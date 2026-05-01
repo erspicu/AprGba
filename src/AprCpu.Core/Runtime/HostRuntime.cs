@@ -4,97 +4,161 @@ using LLVMSharp.Interop;
 namespace AprCpu.Core.Runtime;
 
 /// <summary>
-/// Phase 3.1.a — minimal host runtime that JIT-compiles a spec module
-/// and exposes raw function pointers to the caller. The caller supplies
-/// a byte buffer matching the LLVM struct layout of <see cref="CpuStateLayout"/>;
-/// no architecture-specific C# struct is required (so the same host code
-/// can drive ARM7TDMI, GB LR35902, etc.).
+/// Phase 3.1.a/b — host runtime that JIT-compiles a spec module via MCJIT
+/// and exposes raw function pointers + struct field offsets keyed off
+/// <see cref="CpuStateLayout"/>. Host code passes a byte buffer (sized by
+/// <see cref="StateSizeBytes"/>) instead of a hardcoded ARM-specific
+/// C# struct, so the same runtime drives ARM7TDMI today and GB LR35902
+/// in Phase 4.5.
 ///
 /// MCJIT is used because LLVMSharp.Interop's MCJIT bindings are stable
-/// across LLVM 17/18/20, while the ORC C API surface has shifted between
-/// versions. Tier-up to ORC LLJIT can come later if needed.
+/// across LLVM 17/18/20. ORC LLJIT can come later if needed.
+///
+/// <para><b>Extern binding mechanism (the painful bit):</b></para>
+///
+/// Memory-bus and bank-swap externs are NOT declared as function
+/// declarations — that path doesn't work because MCJIT on Windows x64
+/// silently falls back to Small code model regardless of
+/// <c>LLVMCodeModelLarge</c>, and any heap-allocated host slot more than
+/// 2GB from the JIT'd code page produces a crash on the RIP-relative
+/// load that fetches the function pointer.
+///
+/// Instead, each extern is an LLVM global variable of pointer type whose
+/// <b>initializer is a constant <c>inttoptr</c> of the trampoline's
+/// 64-bit address</b>. MCJIT then places the global in <c>.rdata</c>
+/// adjacent to <c>.text</c>, so the RIP-relative load succeeds. The
+/// loaded value is the trampoline's full 64-bit address; <c>call</c>
+/// through a register has no distance limit.
+///
+/// Implications:
+/// - <see cref="BindExtern"/> must be called BEFORE <see cref="Finalize"/>
+///   (which creates the MCJIT engine and locks the module).
+/// - Re-binding the same extern after Finalize is not supported — the
+///   address is baked into the JIT-compiled image.
+///
+/// Typical usage:
+/// <code>
+///   var rt = HostRuntime.Build(module, layout);
+///   rt.BindExtern("memory_read_32", trampolinePtr);
+///   ...
+///   rt.Finalize();
+///   var fnPtr = rt.GetFunctionPointer("Execute_...");
+/// </code>
 /// </summary>
 public sealed unsafe class HostRuntime : IDisposable
 {
     private static bool _jitInitialized;
     private static readonly object _initLock = new();
 
-    private readonly LLVMExecutionEngineRef _engine;
-    private readonly LLVMTargetDataRef       _targetData;
+    private readonly LLVMModuleRef _module;
+    private LLVMExecutionEngineRef _engine;
+    private LLVMTargetDataRef       _targetData;
+    private bool _finalized;
     private bool _disposed;
 
     public CpuStateLayout Layout { get; }
 
     /// <summary>Total byte size of the CPU-state struct.</summary>
-    public ulong StateSizeBytes { get; }
+    public ulong StateSizeBytes { get; private set; }
 
-    private HostRuntime(LLVMExecutionEngineRef engine, LLVMTargetDataRef targetData, CpuStateLayout layout)
+    private HostRuntime(LLVMModuleRef module, CpuStateLayout layout)
     {
-        _engine = engine;
-        _targetData = targetData;
-        Layout = layout;
-        StateSizeBytes = LLVM.SizeOfTypeInBits(targetData, layout.StructType) / 8;
+        _module = module;
+        Layout  = layout;
     }
 
     /// <summary>
-    /// JIT-compile <paramref name="module"/> and bundle it with the
-    /// <paramref name="layout"/> the caller used to emit it.
-    /// The module is consumed by the JIT engine and must not be reused
-    /// for further IR additions after this call.
+    /// Start a new host runtime. Externs must be bound via
+    /// <see cref="BindExtern"/> before <see cref="Finalize"/> is called.
+    /// </summary>
+    public static HostRuntime Build(LLVMModuleRef module, CpuStateLayout layout)
+        => new(module, layout);
+
+    /// <summary>
+    /// Convenience: build, finalize, and return — for tests that don't
+    /// need any externs (pure GPR/CPSR instructions).
     /// </summary>
     public static HostRuntime Create(LLVMModuleRef module, CpuStateLayout layout)
     {
+        var rt = Build(module, layout);
+        rt.Finalize();
+        return rt;
+    }
+
+    /// <summary>
+    /// Bake the trampoline address for an extern symbol into the IR as
+    /// the initializer of the corresponding global pointer. Must be
+    /// called BEFORE <see cref="Finalize"/>.
+    /// </summary>
+    public void BindExtern(string symbolName, IntPtr nativeFn)
+    {
+        if (_finalized)
+            throw new InvalidOperationException(
+                $"BindExtern('{symbolName}'): runtime already finalized — externs must be bound first.");
+
+        var globalSlot = _module.GetNamedGlobal(symbolName);
+        if (globalSlot.Handle == IntPtr.Zero)
+            throw new InvalidOperationException(
+                $"Extern '{symbolName}' not declared in module — nothing to bind. " +
+                "Declare it as an external global pointer variable.");
+
+        // Set the initializer to inttoptr(addr) so MCJIT places the global
+        // in .rdata adjacent to .text. Switch linkage to Internal so the
+        // JIT linker doesn't try to satisfy the symbol externally.
+        var i64 = LLVMTypeRef.Int64;
+        var addrConst = LLVMValueRef.CreateConstInt(i64, (ulong)nativeFn.ToInt64(), false);
+        var ptrType = LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0);   // generic ptr
+        var ptrConst = LLVMValueRef.CreateConstIntToPtr(addrConst, ptrType);
+
+        globalSlot.Initializer = ptrConst;
+        globalSlot.Linkage = LLVMLinkage.LLVMInternalLinkage;
+    }
+
+    /// <summary>
+    /// Lock the module, create the MCJIT engine, and become ready for
+    /// <see cref="GetFunctionPointer"/>. After this, <see cref="BindExtern"/>
+    /// will throw.
+    /// </summary>
+    public void Finalize()
+    {
+        if (_finalized) return;
         EnsureJitInitialized();
-        var engine = module.CreateMCJITCompiler();
-        var targetData = LLVM.GetExecutionEngineTargetData(engine);
-        return new HostRuntime(engine, targetData, layout);
+
+        var options = new LLVMMCJITCompilerOptions { OptLevel = 0 };
+        _engine = _module.CreateMCJITCompiler(ref options);
+        _targetData = LLVM.GetExecutionEngineTargetData(_engine);
+        StateSizeBytes = LLVM.SizeOfTypeInBits(_targetData, Layout.StructType) / 8;
+        _finalized = true;
     }
 
     /// <summary>Look up the native entry point of a JIT'd function by its IR name.</summary>
     public IntPtr GetFunctionPointer(string functionName)
     {
+        EnsureFinalized();
         var addr = _engine.GetFunctionAddress(functionName);
         if (addr == 0)
             throw new InvalidOperationException(
-                $"MCJIT could not resolve function '{functionName}'. " +
-                "Either the name is wrong, or the function references an unbound extern.");
+                $"MCJIT could not resolve function '{functionName}'.");
         return (IntPtr)addr;
     }
 
     /// <summary>Byte offset of a struct field within the CPU-state buffer.</summary>
     public ulong GetFieldOffsetBytes(int fieldIndex)
-        => LLVM.OffsetOfElement(_targetData, Layout.StructType, (uint)fieldIndex);
-
-    /// <summary>Byte offset of GPR <paramref name="regIndex"/>.</summary>
-    public ulong GprOffset(int regIndex)
-        => GetFieldOffsetBytes(Layout.GprFieldIndex(regIndex));
-
-    /// <summary>Byte offset of a status register slot. <c>mode=null</c> for non-banked (CPSR).</summary>
-    public ulong StatusOffset(string name, string? mode = null)
-        => GetFieldOffsetBytes(Layout.StatusFieldIndex(name, mode));
-
-    /// <summary>Byte offset of a banked GPR slot.</summary>
-    public ulong BankedGprOffset(string mode, int idxInGroup)
-        => GetFieldOffsetBytes(Layout.BankedGprFieldIndex(mode, idxInGroup));
-
-    /// <summary>Byte offset of the cycle-counter (i64).</summary>
-    public ulong CycleCounterOffset
-        => GetFieldOffsetBytes(Layout.CycleCounterFieldIndex);
-
-    /// <summary>
-    /// Bind a native function pointer to an extern symbol declared in the
-    /// IR (e.g. <c>memory_read_8</c>, <c>host_swap_register_bank</c>).
-    /// The IR must have declared the symbol via <c>module.AddFunction(name, ...)</c>
-    /// without a body. Call this BEFORE <see cref="GetFunctionPointer"/>
-    /// so the JIT resolves the symbol on first use.
-    /// </summary>
-    public void BindExtern(string symbolName, IntPtr nativeFn)
     {
-        var fnVal = _engine.FindFunction(symbolName);
-        if (fnVal.Handle == IntPtr.Zero)
+        EnsureFinalized();
+        return LLVM.OffsetOfElement(_targetData, Layout.StructType, (uint)fieldIndex);
+    }
+
+    public ulong GprOffset(int regIndex) => GetFieldOffsetBytes(Layout.GprFieldIndex(regIndex));
+    public ulong StatusOffset(string name, string? mode = null) => GetFieldOffsetBytes(Layout.StatusFieldIndex(name, mode));
+    public ulong BankedGprOffset(string mode, int idxInGroup) => GetFieldOffsetBytes(Layout.BankedGprFieldIndex(mode, idxInGroup));
+    public ulong CycleCounterOffset => GetFieldOffsetBytes(Layout.CycleCounterFieldIndex);
+
+    private void EnsureFinalized()
+    {
+        if (!_finalized)
             throw new InvalidOperationException(
-                $"Extern '{symbolName}' not declared in module — nothing to bind.");
-        _engine.AddGlobalMapping(fnVal, nativeFn);
+                "HostRuntime: call Finalize() (or Create) before using JIT-dependent operations.");
     }
 
     private static void EnsureJitInitialized()
@@ -117,7 +181,6 @@ public sealed unsafe class HostRuntime : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        // MCJIT engine owns the module; disposing the engine frees both.
-        _engine.Dispose();
+        if (_finalized) _engine.Dispose();
     }
 }

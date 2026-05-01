@@ -418,11 +418,9 @@ internal sealed class RestoreCpsrFromSpsr : IMicroOpEmitter
         ctx.Builder.BuildStore(phi, cpsrPtr);
 
         var newMode = ctx.Builder.BuildAnd(phi, ctx.ConstU32(modeMask), "restore_new_mode");
-        var swapFn = HostHelpers.GetSwapRegisterBankFn(ctx.Module, ctx.Layout.PointerType);
-        var swapType = LLVMTypeRef.CreateFunction(
-            ctx.Module.Context.VoidType,
-            new[] { ctx.Layout.PointerType, LLVMTypeRef.Int32, LLVMTypeRef.Int32 });
-        ctx.Builder.BuildCall2(swapType, swapFn,
+        var (swapSlot, swapType, swapPtrType) = HostHelpers.GetSwapRegisterBankSlot(ctx.Module, ctx.Layout.PointerType);
+        var loadedSwap = ctx.Builder.BuildLoad2(swapPtrType, swapSlot, "swap_fn");
+        ctx.Builder.BuildCall2(swapType, loadedSwap,
             new[] { ctx.StatePtr, oldMode, newMode }, "");
     }
 }
@@ -529,11 +527,9 @@ internal sealed class RaiseExceptionEmitter : IMicroOpEmitter
         //    slots. Implemented host-side (Phase 3 work); we just emit the
         //    extern call here.
         var oldMode = ctx.Builder.BuildAnd(oldCpsr, ctx.ConstU32(modeMask), "old_mode");
-        var swapFn = HostHelpers.GetSwapRegisterBankFn(ctx.Module, ctx.Layout.PointerType);
-        var swapType = LLVMTypeRef.CreateFunction(
-            ctx.Module.Context.VoidType,
-            new[] { ctx.Layout.PointerType, LLVMTypeRef.Int32, LLVMTypeRef.Int32 });
-        ctx.Builder.BuildCall2(swapType, swapFn,
+        var (swapSlot, swapType, swapPtrType) = HostHelpers.GetSwapRegisterBankSlot(ctx.Module, ctx.Layout.PointerType);
+        var loadedSwap = ctx.Builder.BuildLoad2(swapPtrType, swapSlot, "swap_fn");
+        ctx.Builder.BuildCall2(swapType, loadedSwap,
             new[] { ctx.StatePtr, oldMode, ctx.ConstU32(newModeEnc) }, "");
 
         // 7. PC = vector address.
@@ -550,14 +546,27 @@ internal static class HostHelpers
 {
     public const string SwapRegisterBank = "host_swap_register_bank";
 
-    public static LLVMValueRef GetSwapRegisterBankFn(LLVMModuleRef module, LLVMTypeRef statePtrType)
+    /// <summary>
+    /// Returns (slot, fnType, ptrType) where <c>slot</c> is the global
+    /// pointer variable holding the host's swap-bank function address.
+    /// Indirect-call idiom (load slot → call) is used because MCJIT can't
+    /// reliably bind extern function declarations via AddGlobalMapping in
+    /// LLVM 20 — see MemoryEmitters.GetOrDeclareMemoryFunctionPointer.
+    /// </summary>
+    public static (LLVMValueRef Slot, LLVMTypeRef FnType, LLVMTypeRef PtrType)
+        GetSwapRegisterBankSlot(LLVMModuleRef module, LLVMTypeRef statePtrType)
     {
-        var existing = module.GetNamedFunction(SwapRegisterBank);
-        if (existing.Handle != IntPtr.Zero) return existing;
         var fnType = LLVMTypeRef.CreateFunction(
             module.Context.VoidType,
             new[] { statePtrType, LLVMTypeRef.Int32, LLVMTypeRef.Int32 });
-        return module.AddFunction(SwapRegisterBank, fnType);
+        var ptrType = LLVMTypeRef.CreatePointer(fnType, 0);
+
+        var existing = module.GetNamedGlobal(SwapRegisterBank);
+        if (existing.Handle != IntPtr.Zero) return (existing, fnType, ptrType);
+
+        var slot = module.AddGlobal(ptrType, SwapRegisterBank);
+        slot.Linkage = LLVMLinkage.LLVMExternalLinkage;
+        return (slot, fnType, ptrType);
     }
 }
 

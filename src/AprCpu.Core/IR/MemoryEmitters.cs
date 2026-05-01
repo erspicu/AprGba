@@ -50,19 +50,34 @@ public static class MemoryEmitters
     }
 
     /// <summary>
-    /// Look up (or declare on first use) one of the memory-bus extern
-    /// functions in the current module. All have signature
-    /// <c>(i32 addr) -&gt; iN</c> for reads or <c>(i32 addr, iN value) -&gt; void</c>
-    /// for writes.
+    /// Look up (or declare on first use) the global pointer slot holding
+    /// the address of an external memory-bus function. The host binds
+    /// each name to a real native function pointer at JIT time via
+    /// <c>AddGlobalMapping</c> on the global.
+    ///
+    /// Background: MCJIT in LLVM 20 cannot reliably bind <c>declare</c>'d
+    /// extern functions via AddGlobalMapping (the call site stays
+    /// unresolved and crashes with an access violation). The standard
+    /// workaround is to indirect through a global function pointer that
+    /// LLVM CAN bind. Each call site does <c>load</c> + <c>call %loaded</c>.
     /// </summary>
-    public static LLVMValueRef GetOrDeclareMemoryFunction(LLVMModuleRef module, string name, LLVMTypeRef returnType, params LLVMTypeRef[] paramTypes)
+    public static (LLVMValueRef Slot, LLVMTypeRef FnType, LLVMTypeRef PtrType)
+        GetOrDeclareMemoryFunctionPointer(
+            LLVMModuleRef module,
+            string name,
+            LLVMTypeRef returnType,
+            params LLVMTypeRef[] paramTypes)
     {
-        var existing = module.GetNamedFunction(name);
+        var fnType  = LLVMTypeRef.CreateFunction(returnType, paramTypes);
+        var ptrType = LLVMTypeRef.CreatePointer(fnType, 0);
+
+        var existing = module.GetNamedGlobal(name);
         if (existing.Handle != IntPtr.Zero)
-            return existing;
-        var fnType = LLVMTypeRef.CreateFunction(returnType, paramTypes);
-        var fn = module.AddFunction(name, fnType);
-        return fn;
+            return (existing, fnType, ptrType);
+
+        var slot = module.AddGlobal(ptrType, name);
+        slot.Linkage = LLVMLinkage.LLVMExternalLinkage;
+        return (slot, fnType, ptrType);
     }
 }
 
@@ -86,11 +101,10 @@ internal sealed class LoadEmitter : IMicroOpEmitter
             _ => throw new NotSupportedException($"load size {size} not supported (use 8/16/32).")
         };
 
-        var fn = MemoryEmitters.GetOrDeclareMemoryFunction(
+        var (slot, fnType, ptrType) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
             ctx.Module, fnName, returnType, LLVMTypeRef.Int32);
-        var fnType = LLVMTypeRef.CreateFunction(returnType, new[] { LLVMTypeRef.Int32 });
-
-        var raw = ctx.Builder.BuildCall2(fnType, fn, new[] { addr }, $"{outName}_raw");
+        var loadedFn = ctx.Builder.BuildLoad2(ptrType, slot, $"{fnName}_fn");
+        var raw = ctx.Builder.BuildCall2(fnType, loadedFn, new[] { addr }, $"{outName}_raw");
 
         // Promote to i32. For sub-word loads we must respect signed flag.
         LLVMValueRef result;
@@ -140,11 +154,10 @@ internal sealed class StoreEmitter : IMicroOpEmitter
             ? value
             : ctx.Builder.BuildTrunc(value, paramType, $"{valueName}_trunc");
 
-        var fn = MemoryEmitters.GetOrDeclareMemoryFunction(
+        var (slot, fnType, ptrType) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
             ctx.Module, fnName, ctx.Module.Context.VoidType, LLVMTypeRef.Int32, paramType);
-        var fnType = LLVMTypeRef.CreateFunction(
-            ctx.Module.Context.VoidType, new[] { LLVMTypeRef.Int32, paramType });
+        var loadedFn = ctx.Builder.BuildLoad2(ptrType, slot, $"{fnName}_fn");
 
-        ctx.Builder.BuildCall2(fnType, fn, new[] { addr, truncated }, "");
+        ctx.Builder.BuildCall2(fnType, loadedFn, new[] { addr, truncated }, "");
     }
 }
