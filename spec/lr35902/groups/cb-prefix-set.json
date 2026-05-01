@@ -1,0 +1,22 @@
+{
+  "name": "CbPrefix_Set",
+  "comment": "SET b, r — 11_bbb_sss. r ← r | (1 << b); flags unchanged. 64 entries.",
+  "formats": [
+    {
+      "name": "Cb_Set",
+      "comment": "11_bbb_sss",
+      "pattern": "11bbbsss",
+      "fields": {
+        "bbb": "5:3",
+        "sss": "2:0"
+      },
+      "mask": "0xC0",
+      "match": "0xC0",
+      "instructions": [{
+        "mnemonic": "SET", "since": "LR35902", "manual_ref": "GB CPU §SET b,r",
+        "cycles": { "form": "2m_or_4m" },
+        "steps": [{ "op": "lr35902_cb_set", "bit_field": "bbb", "src_field": "sss" }]
+      }]
+    }
+  ]
+}

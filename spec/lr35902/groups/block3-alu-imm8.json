@@ -1,0 +1,26 @@
+{
+  "name": "Block3_AluImm8",
+  "comment": "ALU op A, n — 11_ooo_110. Same operation table as block 2 but with imm8 source. 8 opcodes.",
+  "formats": [
+    {
+      "name": "AluA_Imm8",
+      "comment": "11_ooo_110",
+      "pattern": "11ooo110",
+      "fields": {
+        "ooo": "5:3"
+      },
+      "mask": "0xC7",
+      "match": "0xC6",
+      "instructions": [
+        { "selector": { "field": "ooo", "value": "000" }, "mnemonic": "ADD", "since": "LR35902", "manual_ref": "GB CPU §ADD A,n", "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_imm8", "alu_op": "add" }] },
+        { "selector": { "field": "ooo", "value": "001" }, "mnemonic": "ADC", "since": "LR35902", "manual_ref": "GB CPU §ADC A,n", "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_imm8", "alu_op": "adc" }] },
+        { "selector": { "field": "ooo", "value": "010" }, "mnemonic": "SUB", "since": "LR35902", "manual_ref": "GB CPU §SUB n",   "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_imm8", "alu_op": "sub" }] },
+        { "selector": { "field": "ooo", "value": "011" }, "mnemonic": "SBC", "since": "LR35902", "manual_ref": "GB CPU §SBC A,n", "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_imm8", "alu_op": "sbc" }] },
+        { "selector": { "field": "ooo", "value": "100" }, "mnemonic": "AND", "since": "LR35902", "manual_ref": "GB CPU §AND n",   "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_imm8", "alu_op": "and" }] },
+        { "selector": { "field": "ooo", "value": "101" }, "mnemonic": "XOR", "since": "LR35902", "manual_ref": "GB CPU §XOR n",   "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_imm8", "alu_op": "xor" }] },
+        { "selector": { "field": "ooo", "value": "110" }, "mnemonic": "OR",  "since": "LR35902", "manual_ref": "GB CPU §OR n",    "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_imm8", "alu_op": "or"  }] },
+        { "selector": { "field": "ooo", "value": "111" }, "mnemonic": "CP",  "since": "LR35902", "manual_ref": "GB CPU §CP n",    "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_imm8", "alu_op": "cp"  }] }
+      ]
+    }
+  ]
+}

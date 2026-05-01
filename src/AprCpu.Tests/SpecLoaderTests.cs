@@ -105,9 +105,9 @@ public class SpecLoaderTests
         Assert.Equal(8,             loaded.Cpu.Architecture.WordSizeBits);
 
         var gpr = loaded.Cpu.RegisterFile.GeneralPurpose;
-        Assert.Equal(8,  gpr.Count);
+        Assert.Equal(7,  gpr.Count);
         Assert.Equal(8,  gpr.WidthBits);
-        Assert.Equal(new[] { "A", "F", "B", "C", "D", "E", "H", "L" }, gpr.Names);
+        Assert.Equal(new[] { "A", "B", "C", "D", "E", "H", "L" }, gpr.Names);
 
         var pairs = loaded.Cpu.RegisterFile.RegisterPairs;
         Assert.Equal(4, pairs.Count);
@@ -118,10 +118,15 @@ public class SpecLoaderTests
         Assert.Equal("A", af.High);
         Assert.Equal("F", af.Low);
 
-        var f = Assert.Single(loaded.Cpu.RegisterFile.Status);
-        Assert.Equal("F", f.Name);
+        // F is the flag byte (8-bit), SP/PC are 16-bit specials.
+        var status = loaded.Cpu.RegisterFile.Status;
+        Assert.Equal(3, status.Count);
+        var f = status.Single(s => s.Name == "F");
+        Assert.Equal(8, f.WidthBits);
         Assert.Equal(new BitRange(7, 7), f.Fields["Z"]);
         Assert.Equal(new BitRange(4, 4), f.Fields["C"]);
+        Assert.Equal(16, status.Single(s => s.Name == "SP").WidthBits);
+        Assert.Equal(16, status.Single(s => s.Name == "PC").WidthBits);
 
         Assert.Equal(5, loaded.Cpu.ExceptionVectors.Count);
         Assert.Equal(0x50u, loaded.Cpu.ExceptionVectors.Single(v => v.Name == "Timer").Address);

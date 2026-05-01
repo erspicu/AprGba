@@ -1,0 +1,28 @@
+{
+  "name": "Block0_LdRrImm16",
+  "comment": "LD rr, nn — 00_dd0_001. 4 opcodes: BC/DE/HL/SP. Validates the register_pairs schema + 16-bit immediate operand path.",
+  "formats": [
+    {
+      "name": "LdRr_Imm16",
+      "comment": "00_dd0_001 (dd: 00=BC, 01=DE, 10=HL, 11=SP)",
+      "pattern": "00dd0001",
+      "fields": {
+        "dd": "5:4"
+      },
+      "mask": "0xCF",
+      "match": "0x01",
+      "instructions": [
+        {
+          "mnemonic": "LD",
+          "since": "LR35902",
+          "manual_ref": "GB CPU §LD rr,nn",
+          "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "read_imm16", "out": "imm" },
+            { "op": "lr35902_write_rr_dd", "field": "dd", "value": "imm" }
+          ]
+        }
+      ]
+    }
+  ]
+}

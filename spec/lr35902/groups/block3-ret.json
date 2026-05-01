@@ -1,0 +1,53 @@
+{
+  "name": "Block3_Ret",
+  "comment": "Returns: RET (0xC9), RETI (0xD9, enables IME immediately), 4 conditional RET cc (0xC0/C8/D0/D8). 6 opcodes.",
+  "formats": [
+    {
+      "name": "Ret",
+      "comment": "0xC9 — unconditional return",
+      "pattern": "11001001",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xC9",
+      "instructions": [{
+        "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET",
+        "writes_pc": "always",
+        "cycles": { "form": "4m" },
+        "steps": [{ "op": "lr35902_ret" }]
+      }]
+    },
+    {
+      "name": "Reti",
+      "comment": "0xD9 — return + IME=1 immediately (no EI delay).",
+      "pattern": "11011001",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xD9",
+      "instructions": [{
+        "mnemonic": "RETI", "since": "LR35902", "manual_ref": "GB CPU §RETI",
+        "writes_pc": "always",
+        "cycles": { "form": "4m" },
+        "steps": [
+          { "op": "lr35902_ret" },
+          { "op": "lr35902_ime", "value": 1 }
+        ]
+      }]
+    },
+    {
+      "name": "Ret_Cc",
+      "comment": "110cc000 — RET cc",
+      "pattern": "110cc000",
+      "fields": {
+        "cc": "4:3"
+      },
+      "mask": "0xE7",
+      "match": "0xC0",
+      "instructions": [
+        { "selector": { "field": "cc", "value": "00" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET NZ", "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "lr35902_ret_cc", "cond": "NZ" }] },
+        { "selector": { "field": "cc", "value": "01" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET Z",  "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "lr35902_ret_cc", "cond": "Z"  }] },
+        { "selector": { "field": "cc", "value": "10" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET NC", "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "lr35902_ret_cc", "cond": "NC" }] },
+        { "selector": { "field": "cc", "value": "11" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET C",  "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "lr35902_ret_cc", "cond": "C"  }] }
+      ]
+    }
+  ]
+}

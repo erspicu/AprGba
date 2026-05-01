@@ -1,0 +1,54 @@
+{
+  "name": "Block3_StackArith",
+  "comment": "SP-related arithmetic with unique flag semantics: ADD SP,e8 (0xE8), LD HL,SP+e8 (0xF8), LD SP,HL (0xF9). The two e8 forms set Z=N=0, H/C from low-byte arithmetic (per LR35902 spec).",
+  "formats": [
+    {
+      "name": "Add_Sp_E8",
+      "comment": "0xE8 — ADD SP, e8 (signed 8-bit displacement).",
+      "pattern": "11101000",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE8",
+      "instructions": [{
+        "mnemonic": "ADD", "since": "LR35902", "manual_ref": "GB CPU §ADD SP,e8",
+        "cycles": { "form": "4m" },
+        "steps": [
+          { "op": "read_imm8", "out": "e8" },
+          { "op": "lr35902_add_sp_e8", "offset": "e8" }
+        ]
+      }]
+    },
+    {
+      "name": "Ld_Hl_Sp_E8",
+      "comment": "0xF8 — LD HL, SP+e8.",
+      "pattern": "11111000",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xF8",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD HL,SP+e8",
+        "cycles": { "form": "3m" },
+        "steps": [
+          { "op": "read_imm8", "out": "e8" },
+          { "op": "lr35902_ld_hl_sp_e8", "offset": "e8" }
+        ]
+      }]
+    },
+    {
+      "name": "Ld_Sp_Hl",
+      "comment": "0xF9 — LD SP, HL.",
+      "pattern": "11111001",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xF9",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD SP,HL",
+        "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_pair", "name": "HL", "out": "v" },
+          { "op": "write_reg_named", "name": "SP", "value": "v" }
+        ]
+      }]
+    }
+  ]
+}

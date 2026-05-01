@@ -1,0 +1,56 @@
+{
+  "name": "Block3_Jp",
+  "comment": "Absolute jumps: JP nn (0xC3), JP cc nn (0xC2/CA/D2/DA), JP HL (0xE9). 6 opcodes total across 3 formats.",
+  "formats": [
+    {
+      "name": "Jp_Nn",
+      "comment": "0xC3 — JP nn (unconditional)",
+      "pattern": "11000011",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xC3",
+      "instructions": [{
+        "mnemonic": "JP", "since": "LR35902", "manual_ref": "GB CPU §JP nn",
+        "writes_pc": "always",
+        "cycles": { "form": "4m" },
+        "steps": [
+          { "op": "read_imm16", "out": "addr" },
+          { "op": "lr35902_jp", "address": "addr" }
+        ]
+      }]
+    },
+    {
+      "name": "Jp_Cc_Nn",
+      "comment": "110cc010 — JP cc, nn. cc = bits 4:3 (00 NZ, 01 Z, 10 NC, 11 C).",
+      "pattern": "110cc010",
+      "fields": {
+        "cc": "4:3"
+      },
+      "mask": "0xE7",
+      "match": "0xC2",
+      "instructions": [
+        { "selector": { "field": "cc", "value": "00" }, "mnemonic": "JP", "since": "LR35902", "manual_ref": "GB CPU §JP NZ,nn", "writes_pc": "conditional", "cycles": { "form": "3m_or_4m" }, "steps": [{ "op": "read_imm16", "out": "addr" }, { "op": "lr35902_jp_cc", "cond": "NZ", "address": "addr" }] },
+        { "selector": { "field": "cc", "value": "01" }, "mnemonic": "JP", "since": "LR35902", "manual_ref": "GB CPU §JP Z,nn",  "writes_pc": "conditional", "cycles": { "form": "3m_or_4m" }, "steps": [{ "op": "read_imm16", "out": "addr" }, { "op": "lr35902_jp_cc", "cond": "Z",  "address": "addr" }] },
+        { "selector": { "field": "cc", "value": "10" }, "mnemonic": "JP", "since": "LR35902", "manual_ref": "GB CPU §JP NC,nn", "writes_pc": "conditional", "cycles": { "form": "3m_or_4m" }, "steps": [{ "op": "read_imm16", "out": "addr" }, { "op": "lr35902_jp_cc", "cond": "NC", "address": "addr" }] },
+        { "selector": { "field": "cc", "value": "11" }, "mnemonic": "JP", "since": "LR35902", "manual_ref": "GB CPU §JP C,nn",  "writes_pc": "conditional", "cycles": { "form": "3m_or_4m" }, "steps": [{ "op": "read_imm16", "out": "addr" }, { "op": "lr35902_jp_cc", "cond": "C",  "address": "addr" }] }
+      ]
+    },
+    {
+      "name": "Jp_Hl",
+      "comment": "0xE9 — JP HL (PC ← HL).",
+      "pattern": "11101001",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE9",
+      "instructions": [{
+        "mnemonic": "JP", "since": "LR35902", "manual_ref": "GB CPU §JP HL",
+        "writes_pc": "always",
+        "cycles": { "form": "1m" },
+        "steps": [
+          { "op": "read_reg_pair", "name": "HL", "out": "target" },
+          { "op": "lr35902_jp", "address": "target" }
+        ]
+      }]
+    }
+  ]
+}

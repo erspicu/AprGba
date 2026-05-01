@@ -956,4 +956,157 @@ public class DecoderTableTests
         Assert.Equal(expectedFormat,   d!.Format.Name);
         Assert.Equal(expectedMnemonic, d.Instruction.Mnemonic);
     }
+
+    [Theory]
+    // Block 0 spot checks
+    [InlineData(0x00, "NOP")]    // NOP
+    [InlineData(0x01, "LD")]     // LD BC, nn
+    [InlineData(0x02, "LD")]     // LD (BC), A
+    [InlineData(0x03, "INC")]    // INC BC
+    [InlineData(0x04, "INC")]    // INC B
+    [InlineData(0x05, "DEC")]    // DEC B
+    [InlineData(0x06, "LD")]     // LD B, n
+    [InlineData(0x07, "RLCA")]   // RLCA
+    [InlineData(0x08, "LD")]     // LD (nn), SP
+    [InlineData(0x09, "ADD")]    // ADD HL, BC
+    [InlineData(0x0A, "LD")]     // LD A, (BC)
+    [InlineData(0x0B, "DEC")]    // DEC BC
+    [InlineData(0x0F, "RRCA")]   // RRCA
+    [InlineData(0x10, "STOP")]   // STOP
+    [InlineData(0x17, "RLA")]    // RLA
+    [InlineData(0x18, "JR")]     // JR e8
+    [InlineData(0x1F, "RRA")]    // RRA
+    [InlineData(0x20, "JR")]     // JR NZ,e8
+    [InlineData(0x22, "LDI")]    // LD (HL+),A
+    [InlineData(0x27, "DAA")]    // DAA
+    [InlineData(0x28, "JR")]     // JR Z,e8
+    [InlineData(0x2A, "LDI")]    // LD A,(HL+)
+    [InlineData(0x2F, "CPL")]    // CPL
+    [InlineData(0x30, "JR")]     // JR NC,e8
+    [InlineData(0x32, "LDD")]    // LD (HL-),A
+    [InlineData(0x37, "SCF")]    // SCF
+    [InlineData(0x38, "JR")]     // JR C,e8
+    [InlineData(0x3A, "LDD")]    // LD A,(HL-)
+    [InlineData(0x3F, "CCF")]    // CCF
+    // Block 1 already covered above. Block 2 already covered above.
+    // Block 3 spot checks
+    [InlineData(0xC0, "RET")]    // RET NZ
+    [InlineData(0xC1, "POP")]    // POP BC
+    [InlineData(0xC2, "JP")]     // JP NZ, nn
+    [InlineData(0xC3, "JP")]     // JP nn
+    [InlineData(0xC4, "CALL")]   // CALL NZ, nn
+    [InlineData(0xC5, "PUSH")]   // PUSH BC
+    [InlineData(0xC6, "ADD")]    // ADD A, n
+    [InlineData(0xC7, "RST")]    // RST $00
+    [InlineData(0xC8, "RET")]    // RET Z
+    [InlineData(0xC9, "RET")]    // RET
+    [InlineData(0xCA, "JP")]     // JP Z, nn
+    [InlineData(0xCB, "CB_PREFIX")]
+    [InlineData(0xCD, "CALL")]   // CALL nn
+    [InlineData(0xCE, "ADC")]    // ADC A, n
+    [InlineData(0xCF, "RST")]    // RST $08
+    [InlineData(0xD9, "RETI")]   // RETI
+    [InlineData(0xE0, "LDH")]    // LDH (n), A
+    [InlineData(0xE2, "LD")]     // LD (C), A
+    [InlineData(0xE8, "ADD")]    // ADD SP, e8
+    [InlineData(0xE9, "JP")]     // JP HL
+    [InlineData(0xEA, "LD")]     // LD (nn), A
+    [InlineData(0xF0, "LDH")]    // LDH A, (n)
+    [InlineData(0xF2, "LD")]     // LD A, (C)
+    [InlineData(0xF3, "DI")]
+    [InlineData(0xF5, "PUSH")]   // PUSH AF
+    [InlineData(0xF8, "LD")]     // LD HL, SP+e8
+    [InlineData(0xF9, "LD")]     // LD SP, HL
+    [InlineData(0xFA, "LD")]     // LD A, (nn)
+    [InlineData(0xFB, "EI")]
+    [InlineData(0xFF, "RST")]    // RST $38
+    public void Decode_Lr35902_MainSpotChecks(uint encoding, string expectedMnemonic)
+    {
+        var t = new DecoderTable(LoadLr35902Main());
+        var d = t.Decode(encoding);
+        Assert.NotNull(d);
+        Assert.Equal(expectedMnemonic, d!.Instruction.Mnemonic);
+    }
+
+    /// <summary>
+    /// LR35902 has 11 unused opcodes that hardware treats as locks (the CPU
+    /// halts on real DMG hardware). Our decoder should return null for
+    /// these, matching the "unimplemented opcode" behaviour.
+    /// </summary>
+    [Theory]
+    [InlineData(0xD3)] [InlineData(0xDB)] [InlineData(0xDD)]
+    [InlineData(0xE3)] [InlineData(0xE4)] [InlineData(0xEB)]
+    [InlineData(0xEC)] [InlineData(0xED)] [InlineData(0xF4)]
+    [InlineData(0xFC)] [InlineData(0xFD)]
+    public void Decode_Lr35902_UndefinedOpcodes_ReturnNull(uint encoding)
+    {
+        var t = new DecoderTable(LoadLr35902Main());
+        Assert.Null(t.Decode(encoding));
+    }
+
+    /// <summary>
+    /// Coverage sweep: every defined main-set opcode (256 - 11 illegal = 245)
+    /// must decode to some instruction. Ensures no holes after spec-author
+    /// changes.
+    /// </summary>
+    [Fact]
+    public void Decode_Lr35902_AllValidMainOpcodes_HaveAMatch()
+    {
+        var t = new DecoderTable(LoadLr35902Main());
+        var illegal = new HashSet<uint> { 0xD3, 0xDB, 0xDD, 0xE3, 0xE4, 0xEB, 0xEC, 0xED, 0xF4, 0xFC, 0xFD };
+        for (uint op = 0; op < 256; op++)
+        {
+            var decoded = t.Decode(op);
+            if (illegal.Contains(op))
+                Assert.Null(decoded);
+            else
+                Assert.True(decoded is not null, $"Main opcode 0x{op:X2} did not decode.");
+        }
+    }
+
+    // ---------------- LR35902 CB instruction set ----------------
+
+    private static InstructionSetSpec LoadLr35902Cb() =>
+        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "lr35902", "cb.json"));
+
+    [Theory]
+    [InlineData(0x00, "Cb_Shift", "RLC")]   // RLC B
+    [InlineData(0x07, "Cb_Shift", "RLC")]   // RLC A
+    [InlineData(0x08, "Cb_Shift", "RRC")]   // RRC B
+    [InlineData(0x10, "Cb_Shift", "RL")]    // RL B
+    [InlineData(0x18, "Cb_Shift", "RR")]    // RR B
+    [InlineData(0x20, "Cb_Shift", "SLA")]   // SLA B
+    [InlineData(0x28, "Cb_Shift", "SRA")]   // SRA B
+    [InlineData(0x30, "Cb_Shift", "SWAP")]  // SWAP B
+    [InlineData(0x37, "Cb_Shift", "SWAP")]  // SWAP A
+    [InlineData(0x38, "Cb_Shift", "SRL")]   // SRL B
+    [InlineData(0x40, "Cb_Bit",   "BIT")]   // BIT 0, B
+    [InlineData(0x7F, "Cb_Bit",   "BIT")]   // BIT 7, A
+    [InlineData(0x80, "Cb_Res",   "RES")]   // RES 0, B
+    [InlineData(0xBF, "Cb_Res",   "RES")]   // RES 7, A
+    [InlineData(0xC0, "Cb_Set",   "SET")]   // SET 0, B
+    [InlineData(0xFF, "Cb_Set",   "SET")]   // SET 7, A
+    public void Decode_Lr35902_Cb(uint encoding, string expectedFormat, string expectedMnemonic)
+    {
+        var t = new DecoderTable(LoadLr35902Cb());
+        var d = t.Decode(encoding);
+        Assert.NotNull(d);
+        Assert.Equal(expectedFormat,   d!.Format.Name);
+        Assert.Equal(expectedMnemonic, d.Instruction.Mnemonic);
+    }
+
+    /// <summary>
+    /// Every byte 0x00-0xFF in the CB instruction set is defined (no holes —
+    /// the CB space is fully populated by 4 × 64-entry blocks).
+    /// </summary>
+    [Fact]
+    public void Decode_Lr35902_AllCbOpcodes_HaveAMatch()
+    {
+        var t = new DecoderTable(LoadLr35902Cb());
+        for (uint op = 0; op < 256; op++)
+        {
+            var decoded = t.Decode(op);
+            Assert.True(decoded is not null, $"CB opcode 0x{op:X2} did not decode.");
+        }
+    }
 }

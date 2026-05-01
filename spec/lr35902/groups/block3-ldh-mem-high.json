@@ -1,0 +1,108 @@
+{
+  "name": "Block3_LdhMemHigh",
+  "comment": "High-RAM (0xFF00 + offset) and absolute-address LD A ↔ memory: LDH (n)/(C) and LD (nn)/A. 6 opcodes total.",
+  "formats": [
+    {
+      "name": "Ldh_N_A",
+      "comment": "0xE0 — LDH (n), A. Stores A at 0xFF00 + n.",
+      "pattern": "11100000",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE0",
+      "instructions": [{
+        "mnemonic": "LDH", "since": "LR35902", "manual_ref": "GB CPU §LDH (n),A",
+        "writes_memory": ["A"], "cycles": { "form": "3m" },
+        "steps": [
+          { "op": "read_imm8", "out": "off" },
+          { "op": "read_reg_named", "name": "A", "out": "v" },
+          { "op": "lr35902_ldh_io_store", "offset": "off", "value": "v" }
+        ]
+      }]
+    },
+    {
+      "name": "Ldh_A_N",
+      "comment": "0xF0 — LDH A, (n). Loads from 0xFF00 + n into A.",
+      "pattern": "11110000",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xF0",
+      "instructions": [{
+        "mnemonic": "LDH", "since": "LR35902", "manual_ref": "GB CPU §LDH A,(n)",
+        "cycles": { "form": "3m" },
+        "steps": [
+          { "op": "read_imm8", "out": "off" },
+          { "op": "lr35902_ldh_io_load", "offset": "off", "out": "v" },
+          { "op": "write_reg_named", "name": "A", "value": "v" }
+        ]
+      }]
+    },
+    {
+      "name": "Ld_C_A",
+      "comment": "0xE2 — LD (C), A. Stores A at 0xFF00 + C.",
+      "pattern": "11100010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE2",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD (C),A",
+        "writes_memory": ["A"], "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named", "name": "C", "out": "off" },
+          { "op": "read_reg_named", "name": "A", "out": "v" },
+          { "op": "lr35902_ldh_io_store", "offset": "off", "value": "v" }
+        ]
+      }]
+    },
+    {
+      "name": "Ld_A_C",
+      "comment": "0xF2 — LD A, (C). Loads from 0xFF00 + C into A.",
+      "pattern": "11110010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xF2",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD A,(C)",
+        "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named", "name": "C", "out": "off" },
+          { "op": "lr35902_ldh_io_load", "offset": "off", "out": "v" },
+          { "op": "write_reg_named", "name": "A", "value": "v" }
+        ]
+      }]
+    },
+    {
+      "name": "Ld_Nn_A",
+      "comment": "0xEA — LD (nn), A. Absolute address.",
+      "pattern": "11101010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xEA",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD (nn),A",
+        "writes_memory": ["A"], "cycles": { "form": "4m" },
+        "steps": [
+          { "op": "read_imm16", "out": "addr" },
+          { "op": "read_reg_named", "name": "A", "out": "v" },
+          { "op": "store_byte", "address": "addr", "value": "v" }
+        ]
+      }]
+    },
+    {
+      "name": "Ld_A_Nn",
+      "comment": "0xFA — LD A, (nn). Absolute address.",
+      "pattern": "11111010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xFA",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD A,(nn)",
+        "cycles": { "form": "4m" },
+        "steps": [
+          { "op": "read_imm16", "out": "addr" },
+          { "op": "load_byte", "address": "addr", "out": "v" },
+          { "op": "write_reg_named", "name": "A", "value": "v" }
+        ]
+      }]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "CbPrefix_Res",
+  "comment": "RES b, r — 10_bbb_sss. r ← r & ~(1 << b); flags unchanged. 64 entries.",
+  "formats": [
+    {
+      "name": "Cb_Res",
+      "comment": "10_bbb_sss",
+      "pattern": "10bbbsss",
+      "fields": {
+        "bbb": "5:3",
+        "sss": "2:0"
+      },
+      "mask": "0xC0",
+      "match": "0x80",
+      "instructions": [{
+        "mnemonic": "RES", "since": "LR35902", "manual_ref": "GB CPU §RES b,r",
+        "cycles": { "form": "2m_or_4m" },
+        "steps": [{ "op": "lr35902_cb_res", "bit_field": "bbb", "src_field": "sss" }]
+      }]
+    }
+  ]
+}

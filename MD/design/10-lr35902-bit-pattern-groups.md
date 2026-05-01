@@ -379,14 +379,71 @@ spec/lr35902/
 
 ---
 
-## 下一步
+## 進度
 
-依此設計依序產出：
+| 步驟 | 狀態 |
+|---|---|
+| 1. `cpu.json` 骨架（register_file 含 pairs、F/SP/PC、5 IRQ vectors、Main+CB dispatch） | ✅ |
+| 2. block 1（LD r,r' + HALT，3 formats，priority 對 0x76 處理正確） | ✅ |
+| 2. block 2（ALU A,r，2 formats，64 instructions，(HL)/reg cycle 區分） | ✅ |
+| 3. block 0 全部（ld_r8_imm8 / inc_dec_r8 / ld_rr_imm16 / alu_rr / mem_indirect / misc_control / jr / ld_nn_sp） | ✅ |
+| 4. block 3 全部（jp / call / ret / rst / push_pop / ldh_mem_high / stack_arith / di_ei / cb_prefix / alu_imm8） | ✅ |
+| 5. CB-prefix 4 群（shift / bit / res / set，全 256 entries） | ✅ |
+| **JSON 端完成**：245 main + 256 CB = **501 個 opcode 全部 decode 通過** | ✅ |
+| 6. IR emitters 把 `lr35902_*` micro-ops 翻成 LLVM IR | ⏳ 下一輪 |
+| 7. `JsonCpu` backend 串通 → 跑 Blargg `01-special.gb` 對照 `LegacyCpu` | ⏳ |
+| 8. 全 11 子測試對照 → Phase 4.5C 完工 | ⏳ |
 
-1. `cpu.json` 骨架（register_file 含 pairs、interrupt-related 欄位）
-2. block 1 / block 2（最規則、驗證 paired register 跟 ALU helper）
-3. block 0（含 16-bit ALU，驗證 H flag）
-4. block 3（含 CB prefix dispatch）
-5. CB-prefix 4 群
-6. `JsonCpu` backend 串通 → 跑 Blargg `01-special.gb` 對照 `LegacyCpu`
-7. 全 11 子測試對照 → Phase 4.5C 完工
+## 實際檔案結構（與原計畫一致）
+
+```
+spec/lr35902/
+  cpu.json
+  main.json
+  cb.json
+  groups/
+    block0-misc-control.json     — NOP/STOP/RLCA/RRCA/RLA/RRA/DAA/CPL/SCF/CCF（10 條）
+    block0-jr.json               — JR e8 + 4 條 JR cc,e8（5 條）
+    block0-ld-nn-sp.json         — LD (nn),SP（1 條）
+    block0-mem-indirect.json     — LD (BC)/(DE)/(HL+)/(HL-) ↔ A（8 條）
+    block0-ld-rr-imm16.json      — LD rr,nn（4 條）
+    block0-alu-rr.json           — INC rr / DEC rr / ADD HL,rr（12 條）
+    block0-inc-dec-r8.json       — INC r / DEC r（16 條）
+    block0-ld-r8-imm8.json       — LD r,n（8 條）
+    block1-halt.json             — HALT（1 條，priority 高於 LD r,r'）
+    block1-ld-reg-reg.json       — LD r,r'（63 條，3 formats with (HL) split）
+    block2-alu-reg.json          — ALU A,r（64 條，2 formats with (HL) split）
+    block3-jp.json               — JP nn / JP cc nn / JP HL（6 條）
+    block3-call.json             — CALL nn / CALL cc nn（5 條）
+    block3-ret.json              — RET / RETI / RET cc（6 條）
+    block3-rst.json              — RST t（8 條）
+    block3-push-pop.json         — PUSH rr / POP rr（8 條）
+    block3-ldh-mem-high.json     — LDH/LD ↔ A（6 條）
+    block3-stack-arith.json      — ADD SP,e8 / LD HL,SP+e8 / LD SP,HL（3 條）
+    block3-di-ei.json            — DI / EI（2 條）
+    block3-cb-prefix.json        — 0xCB prefix dispatch（1 條）
+    block3-alu-imm8.json         — ALU A,n（8 條）
+    cb-prefix-shift.json         — RLC/RRC/RL/RR/SLA/SRA/SWAP/SRL × 8 sources（64 條）
+    cb-prefix-bit.json           — BIT b,r（64 條，single instruction with bbb/sss）
+    cb-prefix-res.json           — RES b,r（64 條）
+    cb-prefix-set.json           — SET b,r（64 條）
+```
+
+**總計**：23 個 group 檔，~120 個 instruction definition（同個 instruction 在 selector
+不同時算多個），覆蓋全 ISA 245 main + 256 CB = **501 個 opcode**。
+比 1900 行的 `LegacyCpu.Step.cs` 體積大幅壓縮。
+
+## 與設計文件的差異
+
+實作過程相對於原計畫 ([10-...md] 上半段) 的小調整：
+
+1. **F register 不在 GPR file**：原本 `general_purpose.names` 含 F，後來改成只放
+   A/B/C/D/E/H/L 7 個（GPR count = 7）。F 在 status，跟 SP/PC 一起。register_pairs
+   裡 `AF.high="A"/low="F"` 仍然成立 — 各個 emitter 看名字解析來源，不限定 high/low
+   要在同一個 section。
+2. **SP/PC 是 16-bit 的 status register**：避免擴 schema 引入新的 special-register
+   section，現階段把 16-bit 暫存器塞 status，欄位空。framework 不會自動把它當 PC，
+   由 host runtime 處理 — 跟 ARM 的 R15 走 GPR 不同的設計分支。
+3. **`width_bits: 8` for main set**：原本想用 variable-width，後來發現 LR35902 decode
+   只需要 first byte，多餘的 byte 是 execution-time fetch。這讓 DecoderTable 不用支援
+   variable-width。

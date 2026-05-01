@@ -1,0 +1,146 @@
+{
+  "name": "Block0_MemIndirect",
+  "comment": "LD via register-pair pointer with auto-increment/decrement on HL: 8 opcodes total. Pattern: 00_pps_010, where pp selects BC/DE/HL+/HL- and s=0 stores A→memory, s=1 loads memory→A.",
+  "formats": [
+    {
+      "name": "LdInd_BC_A",
+      "comment": "0x02 — LD (BC), A",
+      "pattern": "00000010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x02",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD (BC),A",
+        "writes_memory": ["A"], "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_pair", "name": "BC", "out": "addr" },
+          { "op": "read_reg_named", "name": "A", "out": "v" },
+          { "op": "store_byte", "address": "addr", "value": "v" }
+        ]
+      }]
+    },
+    {
+      "name": "LdInd_DE_A",
+      "comment": "0x12 — LD (DE), A",
+      "pattern": "00010010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x12",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD (DE),A",
+        "writes_memory": ["A"], "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_pair", "name": "DE", "out": "addr" },
+          { "op": "read_reg_named", "name": "A", "out": "v" },
+          { "op": "store_byte", "address": "addr", "value": "v" }
+        ]
+      }]
+    },
+    {
+      "name": "LdInd_HLi_A",
+      "comment": "0x22 — LD (HL+), A (post-increment HL)",
+      "pattern": "00100010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x22",
+      "instructions": [{
+        "mnemonic": "LDI", "since": "LR35902", "manual_ref": "GB CPU §LD (HL+),A",
+        "writes_memory": ["A"], "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_pair", "name": "HL", "out": "addr" },
+          { "op": "read_reg_named", "name": "A", "out": "v" },
+          { "op": "store_byte", "address": "addr", "value": "v" },
+          { "op": "lr35902_inc_pair", "name": "HL" }
+        ]
+      }]
+    },
+    {
+      "name": "LdInd_HLd_A",
+      "comment": "0x32 — LD (HL-), A (post-decrement HL)",
+      "pattern": "00110010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x32",
+      "instructions": [{
+        "mnemonic": "LDD", "since": "LR35902", "manual_ref": "GB CPU §LD (HL-),A",
+        "writes_memory": ["A"], "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_pair", "name": "HL", "out": "addr" },
+          { "op": "read_reg_named", "name": "A", "out": "v" },
+          { "op": "store_byte", "address": "addr", "value": "v" },
+          { "op": "lr35902_dec_pair", "name": "HL" }
+        ]
+      }]
+    },
+    {
+      "name": "LdInd_A_BC",
+      "comment": "0x0A — LD A, (BC)",
+      "pattern": "00001010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x0A",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD A,(BC)",
+        "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_pair", "name": "BC", "out": "addr" },
+          { "op": "load_byte", "address": "addr", "out": "v" },
+          { "op": "write_reg_named", "name": "A", "value": "v" }
+        ]
+      }]
+    },
+    {
+      "name": "LdInd_A_DE",
+      "comment": "0x1A — LD A, (DE)",
+      "pattern": "00011010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x1A",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD A,(DE)",
+        "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_pair", "name": "DE", "out": "addr" },
+          { "op": "load_byte", "address": "addr", "out": "v" },
+          { "op": "write_reg_named", "name": "A", "value": "v" }
+        ]
+      }]
+    },
+    {
+      "name": "LdInd_A_HLi",
+      "comment": "0x2A — LD A, (HL+) (post-increment HL)",
+      "pattern": "00101010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x2A",
+      "instructions": [{
+        "mnemonic": "LDI", "since": "LR35902", "manual_ref": "GB CPU §LD A,(HL+)",
+        "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_pair", "name": "HL", "out": "addr" },
+          { "op": "load_byte", "address": "addr", "out": "v" },
+          { "op": "write_reg_named", "name": "A", "value": "v" },
+          { "op": "lr35902_inc_pair", "name": "HL" }
+        ]
+      }]
+    },
+    {
+      "name": "LdInd_A_HLd",
+      "comment": "0x3A — LD A, (HL-) (post-decrement HL)",
+      "pattern": "00111010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x3A",
+      "instructions": [{
+        "mnemonic": "LDD", "since": "LR35902", "manual_ref": "GB CPU §LD A,(HL-)",
+        "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_pair", "name": "HL", "out": "addr" },
+          { "op": "load_byte", "address": "addr", "out": "v" },
+          { "op": "write_reg_named", "name": "A", "value": "v" },
+          { "op": "lr35902_dec_pair", "name": "HL" }
+        ]
+      }]
+    }
+  ]
+}

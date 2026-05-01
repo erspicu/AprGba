@@ -1,0 +1,23 @@
+{
+  "name": "Block3_Rst",
+  "comment": "11_ttt_111 — RST. Pushes PC, jumps to ttt × 8. 8 opcodes (0xC7, 0xCF, 0xD7, 0xDF, 0xE7, 0xEF, 0xF7, 0xFF).",
+  "formats": [
+    {
+      "name": "Rst",
+      "comment": "11_ttt_111",
+      "pattern": "11ttt111",
+      "fields": {
+        "ttt": "5:3"
+      },
+      "mask": "0xC7",
+      "match": "0xC7",
+      "instructions": [{
+        "mnemonic": "RST", "since": "LR35902", "manual_ref": "GB CPU §RST t",
+        "writes_pc": "always",
+        "writes_memory": ["return_pc_lo", "return_pc_hi"],
+        "cycles": { "form": "4m" },
+        "steps": [{ "op": "lr35902_rst", "field": "ttt" }]
+      }]
+    }
+  ]
+}
