@@ -73,11 +73,44 @@
 - 35 個 xUnit 測試全綠（loader / pattern / decoder / spec-to-IR）
 - 產出的 `.ll` 結構正確：condition gate + S-bit 分支 + register file GEP 都齊全
 
-**未做（保留至 Phase 4 擴充）**：
+**Phase 2 故意未做（移到 Phase 2.5）**：
 - 完整 ARM cond table（目前只實作 AL/EQ/NE，其他 cond 預設 false）
 - LDM/STM block-data-transfer
 - Multiply、Halfword Transfer
 - 完整 banked register swap（restore_cpsr_from_spsr 是 stub）
+- ARM Data Processing 剩餘 12 個 ALU op 與其他 2 種編碼變體
+- PSR Transfer (MRS/MSR)
+- Single Data Transfer (LDR/STR + variants)
+- Single Data Swap (SWP/SWPB)
+- SWI、Coprocessor stub、Undefined trap
+- Thumb F2、F4–F17、F19
+
+---
+
+## Phase 2.5：ARM7TDMI 規格 + Parser 完整化（~3–4 週）
+
+**目標**：把 spec 補完成 ARM7TDMI **完整 ISA**，parser/emitter 同步補齊
+所有 micro-op 與 operand resolver。為 Phase 3 的 ROM 驗證打好「指令層
+完整」基礎。
+
+詳細子階段、deliverable 與 done-criteria 見
+`MD/design/06-arm7tdmi-completion-plan.md`。
+
+**子階段**：
+- 2.5.1 Spec authoring 規範 + lint 強化
+- 2.5.2 ARM Data Processing 全集（×3 編碼）+ PSR Transfer
+- 2.5.3 ARM Memory Transfers（SDT、Halfword/Signed、SWP）
+- 2.5.4 ARM Multiply（含 Multiply Long）
+- 2.5.5 ARM Block Transfer + SWI + Coprocessor stub + Undefined
+- 2.5.6 Thumb 剩餘 16 種格式（F2、F4–F17、F19）
+- 2.5.7 完整 cond table + banked register swap + restore_cpsr_from_spsr
+- 2.5.8 Coverage 驗證 + closeout
+
+**驗收**：
+- arm.json + thumb.json 涵蓋 ARMv4T 全部標準指令
+- LLVM module 通過 Verify，0 diagnostics
+- 所有 micro-op 名稱與 operand_resolver kind 都有 emitter
+- 50+ known opcode 通過 decoder coverage test
 
 ---
 
@@ -226,23 +259,28 @@
 | 里程碑 | 內容 | 累計時間 |
 |---|---|---|
 | **M1** | Phase 0–1 完成（環境 + JSON schema） ✅ | ~1 月 |
-| **M2** | Phase 2 完成 ✅（CLI 工具 demo） + Phase 3 ARM 直譯器 | ~3 月 |
-| **M3** | Phase 4–5 完成（armwrestler 全綠 + 跑 BIOS） | ~6 月 |
+| **M2** | Phase 2 完成 ✅（CLI 工具 demo） | ~3 月 |
+| **M2.5** | Phase 2.5 完成（ARM7TDMI 完整 spec + parser） | ~4 月 |
+| **M3** | Phase 3–5 完成（直譯器 + armwrestler + 跑 BIOS） | ~7 月 |
 | **M4** | Phase 6 完成（Thumb 跑得動） | ~9 月 |
 | **M5** | Phase 7–8 完成（**畫面出來**） | ~12–15 月 |
 
 ---
 
-## 下一步：Phase 3 — 最小直譯器 + ARM 指令完整集
+## 下一步：Phase 2.5 — ARM7TDMI 完整化
 
-Phase 0、1、2 已完成。CLI 已能 `aprcpu --spec ... --output ...` 從 JSON
-規格產出 LLVM IR。下一階段重點：
+Phase 0、1、2 已完成。CLI 已能從 JSON 產 LLVM IR；目前 spec 內容只是
+ARM 7 條 + Thumb 8 條的示範子集。
 
-1. **最小直譯器**：把生成的 `.ll` 用 LLVM JIT 起來執行，逐條跑指令
-   驗證語義（不上 block JIT）
-2. **CpuState 的 C# 端 struct**：使其 layout 與 `CpuStateLayout` 完全一致；
-   pinned + unsafe pointer pass 進 JIT
-3. **完整 ARM cond table**：補上 CS/CC/MI/PL/VS/VC/HI/LS/GE/LT/GT/LE
-4. **擴充指令集**：Data Processing Register、Single Data Transfer (LDR/STR)、
-   Multiply、Block Data Transfer (LDM/STM)
-5. **驗證**：拿 armwrestler 的子集 ROM 跑通
+進入 Phase 3（直譯器跑 ROM）之前，先把 spec 補完整、parser 同步補齊：
+
+1. **2.5.1**：spec 寫法規範文件 + lint 強化
+2. **2.5.2**：ARM Data Processing 全集（×3 編碼）+ PSR Transfer
+3. **2.5.3**：ARM 記憶體傳輸（SDT、Halfword/Signed、SWP）
+4. **2.5.4**：ARM Multiply（含 Multiply Long）
+5. **2.5.5**：ARM Block Transfer + SWI + Coprocessor stub + Undefined
+6. **2.5.6**：Thumb 剩餘 16 種格式
+7. **2.5.7**：完整 cond table + banked register swap
+8. **2.5.8**：Coverage 驗證 + closeout
+
+詳細見 `MD/design/06-arm7tdmi-completion-plan.md`。
