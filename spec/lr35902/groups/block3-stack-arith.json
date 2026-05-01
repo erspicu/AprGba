@@ -45,7 +45,7 @@
         "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD SP,HL",
         "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_pair", "name": "HL", "out": "v" },
+          { "op": "read_reg_pair_named", "name": "HL", "out": "v" },
           { "op": "write_reg_named", "name": "SP", "value": "v" }
         ]
       }]

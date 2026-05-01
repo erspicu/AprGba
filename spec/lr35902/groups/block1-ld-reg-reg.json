@@ -20,7 +20,7 @@
           "cycles": { "form": "2m" },
           "steps": [
             { "op": "lr35902_read_r8",  "field": "sss", "out": "src" },
-            { "op": "read_reg_pair",    "name": "HL",   "out": "addr" },
+            { "op": "read_reg_pair_named",    "name": "HL",   "out": "addr" },
             { "op": "store_byte",       "address": "addr", "value": "src" }
           ]
         }
@@ -42,7 +42,7 @@
           "manual_ref": "GB CPU manual §LD r,(HL)",
           "cycles": { "form": "2m" },
           "steps": [
-            { "op": "read_reg_pair",     "name": "HL",   "out": "addr" },
+            { "op": "read_reg_pair_named",     "name": "HL",   "out": "addr" },
             { "op": "load_byte",         "address": "addr", "out": "src" },
             { "op": "lr35902_write_r8",  "field": "ddd", "value": "src" }
           ]
