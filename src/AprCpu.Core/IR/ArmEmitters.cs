@@ -524,8 +524,13 @@ internal sealed class BranchIndirectArm : IMicroOpEmitter
         var bit0 = ctx.Builder.BuildAnd(target, ctx.ConstU32(1), "bx_bit0");
         CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "T", bit0);
 
-        var alignMask = ctx.ConstU32(0xFFFFFFFEu);
-        var aligned   = ctx.Builder.BuildAnd(target, alignMask, "bx_aligned");
+        // Alignment depends on which mode we're switching INTO:
+        //   bit0 == 1 → Thumb (halfword align: clear bit 0)
+        //   bit0 == 0 → ARM   (word align: clear bits 1:0)
+        var bit0IsSet = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, bit0, ctx.ConstU32(0), "bx_thumb");
+        var thumbAligned = ctx.Builder.BuildAnd(target, ctx.ConstU32(0xFFFFFFFEu), "bx_thumb_aligned");
+        var armAligned   = ctx.Builder.BuildAnd(target, ctx.ConstU32(0xFFFFFFFCu), "bx_arm_aligned");
+        var aligned = ctx.Builder.BuildSelect(bit0IsSet, thumbAligned, armAligned, "bx_aligned");
 
         var pcSlot = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
         ctx.Builder.BuildStore(aligned, pcSlot);

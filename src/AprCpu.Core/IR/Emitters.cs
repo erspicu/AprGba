@@ -443,13 +443,32 @@ internal sealed class SelectStep : IMicroOpEmitter
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
         var cond     = CondExpr.Parse(step.Raw.GetProperty("cond")).Lower(ctx);
-        var trueName  = step.Raw.GetProperty("if_true").GetString()!;
-        var falseName = step.Raw.GetProperty("if_false").GetString()!;
-        var outName   = step.Raw.GetProperty("out").GetString()!;
-        var trueVal   = ctx.Resolve(trueName);
-        var falseVal  = ctx.Resolve(falseName);
-        var result    = ctx.Builder.BuildSelect(cond, trueVal, falseVal, outName);
+        var trueVal  = ResolveValue(ctx, step.Raw, "if_true");
+        var falseVal = ResolveValue(ctx, step.Raw, "if_false");
+        var outName  = step.Raw.GetProperty("out").GetString()!;
+        var result   = ctx.Builder.BuildSelect(cond, trueVal, falseVal, outName);
         ctx.Values[outName] = result;
+    }
+
+    // Accept either { "if_true": "name" } or { "if_true": { "const": 32 } }.
+    private static LLVMValueRef ResolveValue(EmitContext ctx, JsonElement raw, string property)
+    {
+        var el = raw.GetProperty(property);
+        if (el.ValueKind == JsonValueKind.String)
+            return ctx.Resolve(el.GetString()!);
+        if (el.ValueKind == JsonValueKind.Object && el.TryGetProperty("const", out var c))
+        {
+            uint v = c.ValueKind switch
+            {
+                JsonValueKind.Number => (uint)c.GetInt64(),
+                JsonValueKind.String when c.GetString()!.StartsWith("0x") =>
+                    Convert.ToUInt32(c.GetString()!.Substring(2), 16),
+                _ => throw new InvalidOperationException("'const' must be a number or 0x-hex string")
+            };
+            return ctx.ConstU32(v);
+        }
+        throw new InvalidOperationException(
+            $"select '{property}' must be a value name or {{\"const\": <n>}}; got {el.ValueKind}");
     }
 }
 
