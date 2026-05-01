@@ -35,6 +35,13 @@ Console.WriteLine($"  initial PC=0x{cpu.ReadReg16(GbReg16.PC):X4} SP=0x{cpu.Read
 var consumed = cpu.RunCycles(opts.Cycles);
 Console.WriteLine($"  ran {consumed} cycles. final PC=0x{cpu.ReadReg16(GbReg16.PC):X4} halted={cpu.IsHalted}");
 
+if (bus.SerialLog.Length > 0)
+{
+    Console.WriteLine($"--- serial output ({bus.SerialLog.Length} bytes) ---");
+    Console.WriteLine(bus.SerialLog.ToString());
+    Console.WriteLine("--- end serial ---");
+}
+
 if (opts.ScreenshotPath is not null)
 {
     var ppu = new GbPpu();
