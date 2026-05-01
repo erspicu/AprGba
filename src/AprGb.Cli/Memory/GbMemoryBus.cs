@@ -1,42 +1,146 @@
+using System.Text;
+
 namespace AprGb.Cli.Memory;
 
 /// <summary>
-/// Game Boy memory bus skeleton. Real implementation lands in the next
-/// pass — this stub just owns the 64 KB address space and lets ROM
-/// data be loaded into the cart region for early bring-up.
+/// Game Boy DMG memory bus with MBC1 banking and serial-port capture.
+/// MBC2/3/5 not modelled — sufficient for Blargg's cpu_instrs and
+/// instr_timing test ROMs.
+///
+/// Serial output capture: Blargg's CPU test ROMs print pass/fail text
+/// by writing the character to <c>FF01</c> then <c>0x81</c> to
+/// <c>FF02</c> (start transfer, internal clock). We intercept the
+/// FF02 write and append <c>FF01</c>'s last value to <see cref="SerialLog"/>,
+/// then immediately complete the transfer (write 0x01 to FF02 and raise
+/// the serial interrupt — though no IRQ handler is needed for cpu_instrs).
 /// </summary>
 public sealed class GbMemoryBus
 {
-    /// <summary>
-    /// Full 16-bit address space (0x0000-0xFFFF). For Phase 4.5 the
-    /// MBC dispatching will overlay real backing arrays; this flat
-    /// buffer is the placeholder.
-    /// </summary>
-    public byte[] Mem { get; } = new byte[0x10000];
+    public byte[] Rom    { get; private set; } = Array.Empty<byte>();
+    public byte[] ExtRam { get; }              = new byte[0x8000];     // up to 32 KB MBC1 RAM
+    public byte[] Wram   { get; }              = new byte[0x2000];     // 8 KB
+    public byte[] Vram   { get; }              = new byte[0x2000];     // 8 KB
+    public byte[] Oam    { get; }              = new byte[0xA0];       // 160 B
+    public byte[] Hram   { get; }              = new byte[0x7F];       // 127 B (FF80-FFFE)
+    public byte[] Io     { get; }              = new byte[0x80];       // FF00-FF7F
 
-    /// <summary>The cartridge ROM loaded from disk (size depends on cart).</summary>
-    public byte[] Rom { get; private set; } = Array.Empty<byte>();
+    public byte InterruptEnable;     // 0xFFFF
+    public byte InterruptFlag;       // 0xFF0F shadowed in Io but exposed for clarity
 
-    public void LoadRom(byte[] romBytes)
+    /// <summary>Captured serial output — Blargg test ROMs use this for pass/fail text.</summary>
+    public StringBuilder SerialLog { get; } = new();
+
+    // MBC1 state
+    private int  _romBank   = 1;
+    private int  _ramBank   = 0;
+    private bool _ramEnable = false;
+    private bool _modeRamBank = false;    // false = ROM banking mode, true = RAM banking mode
+
+    public void LoadRom(byte[] romBytes) => Rom = romBytes;
+
+    public byte ReadByte(ushort addr)
     {
-        Rom = romBytes;
-        // GB ROM bank 0 is fixed at 0x0000-0x3FFF. Bank N at 0x4000-0x7FFF
-        // (default N=1). MBC mapping comes later.
-        var len0 = Math.Min(0x4000, romBytes.Length);
-        Buffer.BlockCopy(romBytes, 0, Mem, 0x0000, len0);
-        if (romBytes.Length > 0x4000)
-        {
-            var len1 = Math.Min(0x4000, romBytes.Length - 0x4000);
-            Buffer.BlockCopy(romBytes, 0x4000, Mem, 0x4000, len1);
-        }
+        if (addr < 0x4000)                       return SafeRom(addr);
+        if (addr < 0x8000)                       return SafeRom((addr - 0x4000) + _romBank * 0x4000);
+        if (addr < 0xA000)                       return Vram[addr - 0x8000];
+        if (addr < 0xC000)                       return _ramEnable ? ExtRam[(addr - 0xA000) + _ramBank * 0x2000] : (byte)0xFF;
+        if (addr < 0xE000)                       return Wram[addr - 0xC000];
+        if (addr < 0xFE00)                       return Wram[addr - 0xE000];     // echo
+        if (addr < 0xFEA0)                       return Oam[addr - 0xFE00];
+        if (addr < 0xFF00)                       return 0xFF;                    // unusable
+        if (addr == 0xFFFF)                      return InterruptEnable;
+        if (addr >= 0xFF80)                      return Hram[addr - 0xFF80];
+        return ReadIo((byte)(addr - 0xFF00));
     }
 
-    public byte ReadByte(ushort addr) => Mem[addr];
-
-    public void WriteByte(ushort addr, byte value)
+    public void WriteByte(ushort addr, byte v)
     {
-        // ROM region (0x0000-0x7FFF) is read-only for now.
-        if (addr < 0x8000) return;
-        Mem[addr] = value;
+        if (addr < 0x2000) { _ramEnable = (v & 0x0F) == 0x0A; return; }
+        if (addr < 0x4000)
+        {
+            // Lower 5 bits of ROM bank, with the MBC1 quirk: bank values
+            // 0/0x20/0x40/0x60 alias to 1/0x21/0x41/0x61 (no bank 0 in
+            // the upper window).
+            var lo = v & 0x1F;
+            if (lo == 0) lo = 1;
+            _romBank = (_romBank & 0x60) | lo;
+            return;
+        }
+        if (addr < 0x6000)
+        {
+            // Upper 2 bits — depending on mode, either ROM bank high or
+            // RAM bank.
+            var hi = v & 0x3;
+            if (_modeRamBank) _ramBank = hi;
+            else              _romBank = (_romBank & 0x1F) | (hi << 5);
+            return;
+        }
+        if (addr < 0x8000) { _modeRamBank = (v & 1) != 0; return; }
+        if (addr < 0xA000) { Vram[addr - 0x8000] = v; return; }
+        if (addr < 0xC000) { if (_ramEnable) ExtRam[(addr - 0xA000) + _ramBank * 0x2000] = v; return; }
+        if (addr < 0xE000) { Wram[addr - 0xC000] = v; return; }
+        if (addr < 0xFE00) { Wram[addr - 0xE000] = v; return; }     // echo
+        if (addr < 0xFEA0) { Oam[addr - 0xFE00] = v; return; }
+        if (addr < 0xFF00) return;       // unusable
+        if (addr == 0xFFFF) { InterruptEnable = v; return; }
+        if (addr >= 0xFF80) { Hram[addr - 0xFF80] = v; return; }
+        WriteIo((byte)(addr - 0xFF00), v);
+    }
+
+    private byte SafeRom(int idx) => idx < Rom.Length ? Rom[idx] : (byte)0xFF;
+
+    private byte ReadIo(byte off)
+    {
+        return off switch
+        {
+            0x00 => 0xCF,                    // P1 — no buttons pressed
+            0x04 => Io[0x04],                // DIV
+            0x05 => Io[0x05],                // TIMA
+            0x06 => Io[0x06],                // TMA
+            0x07 => Io[0x07],                // TAC
+            0x0F => InterruptFlag,           // IF
+            0x40 => Io[0x40],                // LCDC
+            0x41 => Io[0x41],                // STAT
+            0x42 => Io[0x42],                // SCY
+            0x43 => Io[0x43],                // SCX
+            0x44 => 0x90,                    // LY — fake "in VBlank" (line 144) to satisfy ROMs that wait
+            0x45 => Io[0x45],                // LYC
+            0x47 => Io[0x47],                // BGP
+            0x48 => Io[0x48],                // OBP0
+            0x49 => Io[0x49],                // OBP1
+            0x4A => Io[0x4A],                // WY
+            0x4B => Io[0x4B],                // WX
+            _    => Io[off]
+        };
+    }
+
+    private void WriteIo(byte off, byte v)
+    {
+        switch (off)
+        {
+            case 0x01:                       // SB — serial data buffer
+                Io[0x01] = v;
+                break;
+
+            case 0x02:                       // SC — serial control
+                Io[0x02] = v;
+                if ((v & 0x80) != 0)
+                {
+                    // Bit 7 set = "start transfer". Capture the byte and
+                    // immediately complete; raise serial IRQ flag.
+                    SerialLog.Append((char)Io[0x01]);
+                    Io[0x02] = (byte)(v & 0x7F);
+                    InterruptFlag |= 0x08;
+                }
+                break;
+
+            case 0x0F:                       // IF
+                InterruptFlag = (byte)(v & 0x1F);
+                break;
+
+            default:
+                Io[off] = v;
+                break;
+        }
     }
 }
