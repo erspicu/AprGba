@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AprCpu.Compiler/AprCpu.Compiler.csproj" />
+    <Project Path="src/AprCpu.Core/AprCpu.Core.csproj" />
+    <Project Path="src/AprCpu.Tests/AprCpu.Tests.csproj" />
+  </Folder>
+</Solution>

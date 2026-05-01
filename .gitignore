@@ -430,3 +430,10 @@ FodyWeavers.xsd
 
 # Local-only working notes / scratch
 /etc/
+
+# Third-party reference manuals (vendor copyright, keep local only)
+/ref/
+
+# LLVM IR / Bitcode dumps from spike / dev runs
+*.ll
+*.bc

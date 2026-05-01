@@ -8,7 +8,7 @@
 
 ## Phase 0：環境與 Spike（1–2 週）
 
-**目標**：確認 LLVMSharp 在 Windows 11 + .NET 12 可用
+**目標**：確認 LLVMSharp 在 Windows 11 + .NET 10 可用
 
 任務：
 - [ ] `dotnet new sln`，建立架構文件中描述的專案骨架
