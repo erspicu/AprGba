@@ -113,7 +113,7 @@ internal static class BlockTransferImpl
         ComputeAddressing(EmitContext ctx, MicroOpStep step, out LLVMValueRef list, out LLVMValueRef wBit)
     {
         // List: either prebuilt value or instruction field
-        list = step.Raw.TryGetProperty("list", out var listEl)
+        var rawList = step.Raw.TryGetProperty("list", out var listEl)
             ? ctx.Resolve(listEl.GetString()!)
             : ctx.Resolve(step.Raw.GetProperty("list_field").GetString()!);
 
@@ -137,11 +137,19 @@ internal static class BlockTransferImpl
         }
         var baseVal = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, basePtr, "blkt_base");
 
-        // Popcount-based total byte count.
+        // ARM7TDMI empty-rlist quirk: when the register list is empty,
+        // the instruction behaves as if {R15} were in the list (so PC is
+        // loaded/stored), but the writeback advances by 0x40 (16 registers
+        // worth) instead of 4. Tested by jsmolka tests 513-515.
+        var listIsZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, rawList, ctx.ConstU32(0), "blkt_empty");
+        list = ctx.Builder.BuildSelect(listIsZero, ctx.ConstU32(1u << 15), rawList, "blkt_list_eff");
+
+        // Popcount-based total byte count, with empty-list → 0x40 override.
         var ctpop = BlockTransferEmitters.GetCtpopI32(ctx.Module);
         var ctpopType = LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32, new[] { LLVMTypeRef.Int32 });
-        var count = ctx.Builder.BuildCall2(ctpopType, ctpop, new[] { list }, "blkt_count");
-        var total = ctx.Builder.BuildShl(count, ctx.ConstU32(2), "blkt_total_bytes");
+        var count = ctx.Builder.BuildCall2(ctpopType, ctpop, new[] { rawList }, "blkt_count");
+        var totalNormal = ctx.Builder.BuildShl(count, ctx.ConstU32(2), "blkt_total_normal");
+        var total = ctx.Builder.BuildSelect(listIsZero, ctx.ConstU32(0x40), totalNormal, "blkt_total_bytes");
 
         // P==1 -> pAdj = 4, P==0 -> pAdj = 0  (and conversely for the
         // decrement branch where it picks 0 vs 4).
@@ -205,6 +213,13 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
     {
         var (startAddr, finalAddr, basePtr) = BlockTransferImpl.ComputeAddressing(ctx, step, out var list, out var wBit);
 
+        // ARM7TDMI: when Rn appears in the load list, the loaded value
+        // wins over the writeback. Achieve this by performing the
+        // writeback BEFORE the loads — any subsequent load to Rn
+        // overrides what writeback wrote. (For STM the writeback stays
+        // AFTER the stores; see BlockStoreEmitter.)
+        BlockTransferImpl.EmitWriteback(ctx, wBit, basePtr, finalAddr);
+
         // Running address slot.
         var addrSlot = ctx.Builder.BuildAlloca(LLVMTypeRef.Int32, "blkl_addr");
         ctx.Builder.BuildStore(startAddr, addrSlot);
@@ -260,8 +275,6 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
             ctx.Builder.BuildBr(endBB);
             ctx.Builder.PositionAtEnd(endBB);
         }
-
-        BlockTransferImpl.EmitWriteback(ctx, wBit, basePtr, finalAddr);
     }
 }
 
@@ -286,6 +299,16 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
         var sIsSet = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, sBit, ctx.ConstU32(0), "blks_s_is1");
         var (userReadSlot, userReadType, userReadPtrType) =
             BlockTransferEmitters.GetUserRegReadSlot(ctx.Module, ctx.Layout.PointerType);
+
+        // Resolve Rn so we can detect the ARM7TDMI "Rn in list but not
+        // first" quirk: if Rn is the lowest set bit in the list the
+        // ORIGINAL value goes to memory; otherwise the post-writeback
+        // value goes to memory.
+        var rnIdx = step.Raw.TryGetProperty("base_index", out var rbiEl)
+            ? ctx.ConstU32((uint)rbiEl.GetInt32())
+            : ctx.Builder.BuildAnd(
+                ctx.Resolve(step.Raw.GetProperty("base_field").GetString()!),
+                ctx.ConstU32(0xF), "blks_rn_idx");
 
         for (int i = 0; i < 16; i++)
         {
@@ -312,8 +335,24 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
             var chosenAdj   = i == 15
                 ? ctx.Builder.BuildAdd(chosen, ctx.ConstU32(4), $"blks_r{i}_pc")
                 : chosen;
+
+            // ARM7TDMI quirk: if i == Rn and Rn is NOT the first register
+            // in the list, store the post-writeback value instead. For
+            // i=0 this can never trigger (R0 is always first if in list).
+            LLVMValueRef storeVal = chosenAdj;
+            if (i > 0)
+            {
+                var iEqRn = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, rnIdx, ctx.ConstU32((uint)i), $"blks_i_eq_rn_{i}");
+                // Any lower bits set in list?  list & ((1<<i)-1) != 0 means i is NOT first.
+                var lowMask = ctx.ConstU32((1u << i) - 1u);
+                var lowBits = ctx.Builder.BuildAnd(list, lowMask, $"blks_lowbits_{i}");
+                var hasLower = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, lowBits, ctx.ConstU32(0), $"blks_haslower_{i}");
+                var useWB = ctx.Builder.BuildAnd(iEqRn, hasLower, $"blks_useWB_{i}");
+                storeVal = ctx.Builder.BuildSelect(useWB, finalAddr, chosenAdj, $"blks_storeval_{i}");
+            }
+
             var write32Fn = ctx.Builder.BuildLoad2(write32PtrType, write32Slot, $"blks_write32_{i}");
-            ctx.Builder.BuildCall2(write32Type, write32Fn, new[] { curAddr, chosenAdj }, "");
+            ctx.Builder.BuildCall2(write32Type, write32Fn, new[] { curAddr, storeVal }, "");
             var nextAddr = ctx.Builder.BuildAdd(curAddr, ctx.ConstU32(4), $"blks_a{i}_next");
             ctx.Builder.BuildStore(nextAddr, addrSlot);
 
