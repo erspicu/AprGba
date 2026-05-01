@@ -441,3 +441,6 @@ FodyWeavers.xsd
 # Knowledgebase query logs — local-only Q&A history with Gemini
 /tools/knowledgebase/message/
 /tools/knowledgebase/config.json
+
+# AprGBemu reference clone — local-only for Phase 4.5 GB spec work
+/GB/
