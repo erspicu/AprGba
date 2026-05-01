@@ -1,0 +1,40 @@
+{
+  "name": "BranchExchange",
+  "comment": "BX must be matched BEFORE Data Processing because its mask (0x0FFFFFF0) is more specific and overlaps the bits 27:25=000 + bit 4=1 region used by RegRegShift.",
+  "formats": [
+    {
+      "name": "Branch_Exchange",
+      "comment": "cccc 0001 0010 1111 1111 1111 0001 mmmm (BX Rm)",
+      "pattern": "cccc_000100101111111111110001mmmm",
+      "fields": {
+        "cond": "31:28",
+        "rm": "3:0"
+      },
+      "mask": "0x0FFFFFF0",
+      "match": "0x012FFF10",
+      "instructions": [
+        {
+          "mnemonic": "BX",
+          "since": "ARMv4T",
+          "writes_pc": "always",
+          "switches_instruction_set": true,
+          "manual_ref": "ARM ARM A4.1.10",
+          "cycles": {
+            "form": "2S+1N"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rm",
+              "out": "target"
+            },
+            {
+              "op": "branch_indirect",
+              "target": "target"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

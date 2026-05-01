@@ -1,0 +1,33 @@
+{
+  "name": "ArchitecturallyUndefined",
+  "comment": "ARMv4 reserves the bits 27:25 = 011 + bit 4 = 1 encoding space as 'always undefined' — guaranteed never to be assigned a meaning. Trap to UndefinedInstruction.",
+  "formats": [
+    {
+      "name": "Undefined_Reserved_011_x4_1",
+      "comment": "cccc 011 xxxxxxxxxxxxxxxxxxxx 1 xxxx  (20 don't-care bits + bit 4 = 1 + 4 don't-care bits)",
+      "pattern": "cccc_011_xxxxxxxxxxxxxxxxxxxx_1_xxxx",
+      "fields": {
+        "cond": "31:28"
+      },
+      "mask": "0x0E000010",
+      "match": "0x06000010",
+      "instructions": [
+        {
+          "mnemonic": "UND",
+          "since": "ARMv4",
+          "writes_pc": "always",
+          "manual_ref": "ARM ARM A3.16.7 (Reserved instructions)",
+          "cycles": {
+            "form": "2S+1I+1N"
+          },
+          "steps": [
+            {
+              "op": "raise_exception",
+              "vector": "UndefinedInstruction"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

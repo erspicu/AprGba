@@ -1,0 +1,92 @@
+{
+  "name": "BlockDataTransfer",
+  "comment": "LDM/STM with all 4 P/U addressing modes (IA/IB/DA/DB), S-bit (user-mode access — not yet modelled), W-bit (writeback). Two formats distinguished by L bit; the runtime block_load/block_store emitter handles all P/U/W combinations via select.",
+  "formats": [
+    {
+      "name": "BDT_LDM",
+      "comment": "cccc 100 P U S W 1 nnnn rrrrrrrrrrrrrrrr  (LDM Rn{!}, {reg list})",
+      "pattern": "cccc_100_p_u_s_w_1_nnnn_rrrrrrrrrrrrrrrr",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "s_bit": "22",
+        "w_bit": "21",
+        "rn": "19:16",
+        "reg_list": "15:0"
+      },
+      "mask": "0x0E100000",
+      "match": "0x08100000",
+      "instructions": [
+        {
+          "mnemonic": "LDM",
+          "since": "ARMv4",
+          "writes_pc": "conditional_via_rd",
+          "manual_ref": "ARM ARM A4.1.20",
+          "cycles": {
+            "form": "(n)S+1N+1I",
+            "computed_at": "runtime"
+          },
+          "quirks": [
+            "s_bit_user_mode_not_modelled",
+            "rn_in_list_writeback_timing"
+          ],
+          "steps": [
+            {
+              "op": "block_load",
+              "list_field": "reg_list",
+              "base_field": "rn",
+              "p_field": "p_bit",
+              "u_field": "u_bit",
+              "w_field": "w_bit"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "BDT_STM",
+      "comment": "cccc 100 P U S W 0 nnnn rrrrrrrrrrrrrrrr  (STM Rn{!}, {reg list})",
+      "pattern": "cccc_100_p_u_s_w_0_nnnn_rrrrrrrrrrrrrrrr",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "s_bit": "22",
+        "w_bit": "21",
+        "rn": "19:16",
+        "reg_list": "15:0"
+      },
+      "mask": "0x0E100000",
+      "match": "0x08000000",
+      "instructions": [
+        {
+          "mnemonic": "STM",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "writes_memory": [
+            "normal"
+          ],
+          "manual_ref": "ARM ARM A4.1.97",
+          "cycles": {
+            "form": "(n-1)S+2N",
+            "computed_at": "runtime"
+          },
+          "quirks": [
+            "s_bit_user_mode_not_modelled"
+          ],
+          "steps": [
+            {
+              "op": "block_store",
+              "list_field": "reg_list",
+              "base_field": "rn",
+              "p_field": "p_bit",
+              "u_field": "u_bit",
+              "w_field": "w_bit"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+{
+  "name": "Coprocessor",
+  "comment": "ARMv4 Coprocessor instructions (CDP / MCR/MRC / LDC/STC). GBA's ARM7TDMI has no coprocessor implementation, so all three formats unconditionally raise UndefinedInstruction.",
+  "formats": [
+    {
+      "name": "Coprocessor_LDC_STC",
+      "comment": "cccc 110 P U N W L nnnn dddd kkkk oooooooo  (Coprocessor Data Transfer)",
+      "pattern": "cccc_110_p_u_q_w_a_nnnn_dddd_kkkk_oooooooo",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "n_bit_cp": "22",
+        "w_bit": "21",
+        "l_bit": "20",
+        "rn": "19:16",
+        "crd": "15:12",
+        "cp_num": "11:8",
+        "offset8": "7:0"
+      },
+      "mask": "0x0E000000",
+      "match": "0x0C000000",
+      "instructions": [
+        {
+          "mnemonic": "LDC_STC",
+          "since": "ARMv4",
+          "writes_pc": "always",
+          "manual_ref": "ARM ARM A4.1.21 / A4.1.97 (LDC/STC)",
+          "cycles": {
+            "form": "?"
+          },
+          "quirks": [
+            "no_coprocessor_on_gba"
+          ],
+          "steps": [
+            {
+              "op": "raise_exception",
+              "vector": "UndefinedInstruction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Coprocessor_CDP",
+      "comment": "cccc 1110 oooo nnnn dddd pppp qqq 0 mmmm  (Coprocessor Data Operation, bit 4 = 0)",
+      "pattern": "cccc_1110_oooo_nnnn_dddd_pppp_qqq_0_mmmm",
+      "fields": {
+        "cond": "31:28",
+        "opcode1": "23:20",
+        "crn": "19:16",
+        "crd": "15:12",
+        "cp_num": "11:8",
+        "opcode2": "7:5",
+        "crm": "3:0"
+      },
+      "mask": "0x0F000010",
+      "match": "0x0E000000",
+      "instructions": [
+        {
+          "mnemonic": "CDP",
+          "since": "ARMv4",
+          "writes_pc": "always",
+          "manual_ref": "ARM ARM A4.1.13",
+          "cycles": {
+            "form": "?"
+          },
+          "quirks": [
+            "no_coprocessor_on_gba"
+          ],
+          "steps": [
+            {
+              "op": "raise_exception",
+              "vector": "UndefinedInstruction"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Coprocessor_MCR_MRC",
+      "comment": "cccc 1110 ooo a nnnn dddd pppp qqq 1 mmmm  (Coprocessor Register Transfer, bit 4 = 1)",
+      "pattern": "cccc_1110_ooo_a_nnnn_dddd_pppp_qqq_1_mmmm",
+      "fields": {
+        "cond": "31:28",
+        "opcode1": "23:21",
+        "l_bit": "20",
+        "crn": "19:16",
+        "rd": "15:12",
+        "cp_num": "11:8",
+        "opcode2": "7:5",
+        "crm": "3:0"
+      },
+      "mask": "0x0F000010",
+      "match": "0x0E000010",
+      "instructions": [
+        {
+          "mnemonic": "MCR_MRC",
+          "since": "ARMv4",
+          "writes_pc": "always",
+          "manual_ref": "ARM ARM A4.1.31 / A4.1.37 (MCR/MRC)",
+          "cycles": {
+            "form": "?"
+          },
+          "quirks": [
+            "no_coprocessor_on_gba"
+          ],
+          "steps": [
+            {
+              "op": "raise_exception",
+              "vector": "UndefinedInstruction"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

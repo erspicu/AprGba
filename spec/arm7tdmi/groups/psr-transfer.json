@@ -1,0 +1,124 @@
+{
+  "name": "PSRTransfer",
+  "comment": "PSR Transfer (MRS/MSR) overlaps with the Data Processing encoding space when opcode is 10xx and S=0. Listed before DataProcessing so priority lookup matches PSR encodings first.",
+  "formats": [
+    {
+      "name": "PSR_MRS",
+      "comment": "cccc 0001 0P00 1111 dddd 0000 0000 0000  (MRS Rd, CPSR/SPSR)",
+      "pattern": "cccc_00010_p_001111_dddd_000000000000",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "22",
+        "rd": "15:12"
+      },
+      "mask": "0x0FBF0FFF",
+      "match": "0x010F0000",
+      "instructions": [
+        {
+          "mnemonic": "MRS",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "manual_ref": "ARM ARM A4.1.38",
+          "cycles": {
+            "form": "1S"
+          },
+          "steps": [
+            {
+              "op": "read_psr",
+              "which": "CPSR",
+              "out": "psr_val"
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "psr_val"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PSR_MSR_Reg",
+      "comment": "cccc 0001 0P10 ffff 1111 0000 0000 mmmm  (MSR PSR_<f>, Rm)",
+      "pattern": "cccc_00010_p_10_ffff_111100000000_mmmm",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "22",
+        "field_mask": "19:16",
+        "rm": "3:0"
+      },
+      "mask": "0x0FB0FFF0",
+      "match": "0x0120F000",
+      "instructions": [
+        {
+          "mnemonic": "MSR",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "manual_ref": "ARM ARM A4.1.39",
+          "cycles": {
+            "form": "1S"
+          },
+          "quirks": [
+            "psr_field_mask_runtime"
+          ],
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rm",
+              "out": "src"
+            },
+            {
+              "op": "write_psr",
+              "which": "CPSR",
+              "value": "src"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PSR_MSR_Imm",
+      "comment": "cccc 0011 0P10 ffff 1111 rrrr iiii iiii  (MSR PSR_<f>, #imm)",
+      "pattern": "cccc_00110_p_10_ffff_1111_rrrriiiiiiii",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "22",
+        "field_mask": "19:16",
+        "rotate": "11:8",
+        "imm8": "7:0"
+      },
+      "mask": "0x0FB0F000",
+      "match": "0x0320F000",
+      "operands": {
+        "src": {
+          "kind": "immediate_rotated",
+          "outputs": [
+            "op2_value",
+            "shifter_carry_out"
+          ]
+        }
+      },
+      "instructions": [
+        {
+          "mnemonic": "MSR",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "manual_ref": "ARM ARM A4.1.39",
+          "cycles": {
+            "form": "1S"
+          },
+          "quirks": [
+            "psr_field_mask_runtime"
+          ],
+          "steps": [
+            {
+              "op": "write_psr",
+              "which": "CPSR",
+              "value": "op2_value"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

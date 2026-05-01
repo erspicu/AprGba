@@ -1,0 +1,960 @@
+{
+  "name": "SingleDataTransfer",
+  "comment": "ARM Single Data Transfer (LDR/STR + byte/word). Eight formats: (L,B) × {immediate offset, shifted-register offset}. P/U/W decoded at runtime via select / if.",
+  "formats": [
+    {
+      "name": "SDT_Reg_STR",
+      "comment": "cccc 011 P U 0 W 0 nnnn dddd aaaaa tt 0 mmmm  (STR Rd, [Rn ± Rm shift])",
+      "pattern": "cccc_011_p_u_0_w_0_nnnn_dddd_aaaaatt0mmmm",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "w_bit": "21",
+        "rn": "19:16",
+        "rd": "15:12",
+        "shift_amount": "11:7",
+        "shift_type": "6:5",
+        "rm": "3:0"
+      },
+      "mask": "0x0E500010",
+      "match": "0x06000000",
+      "operands": {
+        "off": {
+          "kind": "shifted_register_by_immediate",
+          "outputs": [
+            "op2_value",
+            "shifter_carry_out"
+          ]
+        }
+      },
+      "instructions": [
+        {
+          "mnemonic": "STR",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "writes_memory": [
+            "normal"
+          ],
+          "manual_ref": "ARM ARM A4.1.99",
+          "cycles": {
+            "form": "2N"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "base"
+            },
+            {
+              "op": "read_reg",
+              "index": "rd",
+              "out": "data"
+            },
+            {
+              "op": "add",
+              "in": [
+                "base",
+                "op2_value"
+              ],
+              "out": "added"
+            },
+            {
+              "op": "sub",
+              "in": [
+                "base",
+                "op2_value"
+              ],
+              "out": "subbed"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "u_bit",
+                "eq": 1
+              },
+              "if_true": "added",
+              "if_false": "subbed",
+              "out": "addr_after"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "p_bit",
+                "eq": 1
+              },
+              "if_true": "addr_after",
+              "if_false": "base",
+              "out": "address"
+            },
+            {
+              "op": "store",
+              "addr": "address",
+              "value": "data",
+              "size": 32
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "p_bit",
+                "eq": 0
+              },
+              "then": [
+                {
+                  "op": "write_reg",
+                  "index": "rn",
+                  "value": "addr_after"
+                }
+              ],
+              "else": [
+                {
+                  "op": "if",
+                  "cond": {
+                    "field": "w_bit",
+                    "eq": 1
+                  },
+                  "then": [
+                    {
+                      "op": "write_reg",
+                      "index": "rn",
+                      "value": "addr_after"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "SDT_Reg_LDR",
+      "comment": "cccc 011 P U 0 W 1 nnnn dddd aaaaa tt 0 mmmm  (LDR Rd, [Rn ± Rm shift])",
+      "pattern": "cccc_011_p_u_0_w_1_nnnn_dddd_aaaaatt0mmmm",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "w_bit": "21",
+        "rn": "19:16",
+        "rd": "15:12",
+        "shift_amount": "11:7",
+        "shift_type": "6:5",
+        "rm": "3:0"
+      },
+      "mask": "0x0E500010",
+      "match": "0x06100000",
+      "operands": {
+        "off": {
+          "kind": "shifted_register_by_immediate",
+          "outputs": [
+            "op2_value",
+            "shifter_carry_out"
+          ]
+        }
+      },
+      "instructions": [
+        {
+          "mnemonic": "LDR",
+          "since": "ARMv4",
+          "writes_pc": "conditional_via_rd",
+          "manual_ref": "ARM ARM A4.1.23",
+          "cycles": {
+            "form": "1S+1N+1I",
+            "extra_when_load_pc": "+1S+1N"
+          },
+          "quirks": [
+            "unaligned_rotates"
+          ],
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "base"
+            },
+            {
+              "op": "add",
+              "in": [
+                "base",
+                "op2_value"
+              ],
+              "out": "added"
+            },
+            {
+              "op": "sub",
+              "in": [
+                "base",
+                "op2_value"
+              ],
+              "out": "subbed"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "u_bit",
+                "eq": 1
+              },
+              "if_true": "added",
+              "if_false": "subbed",
+              "out": "addr_after"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "p_bit",
+                "eq": 1
+              },
+              "if_true": "addr_after",
+              "if_false": "base",
+              "out": "address"
+            },
+            {
+              "op": "load",
+              "addr": "address",
+              "size": 32,
+              "out": "loaded"
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "loaded"
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "p_bit",
+                "eq": 0
+              },
+              "then": [
+                {
+                  "op": "write_reg",
+                  "index": "rn",
+                  "value": "addr_after"
+                }
+              ],
+              "else": [
+                {
+                  "op": "if",
+                  "cond": {
+                    "field": "w_bit",
+                    "eq": 1
+                  },
+                  "then": [
+                    {
+                      "op": "write_reg",
+                      "index": "rn",
+                      "value": "addr_after"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "SDT_Reg_STRB",
+      "comment": "cccc 011 P U 1 W 0 nnnn dddd aaaaa tt 0 mmmm  (STRB Rd, [Rn ± Rm shift])",
+      "pattern": "cccc_011_p_u_1_w_0_nnnn_dddd_aaaaatt0mmmm",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "w_bit": "21",
+        "rn": "19:16",
+        "rd": "15:12",
+        "shift_amount": "11:7",
+        "shift_type": "6:5",
+        "rm": "3:0"
+      },
+      "mask": "0x0E500010",
+      "match": "0x06400000",
+      "operands": {
+        "off": {
+          "kind": "shifted_register_by_immediate",
+          "outputs": [
+            "op2_value",
+            "shifter_carry_out"
+          ]
+        }
+      },
+      "instructions": [
+        {
+          "mnemonic": "STRB",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "writes_memory": [
+            "normal"
+          ],
+          "manual_ref": "ARM ARM A4.1.100",
+          "cycles": {
+            "form": "2N"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "base"
+            },
+            {
+              "op": "read_reg",
+              "index": "rd",
+              "out": "data"
+            },
+            {
+              "op": "add",
+              "in": [
+                "base",
+                "op2_value"
+              ],
+              "out": "added"
+            },
+            {
+              "op": "sub",
+              "in": [
+                "base",
+                "op2_value"
+              ],
+              "out": "subbed"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "u_bit",
+                "eq": 1
+              },
+              "if_true": "added",
+              "if_false": "subbed",
+              "out": "addr_after"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "p_bit",
+                "eq": 1
+              },
+              "if_true": "addr_after",
+              "if_false": "base",
+              "out": "address"
+            },
+            {
+              "op": "store",
+              "addr": "address",
+              "value": "data",
+              "size": 8
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "p_bit",
+                "eq": 0
+              },
+              "then": [
+                {
+                  "op": "write_reg",
+                  "index": "rn",
+                  "value": "addr_after"
+                }
+              ],
+              "else": [
+                {
+                  "op": "if",
+                  "cond": {
+                    "field": "w_bit",
+                    "eq": 1
+                  },
+                  "then": [
+                    {
+                      "op": "write_reg",
+                      "index": "rn",
+                      "value": "addr_after"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "SDT_Reg_LDRB",
+      "comment": "cccc 011 P U 1 W 1 nnnn dddd aaaaa tt 0 mmmm  (LDRB Rd, [Rn ± Rm shift])",
+      "pattern": "cccc_011_p_u_1_w_1_nnnn_dddd_aaaaatt0mmmm",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "w_bit": "21",
+        "rn": "19:16",
+        "rd": "15:12",
+        "shift_amount": "11:7",
+        "shift_type": "6:5",
+        "rm": "3:0"
+      },
+      "mask": "0x0E500010",
+      "match": "0x06500000",
+      "operands": {
+        "off": {
+          "kind": "shifted_register_by_immediate",
+          "outputs": [
+            "op2_value",
+            "shifter_carry_out"
+          ]
+        }
+      },
+      "instructions": [
+        {
+          "mnemonic": "LDRB",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "manual_ref": "ARM ARM A4.1.24",
+          "cycles": {
+            "form": "1S+1N+1I"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "base"
+            },
+            {
+              "op": "add",
+              "in": [
+                "base",
+                "op2_value"
+              ],
+              "out": "added"
+            },
+            {
+              "op": "sub",
+              "in": [
+                "base",
+                "op2_value"
+              ],
+              "out": "subbed"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "u_bit",
+                "eq": 1
+              },
+              "if_true": "added",
+              "if_false": "subbed",
+              "out": "addr_after"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "p_bit",
+                "eq": 1
+              },
+              "if_true": "addr_after",
+              "if_false": "base",
+              "out": "address"
+            },
+            {
+              "op": "load",
+              "addr": "address",
+              "size": 8,
+              "signed": false,
+              "out": "loaded"
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "loaded"
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "p_bit",
+                "eq": 0
+              },
+              "then": [
+                {
+                  "op": "write_reg",
+                  "index": "rn",
+                  "value": "addr_after"
+                }
+              ],
+              "else": [
+                {
+                  "op": "if",
+                  "cond": {
+                    "field": "w_bit",
+                    "eq": 1
+                  },
+                  "then": [
+                    {
+                      "op": "write_reg",
+                      "index": "rn",
+                      "value": "addr_after"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "SDT_Imm_STR",
+      "comment": "cccc 010 P U 0 W 0 nnnn dddd iiiiiiiiiiii  (STR Rd, [Rn ± imm12])",
+      "pattern": "cccc_010_p_u_0_w_0_nnnn_dddd_iiiiiiiiiiii",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "w_bit": "21",
+        "rn": "19:16",
+        "rd": "15:12",
+        "imm12": "11:0"
+      },
+      "mask": "0x0E500000",
+      "match": "0x04000000",
+      "instructions": [
+        {
+          "mnemonic": "STR",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "writes_memory": [
+            "normal"
+          ],
+          "manual_ref": "ARM ARM A4.1.99",
+          "cycles": {
+            "form": "2N"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "base"
+            },
+            {
+              "op": "read_reg",
+              "index": "rd",
+              "out": "data"
+            },
+            {
+              "op": "add",
+              "in": [
+                "base",
+                "imm12"
+              ],
+              "out": "added"
+            },
+            {
+              "op": "sub",
+              "in": [
+                "base",
+                "imm12"
+              ],
+              "out": "subbed"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "u_bit",
+                "eq": 1
+              },
+              "if_true": "added",
+              "if_false": "subbed",
+              "out": "addr_after"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "p_bit",
+                "eq": 1
+              },
+              "if_true": "addr_after",
+              "if_false": "base",
+              "out": "address"
+            },
+            {
+              "op": "store",
+              "addr": "address",
+              "value": "data",
+              "size": 32
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "p_bit",
+                "eq": 0
+              },
+              "then": [
+                {
+                  "op": "write_reg",
+                  "index": "rn",
+                  "value": "addr_after"
+                }
+              ],
+              "else": [
+                {
+                  "op": "if",
+                  "cond": {
+                    "field": "w_bit",
+                    "eq": 1
+                  },
+                  "then": [
+                    {
+                      "op": "write_reg",
+                      "index": "rn",
+                      "value": "addr_after"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "SDT_Imm_LDR",
+      "comment": "cccc 010 P U 0 W 1 nnnn dddd iiiiiiiiiiii  (LDR Rd, [Rn ± imm12])",
+      "pattern": "cccc_010_p_u_0_w_1_nnnn_dddd_iiiiiiiiiiii",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "w_bit": "21",
+        "rn": "19:16",
+        "rd": "15:12",
+        "imm12": "11:0"
+      },
+      "mask": "0x0E500000",
+      "match": "0x04100000",
+      "instructions": [
+        {
+          "mnemonic": "LDR",
+          "since": "ARMv4",
+          "writes_pc": "conditional_via_rd",
+          "manual_ref": "ARM ARM A4.1.23",
+          "cycles": {
+            "form": "1S+1N+1I",
+            "extra_when_load_pc": "+1S+1N"
+          },
+          "quirks": [
+            "unaligned_rotates"
+          ],
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "base"
+            },
+            {
+              "op": "add",
+              "in": [
+                "base",
+                "imm12"
+              ],
+              "out": "added"
+            },
+            {
+              "op": "sub",
+              "in": [
+                "base",
+                "imm12"
+              ],
+              "out": "subbed"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "u_bit",
+                "eq": 1
+              },
+              "if_true": "added",
+              "if_false": "subbed",
+              "out": "addr_after"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "p_bit",
+                "eq": 1
+              },
+              "if_true": "addr_after",
+              "if_false": "base",
+              "out": "address"
+            },
+            {
+              "op": "load",
+              "addr": "address",
+              "size": 32,
+              "out": "loaded"
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "loaded"
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "p_bit",
+                "eq": 0
+              },
+              "then": [
+                {
+                  "op": "write_reg",
+                  "index": "rn",
+                  "value": "addr_after"
+                }
+              ],
+              "else": [
+                {
+                  "op": "if",
+                  "cond": {
+                    "field": "w_bit",
+                    "eq": 1
+                  },
+                  "then": [
+                    {
+                      "op": "write_reg",
+                      "index": "rn",
+                      "value": "addr_after"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "SDT_Imm_STRB",
+      "comment": "cccc 010 P U 1 W 0 nnnn dddd iiiiiiiiiiii  (STRB Rd, [Rn ± imm12])",
+      "pattern": "cccc_010_p_u_1_w_0_nnnn_dddd_iiiiiiiiiiii",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "w_bit": "21",
+        "rn": "19:16",
+        "rd": "15:12",
+        "imm12": "11:0"
+      },
+      "mask": "0x0E500000",
+      "match": "0x04400000",
+      "instructions": [
+        {
+          "mnemonic": "STRB",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "writes_memory": [
+            "normal"
+          ],
+          "manual_ref": "ARM ARM A4.1.100",
+          "cycles": {
+            "form": "2N"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "base"
+            },
+            {
+              "op": "read_reg",
+              "index": "rd",
+              "out": "data"
+            },
+            {
+              "op": "add",
+              "in": [
+                "base",
+                "imm12"
+              ],
+              "out": "added"
+            },
+            {
+              "op": "sub",
+              "in": [
+                "base",
+                "imm12"
+              ],
+              "out": "subbed"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "u_bit",
+                "eq": 1
+              },
+              "if_true": "added",
+              "if_false": "subbed",
+              "out": "addr_after"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "p_bit",
+                "eq": 1
+              },
+              "if_true": "addr_after",
+              "if_false": "base",
+              "out": "address"
+            },
+            {
+              "op": "store",
+              "addr": "address",
+              "value": "data",
+              "size": 8
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "p_bit",
+                "eq": 0
+              },
+              "then": [
+                {
+                  "op": "write_reg",
+                  "index": "rn",
+                  "value": "addr_after"
+                }
+              ],
+              "else": [
+                {
+                  "op": "if",
+                  "cond": {
+                    "field": "w_bit",
+                    "eq": 1
+                  },
+                  "then": [
+                    {
+                      "op": "write_reg",
+                      "index": "rn",
+                      "value": "addr_after"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "SDT_Imm_LDRB",
+      "comment": "cccc 010 P U 1 W 1 nnnn dddd iiiiiiiiiiii  (LDRB Rd, [Rn ± imm12])",
+      "pattern": "cccc_010_p_u_1_w_1_nnnn_dddd_iiiiiiiiiiii",
+      "fields": {
+        "cond": "31:28",
+        "p_bit": "24",
+        "u_bit": "23",
+        "w_bit": "21",
+        "rn": "19:16",
+        "rd": "15:12",
+        "imm12": "11:0"
+      },
+      "mask": "0x0E500000",
+      "match": "0x04500000",
+      "instructions": [
+        {
+          "mnemonic": "LDRB",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "manual_ref": "ARM ARM A4.1.24",
+          "cycles": {
+            "form": "1S+1N+1I"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "base"
+            },
+            {
+              "op": "add",
+              "in": [
+                "base",
+                "imm12"
+              ],
+              "out": "added"
+            },
+            {
+              "op": "sub",
+              "in": [
+                "base",
+                "imm12"
+              ],
+              "out": "subbed"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "u_bit",
+                "eq": 1
+              },
+              "if_true": "added",
+              "if_false": "subbed",
+              "out": "addr_after"
+            },
+            {
+              "op": "select",
+              "cond": {
+                "field": "p_bit",
+                "eq": 1
+              },
+              "if_true": "addr_after",
+              "if_false": "base",
+              "out": "address"
+            },
+            {
+              "op": "load",
+              "addr": "address",
+              "size": 8,
+              "signed": false,
+              "out": "loaded"
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "loaded"
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "p_bit",
+                "eq": 0
+              },
+              "then": [
+                {
+                  "op": "write_reg",
+                  "index": "rn",
+                  "value": "addr_after"
+                }
+              ],
+              "else": [
+                {
+                  "op": "if",
+                  "cond": {
+                    "field": "w_bit",
+                    "eq": 1
+                  },
+                  "then": [
+                    {
+                      "op": "write_reg",
+                      "index": "rn",
+                      "value": "addr_after"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
