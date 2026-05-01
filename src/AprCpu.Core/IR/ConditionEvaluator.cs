@@ -26,6 +26,41 @@ namespace AprCpu.Core.IR
         public static LLVMValueRef EmitCheck(EmitContext ctx, GlobalCondition gc)
         {
             var cond = ctx.ExtractField(gc.Field, "cond");
+            return EmitCheckOnCondValue(ctx, cond, gc.Table);
+        }
+
+        /// <summary>
+        /// Standard ARMv4 condition mnemonic table (used as default when the
+        /// caller doesn't pass an explicit table — typical for Thumb F16
+        /// conditional branches whose cond field is per-instruction rather
+        /// than a global gate).
+        /// </summary>
+        public static readonly IReadOnlyDictionary<string, string> StandardArmCondTable
+            = new Dictionary<string, string>
+            {
+                ["0000"] = "EQ", ["0001"] = "NE",
+                ["0010"] = "CS", ["0011"] = "CC",
+                ["0100"] = "MI", ["0101"] = "PL",
+                ["0110"] = "VS", ["0111"] = "VC",
+                ["1000"] = "HI", ["1001"] = "LS",
+                ["1010"] = "GE", ["1011"] = "LT",
+                ["1100"] = "GT", ["1101"] = "LE",
+                ["1110"] = "AL", ["1111"] = "NV",
+            };
+
+        /// <summary>
+        /// Same as <see cref="EmitCheck"/> but takes the cond value as an
+        /// already-resolved i32 (typically a step-output or a field
+        /// extraction the caller did itself). Useful for instructions like
+        /// Thumb F16 that carry their own per-instruction cond field
+        /// rather than going through the instruction-set-wide cond gate.
+        /// </summary>
+        public static LLVMValueRef EmitCheckOnCondValue(
+            EmitContext ctx,
+            LLVMValueRef cond,
+            IReadOnlyDictionary<string, string>? table = null)
+        {
+            table ??= StandardArmCondTable;
 
             // Read CPSR flags as i32 0/1 then convert to i1.
             var nI32 = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "N");
@@ -73,7 +108,7 @@ namespace AprCpu.Core.IR
             // Walk the spec's cond table; for each (binary code, mnemonic)
             // recognised, emit a select that picks this branch's result
             // when the cond field matches the code.
-            foreach (var (codeStr, mnemonic) in gc.Table)
+            foreach (var (codeStr, mnemonic) in table)
             {
                 if (!byMnemonic.TryGetValue(mnemonic, out var condResult)) continue;
 

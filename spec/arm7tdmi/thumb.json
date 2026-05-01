@@ -24,6 +24,9 @@
     { "$include": "thumb-groups/f13-add-offset-sp.json" },
     { "$include": "thumb-groups/f14-push-pop.json" },
     { "$include": "thumb-groups/f15-multiple-load-store.json" },
-    { "$include": "thumb-groups/f18-unconditional-branch.json" }
+    { "$include": "thumb-groups/f17-software-interrupt.json" },
+    { "$include": "thumb-groups/f16-conditional-branch.json" },
+    { "$include": "thumb-groups/f18-unconditional-branch.json" },
+    { "$include": "thumb-groups/f19-long-branch-link.json" }
   ]
 }

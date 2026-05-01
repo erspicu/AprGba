@@ -390,6 +390,59 @@ public class DecoderTableTests
         Assert.Equal("LDMIA", d!.Instruction.Mnemonic);
     }
 
+    /// <summary>Thumb F16 BEQ +offset (cond=0000) → 0xD002</summary>
+    [Fact]
+    public void Decode_Thumb_F16_BEq()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0xD002u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F16_BCond", d!.Format.Name);
+        Assert.Equal("B", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F16 BNE +offset (cond=0001) → 0xD102</summary>
+    [Fact]
+    public void Decode_Thumb_F16_BNe()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0xD102u);
+        Assert.NotNull(d);
+        Assert.Equal("B", d!.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F17 SWI #0 → 0xDF00 (must NOT be confused with F16 cond=1111)</summary>
+    [Fact]
+    public void Decode_Thumb_F17_Swi()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0xDF00u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F17_SWI", d!.Format.Name);
+        Assert.Equal("SWI", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F19 BL high half → 0xF000 (H=0)</summary>
+    [Fact]
+    public void Decode_Thumb_F19_BlHigh()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0xF000u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F19_BL", d!.Format.Name);
+        Assert.Equal("BL_HI", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F19 BL low half → 0xF800 (H=1)</summary>
+    [Fact]
+    public void Decode_Thumb_F19_BlLow()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0xF800u);
+        Assert.NotNull(d);
+        Assert.Equal("BL_LO", d!.Instruction.Mnemonic);
+    }
+
     // Note: prior "Decode_ReturnsNullForUndefinedEncoding" test was removed
     // in 2.5.5a because the spec's encoding-space coverage is approaching
     // 100% (Coprocessor stubs in 2.5.5b will close the remaining gap), and

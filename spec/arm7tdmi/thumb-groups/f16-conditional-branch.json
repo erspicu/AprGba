@@ -1,0 +1,35 @@
+{
+  "name": "Thumb_F16_ConditionalBranch",
+  "comment": "1101 cccc oooooooo — B<cond> with 8-bit signed offset (scaled by 2). cond=1111 is reserved for SWI (F17, must be matched first by priority order).",
+  "formats": [
+    {
+      "name":    "Thumb_F16_BCond",
+      "pattern": "1101_cccc_oooooooo",
+      "fields": {
+        "cond": "11:8",
+        "imm8": "7:0"
+      },
+      "mask":  "0xF000",
+      "match": "0xD000",
+      "instructions": [
+        {
+          "mnemonic":   "B",
+          "since":      "ARMv4T",
+          "writes_pc":  "conditional_via_rd",
+          "manual_ref": "ARM ARM A7.1.5 (Thumb F16)",
+          "cycles":     { "form": "(2S+1N) if taken, 1S if not" },
+          "comment":    "Single mnemonic 'B' with runtime cond evaluation; ARM disassemblers spell as BEQ/BNE/etc by cond field.",
+          "steps": [
+            { "op": "if_arm_cond", "cond_field": "cond", "then": [
+              { "op": "read_reg", "index": 15, "out": "raw_pc" },
+              { "op": "shl", "in": ["imm8", { "const": 24 }], "out": "shl24" },
+              { "op": "asr", "in": ["shl24", { "const": 23 }], "out": "scaled_offset" },
+              { "op": "add", "in": ["raw_pc", "scaled_offset"], "out": "target" },
+              { "op": "branch", "target": "target" }
+            ]}
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "name": "Thumb_F17_SoftwareInterrupt",
+  "comment": "11011111 vvvvvvvv — Thumb SWI. Distinguished from F16 conditional branch (cond=1111 reserved). Mask bits 15:8 fully fixed.",
+  "formats": [
+    {
+      "name":    "Thumb_F17_SWI",
+      "pattern": "11011111_vvvvvvvv",
+      "fields": {
+        "swi_id": "7:0"
+      },
+      "mask":  "0xFF00",
+      "match": "0xDF00",
+      "instructions": [
+        {
+          "mnemonic":   "SWI",
+          "since":      "ARMv4T",
+          "writes_pc":  "always",
+          "manual_ref": "ARM ARM A7.1.111 (Thumb F17)",
+          "cycles":     { "form": "2S+1N" },
+          "steps": [
+            { "op": "raise_exception", "vector": "SoftwareInterrupt" }
+          ]
+        }
+      ]
+    }
+  ]
+}

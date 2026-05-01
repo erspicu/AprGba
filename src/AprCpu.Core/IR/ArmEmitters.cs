@@ -42,6 +42,9 @@ public static class ArmEmitters
         // Exception entry (vectors). Phase 2.5.5 first-iteration stub.
         reg.Register(new RaiseExceptionEmitter());
 
+        // Per-instruction condition gate (Thumb F16 conditional branch).
+        reg.Register(new IfArmCondEmitter());
+
         // Stub / placeholder
         reg.Register(new RestoreCpsrFromSpsr());
     }
@@ -295,6 +298,52 @@ internal sealed class BranchIndirectArm : IMicroOpEmitter
 
         var pcSlot = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
         ctx.Builder.BuildStore(aligned, pcSlot);
+    }
+}
+
+/// <summary>
+/// Per-instruction conditional gate. Wraps a then-block so it executes
+/// only if the standard ARM condition (named by a 4-bit field in the
+/// instruction) holds against current CPSR flags.
+///
+/// Step shape:
+/// <code>
+///   { "op": "if_arm_cond",
+///     "cond_field": &lt;name&gt;,
+///     "then": [ ...steps... ] }
+/// </code>
+///
+/// Used by Thumb F16 (conditional branch) where each instruction
+/// carries its own cond field rather than going through the
+/// instruction-set-wide condition gate.
+/// </summary>
+internal sealed class IfArmCondEmitter : IMicroOpEmitter
+{
+    public string OpName => "if_arm_cond";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var condFieldName = step.Raw.GetProperty("cond_field").GetString()!;
+        var thenSteps = step.Raw.GetProperty("then");
+
+        var condVal = ctx.Resolve(condFieldName);
+        var shouldExec = ConditionEvaluator.EmitCheckOnCondValue(ctx, condVal);
+
+        var thenBB = ctx.Function.AppendBasicBlock("ifcond_then");
+        var endBB  = ctx.Function.AppendBasicBlock("ifcond_end");
+        ctx.Builder.BuildCondBr(shouldExec, thenBB, endBB);
+
+        ctx.Builder.PositionAtEnd(thenBB);
+        var registry = EmitterContextHolder.CurrentRegistry
+            ?? throw new InvalidOperationException("No active EmitterRegistry on this thread.");
+        foreach (var stepEl in thenSteps.EnumerateArray())
+        {
+            var op = stepEl.GetProperty("op").GetString()!;
+            registry.EmitStep(ctx, new MicroOpStep(op, stepEl));
+        }
+        if (ctx.Builder.InsertBlock.Terminator.Handle == IntPtr.Zero)
+            ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
     }
 }
 
