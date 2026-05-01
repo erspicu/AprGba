@@ -1,0 +1,48 @@
+{
+  "name": "Thumb_F15_MultipleLdSt",
+  "comment": "1100 L bbb rrrrrrrr — STMIA Rb!, {Rlist} or LDMIA Rb!, {Rlist}. Always increment-after with writeback. List is R0..R7 only (8 bits).",
+  "formats": [
+    {
+      "name":    "Thumb_F15_MultipleLdSt",
+      "pattern": "1100_a_bbb_rrrrrrrr",
+      "fields": {
+        "l_bit":    "11",
+        "rb":       "10:8",
+        "reg_list": "7:0"
+      },
+      "mask":  "0xF000",
+      "match": "0xC000",
+      "instructions": [
+        {
+          "selector":   { "field": "l_bit", "value": "0" },
+          "mnemonic":   "STMIA",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "writes_memory": ["normal"],
+          "manual_ref": "ARM ARM A7.1.40 (Thumb F15)",
+          "cycles":     { "form": "(n-1)S+2N" },
+          "steps": [
+            { "op": "block_store",
+              "list_field": "reg_list",
+              "base_field": "rb",
+              "p": 0, "u": 1, "w": 1 }
+          ]
+        },
+        {
+          "selector":   { "field": "l_bit", "value": "1" },
+          "mnemonic":   "LDMIA",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "manual_ref": "ARM ARM A7.1.20 (Thumb F15)",
+          "cycles":     { "form": "(n)S+1N+1I" },
+          "steps": [
+            { "op": "block_load",
+              "list_field": "reg_list",
+              "base_field": "rb",
+              "p": 0, "u": 1, "w": 1 }
+          ]
+        }
+      ]
+    }
+  ]
+}

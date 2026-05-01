@@ -1,0 +1,47 @@
+{
+  "name": "Thumb_F13_AddOffsetSp",
+  "comment": "10110000 S wwwwwww — ADD/SUB SP, #imm7*4. Adjusts SP by +/- (imm7*4). 2 instructions selected by S bit.",
+  "formats": [
+    {
+      "name":    "Thumb_F13_AddOffsetSp",
+      "pattern": "10110000_s_wwwwwww",
+      "fields": {
+        "s_bit": "7",
+        "imm7":  "6:0"
+      },
+      "mask":  "0xFF00",
+      "match": "0xB000",
+      "instructions": [
+        {
+          "selector":   { "field": "s_bit", "value": "0" },
+          "mnemonic":   "ADD",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "comment":    "ADD SP, #imm7*4",
+          "manual_ref": "ARM ARM A7.1.5 (Thumb F13)",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": 13, "out": "sp_val" },
+            { "op": "shl", "in": ["imm7", { "const": 2 }], "out": "scaled" },
+            { "op": "add", "in": ["sp_val", "scaled"], "out": "new_sp" },
+            { "op": "write_reg", "index": 13, "value": "new_sp" }
+          ]
+        },
+        {
+          "selector":   { "field": "s_bit", "value": "1" },
+          "mnemonic":   "SUB",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "comment":    "SUB SP, #imm7*4",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": 13, "out": "sp_val" },
+            { "op": "shl", "in": ["imm7", { "const": 2 }], "out": "scaled" },
+            { "op": "sub", "in": ["sp_val", "scaled"], "out": "new_sp" },
+            { "op": "write_reg", "index": 13, "value": "new_sp" }
+          ]
+        }
+      ]
+    }
+  ]
+}

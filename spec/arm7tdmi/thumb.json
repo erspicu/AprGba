@@ -20,6 +20,10 @@
     { "$include": "thumb-groups/f9-load-store-imm-offset.json" },
     { "$include": "thumb-groups/f10-load-store-halfword.json" },
     { "$include": "thumb-groups/f11-sp-relative.json" },
+    { "$include": "thumb-groups/f12-load-address.json" },
+    { "$include": "thumb-groups/f13-add-offset-sp.json" },
+    { "$include": "thumb-groups/f14-push-pop.json" },
+    { "$include": "thumb-groups/f15-multiple-load-store.json" },
     { "$include": "thumb-groups/f18-unconditional-branch.json" }
   ]
 }

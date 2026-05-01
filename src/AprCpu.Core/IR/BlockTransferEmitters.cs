@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AprCpu.Core.JsonSpec;
 using LLVMSharp.Interop;
 
@@ -64,26 +65,44 @@ public static class BlockTransferEmitters
 }
 
 /// <summary>
-/// Shared helpers used by both block_load and block_store.
+/// Shared helpers used by both block_load and block_store. Step shape:
+/// <code>
+///   list:        either "list_field": &lt;name&gt; or "list": &lt;value-name&gt;
+///   base:        either "base_field": &lt;name&gt; (runtime field, masked to 4 bits)
+///                or     "base_index": &lt;int 0..15&gt; (compile-time register choice)
+///   p / u / w:   either "_field": &lt;name&gt; or "_value": 0|1 / direct number value
+/// </code>
+/// The constant forms are useful for instructions whose addressing
+/// behaviour is fixed (e.g. Thumb PUSH = STMDB SP! always).
 /// </summary>
 internal static class BlockTransferImpl
 {
-    public static (LLVMValueRef startAddr, LLVMValueRef finalAddr, LLVMValueRef rnIdx)
+    public static (LLVMValueRef startAddr, LLVMValueRef finalAddr, LLVMValueRef basePtr)
         ComputeAddressing(EmitContext ctx, MicroOpStep step, out LLVMValueRef list, out LLVMValueRef wBit)
     {
-        var listFieldName = step.Raw.GetProperty("list_field").GetString()!;
-        var baseFieldName = step.Raw.GetProperty("base_field").GetString()!;
-        var pFieldName    = step.Raw.GetProperty("p_field").GetString()!;
-        var uFieldName    = step.Raw.GetProperty("u_field").GetString()!;
-        var wFieldName    = step.Raw.GetProperty("w_field").GetString()!;
+        // List: either prebuilt value or instruction field
+        list = step.Raw.TryGetProperty("list", out var listEl)
+            ? ctx.Resolve(listEl.GetString()!)
+            : ctx.Resolve(step.Raw.GetProperty("list_field").GetString()!);
 
-        list = ctx.Resolve(listFieldName);     // i32 value (low 16 bits = register list)
-        var p   = ctx.Resolve(pFieldName);
-        var u   = ctx.Resolve(uFieldName);
-        wBit    = ctx.Resolve(wFieldName);
-        var rnIdx = ctx.Builder.BuildAnd(ctx.Resolve(baseFieldName), ctx.ConstU32(0xF), "blkt_rn_idx");
+        // P / U / W: each may be a runtime field or a literal 0/1
+        var p   = ResolveBitOrField(ctx, step.Raw, "p", "p_field");
+        var u   = ResolveBitOrField(ctx, step.Raw, "u", "u_field");
+        wBit    = ResolveBitOrField(ctx, step.Raw, "w", "w_field");
 
-        var basePtr = ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, rnIdx);
+        // Base: either compile-time register index or runtime field
+        LLVMValueRef basePtr;
+        if (step.Raw.TryGetProperty("base_index", out var biEl))
+        {
+            int idx = biEl.GetInt32();
+            basePtr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, idx);
+        }
+        else
+        {
+            var baseFieldName = step.Raw.GetProperty("base_field").GetString()!;
+            var rnIdx = ctx.Builder.BuildAnd(ctx.Resolve(baseFieldName), ctx.ConstU32(0xF), "blkt_rn_idx");
+            basePtr = ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, rnIdx);
+        }
         var baseVal = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, basePtr, "blkt_base");
 
         // Popcount-based total byte count.
@@ -112,22 +131,36 @@ internal static class BlockTransferImpl
         var decFinal = ctx.Builder.BuildSub(baseVal, total, "blkt_dec_final");
         var finalAddr = ctx.Builder.BuildSelect(uIs1, incFinal, decFinal, "blkt_final");
 
-        return (startAddr, finalAddr, rnIdx);
+        return (startAddr, finalAddr, basePtr);
+    }
+
+    private static LLVMValueRef ResolveBitOrField(EmitContext ctx, JsonElement step, string constName, string fieldName)
+    {
+        if (step.TryGetProperty(constName, out var cEl))
+        {
+            return cEl.ValueKind switch
+            {
+                JsonValueKind.Number => ctx.ConstU32((uint)cEl.GetInt64()),
+                JsonValueKind.String => ctx.Resolve(cEl.GetString()!),
+                _ => throw new InvalidOperationException(
+                    $"block_transfer '{constName}': must be number or string name; got {cEl.ValueKind}"),
+            };
+        }
+        return ctx.Resolve(step.GetProperty(fieldName).GetString()!);
     }
 
     /// <summary>
     /// Emit the writeback step shared by load and store paths:
-    /// <c>if (w_bit) R[rn] = final_addr</c>.
+    /// <c>if (w_bit) *basePtr = final_addr</c>.
     /// </summary>
-    public static void EmitWriteback(EmitContext ctx, LLVMValueRef wBit, LLVMValueRef rnIdx, LLVMValueRef finalAddr)
+    public static void EmitWriteback(EmitContext ctx, LLVMValueRef wBit, LLVMValueRef basePtr, LLVMValueRef finalAddr)
     {
         var wIs1 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, wBit, ctx.ConstU32(0), "blkt_w_is1");
         var wThen = ctx.Function.AppendBasicBlock("blkt_wb_then");
         var wEnd  = ctx.Function.AppendBasicBlock("blkt_wb_end");
         ctx.Builder.BuildCondBr(wIs1, wThen, wEnd);
         ctx.Builder.PositionAtEnd(wThen);
-        var rnPtr = ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, rnIdx);
-        ctx.Builder.BuildStore(finalAddr, rnPtr);
+        ctx.Builder.BuildStore(finalAddr, basePtr);
         ctx.Builder.BuildBr(wEnd);
         ctx.Builder.PositionAtEnd(wEnd);
     }
@@ -138,7 +171,7 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
     public string OpName => "block_load";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        var (startAddr, finalAddr, rnIdx) = BlockTransferImpl.ComputeAddressing(ctx, step, out var list, out var wBit);
+        var (startAddr, finalAddr, basePtr) = BlockTransferImpl.ComputeAddressing(ctx, step, out var list, out var wBit);
 
         // Running address slot.
         var addrSlot = ctx.Builder.BuildAlloca(LLVMTypeRef.Int32, "blkl_addr");
@@ -172,7 +205,7 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
             ctx.Builder.PositionAtEnd(endBB);
         }
 
-        BlockTransferImpl.EmitWriteback(ctx, wBit, rnIdx, finalAddr);
+        BlockTransferImpl.EmitWriteback(ctx, wBit, basePtr, finalAddr);
     }
 }
 
@@ -181,7 +214,7 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
     public string OpName => "block_store";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        var (startAddr, finalAddr, rnIdx) = BlockTransferImpl.ComputeAddressing(ctx, step, out var list, out var wBit);
+        var (startAddr, finalAddr, basePtr) = BlockTransferImpl.ComputeAddressing(ctx, step, out var list, out var wBit);
 
         var addrSlot = ctx.Builder.BuildAlloca(LLVMTypeRef.Int32, "blks_addr");
         ctx.Builder.BuildStore(startAddr, addrSlot);
@@ -215,6 +248,6 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
             ctx.Builder.PositionAtEnd(endBB);
         }
 
-        BlockTransferImpl.EmitWriteback(ctx, wBit, rnIdx, finalAddr);
+        BlockTransferImpl.EmitWriteback(ctx, wBit, basePtr, finalAddr);
     }
 }

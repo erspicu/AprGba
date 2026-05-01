@@ -1,0 +1,50 @@
+{
+  "name": "Thumb_F12_LoadAddress",
+  "comment": "1010 SP ddd wwwwwwww — ADD Rd, [PC|SP], #imm8*4. SP=0 means PC source (PC value is (PC+4)&~3); SP=1 means SP source. Two instructions, both spelled ADD; selector value disambiguates the function name.",
+  "formats": [
+    {
+      "name":    "Thumb_F12_LoadAddr",
+      "pattern": "1010_a_ddd_wwwwwwww",
+      "fields": {
+        "sp_bit": "11",
+        "rd":     "10:8",
+        "imm8":   "7:0"
+      },
+      "mask":  "0xF000",
+      "match": "0xA000",
+      "instructions": [
+        {
+          "selector":   { "field": "sp_bit", "value": "0" },
+          "mnemonic":   "ADD",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "comment":    "ADD Rd, PC, #imm8*4 (often spelled ADR Rd, label)",
+          "manual_ref": "ARM ARM A7.1.5 (Thumb F12)",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": 15, "out": "raw_pc" },
+            { "op": "add", "in": ["raw_pc", { "const": 4 }], "out": "pc_pipelined" },
+            { "op": "and", "in": ["pc_pipelined", { "const": "0xFFFFFFFC" }], "out": "pc_aligned" },
+            { "op": "shl", "in": ["imm8", { "const": 2 }], "out": "scaled_offset" },
+            { "op": "add", "in": ["pc_aligned", "scaled_offset"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" }
+          ]
+        },
+        {
+          "selector":   { "field": "sp_bit", "value": "1" },
+          "mnemonic":   "ADD",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "comment":    "ADD Rd, SP, #imm8*4",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": 13, "out": "sp_val" },
+            { "op": "shl", "in": ["imm8", { "const": 2 }], "out": "scaled_offset" },
+            { "op": "add", "in": ["sp_val", "scaled_offset"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" }
+          ]
+        }
+      ]
+    }
+  ]
+}
