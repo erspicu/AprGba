@@ -157,6 +157,48 @@ public sealed unsafe class CpuStateLayout
         return BuildGep(builder, statePtr, idx, label);
     }
 
+    /// <summary>
+    /// Field index of a GPR within the LLVM struct. GPRs are always laid
+    /// first, so this is just the register index.
+    /// </summary>
+    public int GprFieldIndex(int regIndex)
+    {
+        if (regIndex < 0 || regIndex >= GprCount)
+            throw new ArgumentOutOfRangeException(nameof(regIndex),
+                $"GPR index {regIndex} out of range [0, {GprCount}).");
+        return regIndex;
+    }
+
+    /// <summary>
+    /// Field index of a status register slot. Pass <paramref name="mode"/>=null
+    /// for non-banked status (CPSR), or a mode id for banked (SPSR_<mode>).
+    /// Used by host runtimes that need byte-offset calculations via
+    /// <c>LLVM.OffsetOfElement</c> rather than going through GEP.
+    /// </summary>
+    public int StatusFieldIndex(string name, string? mode = null)
+    {
+        if (!_statusFieldIndex.TryGetValue((name, mode), out var idx))
+            throw new InvalidOperationException(
+                $"Status register '{name}' (mode={mode ?? "(none)"}) not declared in spec.");
+        return idx;
+    }
+
+    /// <summary>
+    /// Field index of a banked GPR slot for a given mode. Index is the
+    /// position within the banked group (0..banked_count-1).
+    /// </summary>
+    public int BankedGprFieldIndex(string mode, int idxInGroup)
+    {
+        if (!_bankedGroupFirstIndex.TryGetValue(mode, out var first))
+            throw new InvalidOperationException(
+                $"Mode '{mode}' has no banked GPR group declared.");
+        var size = _bankedGroupSize[mode];
+        if (idxInGroup < 0 || idxInGroup >= size)
+            throw new ArgumentOutOfRangeException(nameof(idxInGroup),
+                $"Banked GPR index {idxInGroup} out of range [0, {size}).");
+        return first + idxInGroup;
+    }
+
     /// <summary>True iff <paramref name="name"/> is a banked status register.</summary>
     public bool IsStatusRegisterBanked(string name) => _statusBankedModes.ContainsKey(name);
 
