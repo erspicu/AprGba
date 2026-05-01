@@ -23,32 +23,30 @@
 
 ---
 
-## Phase 1：JSON Schema 設計（2–3 週）
+## Phase 1：JSON Schema 設計（2–3 週） ✅ 完成
 
 **目標**：定義出可表達 ARM7TDMI 的 JSON 格式
 
-任務：
-- [ ] 設計頂層結構：`instruction_sets`（ARM/Thumb 命名空間）、`formats`、`instructions`
-- [ ] Bit pattern 語法（如 `"cccc_001_oooo_s_nnnn_dddd_iiiiiiiiiiii"`）
-- [ ] Field extraction 語法（如 `"cond": "31:28"`）
-- [ ] Mask/Match 計算規則
-- [ ] **Micro-op 詞彙表**（首批 ~30 個）：
-  - 算術：`add`, `sub`, `adc`, `sbc`, `mul`, `neg`
-  - 邏輯：`and`, `or`, `xor`, `not`
-  - 位移：`shl`, `shr`, `sar`, `ror`, `rrx`
-  - 比較：`cmp_eq`, `cmp_lt`, `cmp_le`, `cmp_ult`
-  - 記憶體：`load_8/16/32`, `store_8/16/32`
-  - 暫存器：`load_reg`, `store_reg`
-  - 旗標：`update_z`, `update_n`, `update_c_add`, `update_c_sub`, `update_v_add`, `update_v_sub`
-  - 控制流：`branch`, `branch_cond`, `if_s_bit`
-  - 立即值：`resolve_imm_rotated`, `resolve_shifted_reg`
-- [ ] 條件執行 wrapper（cond field 統一處理）
-- [ ] PC 偏移處理機制（讀 R15 時自動 +8 / +4）
-- [ ] Cycle count 標記方式
+完成項目：
+- [x] 頂層結構（`cpu.json` + 多個 instruction-set 檔；`extends` 繼承機制）
+- [x] Bit pattern 語法（`cccc_001_oooo_s_nnnn_dddd_rrrriiiiiiii`，自動推導 mask/match）
+- [x] Field extraction 語法（`"31:28"` / `"5"`）
+- [x] Mask/Match 計算規則 + lint 規則（pattern/mask/match 三者一致檢查）
+- [x] Micro-op 詞彙表（~75 個 base op，分 13 類）
+- [x] 條件執行 wrapper（instruction-set 層級 `global_condition`）
+- [x] PC 偏移處理機制（`pc_offset_bytes`）
+- [x] Cycle count 標記（S/N/I/C 形式 + extra_when_*）
+- [x] 多模式指令長度（`width_bits: 16|32|"variable"` + Thumb-2 預備 `width_decision`）
+- [x] CPU variant 與 feature flag（`requires_feature`、`since`/`until`）
+- [x] 自訂 micro-op 機制（`custom_micro_ops`）
+- [x] JSON Schema validator 檔（Draft 2020-12）
+- [x] 完整 ARM7TDMI 範例：`cpu.json`、`arm.json`（MOV/ADD/SUB/CMP + B/BL/BX）、`thumb.json`（F1/F3/F18 子集）
 
-**驗收**：手寫一份能涵蓋 5 條指令（MOV、ADD、SUB、CMP、B）的 `arm.json`，schema 可被 JSON validator 通過。
-
-**產出**：`MD/design/04-json-schema-spec.md`（後續補充）
+**產出**：
+- `MD/design/04-json-schema-spec.md` — schema 設計總文件（18 章）
+- `MD/design/05-microops-vocabulary.md` — micro-op 完整參考
+- `spec/schema/cpu-spec.schema.json` — JSON Schema validator
+- `spec/arm7tdmi/cpu.json` / `arm.json` / `thumb.json` — 範例 spec
 
 ---
 
@@ -215,7 +213,7 @@
 
 | 里程碑 | 內容 | 累計時間 |
 |---|---|---|
-| **M1** | Phase 0–1 完成（環境 + JSON schema） | ~1 月 |
+| **M1** | Phase 0–1 完成（環境 + JSON schema） ✅ | ~1 月 |
 | **M2** | Phase 2–3 完成（CLI 工具 demo + 基本 ARM 直譯器） | ~3 月 |
 | **M3** | Phase 4–5 完成（armwrestler 全綠 + 跑 BIOS） | ~6 月 |
 | **M4** | Phase 6 完成（Thumb 跑得動） | ~9 月 |
@@ -223,12 +221,15 @@
 
 ---
 
-## 立即可動工的下一步（Phase 0 Day 1）
+## 下一步：Phase 2 — JSON Parser + LLVM IR Emitter CLI
 
-1. `dotnet new sln -n AprGba`
-2. 建立 `src/AprCpu.Core/`、`src/AprCpu.Compiler/`
-3. `dotnet add package LLVMSharp.Interop`
-4. 寫一個 `Program.cs` emit `int add(int,int)`，JIT 跑出結果
-5. 確認可輸出 `.ll`
+Phase 0 與 Phase 1 已完成：solution 骨架與 LLVM JIT spike 跑通；JSON
+schema、micro-op vocabulary、ARM7TDMI 範例 spec 都到位。
 
-**做到這四件事，整個技術選型就驗證完一半了**。
+進入 Phase 2 的具體切入點：
+
+1. 在 `AprCpu.Core` 新增 `JsonSpec/`：載入 cpu.json + 引用的 instruction-set 檔
+2. `Decoder/`：把 pattern 字串 compile 成 mask/match 比對表
+3. `IR/`：每個 micro-op 對應一個 emitter，組合產出 `LLVMValueRef`
+4. `Compiler` CLI 升級：`aprcpu --spec spec/arm7tdmi/cpu.json --output temp/arm.ll`
+5. 整合測試：載入 `arm.json` → 為 ADD/SUB/MOV/CMP 各 emit 一個函式 → 比對 `.ll` 文字符合預期
