@@ -57,6 +57,29 @@ public class SpecCompilerTests
     }
 
     [Fact]
+    public void Compile_EmittedIRForSwiContainsExceptionEntrySequence()
+    {
+        // 2.5.7b: SWI must save CPSR -> SPSR_Supervisor, save next-PC -> banked
+        // R14_Supervisor, switch CPSR.M to Supervisor (10011 = 0x13), set CPSR.I,
+        // call host_swap_register_bank, and store the SWI vector address (0x8) to PC.
+        var result = SpecCompiler.Compile(CpuJson);
+        var ir = result.Module.PrintToString();
+
+        Assert.Contains("declare void @host_swap_register_bank(", ir);
+        // The SWI emit body must call the swap helper and store the vector address.
+        var swiFnIdx = ir.IndexOf("@Execute_ARM_SWI_SWI", StringComparison.Ordinal);
+        Assert.True(swiFnIdx >= 0, "SWI function should be emitted");
+        // Slice from SWI body to next 'define' to scope the asserts.
+        var nextDefine = ir.IndexOf("\ndefine ", swiFnIdx + 1, StringComparison.Ordinal);
+        var swiBody = nextDefine > 0 ? ir.Substring(swiFnIdx, nextDefine - swiFnIdx) : ir.Substring(swiFnIdx);
+
+        Assert.Contains("call void @host_swap_register_bank", swiBody);
+        Assert.Contains("store i32 8,", swiBody);          // PC := 0x8 (SoftwareInterrupt vector)
+        Assert.Contains("cpsr_with_new_mode", swiBody);    // mode bits replaced
+        Assert.Contains("cpsr_disable_i", swiBody);        // I bit set per spec disable=["I"]
+    }
+
+    [Fact]
     public void CompileToFile_WritesValidLlFile()
     {
         var temp = Path.Combine(TestPaths.RepoRoot, "temp", "spec_compiler_test.ll");

@@ -378,26 +378,118 @@ internal sealed class RaiseExceptionEmitter : IMicroOpEmitter
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
         var vectorName = step.Raw.GetProperty("vector").GetString()!;
-        uint? address = null;
+
+        // Look up the spec's vector entry.
+        ExceptionVector? vector = null;
         foreach (var v in ctx.Layout.ExceptionVectors)
-        {
-            if (string.Equals(v.Name, vectorName, StringComparison.Ordinal))
-            {
-                address = v.Address;
-                break;
-            }
-        }
-        if (address is null)
+            if (string.Equals(v.Name, vectorName, StringComparison.Ordinal)) { vector = v; break; }
+        if (vector is null)
         {
             throw new InvalidOperationException(
                 $"raise_exception: unknown vector '{vectorName}'. Declared vectors: " +
                 string.Join(", ", ctx.Layout.ExceptionVectors.Select(v => v.Name)));
         }
 
-        // Phase 2.5.5b first-iteration stub: jump to vector address.
-        // 2.5.7 will add: SPSR save, mode switch, LR save, banked register swap.
-        var pcSlot = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
-        ctx.Builder.BuildStore(ctx.ConstU32(address.Value), pcSlot);
+        var modes = ctx.Layout.ProcessorModes
+            ?? throw new InvalidOperationException(
+                "raise_exception requires processor_modes in the CPU spec.");
+        if (vector.EnterMode is null)
+            throw new InvalidOperationException(
+                $"Vector '{vectorName}' has no enter_mode declared in spec.");
+        var enterMode = vector.EnterMode;
+
+        var modeEntry = modes.Modes.FirstOrDefault(m => m.Id == enterMode);
+        if (modeEntry?.Encoding is null)
+            throw new InvalidOperationException(
+                $"Mode '{enterMode}' has no encoding declared in spec.");
+        uint newModeEnc = Convert.ToUInt32(modeEntry.Encoding, 2);
+
+        // 1. Read current CPSR.
+        var cpsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR");
+        var oldCpsr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "old_cpsr");
+
+        // 2. Save CPSR -> SPSR_<enterMode> (only if SPSR is banked AND
+        //    the target mode has a banked SPSR slot).
+        if (ctx.Layout.IsStatusRegisterBanked("SPSR") &&
+            ctx.Layout.GetStatusBankedModes("SPSR").Contains(enterMode))
+        {
+            var spsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SPSR", enterMode);
+            ctx.Builder.BuildStore(oldCpsr, spsrPtr);
+        }
+
+        // 3. Compute next-instruction PC.  Reading R15 returns
+        //    current_addr + pc_offset_bytes; the next instruction is at
+        //    current_addr + instruction_size_bytes; so next_pc = R15 -
+        //    (pc_offset_bytes - instruction_size_bytes).
+        var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
+        var r15    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "raw_pc");
+        var widthBytes  = ctx.InstructionSet.WidthBits.Fixed!.Value / 8;
+        var pcDelta     = ctx.InstructionSet.PcOffsetBytes - widthBytes;
+        var nextPc      = pcDelta == 0
+            ? r15
+            : ctx.Builder.BuildSub(r15, ctx.ConstU32((uint)pcDelta), "next_pc");
+
+        // 4. Save next_pc -> R14_<enterMode> (banked LR slot).
+        if (modes.BankedRegisters.TryGetValue(enterMode, out var bankedList))
+        {
+            var r14Idx = -1;
+            for (int i = 0; i < bankedList.Count; i++)
+                if (bankedList[i] == "R14") { r14Idx = i; break; }
+            if (r14Idx >= 0)
+            {
+                var lrPtr = ctx.Layout.GepBankedGpr(ctx.Builder, ctx.StatePtr, enterMode, r14Idx);
+                ctx.Builder.BuildStore(nextPc, lrPtr);
+            }
+        }
+
+        // 5. Compute new CPSR: clear M[4:0], OR in new mode + disable bits.
+        const uint modeMask = 0x1F;
+        var clearedMode = ctx.Builder.BuildAnd(oldCpsr, ctx.ConstU32(~modeMask), "cpsr_no_mode");
+        var withNewMode = ctx.Builder.BuildOr(clearedMode, ctx.ConstU32(newModeEnc), "cpsr_with_new_mode");
+        var newCpsr = withNewMode;
+        foreach (var disableFlag in vector.DisableFlags)
+        {
+            int bitIdx = ctx.Layout.GetStatusFlagBitIndex("CPSR", disableFlag);
+            uint bitMask = 1u << bitIdx;
+            newCpsr = ctx.Builder.BuildOr(newCpsr, ctx.ConstU32(bitMask),
+                $"cpsr_disable_{disableFlag.ToLowerInvariant()}");
+        }
+        ctx.Builder.BuildStore(newCpsr, cpsrPtr);
+
+        // 6. Call host_swap_register_bank(state, old_mode, new_mode) so
+        //    the host can re-shuffle banked GPRs into the visible R8-R14
+        //    slots. Implemented host-side (Phase 3 work); we just emit the
+        //    extern call here.
+        var oldMode = ctx.Builder.BuildAnd(oldCpsr, ctx.ConstU32(modeMask), "old_mode");
+        var swapFn = HostHelpers.GetSwapRegisterBankFn(ctx.Module, ctx.Layout.PointerType);
+        var swapType = LLVMTypeRef.CreateFunction(
+            ctx.Module.Context.VoidType,
+            new[] { ctx.Layout.PointerType, LLVMTypeRef.Int32, LLVMTypeRef.Int32 });
+        ctx.Builder.BuildCall2(swapType, swapFn,
+            new[] { ctx.StatePtr, oldMode, ctx.ConstU32(newModeEnc) }, "");
+
+        // 7. PC = vector address.
+        ctx.Builder.BuildStore(ctx.ConstU32(vector.Address), r15Ptr);
+    }
+}
+
+/// <summary>
+/// Externs the host runtime is expected to bind at JIT/exec setup time
+/// (Phase 3 work). Centralised so the binding side has a single
+/// canonical name list.
+/// </summary>
+internal static class HostHelpers
+{
+    public const string SwapRegisterBank = "host_swap_register_bank";
+
+    public static LLVMValueRef GetSwapRegisterBankFn(LLVMModuleRef module, LLVMTypeRef statePtrType)
+    {
+        var existing = module.GetNamedFunction(SwapRegisterBank);
+        if (existing.Handle != IntPtr.Zero) return existing;
+        var fnType = LLVMTypeRef.CreateFunction(
+            module.Context.VoidType,
+            new[] { statePtrType, LLVMTypeRef.Int32, LLVMTypeRef.Int32 });
+        return module.AddFunction(SwapRegisterBank, fnType);
     }
 }
 
