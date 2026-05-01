@@ -83,40 +83,14 @@ public sealed unsafe class InstructionFunctionBuilder
 
     private static void EmitConditionGate(EmitContext ctx, GlobalCondition gc, LLVMBasicBlockRef skipBlock)
     {
-        // Extract cond field
-        var cond = ctx.ExtractField(gc.Field, "cond");
-        // For Phase 2 first iteration, only support EQ table semantics:
-        // `1110` (AL) → always; everything else evaluated against CPSR flags.
-        var alConst = ctx.ConstU32(0b1110);
-        var isAlways = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, cond, alConst, "is_always");
-
+        // R4: cond evaluation is fully data-driven by the spec's
+        // global_condition.table; ConditionEvaluator covers the 14 standard
+        // ARM cond codes plus AL / NV. Mnemonics not in the recognised set
+        // default to "false" (never execute), matching ARM's "NV reserved"
+        // semantics.
+        var shouldExecute = ConditionEvaluator.EmitCheck(ctx, gc);
         var execBlock = ctx.Function.AppendBasicBlock("exec");
-        var checkBlock = ctx.Function.AppendBasicBlock("cond_check");
-
-        ctx.Builder.BuildCondBr(isAlways, execBlock, checkBlock);
-
-        // The non-AL path: for now only supports EQ/NE; otherwise we conservatively
-        // fall through to execute. A complete cond table lands in R4 (2.6).
-        ctx.Builder.PositionAtEnd(checkBlock);
-        var zBitIndex = ctx.Layout.GetStatusFlagBitIndex("CPSR", "Z");
-        var cpsr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32,
-            ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR"), "cpsr");
-        var zBit = ctx.Builder.BuildAnd(
-            ctx.Builder.BuildLShr(cpsr, ctx.ConstU32((uint)zBitIndex), "cpsr_z_shr"),
-            ctx.ConstU32(1), "cpsr_z");
-
-        var isEq = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, cond, ctx.ConstU32(0b0000), "is_eq");
-        var isNe = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, cond, ctx.ConstU32(0b0001), "is_ne");
-        var zSet  = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, zBit, ctx.ConstU32(0), "z_set");
-        var zClr  = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, zBit, ctx.ConstU32(0), "z_clr");
-
-        var eqOk = ctx.Builder.BuildAnd(isEq, zSet, "eq_ok");
-        var neOk = ctx.Builder.BuildAnd(isNe, zClr, "ne_ok");
-        var anyOk = ctx.Builder.BuildOr(eqOk, neOk, "cond_ok_partial");
-
-        // For unsupported codes (anything other than AL/EQ/NE), default to false.
-        ctx.Builder.BuildCondBr(anyOk, execBlock, skipBlock);
-
+        ctx.Builder.BuildCondBr(shouldExecute, execBlock, skipBlock);
         ctx.Builder.PositionAtEnd(execBlock);
     }
 
