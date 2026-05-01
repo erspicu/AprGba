@@ -3,6 +3,12 @@
 Project-specific rules for AI agents (Claude Code et al.) working in this
 repository. Keep concise; add new rules as they emerge.
 
+## 對話語言 — 一律使用繁體中文
+
+與使用者對話時請一律使用繁體中文（user-facing 說明、進度回報、
+方案討論、結尾摘要）。**程式碼、commit message、檔案內容、設計文件
+等寫到檔案的內容仍維持英文**，避免污染現有 codebase 的語言一致性。
+
 ## Scratch files — use `/temp/`
 
 **Always write temporary / scratch / one-off output files to the `/temp/`
