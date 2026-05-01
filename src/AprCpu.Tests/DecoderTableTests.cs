@@ -137,9 +137,9 @@ public class DecoderTableTests
     public void Decode_ReturnsNullForUndefinedEncoding()
     {
         var t = new DecoderTable(LoadArm());
-        // Single Data Transfer space (bits 27:25 = 010) is not yet in spec
-        // (lands in Phase 2.5.3); decoder must currently return null for it.
-        var d = t.Decode(0xE500_0000u);
+        // Block Data Transfer space (bits 27:25 = 100) is not yet in spec
+        // (lands in Phase 2.5.5); decoder must currently return null for it.
+        var d = t.Decode(0xE800_0000u);
         Assert.Null(d);
     }
 
@@ -163,6 +163,50 @@ public class DecoderTableTests
         Assert.NotNull(d);
         Assert.Equal("DataProcessing_RegImmShift", d!.Format.Name);
         Assert.Equal("ADD", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>STR R0, [R1, #4]  pre-indexed, no writeback → 0xE5810004</summary>
+    [Fact]
+    public void Decode_SDT_Imm_STR()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE581_0004u);
+        Assert.NotNull(d);
+        Assert.Equal("SDT_Imm_STR", d!.Format.Name);
+        Assert.Equal("STR", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDR R0, [R1, #4]  pre-indexed, no writeback → 0xE5910004</summary>
+    [Fact]
+    public void Decode_SDT_Imm_LDR()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE591_0004u);
+        Assert.NotNull(d);
+        Assert.Equal("SDT_Imm_LDR", d!.Format.Name);
+        Assert.Equal("LDR", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>STRB R0, [R1, #4] → 0xE5C10004</summary>
+    [Fact]
+    public void Decode_SDT_Imm_STRB()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE5C1_0004u);
+        Assert.NotNull(d);
+        Assert.Equal("SDT_Imm_STRB", d!.Format.Name);
+        Assert.Equal("STRB", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDRB R0, [R1, #4] → 0xE5D10004</summary>
+    [Fact]
+    public void Decode_SDT_Imm_LDRB()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE5D1_0004u);
+        Assert.NotNull(d);
+        Assert.Equal("SDT_Imm_LDRB", d!.Format.Name);
+        Assert.Equal("LDRB", d.Instruction.Mnemonic);
     }
 
     /// <summary>RegRegShift form: ADD R0, R1, R2, LSL R3 → 0xE0810312.</summary>

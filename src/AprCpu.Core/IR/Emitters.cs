@@ -39,6 +39,7 @@ public static class StandardEmitters
 
         // Control flow (generic — branch_indirect is in ArmEmitters)
         reg.Register(new IfStep());
+        reg.Register(new SelectStep());
         reg.Register(new Branch("branch",      BranchKind.Plain));
         reg.Register(new Branch("branch_link", BranchKind.Link));
     }
@@ -263,6 +264,37 @@ internal sealed class IfStep : IMicroOpEmitter
     {
         var bb = ctx.Builder.InsertBlock;
         return bb.Terminator.Handle != IntPtr.Zero;
+    }
+}
+
+/// <summary>
+/// Pure-SSA conditional value selection — needed when a value defined
+/// in two branches of an <c>if</c> would otherwise be used past the
+/// branch (which violates LLVM SSA dominance). Lowers to a single
+/// <c>select i1</c> instruction.
+///
+/// Step shape:
+/// <code>
+///   { "op": "select",
+///     "cond":     { "field": "u_bit", "eq": 1 } | { "var": "x", "eq": 0 },
+///     "if_true":  &lt;value-name&gt;,
+///     "if_false": &lt;value-name&gt;,
+///     "out":      &lt;name&gt; }
+/// </code>
+/// </summary>
+internal sealed class SelectStep : IMicroOpEmitter
+{
+    public string OpName => "select";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var cond     = CondExpr.Parse(step.Raw.GetProperty("cond")).Lower(ctx);
+        var trueName  = step.Raw.GetProperty("if_true").GetString()!;
+        var falseName = step.Raw.GetProperty("if_false").GetString()!;
+        var outName   = step.Raw.GetProperty("out").GetString()!;
+        var trueVal   = ctx.Resolve(trueName);
+        var falseVal  = ctx.Resolve(falseName);
+        var result    = ctx.Builder.BuildSelect(cond, trueVal, falseVal, outName);
+        ctx.Values[outName] = result;
     }
 }
 
