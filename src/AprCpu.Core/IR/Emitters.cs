@@ -34,6 +34,14 @@ public static class StandardEmitters
         reg.Register(new BicEmitter());   // a AND NOT b
         reg.Register(new MvnEmitter());   // NOT a
 
+        // Multiply: 32-bit and 32x32->64 variants.
+        reg.Register(new Binary("mul", (b, l, r, n) => b.BuildMul(l, r, n)));
+        reg.Register(new MulLongEmitter("umul64", signed: false));
+        reg.Register(new MulLongEmitter("smul64", signed: true));
+        reg.Register(new AddI64Emitter());
+        reg.Register(new ReadRegPairU64Emitter());
+        reg.Register(new WriteRegPairEmitter());
+
         // Memory access (architecture-agnostic; lowers to host-bound externs)
         MemoryEmitters.RegisterAll(reg);
 
@@ -221,6 +229,124 @@ internal sealed class BicEmitter : IMicroOpEmitter
         var notB = ctx.Builder.BuildXor(b, ctx.ConstU32(0xFFFFFFFFu), "bic_notb");
         var res = ctx.Builder.BuildAnd(a, notB, StandardEmitters.GetOut(step.Raw));
         ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
+    }
+}
+
+// ---------------- 64-bit multiply-long support ----------------
+
+/// <summary>
+/// 32x32 → 64 widening multiply. Inputs are zero/sign-extended to i64
+/// then multiplied; the i64 result is cached under the step's `out` name.
+/// </summary>
+internal sealed class MulLongEmitter : IMicroOpEmitter
+{
+    public string OpName { get; }
+    private readonly bool _signed;
+
+    public MulLongEmitter(string opName, bool signed)
+    {
+        OpName  = opName;
+        _signed = signed;
+    }
+
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
+        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var i64 = LLVMTypeRef.Int64;
+        var aL = _signed
+            ? ctx.Builder.BuildSExt(a, i64, $"{OpName}_a_l")
+            : ctx.Builder.BuildZExt(a, i64, $"{OpName}_a_l");
+        var bL = _signed
+            ? ctx.Builder.BuildSExt(b, i64, $"{OpName}_b_l")
+            : ctx.Builder.BuildZExt(b, i64, $"{OpName}_b_l");
+        var outName = StandardEmitters.GetOut(step.Raw);
+        var res = ctx.Builder.BuildMul(aL, bL, outName);
+        ctx.Values[outName] = res;
+    }
+}
+
+/// <summary>64-bit add (i64 in, i64 out). Used by accumulating multiplies.</summary>
+internal sealed class AddI64Emitter : IMicroOpEmitter
+{
+    public string OpName => "add_i64";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
+        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var outName = StandardEmitters.GetOut(step.Raw);
+        var res = ctx.Builder.BuildAdd(a, b, outName);
+        ctx.Values[outName] = res;
+    }
+}
+
+/// <summary>
+/// Reads two GPRs and combines them as <c>(hi &lt;&lt; 32) | lo</c>,
+/// returning an i64 named value. Used by accumulating long multiplies
+/// (UMLAL/SMLAL) to fold the existing RdHi:RdLo into the multiplier.
+///
+/// Step shape:
+/// <code>
+///   { "op": "read_reg_pair_u64",
+///     "lo_index": "rd_lo" | 0..15,
+///     "hi_index": "rd_hi" | 0..15,
+///     "out": &lt;name&gt; }
+/// </code>
+/// </summary>
+internal sealed class ReadRegPairU64Emitter : IMicroOpEmitter
+{
+    public string OpName => "read_reg_pair_u64";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var loIdxExpr = step.Raw.GetProperty("lo_index");
+        var hiIdxExpr = step.Raw.GetProperty("hi_index");
+        var outName   = StandardEmitters.GetOut(step.Raw);
+
+        var loPtr = ReadReg.ResolveRegPtr(ctx, loIdxExpr);
+        var hiPtr = ReadReg.ResolveRegPtr(ctx, hiIdxExpr);
+        var lo32  = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, loPtr, $"{outName}_lo32");
+        var hi32  = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, hiPtr, $"{outName}_hi32");
+
+        var i64 = LLVMTypeRef.Int64;
+        var loZ = ctx.Builder.BuildZExt(lo32, i64, $"{outName}_lo64");
+        var hiZ = ctx.Builder.BuildZExt(hi32, i64, $"{outName}_hi64");
+        var hiShift = ctx.Builder.BuildShl(hiZ,
+            LLVMValueRef.CreateConstInt(i64, 32, false), $"{outName}_hi_shifted");
+        var combined = ctx.Builder.BuildOr(loZ, hiShift, outName);
+        ctx.Values[outName] = combined;
+    }
+}
+
+/// <summary>
+/// Splits an i64 value into low/high 32-bit halves and writes each to a
+/// GPR. Step shape:
+/// <code>
+///   { "op": "write_reg_pair",
+///     "lo_index": "rd_lo" | 0..15,
+///     "hi_index": "rd_hi" | 0..15,
+///     "value":    &lt;i64-name&gt; }
+/// </code>
+/// </summary>
+internal sealed class WriteRegPairEmitter : IMicroOpEmitter
+{
+    public string OpName => "write_reg_pair";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var loIdxExpr = step.Raw.GetProperty("lo_index");
+        var hiIdxExpr = step.Raw.GetProperty("hi_index");
+        var valueName = step.Raw.GetProperty("value").GetString()!;
+        var v64 = ctx.Resolve(valueName);
+
+        var i64 = LLVMTypeRef.Int64;
+        var lo32 = ctx.Builder.BuildTrunc(v64, LLVMTypeRef.Int32, $"{valueName}_lo");
+        var hi64 = ctx.Builder.BuildLShr(v64,
+            LLVMValueRef.CreateConstInt(i64, 32, false), $"{valueName}_hi64");
+        var hi32 = ctx.Builder.BuildTrunc(hi64, LLVMTypeRef.Int32, $"{valueName}_hi");
+
+        var loPtr = ReadReg.ResolveRegPtr(ctx, loIdxExpr);
+        var hiPtr = ReadReg.ResolveRegPtr(ctx, hiIdxExpr);
+        ctx.Builder.BuildStore(lo32, loPtr);
+        ctx.Builder.BuildStore(hi32, hiPtr);
     }
 }
 

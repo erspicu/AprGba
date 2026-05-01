@@ -363,6 +363,72 @@ public class DecoderTableTests
         Assert.Equal("SWPB", d.Instruction.Mnemonic);
     }
 
+    /// <summary>MUL R0, R1, R2  Rd=0, Rm=1, Rs=2 → 0xE0000291</summary>
+    [Fact]
+    public void Decode_MUL()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE000_0291u);
+        Assert.NotNull(d);
+        Assert.Equal("Multiply_32", d!.Format.Name);
+        Assert.Equal("MUL", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>MLA R0, R1, R2, R3 → 0xE0203291  (A=1, Rd=0, Rn=3, Rs=2, Rm=1)</summary>
+    [Fact]
+    public void Decode_MLA()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE020_3291u);
+        Assert.NotNull(d);
+        Assert.Equal("Multiply_32", d!.Format.Name);
+        Assert.Equal("MLA", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>UMULL R0, R1, R2, R3  RdLo=0, RdHi=1, Rm=2, Rs=3 → 0xE0810392</summary>
+    [Fact]
+    public void Decode_UMULL()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE081_0392u);
+        Assert.NotNull(d);
+        Assert.Equal("MultiplyLong", d!.Format.Name);
+        Assert.Equal("UMULL", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>UMLAL R0, R1, R2, R3 → 0xE0A10392</summary>
+    [Fact]
+    public void Decode_UMLAL()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE0A1_0392u);
+        Assert.NotNull(d);
+        Assert.Equal("MultiplyLong", d!.Format.Name);
+        Assert.Equal("UMLAL", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>SMULL R0, R1, R2, R3 → 0xE0C10392</summary>
+    [Fact]
+    public void Decode_SMULL()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE0C1_0392u);
+        Assert.NotNull(d);
+        Assert.Equal("MultiplyLong", d!.Format.Name);
+        Assert.Equal("SMULL", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>SMLAL R0, R1, R2, R3 → 0xE0E10392</summary>
+    [Fact]
+    public void Decode_SMLAL()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE0E1_0392u);
+        Assert.NotNull(d);
+        Assert.Equal("MultiplyLong", d!.Format.Name);
+        Assert.Equal("SMLAL", d.Instruction.Mnemonic);
+    }
+
     /// <summary>RegRegShift form: ADD R0, R1, R2, LSL R3 → 0xE0810312.</summary>
     [Fact]
     public void Decode_RegRegShift_AddByRegister()
