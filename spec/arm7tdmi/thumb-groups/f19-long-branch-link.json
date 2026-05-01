@@ -1,0 +1,55 @@
+{
+  "name": "Thumb_F19_LongBranchLink",
+  "comment": "1111 H ooooooooooo — BL pair, two halves: high (H=0) loads the upper part of the offset into LR, low (H=1) combines with the second part and performs the branch. Each half decodes as its own instruction in our framework.",
+  "formats": [
+    {
+      "name":    "Thumb_F19_BL",
+      "pattern": "1111_h_ooooooooooo",
+      "fields": {
+        "h_bit":       "11",
+        "offset_part": "10:0"
+      },
+      "mask":  "0xF000",
+      "match": "0xF000",
+      "instructions": [
+        {
+          "selector":   { "field": "h_bit", "value": "0" },
+          "mnemonic":   "BL_HI",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "comment":    "BL high half: LR = (PC pipeline value) + (sign_extend(offset_part) << 12). Sign-extension via shl 21 + asr 21 combined with the <<12 shift becomes asr 9.",
+          "manual_ref": "ARM ARM A7.1.5 (Thumb F19 high half)",
+          "cycles":     { "form": "1S" },
+          "quirks":     ["bl_hi_half"],
+          "steps": [
+            { "op": "read_reg", "index": 15, "out": "raw_pc" },
+            { "op": "shl", "in": ["offset_part", { "const": 21 }], "out": "off_shl" },
+            { "op": "asr", "in": ["off_shl", { "const": 9 }], "out": "scaled_offset" },
+            { "op": "add", "in": ["raw_pc", "scaled_offset"], "out": "new_lr" },
+            { "op": "write_reg", "index": 14, "value": "new_lr" }
+          ]
+        },
+        {
+          "selector":   { "field": "h_bit", "value": "1" },
+          "mnemonic":   "BL_LO",
+          "since":      "ARMv4T",
+          "writes_pc":  "always",
+          "comment":    "BL low half: target = LR + (offset_part << 1). LR = (R15 - 2) | 1 (next-instruction PC, with Thumb bit). PC = target.",
+          "manual_ref": "ARM ARM A7.1.5 (Thumb F19 low half)",
+          "cycles":     { "form": "2S+1N" },
+          "quirks":     ["bl_lo_half"],
+          "steps": [
+            { "op": "read_reg", "index": 14, "out": "old_lr" },
+            { "op": "shl", "in": ["offset_part", { "const": 1 }], "out": "low_offset" },
+            { "op": "add", "in": ["old_lr", "low_offset"], "out": "target" },
+            { "op": "read_reg", "index": 15, "out": "raw_pc" },
+            { "op": "sub", "in": ["raw_pc", { "const": 2 }], "out": "return_pc_raw" },
+            { "op": "or", "in": ["return_pc_raw", { "const": 1 }], "out": "new_lr" },
+            { "op": "write_reg", "index": 14, "value": "new_lr" },
+            { "op": "write_reg", "index": 15, "value": "target" }
+          ]
+        }
+      ]
+    }
+  ]
+}
