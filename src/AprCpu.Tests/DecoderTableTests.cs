@@ -133,15 +133,10 @@ public class DecoderTableTests
         Assert.Equal("B", d!.Instruction.Mnemonic);
     }
 
-    [Fact]
-    public void Decode_ReturnsNullForUndefinedEncoding()
-    {
-        var t = new DecoderTable(LoadArm());
-        // Block Data Transfer space (bits 27:25 = 100) is not yet in spec
-        // (lands in Phase 2.5.5); decoder must currently return null for it.
-        var d = t.Decode(0xE800_0000u);
-        Assert.Null(d);
-    }
+    // Note: prior "Decode_ReturnsNullForUndefinedEncoding" test was removed
+    // in 2.5.5a because the spec's encoding-space coverage is approaching
+    // 100% (Coprocessor stubs in 2.5.5b will close the remaining gap), and
+    // any reserved/UND encoding becomes a defined Undefined-trap format.
 
     /// <summary>RegImmShift form: MOV R0, R1, LSL #2 → 0xE1A00101.</summary>
     [Fact]
@@ -427,6 +422,50 @@ public class DecoderTableTests
         Assert.NotNull(d);
         Assert.Equal("MultiplyLong", d!.Format.Name);
         Assert.Equal("SMLAL", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDMIA R0, {R1,R2} → 0xE8900006</summary>
+    [Fact]
+    public void Decode_LDM_IA()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE890_0006u);
+        Assert.NotNull(d);
+        Assert.Equal("BDT_LDM", d!.Format.Name);
+        Assert.Equal("LDM", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDMIB R0, {R1} → 0xE9900002 (P=1)</summary>
+    [Fact]
+    public void Decode_LDM_IB()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE990_0002u);
+        Assert.NotNull(d);
+        Assert.Equal("BDT_LDM", d!.Format.Name);
+        Assert.Equal("LDM", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>STMIA R0!, {R1,R2} → 0xE8A00006 (W=1)</summary>
+    [Fact]
+    public void Decode_STM_IA_Writeback()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE8A0_0006u);
+        Assert.NotNull(d);
+        Assert.Equal("BDT_STM", d!.Format.Name);
+        Assert.Equal("STM", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>STMDB R13!, {R0,R14}  push → 0xE92D4001  (P=1, U=0, W=1)</summary>
+    [Fact]
+    public void Decode_STMDB_Push()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE92D_4001u);
+        Assert.NotNull(d);
+        Assert.Equal("BDT_STM", d!.Format.Name);
+        Assert.Equal("STM", d.Instruction.Mnemonic);
     }
 
     /// <summary>RegRegShift form: ADD R0, R1, R2, LSL R3 → 0xE0810312.</summary>
