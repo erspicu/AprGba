@@ -1,0 +1,132 @@
+{
+  "name": "Format1_MoveShiftedRegister",
+  "formats": [
+    {
+      "name": "Thumb_F1_MoveShiftedRegister",
+      "comment": "000 op iiiii sss ddd  (LSL/LSR/ASR Rd, Rs, #imm5)",
+      "pattern": "000_oo_iiiii_sss_ddd",
+      "fields": {
+        "op": "12:11",
+        "imm5": "10:6",
+        "rs": "5:3",
+        "rd": "2:0"
+      },
+      "mask": "0xE000",
+      "match": "0x0000",
+      "instructions": [
+        {
+          "selector": {
+            "field": "op",
+            "value": "00"
+          },
+          "mnemonic": "LSL",
+          "since": "ARMv4T",
+          "writes_pc": "never",
+          "manual_ref": "ARM ARM A7.1.40 (Thumb F1)",
+          "cycles": {
+            "form": "1S"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rs",
+              "out": "rs_val"
+            },
+            {
+              "op": "shl",
+              "in": [
+                "rs_val",
+                "imm5"
+              ],
+              "out": "result",
+              "width": 32
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "result"
+            },
+            {
+              "op": "update_nz",
+              "value": "result"
+            }
+          ]
+        },
+        {
+          "selector": {
+            "field": "op",
+            "value": "01"
+          },
+          "mnemonic": "LSR",
+          "since": "ARMv4T",
+          "writes_pc": "never",
+          "cycles": {
+            "form": "1S"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rs",
+              "out": "rs_val"
+            },
+            {
+              "op": "lsr",
+              "in": [
+                "rs_val",
+                "imm5"
+              ],
+              "out": "result",
+              "width": 32
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "result"
+            },
+            {
+              "op": "update_nz",
+              "value": "result"
+            }
+          ]
+        },
+        {
+          "selector": {
+            "field": "op",
+            "value": "10"
+          },
+          "mnemonic": "ASR",
+          "since": "ARMv4T",
+          "writes_pc": "never",
+          "cycles": {
+            "form": "1S"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rs",
+              "out": "rs_val"
+            },
+            {
+              "op": "asr",
+              "in": [
+                "rs_val",
+                "imm5"
+              ],
+              "out": "result",
+              "width": 32
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "result"
+            },
+            {
+              "op": "update_nz",
+              "value": "result"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,191 @@
+{
+  "name": "Format3_MoveCompareAddSubImmediate",
+  "formats": [
+    {
+      "name": "Thumb_F3_ImmediateOps",
+      "comment": "001 op ddd iiiiiiii (MOV/CMP/ADD/SUB Rd, #imm8)",
+      "pattern": "001_oo_ddd_iiiiiiii",
+      "fields": {
+        "op": "12:11",
+        "rd": "10:8",
+        "imm8": "7:0"
+      },
+      "mask": "0xE000",
+      "match": "0x2000",
+      "instructions": [
+        {
+          "selector": {
+            "field": "op",
+            "value": "00"
+          },
+          "mnemonic": "MOV",
+          "since": "ARMv4T",
+          "writes_pc": "never",
+          "manual_ref": "ARM ARM A7.1.42 (Thumb F3)",
+          "cycles": {
+            "form": "1S"
+          },
+          "steps": [
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "imm8"
+            },
+            {
+              "op": "update_nz",
+              "value": "imm8"
+            }
+          ]
+        },
+        {
+          "selector": {
+            "field": "op",
+            "value": "01"
+          },
+          "mnemonic": "CMP",
+          "since": "ARMv4T",
+          "writes_pc": "never",
+          "cycles": {
+            "form": "1S"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rd",
+              "out": "rd_val"
+            },
+            {
+              "op": "sub",
+              "in": [
+                "rd_val",
+                "imm8"
+              ],
+              "out": "result"
+            },
+            {
+              "op": "update_nz",
+              "value": "result"
+            },
+            {
+              "op": "update_c_sub",
+              "in": [
+                "rd_val",
+                "imm8"
+              ]
+            },
+            {
+              "op": "update_v_sub",
+              "in": [
+                "rd_val",
+                "imm8",
+                "result"
+              ]
+            }
+          ]
+        },
+        {
+          "selector": {
+            "field": "op",
+            "value": "10"
+          },
+          "mnemonic": "ADD",
+          "since": "ARMv4T",
+          "writes_pc": "never",
+          "cycles": {
+            "form": "1S"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rd",
+              "out": "rd_val"
+            },
+            {
+              "op": "add",
+              "in": [
+                "rd_val",
+                "imm8"
+              ],
+              "out": "result"
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "result"
+            },
+            {
+              "op": "update_nz",
+              "value": "result"
+            },
+            {
+              "op": "update_c_add",
+              "in": [
+                "rd_val",
+                "imm8"
+              ]
+            },
+            {
+              "op": "update_v_add",
+              "in": [
+                "rd_val",
+                "imm8",
+                "result"
+              ]
+            }
+          ]
+        },
+        {
+          "selector": {
+            "field": "op",
+            "value": "11"
+          },
+          "mnemonic": "SUB",
+          "since": "ARMv4T",
+          "writes_pc": "never",
+          "cycles": {
+            "form": "1S"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rd",
+              "out": "rd_val"
+            },
+            {
+              "op": "sub",
+              "in": [
+                "rd_val",
+                "imm8"
+              ],
+              "out": "result"
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "result"
+            },
+            {
+              "op": "update_nz",
+              "value": "result"
+            },
+            {
+              "op": "update_c_sub",
+              "in": [
+                "rd_val",
+                "imm8"
+              ]
+            },
+            {
+              "op": "update_v_sub",
+              "in": [
+                "rd_val",
+                "imm8",
+                "result"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

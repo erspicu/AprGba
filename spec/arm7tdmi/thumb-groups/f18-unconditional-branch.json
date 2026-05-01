@@ -1,0 +1,41 @@
+{
+  "name": "Format18_UnconditionalBranch",
+  "formats": [
+    {
+      "name": "Thumb_F18_B",
+      "comment": "11100 ooooooooooo (signed 11-bit offset, <<1)",
+      "pattern": "11100_ooooooooooo",
+      "fields": {
+        "offset11": "10:0"
+      },
+      "mask": "0xF800",
+      "match": "0xE000",
+      "operands": {
+        "branch_target": {
+          "kind": "pc_relative_offset",
+          "outputs": [
+            "address"
+          ]
+        }
+      },
+      "instructions": [
+        {
+          "mnemonic": "B",
+          "since": "ARMv4T",
+          "unconditional": true,
+          "writes_pc": "always",
+          "manual_ref": "ARM ARM A7.1.5 (Thumb F18)",
+          "cycles": {
+            "form": "2S+1N"
+          },
+          "steps": [
+            {
+              "op": "branch",
+              "target": "address"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
