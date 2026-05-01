@@ -70,7 +70,8 @@
             {
               "op": "write_psr",
               "which": "CPSR",
-              "value": "src"
+              "value": "src",
+              "mask_from_psr_field": "field_mask"
             }
           ]
         }
@@ -114,7 +115,8 @@
             {
               "op": "write_psr",
               "which": "CPSR",
-              "value": "op2_value"
+              "value": "op2_value",
+              "mask_from_psr_field": "field_mask"
             }
           ]
         }

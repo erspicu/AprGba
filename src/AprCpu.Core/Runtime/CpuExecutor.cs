@@ -153,6 +153,32 @@ public sealed unsafe class CpuExecutor
         return n;
     }
 
+    /// <summary>
+    /// Run until the program traps at a self-branch (the canonical
+    /// "halt" idiom: <c>idle: b idle</c>) or <paramref name="maxSteps"/>
+    /// is reached. Returns (executed, halted).
+    ///
+    /// Halt detection: if PC at the start of an iteration equals PC
+    /// at the start of the previous iteration, the last instruction
+    /// did not advance PC (it branched to itself or wrote PC=self).
+    /// One step is "wasted" detecting this — that's harmless for our
+    /// use case (detecting end of test ROM execution).
+    /// </summary>
+    public (int Executed, bool Halted) RunUntilHalt(int maxSteps)
+    {
+        uint lastPc = uint.MaxValue;     // sentinel — first iter never matches
+        int n = 0;
+        while (n < maxSteps)
+        {
+            var pc = Pc;
+            if (pc == lastPc) return (n, true);
+            Step();
+            lastPc = pc;
+            n++;
+        }
+        return (n, false);
+    }
+
     private IntPtr ResolveFunctionPointer(DecodedInstruction decoded)
     {
         var format = decoded.Format;

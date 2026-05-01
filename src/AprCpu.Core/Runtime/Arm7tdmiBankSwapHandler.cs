@@ -10,18 +10,26 @@ namespace AprCpu.Core.Runtime;
 /// banked storage, then copies the IN-coming mode's banked storage
 /// into the visible slots.
 ///
-/// <para><b>Known limitation</b> (Phase 3 scope):</para>
-/// User and System modes have no banked entries in arm7tdmi/cpu.json,
-/// so transitions FROM them don't save the current visible R8-R14
-/// anywhere. After User → SVC → User the User's R13/R14 will be
-/// clobbered. Fix when needed: add a "User" entry with R8-R14 to the
-/// spec, OR maintain a sidecar slot keyed off the User mode encoding.
-/// Phase 4 (real ROM execution) will force this fix.
+/// <para><b>User/System sidecar banks:</b></para>
+/// User and System modes have no banked entries in arm7tdmi/cpu.json
+/// (architecturally they share storage with the visible slots). But on
+/// real hardware their R13/R14 still need to survive a round-trip
+/// through Supervisor/IRQ/etc. — otherwise SP is destroyed by every
+/// SWI. We allocate per-mode-encoding sidecar slots in C# memory for
+/// the modes that the spec leaves un-banked, and use them like any
+/// other bank. This keeps the spec architecturally minimal while
+/// making real ROM execution work.
 /// </summary>
 public sealed unsafe class Arm7tdmiBankSwapHandler : IBankSwapHandler
 {
+    // Registers that User/System mode's sidecar bank should preserve
+    // across mode transitions. R13/R14 only — R8-R12 don't bank in any
+    // non-FIQ mode, so they don't need User/System preservation either.
+    private static readonly int[] UserSystemSidecarRegs = { 13, 14 };
+
     private readonly HostRuntime _rt;
     private readonly Dictionary<uint, IReadOnlyList<BankEntry>> _bankByModeEnc = new();
+    private readonly Dictionary<uint, uint[]> _sidecar = new();    // mode_enc → sidecar storage for User/System
     private bool _offsetsResolved;
 
     public Arm7tdmiBankSwapHandler(HostRuntime rt)
@@ -41,6 +49,7 @@ public sealed unsafe class Arm7tdmiBankSwapHandler : IBankSwapHandler
             if (!modes.BankedRegisters.TryGetValue(mode.Id, out var bankedNames) || bankedNames.Count == 0)
             {
                 _bankByModeEnc[enc] = Array.Empty<BankEntry>();
+                _sidecar[enc] = new uint[UserSystemSidecarRegs.Length];
                 continue;
             }
 
@@ -62,20 +71,42 @@ public sealed unsafe class Arm7tdmiBankSwapHandler : IBankSwapHandler
         if (oldMode == newMode) return;
         ResolveOffsetsIfNeeded();
 
-        if (_bankByModeEnc.TryGetValue(oldMode, out var oldEntries))
+        // Save OUT-going mode's visible R8-R14 → its bank or sidecar.
+        if (_bankByModeEnc.TryGetValue(oldMode, out var oldEntries) && oldEntries.Count > 0)
+        {
             foreach (var e in oldEntries)
             {
                 var v = BinaryPrimitives.ReadUInt32LittleEndian(new ReadOnlySpan<byte>(state + e.VisibleOffset, 4));
                 BinaryPrimitives.WriteUInt32LittleEndian(new Span<byte>(state + e.BankOffset, 4), v);
             }
+        }
+        else if (_sidecar.TryGetValue(oldMode, out var oldSide))
+        {
+            for (int i = 0; i < UserSystemSidecarRegs.Length; i++)
+                oldSide[i] = ReadGpr(state, UserSystemSidecarRegs[i]);
+        }
 
-        if (_bankByModeEnc.TryGetValue(newMode, out var newEntries))
+        // Load IN-coming mode's bank or sidecar → visible R8-R14.
+        if (_bankByModeEnc.TryGetValue(newMode, out var newEntries) && newEntries.Count > 0)
+        {
             foreach (var e in newEntries)
             {
                 var v = BinaryPrimitives.ReadUInt32LittleEndian(new ReadOnlySpan<byte>(state + e.BankOffset, 4));
                 BinaryPrimitives.WriteUInt32LittleEndian(new Span<byte>(state + e.VisibleOffset, 4), v);
             }
+        }
+        else if (_sidecar.TryGetValue(newMode, out var newSide))
+        {
+            for (int i = 0; i < UserSystemSidecarRegs.Length; i++)
+                WriteGpr(state, UserSystemSidecarRegs[i], newSide[i]);
+        }
     }
+
+    private uint ReadGpr(byte* state, int regIndex)
+        => BinaryPrimitives.ReadUInt32LittleEndian(new ReadOnlySpan<byte>(state + (long)_rt.GprOffset(regIndex), 4));
+
+    private void WriteGpr(byte* state, int regIndex, uint value)
+        => BinaryPrimitives.WriteUInt32LittleEndian(new Span<byte>(state + (long)_rt.GprOffset(regIndex), 4), value);
 
     private void ResolveOffsetsIfNeeded()
     {

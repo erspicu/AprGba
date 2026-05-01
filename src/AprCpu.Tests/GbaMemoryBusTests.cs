@@ -27,13 +27,18 @@ public class GbaMemoryBusTests
     }
 
     [Fact]
-    public void DispstatRead_AlwaysReportsVBlankFlag()
+    public void DispstatRead_TogglesVBlankFlagAcrossSuccessiveReads()
     {
-        // jsmolka's m_vsync polls (DISPSTAT & VBLANK_FLG); if we never
-        // report it, the test ROM deadlocks. The stub must always set bit 0.
+        // jsmolka's m_vsync waits for VBlank to CLEAR then waits for it
+        // to SET — both polarities must be observable. The stub toggles
+        // on every read so both loops in m_vsync exit within 1-2 reads.
         var bus = new GbaMemoryBus();
-        var halfword = bus.ReadHalfword(0x04000004);
-        Assert.Equal(GbaMemoryMap.STAT_VBLANK_FLG, (ushort)(halfword & GbaMemoryMap.STAT_VBLANK_FLG));
+        var r1 = bus.ReadHalfword(0x04000004);
+        var r2 = bus.ReadHalfword(0x04000004);
+        var r3 = bus.ReadHalfword(0x04000004);
+        // r1 != r2 means flag toggled at least once in three reads.
+        Assert.NotEqual(r1 & GbaMemoryMap.STAT_VBLANK_FLG, r2 & GbaMemoryMap.STAT_VBLANK_FLG);
+        Assert.NotEqual(r2 & GbaMemoryMap.STAT_VBLANK_FLG, r3 & GbaMemoryMap.STAT_VBLANK_FLG);
     }
 
     [Fact]
@@ -43,8 +48,8 @@ public class GbaMemoryBusTests
         // VCOUNT lie helps tests that read the line counter to make progress.
         var bus = new GbaMemoryBus();
         var word = bus.ReadWord(0x04000004);
-        Assert.Equal(GbaMemoryMap.STAT_VBLANK_FLG, (ushort)(word & 0xFFFFu));
         Assert.NotEqual(0u, word & 0xFFFF0000u);  // VCOUNT non-zero
+        // Lower 16 bits hold DISPSTAT (which toggles); we just check it parses.
     }
 
     [Fact]
