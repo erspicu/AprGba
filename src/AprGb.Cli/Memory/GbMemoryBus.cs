@@ -36,6 +36,50 @@ public sealed class GbMemoryBus
     private bool _ramEnable = false;
     private bool _modeRamBank = false;    // false = ROM banking mode, true = RAM banking mode
 
+    // Timer state (DIV/TIMA accumulators in t-cycles).
+    private int _divAccum;
+    private int _timaAccum;
+
+    /// <summary>
+    /// Advance hardware timers by <paramref name="tCycles"/> t-cycles.
+    /// Called by the CPU after each instruction (and during HALT).
+    /// Implements DIV (always-on, 16384 Hz) + TIMA (TAC-gated) per Pan Docs.
+    /// On TIMA overflow, reloads from TMA and raises IF bit 2 (Timer IRQ).
+    /// </summary>
+    public void Tick(int tCycles)
+    {
+        // DIV: always increments at 16384 Hz (every 256 t-cycles).
+        _divAccum += tCycles;
+        while (_divAccum >= 256) { _divAccum -= 256; Io[0x04]++; }
+
+        // TIMA: only when TAC bit 2 is set.
+        var tac = Io[0x07];
+        if ((tac & 0x04) == 0) { _timaAccum = 0; return; }
+
+        int period = (tac & 0x03) switch
+        {
+            0 => 1024,    // 4096 Hz
+            1 => 16,      // 262144 Hz
+            2 => 64,      // 65536 Hz
+            _ => 256,     // 16384 Hz (TAC=11)
+        };
+
+        _timaAccum += tCycles;
+        while (_timaAccum >= period)
+        {
+            _timaAccum -= period;
+            if (Io[0x05] == 0xFF)
+            {
+                Io[0x05] = Io[0x06];          // reload TMA
+                InterruptFlag |= 0x04;        // raise Timer IRQ
+            }
+            else
+            {
+                Io[0x05]++;
+            }
+        }
+    }
+
     public void LoadRom(byte[] romBytes) => Rom = romBytes;
 
     public byte ReadByte(ushort addr)
@@ -132,6 +176,16 @@ public sealed class GbMemoryBus
                     Io[0x02] = (byte)(v & 0x7F);
                     InterruptFlag |= 0x08;
                 }
+                break;
+
+            case 0x04:                       // DIV — any write resets to 0
+                Io[0x04] = 0;
+                _divAccum = 0;
+                break;
+
+            case 0x07:                       // TAC — reset TIMA accumulator on TAC change
+                Io[0x07] = (byte)(v & 0x07);
+                _timaAccum = 0;
                 break;
 
             case 0x0F:                       // IF
