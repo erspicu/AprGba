@@ -141,6 +141,253 @@
                 { "op": "update_c_sub", "in": ["rn_val", "op2_value"] },
                 { "op": "update_v_sub", "in": ["rn_val", "op2_value", "result"] }
               ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "0000" },
+              "mnemonic":   "AND",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.4",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "and", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if", "cond": { "field": "s_bit", "eq": 1 }, "then": [
+                  { "op": "if", "cond": { "field": "rd", "eq": 15 }, "then": [
+                    { "op": "restore_cpsr_from_spsr" }
+                  ], "else": [
+                    { "op": "update_nz",        "value": "result" },
+                    { "op": "update_c_shifter", "in": ["shifter_carry_out"] }
+                  ] }
+                ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "0001" },
+              "mnemonic":   "EOR",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.18",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "xor", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if", "cond": { "field": "s_bit", "eq": 1 }, "then": [
+                  { "op": "if", "cond": { "field": "rd", "eq": 15 }, "then": [
+                    { "op": "restore_cpsr_from_spsr" }
+                  ], "else": [
+                    { "op": "update_nz",        "value": "result" },
+                    { "op": "update_c_shifter", "in": ["shifter_carry_out"] }
+                  ] }
+                ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "0011" },
+              "mnemonic":   "RSB",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.62",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "rsb", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if", "cond": { "field": "s_bit", "eq": 1 }, "then": [
+                  { "op": "if", "cond": { "field": "rd", "eq": 15 }, "then": [
+                    { "op": "restore_cpsr_from_spsr" }
+                  ], "else": [
+                    { "op": "update_nz",     "value": "result" },
+                    { "op": "update_c_sub",  "in": ["op2_value", "rn_val"] },
+                    { "op": "update_v_sub",  "in": ["op2_value", "rn_val", "result"] }
+                  ] }
+                ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "0101" },
+              "mnemonic":   "ADC",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.2",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "adc", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if", "cond": { "field": "s_bit", "eq": 1 }, "then": [
+                  { "op": "if", "cond": { "field": "rd", "eq": 15 }, "then": [
+                    { "op": "restore_cpsr_from_spsr" }
+                  ], "else": [
+                    { "op": "update_nz",            "value": "result" },
+                    { "op": "update_c_add_carry",   "in": ["rn_val", "op2_value", "__carry_in__"] },
+                    { "op": "update_v_add",         "in": ["rn_val", "op2_value", "result"] }
+                  ] }
+                ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "0110" },
+              "mnemonic":   "SBC",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.65",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "sbc", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if", "cond": { "field": "s_bit", "eq": 1 }, "then": [
+                  { "op": "if", "cond": { "field": "rd", "eq": 15 }, "then": [
+                    { "op": "restore_cpsr_from_spsr" }
+                  ], "else": [
+                    { "op": "update_nz",          "value": "result" },
+                    { "op": "update_c_sub_carry", "in": ["rn_val", "op2_value", "__carry_in__"] },
+                    { "op": "update_v_sub",       "in": ["rn_val", "op2_value", "result"] }
+                  ] }
+                ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "0111" },
+              "mnemonic":   "RSC",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.63",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "rsc", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if", "cond": { "field": "s_bit", "eq": 1 }, "then": [
+                  { "op": "if", "cond": { "field": "rd", "eq": 15 }, "then": [
+                    { "op": "restore_cpsr_from_spsr" }
+                  ], "else": [
+                    { "op": "update_nz",          "value": "result" },
+                    { "op": "update_c_sub_carry", "in": ["op2_value", "rn_val", "__carry_in__"] },
+                    { "op": "update_v_sub",       "in": ["op2_value", "rn_val", "result"] }
+                  ] }
+                ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "1000" },
+              "mnemonic":   "TST",
+              "since":      "ARMv4",
+              "writes_pc":  "never",
+              "manual_ref": "ARM ARM A4.1.117",
+              "cycles":     { "form": "1S" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "and", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "update_nz",        "value": "result" },
+                { "op": "update_c_shifter", "in": ["shifter_carry_out"] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "1001" },
+              "mnemonic":   "TEQ",
+              "since":      "ARMv4",
+              "writes_pc":  "never",
+              "manual_ref": "ARM ARM A4.1.116",
+              "cycles":     { "form": "1S" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "xor", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "update_nz",        "value": "result" },
+                { "op": "update_c_shifter", "in": ["shifter_carry_out"] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "1011" },
+              "mnemonic":   "CMN",
+              "since":      "ARMv4",
+              "writes_pc":  "never",
+              "manual_ref": "ARM ARM A4.1.16",
+              "cycles":     { "form": "1S" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "add", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "update_nz",    "value": "result" },
+                { "op": "update_c_add", "in": ["rn_val", "op2_value"] },
+                { "op": "update_v_add", "in": ["rn_val", "op2_value", "result"] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "1100" },
+              "mnemonic":   "ORR",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.45",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "or", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if", "cond": { "field": "s_bit", "eq": 1 }, "then": [
+                  { "op": "if", "cond": { "field": "rd", "eq": 15 }, "then": [
+                    { "op": "restore_cpsr_from_spsr" }
+                  ], "else": [
+                    { "op": "update_nz",        "value": "result" },
+                    { "op": "update_c_shifter", "in": ["shifter_carry_out"] }
+                  ] }
+                ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "1110" },
+              "mnemonic":   "BIC",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.6",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "bic", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if", "cond": { "field": "s_bit", "eq": 1 }, "then": [
+                  { "op": "if", "cond": { "field": "rd", "eq": 15 }, "then": [
+                    { "op": "restore_cpsr_from_spsr" }
+                  ], "else": [
+                    { "op": "update_nz",        "value": "result" },
+                    { "op": "update_c_shifter", "in": ["shifter_carry_out"] }
+                  ] }
+                ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "1111" },
+              "mnemonic":   "MVN",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.36",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "mvn", "in": ["op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if", "cond": { "field": "s_bit", "eq": 1 }, "then": [
+                  { "op": "if", "cond": { "field": "rd", "eq": 15 }, "then": [
+                    { "op": "restore_cpsr_from_spsr" }
+                  ], "else": [
+                    { "op": "update_nz",        "value": "result" },
+                    { "op": "update_c_shifter", "in": ["shifter_carry_out"] }
+                  ] }
+                ] }
+              ]
             }
 
           ]
