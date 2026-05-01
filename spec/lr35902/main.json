@@ -1,0 +1,19 @@
+{
+  "$schema": "../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+  "name": "Main",
+  "width_bits": "variable",
+  "alignment_bytes": 1,
+  "pc_offset_bytes": 1,
+  "endian_within_word": "little",
+  "decode_strategy": "mask_match_priority",
+  "width_decision": {
+    "first_unit_bits": 8,
+    "rule": {
+      "field": "7:0",
+      "long_when_in": [],
+      "long_total_bits": 24
+    }
+  },
+  "encoding_groups": []
+}

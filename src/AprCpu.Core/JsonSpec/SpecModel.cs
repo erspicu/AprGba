@@ -58,7 +58,8 @@ public sealed record CpuVariant(
 
 public sealed record RegisterFile(
     GeneralPurposeRegisters GeneralPurpose,
-    IReadOnlyList<StatusRegister> Status);
+    IReadOnlyList<StatusRegister> Status,
+    IReadOnlyList<RegisterPair> RegisterPairs);
 
 public sealed record GeneralPurposeRegisters(
     int Count,
@@ -66,6 +67,14 @@ public sealed record GeneralPurposeRegisters(
     IReadOnlyList<string> Names,
     IReadOnlyDictionary<string, string> Aliases,
     int? PcIndex);
+
+/// <summary>
+/// Two 8-bit GPRs that can also be addressed as a single 16-bit value
+/// (LR35902/Z80-style: BC, DE, HL, AF). The pair name is read/written
+/// via <c>read_reg_pair</c>/<c>write_reg_pair</c> micro-ops; <c>High</c>
+/// supplies the upper 8 bits and <c>Low</c> the lower 8 bits.
+/// </summary>
+public sealed record RegisterPair(string Name, string High, string Low);
 
 public sealed record StatusRegister(
     string Name,

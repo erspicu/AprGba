@@ -1,0 +1,79 @@
+{
+  "$schema": "../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+
+  "architecture": {
+    "id":             "LR35902",
+    "family":         "Sharp-SM83",
+    "extends":        null,
+    "endianness":     "little",
+    "word_size_bits": 8
+  },
+
+  "variants": [
+    {
+      "id":       "DMG",
+      "core":     "LR35902",
+      "features": [],
+      "notes":    "Game Boy (DMG) main CPU. Sharp SM83 = Z80-derived; drops IX/IY/shadow regs, adds LDH/SWAP/STOP and the high-RAM IO range."
+    }
+  ],
+
+  "register_file": {
+    "general_purpose": {
+      "count":      8,
+      "width_bits": 8,
+      "names":      ["A", "F", "B", "C", "D", "E", "H", "L"],
+      "aliases":    {},
+      "pc_index":   null
+    },
+
+    "register_pairs": [
+      { "name": "AF", "high": "A", "low": "F" },
+      { "name": "BC", "high": "B", "low": "C" },
+      { "name": "DE", "high": "D", "low": "E" },
+      { "name": "HL", "high": "H", "low": "L" }
+    ],
+
+    "status": [
+      {
+        "name":       "F",
+        "width_bits": 8,
+        "fields": {
+          "Z": "7",
+          "N": "6",
+          "H": "5",
+          "C": "4"
+        }
+      }
+    ]
+  },
+
+  "exception_vectors": [
+    { "name": "VBlank", "address": "0x00000040" },
+    { "name": "LcdStat","address": "0x00000048" },
+    { "name": "Timer",  "address": "0x00000050" },
+    { "name": "Serial", "address": "0x00000058" },
+    { "name": "Joypad", "address": "0x00000060" }
+  ],
+
+  "instruction_sets": [
+    { "name": "Main", "file": "main.json" },
+    { "name": "CB",   "file": "cb.json"   }
+  ],
+
+  "instruction_set_dispatch": {
+    "selector":         "prefix_byte_0xCB",
+    "selector_values":  { "main": "Main", "cb": "CB" },
+    "switch_via":       ["CB_PREFIX"],
+    "transition_rule":  "Encountering opcode 0xCB in Main causes the next fetched byte to be decoded in CB; control returns to Main automatically after that single CB instruction completes."
+  },
+
+  "memory_model": {
+    "default_endianness": "little",
+    "alignment_policy": {
+      "load_unaligned":  "passthrough",
+      "store_unaligned": "passthrough"
+    }
+  }
+}

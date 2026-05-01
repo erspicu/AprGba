@@ -93,4 +93,47 @@ public class SpecLoaderTests
         Assert.Contains("LSR", mnemonics);
         Assert.Contains("ASR", mnemonics);
     }
+
+    [Fact]
+    public void Loads_Lr35902_CpuJson_WithRegisterPairs()
+    {
+        var loaded = SpecLoader.LoadCpuSpec(Path.Combine(SpecRoot, "lr35902", "cpu.json"));
+
+        Assert.Equal("LR35902",     loaded.Cpu.Architecture.Id);
+        Assert.Equal("Sharp-SM83",  loaded.Cpu.Architecture.Family);
+        Assert.Equal("little",      loaded.Cpu.Architecture.Endianness);
+        Assert.Equal(8,             loaded.Cpu.Architecture.WordSizeBits);
+
+        var gpr = loaded.Cpu.RegisterFile.GeneralPurpose;
+        Assert.Equal(8,  gpr.Count);
+        Assert.Equal(8,  gpr.WidthBits);
+        Assert.Equal(new[] { "A", "F", "B", "C", "D", "E", "H", "L" }, gpr.Names);
+
+        var pairs = loaded.Cpu.RegisterFile.RegisterPairs;
+        Assert.Equal(4, pairs.Count);
+        var bc = pairs.Single(p => p.Name == "BC");
+        Assert.Equal("B", bc.High);
+        Assert.Equal("C", bc.Low);
+        var af = pairs.Single(p => p.Name == "AF");
+        Assert.Equal("A", af.High);
+        Assert.Equal("F", af.Low);
+
+        var f = Assert.Single(loaded.Cpu.RegisterFile.Status);
+        Assert.Equal("F", f.Name);
+        Assert.Equal(new BitRange(7, 7), f.Fields["Z"]);
+        Assert.Equal(new BitRange(4, 4), f.Fields["C"]);
+
+        Assert.Equal(5, loaded.Cpu.ExceptionVectors.Count);
+        Assert.Equal(0x50u, loaded.Cpu.ExceptionVectors.Single(v => v.Name == "Timer").Address);
+
+        Assert.Equal(2, loaded.InstructionSets.Count);
+        Assert.True(loaded.InstructionSets.ContainsKey("Main"));
+        Assert.True(loaded.InstructionSets.ContainsKey("CB"));
+
+        var main = loaded.InstructionSets["Main"];
+        Assert.True(main.WidthBits.IsVariable);
+
+        var cb = loaded.InstructionSets["CB"];
+        Assert.Equal(8, cb.WidthBits.Fixed);
+    }
 }
