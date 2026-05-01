@@ -155,11 +155,16 @@ internal static class OperandResolverImpl
             ? sext
             : ctx.Builder.BuildShl(sext, ctx.ConstU32((uint)shiftAmt), "off_scaled");
 
+        // Convention: state.R15 already contains "current_instruction_addr +
+        // pc_offset_bytes" (the pipeline-adjusted value the host loop pre-sets
+        // before executing each instruction). Do NOT add pc_offset_bytes again —
+        // doing so would double-count and put the branch target 8 bytes too far
+        // (caught by Phase 3.2 CpuExecutor branch test). Same convention is used
+        // by raise_exception (subtracts pc_offset−instr_size to get next-PC) and
+        // by BL_HI (read_reg 15 → raw_pc → add scaled_offset directly).
         var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
         var r15    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "r15");
-        var pcOff  = ctx.ConstU32((uint)ctx.InstructionSet.PcOffsetBytes);
-        var pc     = ctx.Builder.BuildAdd(r15, pcOff, "pc_with_offset");
-        var addr   = ctx.Builder.BuildAdd(pc, scaled, "address");
+        var addr   = ctx.Builder.BuildAdd(r15, scaled, "address");
         ctx.Values["address"] = addr;
     }
 
