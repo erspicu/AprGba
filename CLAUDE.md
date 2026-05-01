@@ -52,6 +52,12 @@ working title and has been fully renamed.
 ```
 dotnet build AprGba.slnx
 dotnet test  AprGba.slnx
+
+# Compile a CPU spec to LLVM IR (Phase 2):
+dotnet run --project src/AprCpu.Compiler -- \
+    --spec spec/arm7tdmi/cpu.json --output temp/arm7tdmi.ll
+
+# Phase-0 spike (LLVM toolchain sanity check):
 dotnet run --project src/AprCpu.Compiler -- --jit-only
 ```
 
