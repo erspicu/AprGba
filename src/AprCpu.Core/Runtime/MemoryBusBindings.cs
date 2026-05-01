@@ -21,7 +21,7 @@ public static unsafe class MemoryBusBindings
     /// <summary>
     /// Bind the six memory-bus externs in <paramref name="rt"/>'s module
     /// to <paramref name="bus"/>. Must be called BEFORE
-    /// <see cref="HostRuntime.Finalize"/> (the trampoline addresses are
+    /// <see cref="HostRuntime.Compile"/> (the trampoline addresses are
     /// baked into the IR as constant initializers).
     ///
     /// The returned scope restores the prior <c>_current</c> binding when
