@@ -238,8 +238,14 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
             var curAddr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, addrSlot, $"blks_a{i}");
             var rPtr    = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
             var rVal    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, rPtr, $"blks_r{i}");
+            // ARM7TDMI quirk: storing R15 in block transfer pushes PC + 12,
+            // i.e. R15 read value + 4. (R15 read = current_inst + 8;
+            // stored = current_inst + 12.)
+            var rValAdjusted = i == 15
+                ? ctx.Builder.BuildAdd(rVal, ctx.ConstU32(4), $"blks_r{i}_pc")
+                : rVal;
             var write32Fn = ctx.Builder.BuildLoad2(write32PtrType, write32Slot, $"blks_write32_{i}");
-            ctx.Builder.BuildCall2(write32Type, write32Fn, new[] { curAddr, rVal }, "");
+            ctx.Builder.BuildCall2(write32Type, write32Fn, new[] { curAddr, rValAdjusted }, "");
             var nextAddr = ctx.Builder.BuildAdd(curAddr, ctx.ConstU32(4), $"blks_a{i}_next");
             ctx.Builder.BuildStore(nextAddr, addrSlot);
 

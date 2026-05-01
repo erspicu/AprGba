@@ -41,14 +41,34 @@
               "out": "src"
             },
             {
+              "op": "and",
+              "in": ["addr", { "const": 3 }],
+              "out": "addr_lo2"
+            },
+            {
+              "op": "shl",
+              "in": ["addr_lo2", { "const": 3 }],
+              "out": "rot_amount"
+            },
+            {
+              "op": "and",
+              "in": ["addr", { "const": "0xFFFFFFFC" }],
+              "out": "addr_aligned"
+            },
+            {
               "op": "load",
-              "addr": "addr",
+              "addr": "addr_aligned",
               "size": 32,
+              "out": "raw_word"
+            },
+            {
+              "op": "ror",
+              "in": ["raw_word", "rot_amount"],
               "out": "old_value"
             },
             {
               "op": "store",
-              "addr": "addr",
+              "addr": "addr_aligned",
               "value": "src",
               "size": 32
             },

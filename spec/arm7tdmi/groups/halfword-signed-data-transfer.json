@@ -96,8 +96,13 @@
               "out": "address"
             },
             {
+              "op": "and",
+              "in": ["address", { "const": "0xFFFFFFFE" }],
+              "out": "addr_aligned"
+            },
+            {
               "op": "store",
-              "addr": "address",
+              "addr": "addr_aligned",
               "value": "data",
               "size": 16
             },
@@ -221,16 +226,31 @@
               "out": "address"
             },
             {
-              "op": "load",
-              "addr": "address",
-              "size": 16,
-              "signed": false,
-              "out": "loaded"
+              "op": "and",
+              "in": ["address", { "const": 1 }],
+              "out": "addr_lo1"
             },
             {
-              "op": "write_reg",
-              "index": "rd",
-              "value": "loaded"
+              "op": "shl",
+              "in": ["addr_lo1", { "const": 3 }],
+              "out": "rot_amount"
+            },
+            {
+              "op": "and",
+              "in": ["address", { "const": "0xFFFFFFFE" }],
+              "out": "addr_aligned"
+            },
+            {
+              "op": "load",
+              "addr": "addr_aligned",
+              "size": 16,
+              "signed": false,
+              "out": "raw_half"
+            },
+            {
+              "op": "ror",
+              "in": ["raw_half", "rot_amount"],
+              "out": "loaded"
             },
             {
               "op": "if",
@@ -261,6 +281,11 @@
                   ]
                 }
               ]
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "loaded"
             }
           ]
         }
@@ -483,10 +508,34 @@
               "out": "address"
             },
             {
+              "op": "and",
+              "in": ["address", { "const": 1 }],
+              "out": "addr_lo1"
+            },
+            {
+              "op": "and",
+              "in": ["address", { "const": "0xFFFFFFFE" }],
+              "out": "addr_aligned"
+            },
+            {
               "op": "load",
-              "addr": "address",
+              "addr": "addr_aligned",
               "size": 16,
               "signed": true,
+              "out": "loaded_h"
+            },
+            {
+              "op": "load",
+              "addr": "address",
+              "size": 8,
+              "signed": true,
+              "out": "loaded_b"
+            },
+            {
+              "op": "select",
+              "cond": { "var": "addr_lo1", "eq": 0 },
+              "if_true": "loaded_h",
+              "if_false": "loaded_b",
               "out": "loaded"
             },
             {
@@ -608,8 +657,13 @@
               "out": "address"
             },
             {
+              "op": "and",
+              "in": ["address", { "const": "0xFFFFFFFE" }],
+              "out": "addr_aligned"
+            },
+            {
               "op": "store",
-              "addr": "address",
+              "addr": "addr_aligned",
               "value": "data",
               "size": 16
             },
@@ -719,16 +773,31 @@
               "out": "address"
             },
             {
-              "op": "load",
-              "addr": "address",
-              "size": 16,
-              "signed": false,
-              "out": "loaded"
+              "op": "and",
+              "in": ["address", { "const": 1 }],
+              "out": "addr_lo1"
             },
             {
-              "op": "write_reg",
-              "index": "rd",
-              "value": "loaded"
+              "op": "shl",
+              "in": ["addr_lo1", { "const": 3 }],
+              "out": "rot_amount"
+            },
+            {
+              "op": "and",
+              "in": ["address", { "const": "0xFFFFFFFE" }],
+              "out": "addr_aligned"
+            },
+            {
+              "op": "load",
+              "addr": "addr_aligned",
+              "size": 16,
+              "signed": false,
+              "out": "raw_half"
+            },
+            {
+              "op": "ror",
+              "in": ["raw_half", "rot_amount"],
+              "out": "loaded"
             },
             {
               "op": "if",
@@ -759,6 +828,11 @@
                   ]
                 }
               ]
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "loaded"
             }
           ]
         }
@@ -953,10 +1027,34 @@
               "out": "address"
             },
             {
+              "op": "and",
+              "in": ["address", { "const": 1 }],
+              "out": "addr_lo1"
+            },
+            {
+              "op": "and",
+              "in": ["address", { "const": "0xFFFFFFFE" }],
+              "out": "addr_aligned"
+            },
+            {
               "op": "load",
-              "addr": "address",
+              "addr": "addr_aligned",
               "size": 16,
               "signed": true,
+              "out": "loaded_h"
+            },
+            {
+              "op": "load",
+              "addr": "address",
+              "size": 8,
+              "signed": true,
+              "out": "loaded_b"
+            },
+            {
+              "op": "select",
+              "cond": { "var": "addr_lo1", "eq": 0 },
+              "if_true": "loaded_h",
+              "if_false": "loaded_b",
               "out": "loaded"
             },
             {

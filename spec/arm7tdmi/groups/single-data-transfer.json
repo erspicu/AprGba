@@ -88,9 +88,26 @@
               "out": "address"
             },
             {
+              "op": "and",
+              "in": ["address", { "const": "0xFFFFFFFC" }],
+              "out": "addr_aligned"
+            },
+            {
+              "op": "add",
+              "in": ["data", { "const": 4 }],
+              "out": "data_pc_plus4"
+            },
+            {
+              "op": "select",
+              "cond": { "field": "rd", "eq": 15 },
+              "if_true": "data_pc_plus4",
+              "if_false": "data",
+              "out": "store_value"
+            },
+            {
               "op": "store",
-              "addr": "address",
-              "value": "data",
+              "addr": "addr_aligned",
+              "value": "store_value",
               "size": 32
             },
             {
@@ -209,15 +226,30 @@
               "out": "address"
             },
             {
-              "op": "load",
-              "addr": "address",
-              "size": 32,
-              "out": "loaded"
+              "op": "and",
+              "in": ["address", { "const": 3 }],
+              "out": "addr_lo2"
             },
             {
-              "op": "write_reg",
-              "index": "rd",
-              "value": "loaded"
+              "op": "shl",
+              "in": ["addr_lo2", { "const": 3 }],
+              "out": "rot_amount"
+            },
+            {
+              "op": "and",
+              "in": ["address", { "const": "0xFFFFFFFC" }],
+              "out": "addr_aligned"
+            },
+            {
+              "op": "load",
+              "addr": "addr_aligned",
+              "size": 32,
+              "out": "raw_word"
+            },
+            {
+              "op": "ror",
+              "in": ["raw_word", "rot_amount"],
+              "out": "loaded"
             },
             {
               "op": "if",
@@ -248,6 +280,11 @@
                   ]
                 }
               ]
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "loaded"
             }
           ]
         }
@@ -576,9 +613,26 @@
               "out": "address"
             },
             {
+              "op": "and",
+              "in": ["address", { "const": "0xFFFFFFFC" }],
+              "out": "addr_aligned"
+            },
+            {
+              "op": "add",
+              "in": ["data", { "const": 4 }],
+              "out": "data_pc_plus4"
+            },
+            {
+              "op": "select",
+              "cond": { "field": "rd", "eq": 15 },
+              "if_true": "data_pc_plus4",
+              "if_false": "data",
+              "out": "store_value"
+            },
+            {
               "op": "store",
-              "addr": "address",
-              "value": "data",
+              "addr": "addr_aligned",
+              "value": "store_value",
               "size": 32
             },
             {
@@ -686,15 +740,30 @@
               "out": "address"
             },
             {
-              "op": "load",
-              "addr": "address",
-              "size": 32,
-              "out": "loaded"
+              "op": "and",
+              "in": ["address", { "const": 3 }],
+              "out": "addr_lo2"
             },
             {
-              "op": "write_reg",
-              "index": "rd",
-              "value": "loaded"
+              "op": "shl",
+              "in": ["addr_lo2", { "const": 3 }],
+              "out": "rot_amount"
+            },
+            {
+              "op": "and",
+              "in": ["address", { "const": "0xFFFFFFFC" }],
+              "out": "addr_aligned"
+            },
+            {
+              "op": "load",
+              "addr": "addr_aligned",
+              "size": 32,
+              "out": "raw_word"
+            },
+            {
+              "op": "ror",
+              "in": ["raw_word", "rot_amount"],
+              "out": "loaded"
             },
             {
               "op": "if",
@@ -725,6 +794,11 @@
                   ]
                 }
               ]
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "loaded"
             }
           ]
         }
