@@ -209,6 +209,50 @@ public class DecoderTableTests
         Assert.Equal("LDRB", d.Instruction.Mnemonic);
     }
 
+    /// <summary>STR R0, [R1, R2]   reg offset, pre, no shift, no writeback → 0xE7810002</summary>
+    [Fact]
+    public void Decode_SDT_Reg_STR()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE781_0002u);
+        Assert.NotNull(d);
+        Assert.Equal("SDT_Reg_STR", d!.Format.Name);
+        Assert.Equal("STR", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDR R0, [R1, R2, LSL #2] → 0xE7910102</summary>
+    [Fact]
+    public void Decode_SDT_Reg_LDR()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE791_0102u);
+        Assert.NotNull(d);
+        Assert.Equal("SDT_Reg_LDR", d!.Format.Name);
+        Assert.Equal("LDR", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>STRB R0, [R1, R2] → 0xE7C10002</summary>
+    [Fact]
+    public void Decode_SDT_Reg_STRB()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE7C1_0002u);
+        Assert.NotNull(d);
+        Assert.Equal("SDT_Reg_STRB", d!.Format.Name);
+        Assert.Equal("STRB", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDRB R0, [R1, R2] → 0xE7D10002</summary>
+    [Fact]
+    public void Decode_SDT_Reg_LDRB()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE7D1_0002u);
+        Assert.NotNull(d);
+        Assert.Equal("SDT_Reg_LDRB", d!.Format.Name);
+        Assert.Equal("LDRB", d.Instruction.Mnemonic);
+    }
+
     /// <summary>RegRegShift form: ADD R0, R1, R2, LSL R3 → 0xE0810312.</summary>
     [Fact]
     public void Decode_RegRegShift_AddByRegister()
