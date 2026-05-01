@@ -468,6 +468,61 @@ public class DecoderTableTests
         Assert.Equal("STM", d.Instruction.Mnemonic);
     }
 
+    /// <summary>SWI #0x123456 → 0xEF123456</summary>
+    [Fact]
+    public void Decode_SWI()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xEF12_3456u);
+        Assert.NotNull(d);
+        Assert.Equal("SWI", d!.Format.Name);
+        Assert.Equal("SWI", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>CDP encoding (any) → traps to UND. 0xEE000000.</summary>
+    [Fact]
+    public void Decode_CDP_StubsToUndefined()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xEE00_0000u);
+        Assert.NotNull(d);
+        Assert.Equal("Coprocessor_CDP", d!.Format.Name);
+        Assert.Equal("CDP", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>MCR/MRC encoding (bit 4 = 1) → 0xEE000010.</summary>
+    [Fact]
+    public void Decode_MCR_MRC_StubsToUndefined()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xEE00_0010u);
+        Assert.NotNull(d);
+        Assert.Equal("Coprocessor_MCR_MRC", d!.Format.Name);
+        Assert.Equal("MCR_MRC", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDC/STC encoding (bits 27:25 = 110) → 0xEC000000.</summary>
+    [Fact]
+    public void Decode_LDC_STC_StubsToUndefined()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xEC00_0000u);
+        Assert.NotNull(d);
+        Assert.Equal("Coprocessor_LDC_STC", d!.Format.Name);
+        Assert.Equal("LDC_STC", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>"Always undefined" reserved encoding (bits 27:25 = 011, bit 4 = 1) → 0xE6000010.</summary>
+    [Fact]
+    public void Decode_ArchitecturallyUndefined()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE600_0010u);
+        Assert.NotNull(d);
+        Assert.Equal("Undefined_Reserved_011_x4_1", d!.Format.Name);
+        Assert.Equal("UND", d.Instruction.Mnemonic);
+    }
+
     /// <summary>RegRegShift form: ADD R0, R1, R2, LSL R3 → 0xE0810312.</summary>
     [Fact]
     public void Decode_RegRegShift_AddByRegister()

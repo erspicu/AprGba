@@ -39,6 +39,9 @@ public static class ArmEmitters
         // BX-style indirect branch (T-bit selects ARM/Thumb)
         reg.Register(new BranchIndirectArm());
 
+        // Exception entry (vectors). Phase 2.5.5 first-iteration stub.
+        reg.Register(new RaiseExceptionEmitter());
+
         // Stub / placeholder
         reg.Register(new RestoreCpsrFromSpsr());
     }
@@ -304,6 +307,48 @@ internal sealed class RestoreCpsrFromSpsr : IMicroOpEmitter
         // Phase 2.5.7 (banked register swap).
         var cpsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR");
         var _ = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "cpsr_stub_load");
+    }
+}
+
+/// <summary>
+/// Enter an exception vector. The full ARM exception-entry sequence
+/// (save CPSR -&gt; SPSR_&lt;mode&gt;, switch CPSR.M, save next-PC -&gt; LR_&lt;mode&gt;,
+/// jump to vector address) requires banked-register support which lands
+/// in 2.5.7. For now we emit only the PC update — host code can detect
+/// the PC change and complete the rest in software.
+///
+/// Step shape:
+/// <code>{ "op": "raise_exception", "vector": "SoftwareInterrupt" }</code>
+///
+/// The vector name is looked up in the spec's
+/// <see cref="CpuStateLayout.ExceptionVectors"/> table.
+/// </summary>
+internal sealed class RaiseExceptionEmitter : IMicroOpEmitter
+{
+    public string OpName => "raise_exception";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var vectorName = step.Raw.GetProperty("vector").GetString()!;
+        uint? address = null;
+        foreach (var v in ctx.Layout.ExceptionVectors)
+        {
+            if (string.Equals(v.Name, vectorName, StringComparison.Ordinal))
+            {
+                address = v.Address;
+                break;
+            }
+        }
+        if (address is null)
+        {
+            throw new InvalidOperationException(
+                $"raise_exception: unknown vector '{vectorName}'. Declared vectors: " +
+                string.Join(", ", ctx.Layout.ExceptionVectors.Select(v => v.Name)));
+        }
+
+        // Phase 2.5.5b first-iteration stub: jump to vector address.
+        // 2.5.7 will add: SPSR save, mode switch, LR save, banked register swap.
+        var pcSlot = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
+        ctx.Builder.BuildStore(ctx.ConstU32(address.Value), pcSlot);
     }
 }
 

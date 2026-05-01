@@ -36,7 +36,8 @@ public sealed unsafe class SpecCompiler
         var layout = new CpuStateLayout(
             module.Context,
             loaded.Cpu.RegisterFile,
-            loaded.Cpu.ProcessorModes);
+            loaded.Cpu.ProcessorModes,
+            loaded.Cpu.ExceptionVectors);
 
         var registry = new EmitterRegistry();
         StandardEmitters.RegisterAll(registry);
