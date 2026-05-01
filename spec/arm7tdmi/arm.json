@@ -1,0 +1,238 @@
+{
+  "$schema": "../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+
+  "name":               "ARM",
+  "width_bits":         32,
+  "alignment_bytes":    4,
+  "pc_offset_bytes":    8,
+  "endian_within_word": "little",
+
+  "global_condition": {
+    "field": "31:28",
+    "table": {
+      "0000": "EQ", "0001": "NE", "0010": "CS", "0011": "CC",
+      "0100": "MI", "0101": "PL", "0110": "VS", "0111": "VC",
+      "1000": "HI", "1001": "LS", "1010": "GE", "1011": "LT",
+      "1100": "GT", "1101": "LE", "1110": "AL", "1111": "NV"
+    },
+    "applies_to": "all_unless_marked_unconditional"
+  },
+
+  "decode_strategy": "mask_match_priority",
+
+  "encoding_groups": [
+
+    {
+      "name": "DataProcessing",
+      "formats": [
+
+        {
+          "name":    "DataProcessing_Immediate",
+          "comment": "cccc 001 oooo s nnnn dddd rrrr iiiiiiii (8-bit imm rotated by 2*rrrr)",
+          "pattern": "cccc_001_oooo_s_nnnn_dddd_rrrriiiiiiii",
+          "fields": {
+            "cond":   "31:28",
+            "opcode": "24:21",
+            "s_bit":  "20",
+            "rn":     "19:16",
+            "rd":     "15:12",
+            "rotate": "11:8",
+            "imm8":   "7:0"
+          },
+          "mask":  "0x0E000000",
+          "match": "0x02000000",
+
+          "operands": {
+            "op2": {
+              "kind":    "immediate_rotated",
+              "outputs": ["op2_value", "shifter_carry_out"]
+            }
+          },
+
+          "instructions": [
+
+            {
+              "selector":   { "field": "opcode", "value": "1101" },
+              "mnemonic":   "MOV",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.35 / ARMv4T A4.1.34",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "write_reg", "index": "rd", "value": "op2_value" },
+                { "op": "if",
+                  "cond": { "field": "s_bit", "eq": 1 },
+                  "then": [
+                    { "op": "if",
+                      "cond": { "field": "rd", "eq": 15 },
+                      "then": [ { "op": "restore_cpsr_from_spsr" } ],
+                      "else": [
+                        { "op": "update_nz",         "value": "op2_value" },
+                        { "op": "update_c_shifter", "in": ["shifter_carry_out"] }
+                      ] }
+                  ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "0100" },
+              "mnemonic":   "ADD",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.3",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "add", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if",
+                  "cond": { "field": "s_bit", "eq": 1 },
+                  "then": [
+                    { "op": "if",
+                      "cond": { "field": "rd", "eq": 15 },
+                      "then": [ { "op": "restore_cpsr_from_spsr" } ],
+                      "else": [
+                        { "op": "update_nz",     "value": "result" },
+                        { "op": "update_c_add",  "in": ["rn_val", "op2_value"] },
+                        { "op": "update_v_add",  "in": ["rn_val", "op2_value", "result"] }
+                      ] }
+                  ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "0010" },
+              "mnemonic":   "SUB",
+              "since":      "ARMv4",
+              "writes_pc":  "conditional_via_rd",
+              "manual_ref": "ARM ARM A4.1.106",
+              "cycles":     { "form": "1S", "extra_when_dest_pc": "+1S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "sub", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "write_reg", "index": "rd", "value": "result" },
+                { "op": "if",
+                  "cond": { "field": "s_bit", "eq": 1 },
+                  "then": [
+                    { "op": "if",
+                      "cond": { "field": "rd", "eq": 15 },
+                      "then": [ { "op": "restore_cpsr_from_spsr" } ],
+                      "else": [
+                        { "op": "update_nz",     "value": "result" },
+                        { "op": "update_c_sub",  "in": ["rn_val", "op2_value"] },
+                        { "op": "update_v_sub",  "in": ["rn_val", "op2_value", "result"] }
+                      ] }
+                  ] }
+              ]
+            },
+
+            {
+              "selector":   { "field": "opcode", "value": "1010" },
+              "mnemonic":   "CMP",
+              "since":      "ARMv4",
+              "writes_pc":  "never",
+              "manual_ref": "ARM ARM A4.1.15",
+              "cycles":     { "form": "1S" },
+              "steps": [
+                { "op": "read_reg", "index": "rn", "out": "rn_val" },
+                { "op": "sub", "in": ["rn_val", "op2_value"], "out": "result" },
+                { "op": "update_nz",    "value": "result" },
+                { "op": "update_c_sub", "in": ["rn_val", "op2_value"] },
+                { "op": "update_v_sub", "in": ["rn_val", "op2_value", "result"] }
+              ]
+            }
+
+          ]
+        }
+
+      ]
+    },
+
+    {
+      "name": "Branch",
+      "formats": [
+
+        {
+          "name":    "Branch_BL",
+          "comment": "cccc 101 L oooooooooooooooooooooooo (24-bit signed offset, <<2)",
+          "pattern": "cccc_101_L_oooooooooooooooooooooooo",
+          "fields": {
+            "cond":     "31:28",
+            "L":        "24",
+            "offset24": "23:0"
+          },
+          "mask":  "0x0E000000",
+          "match": "0x0A000000",
+
+          "operands": {
+            "branch_target": {
+              "kind":    "pc_relative_offset",
+              "outputs": ["address"]
+            }
+          },
+
+          "instructions": [
+
+            {
+              "selector":   { "field": "L", "value": "0" },
+              "mnemonic":   "B",
+              "since":      "ARMv4",
+              "writes_pc":  "always",
+              "manual_ref": "ARM ARM A4.1.5",
+              "cycles":     { "form": "2S+1N", "extra_when_load_pc": "" },
+              "steps": [
+                { "op": "branch", "target": "address" }
+              ]
+            },
+
+            {
+              "selector":   { "field": "L", "value": "1" },
+              "mnemonic":   "BL",
+              "since":      "ARMv4",
+              "writes_pc":  "always",
+              "manual_ref": "ARM ARM A4.1.5",
+              "cycles":     { "form": "2S+1N" },
+              "steps": [
+                { "op": "branch_link", "target": "address" }
+              ]
+            }
+
+          ]
+        },
+
+        {
+          "name":    "Branch_Exchange",
+          "comment": "cccc 0001 0010 1111 1111 1111 0001 mmmm (BX Rm)",
+          "pattern": "cccc_000100101111111111110001mmmm",
+          "fields": {
+            "cond": "31:28",
+            "rm":   "3:0"
+          },
+          "mask":  "0x0FFFFFF0",
+          "match": "0x012FFF10",
+
+          "instructions": [
+
+            {
+              "selector":   { "field": "rm", "value": "0" },
+              "mnemonic":   "BX",
+              "since":      "ARMv4T",
+              "writes_pc":  "always",
+              "switches_instruction_set": true,
+              "manual_ref": "ARM ARM A4.1.10",
+              "cycles":     { "form": "2S+1N" },
+              "steps": [
+                { "op": "read_reg", "index": "rm", "out": "target" },
+                { "op": "branch_indirect", "target": "target" }
+              ]
+            }
+
+          ]
+        }
+
+      ]
+    }
+
+  ]
+}

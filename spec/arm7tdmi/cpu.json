@@ -1,0 +1,104 @@
+{
+  "$schema": "../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+
+  "architecture": {
+    "id":             "ARMv4T",
+    "family":         "ARM",
+    "extends":        null,
+    "endianness":     "little",
+    "word_size_bits": 32
+  },
+
+  "variants": [
+    {
+      "id":       "ARM7TDMI",
+      "core":     "ARM7",
+      "features": ["T", "D", "M", "I"],
+      "notes":    "GBA main CPU; NDS auxiliary CPU"
+    }
+  ],
+
+  "register_file": {
+    "general_purpose": {
+      "count":      16,
+      "width_bits": 32,
+      "names":      ["R0","R1","R2","R3","R4","R5","R6","R7",
+                     "R8","R9","R10","R11","R12","R13","R14","R15"],
+      "aliases":    { "SP": "R13", "LR": "R14", "PC": "R15" },
+      "pc_index":   15
+    },
+    "status": [
+      {
+        "name":       "CPSR",
+        "width_bits": 32,
+        "fields": {
+          "N": "31", "Z": "30", "C": "29", "V": "28",
+          "I": "7",  "F": "6",  "T": "5",  "M": "4:0"
+        }
+      },
+      {
+        "name":            "SPSR",
+        "width_bits":      32,
+        "banked_per_mode": ["FIQ","IRQ","Supervisor","Abort","Undefined"]
+      }
+    ]
+  },
+
+  "processor_modes": {
+    "modes": [
+      { "id": "User",       "encoding": "10000", "privileged": false },
+      { "id": "FIQ",        "encoding": "10001", "privileged": true  },
+      { "id": "IRQ",        "encoding": "10010", "privileged": true  },
+      { "id": "Supervisor", "encoding": "10011", "privileged": true  },
+      { "id": "Abort",      "encoding": "10111", "privileged": true  },
+      { "id": "Undefined",  "encoding": "11011", "privileged": true  },
+      { "id": "System",     "encoding": "11111", "privileged": true  }
+    ],
+    "banked_registers": {
+      "FIQ":        ["R8","R9","R10","R11","R12","R13","R14"],
+      "IRQ":        ["R13","R14"],
+      "Supervisor": ["R13","R14"],
+      "Abort":      ["R13","R14"],
+      "Undefined":  ["R13","R14"],
+      "System":     []
+    }
+  },
+
+  "exception_vectors": [
+    { "name": "Reset",                "address": "0x00000000",
+      "enter_mode": "Supervisor",     "disable": ["I","F"] },
+    { "name": "UndefinedInstruction", "address": "0x00000004",
+      "enter_mode": "Undefined" },
+    { "name": "SoftwareInterrupt",    "address": "0x00000008",
+      "enter_mode": "Supervisor",     "disable": ["I"] },
+    { "name": "PrefetchAbort",        "address": "0x0000000C",
+      "enter_mode": "Abort",          "disable": ["I"] },
+    { "name": "DataAbort",            "address": "0x00000010",
+      "enter_mode": "Abort",          "disable": ["I"] },
+    { "name": "IRQ",                  "address": "0x00000018",
+      "enter_mode": "IRQ",            "disable": ["I"] },
+    { "name": "FIQ",                  "address": "0x0000001C",
+      "enter_mode": "FIQ",            "disable": ["I","F"] }
+  ],
+
+  "instruction_sets": [
+    { "name": "ARM",   "file": "arm.json"   },
+    { "name": "Thumb", "file": "thumb.json" }
+  ],
+
+  "instruction_set_dispatch": {
+    "selector":         "CPSR.T",
+    "selector_values":  { "0": "ARM", "1": "Thumb" },
+    "switch_via":       ["BX"],
+    "transition_rule":  "Target address bit[0]==1 selects Thumb (T<-1) and is cleared before fetch."
+  },
+
+  "memory_model": {
+    "default_endianness": "little",
+    "alignment_policy": {
+      "load_unaligned":  "rotate_within_word",
+      "store_unaligned": "force_align_low_bits"
+    }
+  }
+}

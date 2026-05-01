@@ -1,0 +1,459 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aprgba.dev/schemas/cpu-spec/v1",
+  "title": "AprCpu Spec",
+  "description": "Top-level schema covering both CPU model files (cpu.json) and instruction-set files (arm.json / thumb.json / ...). The schema is intentionally permissive in places where future extension is expected; strict structural rules live where breakage would be silent (encoding patterns, field ranges, micro-op shape).",
+
+  "$defs": {
+
+    "BitRange": {
+      "description": "Single bit (\"7\") or inclusive range (\"hi:lo\", e.g. \"31:28\").",
+      "type": "string",
+      "pattern": "^([0-9]+|[0-9]+:[0-9]+)$"
+    },
+
+    "HexNumber": {
+      "type": "string",
+      "pattern": "^0x[0-9A-Fa-f]+$"
+    },
+
+    "BitString": {
+      "description": "Bit pattern with placeholders. Allowed chars: 0 1 x and a-z (field placeholders). Underscores allowed for grouping and ignored.",
+      "type": "string",
+      "pattern": "^[01xa-z_]+$"
+    },
+
+    "Endianness": { "enum": ["little", "big"] },
+
+    "VariantRef": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id":       { "type": "string" },
+        "core":     { "type": "string" },
+        "features": { "type": "array", "items": { "type": "string" } },
+        "notes":    { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "Architecture": {
+      "type": "object",
+      "required": ["id", "family"],
+      "properties": {
+        "id":              { "type": "string" },
+        "family":          { "type": "string" },
+        "extends":         { "type": ["string", "null"] },
+        "endianness":      { "$ref": "#/$defs/Endianness" },
+        "word_size_bits":  { "type": "integer", "enum": [8, 16, 32, 64] }
+      },
+      "additionalProperties": false
+    },
+
+    "RegisterField": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/BitRange" }
+    },
+
+    "RegisterStatus": {
+      "type": "object",
+      "required": ["name", "width_bits"],
+      "properties": {
+        "name":              { "type": "string" },
+        "width_bits":        { "type": "integer", "minimum": 1 },
+        "fields":            { "$ref": "#/$defs/RegisterField" },
+        "banked_per_mode":   { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+
+    "RegisterFile": {
+      "type": "object",
+      "required": ["general_purpose"],
+      "properties": {
+        "general_purpose": {
+          "type": "object",
+          "required": ["count", "width_bits", "names"],
+          "properties": {
+            "count":      { "type": "integer", "minimum": 1 },
+            "width_bits": { "type": "integer", "enum": [8, 16, 32, 64] },
+            "names":      { "type": "array", "items": { "type": "string" } },
+            "aliases":    { "type": "object", "additionalProperties": { "type": "string" } },
+            "pc_index":   { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        },
+        "status": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/RegisterStatus" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "ProcessorModes": {
+      "type": "object",
+      "properties": {
+        "modes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id":         { "type": "string" },
+              "encoding":   { "type": "string" },
+              "privileged": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "banked_registers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "ExceptionVector": {
+      "type": "object",
+      "required": ["name", "address"],
+      "properties": {
+        "name":       { "type": "string" },
+        "address":    { "$ref": "#/$defs/HexNumber" },
+        "enter_mode": { "type": "string" },
+        "disable":    { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+
+    "InstructionSetRef": {
+      "type": "object",
+      "required": ["name", "file"],
+      "properties": {
+        "name":    { "type": "string" },
+        "file":    { "type": "string" },
+        "extends": {
+          "type": "object",
+          "properties": {
+            "spec": { "type": "string" },
+            "set":  { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "InstructionSetDispatch": {
+      "type": "object",
+      "required": ["selector", "selector_values"],
+      "properties": {
+        "selector":         { "type": "string" },
+        "selector_values":  { "type": "object", "additionalProperties": { "type": "string" } },
+        "switch_via":       { "type": "array", "items": { "type": "string" } },
+        "transition_rule":  { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "MemoryModel": {
+      "type": "object",
+      "properties": {
+        "default_endianness": { "$ref": "#/$defs/Endianness" },
+        "alignment_policy": {
+          "type": "object",
+          "properties": {
+            "load_unaligned":  { "enum": ["rotate_within_word", "abort", "force_align_low_bits", "permit"] },
+            "store_unaligned": { "enum": ["rotate_within_word", "abort", "force_align_low_bits", "permit"] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "GlobalCondition": {
+      "type": "object",
+      "required": ["field", "table"],
+      "properties": {
+        "field":      { "$ref": "#/$defs/BitRange" },
+        "table":      { "type": "object", "additionalProperties": { "type": "string" } },
+        "applies_to": { "enum": ["all_unless_marked_unconditional", "all"] }
+      },
+      "additionalProperties": false
+    },
+
+    "OperandResolver": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "register_direct",
+            "immediate_value",
+            "immediate_rotated",
+            "shifted_register_by_immediate",
+            "shifted_register_by_register",
+            "pc_relative_offset",
+            "register_list",
+            "literal_pool"
+          ]
+        },
+        "outputs": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+
+    "Cycles": {
+      "type": "object",
+      "properties": {
+        "form":     { "type": ["string", "integer"] },
+        "form_alt": { "type": "array", "items": { "type": ["string", "integer"] } },
+        "extra_when_dest_pc": { "type": "string" },
+        "extra_when_load_pc": { "type": "string" },
+        "computed_at": { "enum": ["compile_time", "runtime"] }
+      },
+      "additionalProperties": true
+    },
+
+    "MicroOpStep": {
+      "type": "object",
+      "required": ["op"],
+      "properties": {
+        "op":     { "type": "string" },
+        "in":     { "type": "array" },
+        "value":  {},
+        "out":    { "type": "string" },
+        "size":   { "type": "integer", "enum": [1, 8, 16, 32, 64] },
+        "width":  { "type": "integer", "enum": [1, 8, 16, 32, 64] },
+        "signed": { "type": "boolean" },
+        "cond":   {},
+        "then":   { "type": "array", "items": { "$ref": "#/$defs/MicroOpStep" } },
+        "else":   { "type": "array", "items": { "$ref": "#/$defs/MicroOpStep" } },
+        "cases":  {
+          "type": "object",
+          "additionalProperties": { "type": "array", "items": { "$ref": "#/$defs/MicroOpStep" } }
+        },
+        "default":{ "type": "array", "items": { "$ref": "#/$defs/MicroOpStep" } },
+        "selector": { "type": "string" },
+        "addr":   {},
+        "target": {},
+        "index":  {},
+        "reason": { "type": "string" },
+        "next_pc":{},
+        "vector": { "type": "string" },
+        "mode":   {},
+        "name":   { "type": "string" },
+        "args":   { "type": "array" }
+      },
+      "additionalProperties": true
+    },
+
+    "InstructionDefinition": {
+      "type": "object",
+      "required": ["mnemonic", "steps"],
+      "properties": {
+        "selector": {
+          "type": "object",
+          "required": ["field", "value"],
+          "properties": {
+            "field": { "type": "string" },
+            "value": { "type": ["string", "integer"] }
+          },
+          "additionalProperties": false
+        },
+        "mnemonic":         { "type": "string" },
+        "since":            { "type": "string" },
+        "until":            { "type": "string" },
+        "requires_feature": { "type": "string" },
+        "unconditional":    { "type": "boolean" },
+        "writes_pc":        { "enum": ["never", "always", "conditional_via_rd"] },
+        "writes_memory":    { "type": "array", "items": { "type": "string" } },
+        "changes_mode":     { "type": "boolean" },
+        "switches_instruction_set": { "type": "boolean" },
+        "requires_io_barrier": { "type": "boolean" },
+        "quirks":           { "type": "array", "items": { "type": "string" } },
+        "manual_ref":       { "type": "string" },
+        "cycles":           { "$ref": "#/$defs/Cycles" },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/MicroOpStep" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "EncodingFormat": {
+      "type": "object",
+      "required": ["name", "fields", "instructions"],
+      "properties": {
+        "name":     { "type": "string" },
+        "comment":  { "type": "string" },
+        "pattern":  { "$ref": "#/$defs/BitString" },
+        "mask":     { "$ref": "#/$defs/HexNumber" },
+        "match":    { "$ref": "#/$defs/HexNumber" },
+        "fields": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/BitRange" }
+        },
+        "operands": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/OperandResolver" }
+        },
+        "instructions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/InstructionDefinition" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "EncodingGroup": {
+      "type": "object",
+      "required": ["name", "formats"],
+      "properties": {
+        "name":         { "type": "string" },
+        "applies_when": { "type": "string" },
+        "formats": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EncodingFormat" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "WidthDecision": {
+      "type": "object",
+      "required": ["first_unit_bits", "rule"],
+      "properties": {
+        "first_unit_bits": { "type": "integer", "enum": [8, 16, 32] },
+        "rule": {
+          "type": "object",
+          "required": ["field", "long_when_in", "long_total_bits"],
+          "properties": {
+            "field":           { "type": "string" },
+            "long_when_in":    { "type": "array", "items": { "type": "string" } },
+            "long_total_bits": { "type": "integer", "enum": [16, 32, 48, 64] }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "CustomMicroOp": {
+      "type": "object",
+      "required": ["name", "inputs", "outputs"],
+      "properties": {
+        "name": { "type": "string" },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name":  { "type": "string" },
+              "width": { "type": "integer" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name":  { "type": "string" },
+              "width": { "type": "integer" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "summary":             { "type": "string" },
+        "implementation_hint": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+
+    "CpuModelFile": {
+      "type": "object",
+      "required": ["spec_version", "architecture", "register_file", "instruction_sets"],
+      "properties": {
+        "$schema":      { "type": "string" },
+        "spec_version": { "type": "string" },
+        "architecture": { "$ref": "#/$defs/Architecture" },
+        "variants":     { "type": "array", "items": { "$ref": "#/$defs/VariantRef" } },
+        "register_file":{ "$ref": "#/$defs/RegisterFile" },
+        "processor_modes": { "$ref": "#/$defs/ProcessorModes" },
+        "exception_vectors": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ExceptionVector" }
+        },
+        "instruction_sets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/InstructionSetRef" },
+          "minItems": 1
+        },
+        "instruction_set_dispatch": { "$ref": "#/$defs/InstructionSetDispatch" },
+        "memory_model":             { "$ref": "#/$defs/MemoryModel" },
+        "custom_micro_ops": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CustomMicroOp" }
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "InstructionSetFile": {
+      "type": "object",
+      "required": ["spec_version", "name", "width_bits", "encoding_groups"],
+      "properties": {
+        "$schema":      { "type": "string" },
+        "spec_version": { "type": "string" },
+        "name":              { "type": "string" },
+        "width_bits": {
+          "oneOf": [
+            { "type": "integer", "enum": [8, 16, 32, 64] },
+            { "const": "variable" }
+          ]
+        },
+        "alignment_bytes":   { "type": "integer", "enum": [1, 2, 4, 8] },
+        "pc_offset_bytes":   { "type": "integer", "minimum": 0 },
+        "endian_within_word":{ "$ref": "#/$defs/Endianness" },
+        "global_condition":  { "$ref": "#/$defs/GlobalCondition" },
+        "decode_strategy": {
+          "enum": ["mask_match_priority", "mask_match_specificity", "tree"]
+        },
+        "width_decision":    { "$ref": "#/$defs/WidthDecision" },
+        "encoding_groups": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EncodingGroup" }
+        },
+        "extends": {
+          "type": "object",
+          "properties": {
+            "spec": { "type": "string" },
+            "set":  { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "custom_micro_ops": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CustomMicroOp" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "oneOf": [
+    { "$ref": "#/$defs/CpuModelFile" },
+    { "$ref": "#/$defs/InstructionSetFile" }
+  ]
+}
