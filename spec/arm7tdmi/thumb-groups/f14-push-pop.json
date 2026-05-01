@@ -1,0 +1,52 @@
+{
+  "name": "Thumb_F14_PushPop",
+  "comment": "1011 L 10 R rrrrrrrr — PUSH/POP register subset of {R0..R7} (in low 8 bits) + optional LR (PUSH, R=1) or PC (POP, R=1). PUSH = STMDB SP! {list,LR?}; POP = LDMIA SP! {list,PC?}. The R bit is OR'd into the right slot of the full 16-bit register list before delegating to block_load/block_store.",
+  "formats": [
+    {
+      "name":    "Thumb_F14_PushPop",
+      "pattern": "1011_a_10_b_rrrrrrrr",
+      "fields": {
+        "l_bit":         "11",
+        "r_bit":         "8",
+        "reg_list_low":  "7:0"
+      },
+      "mask":  "0xF600",
+      "match": "0xB400",
+      "instructions": [
+        {
+          "selector":   { "field": "l_bit", "value": "0" },
+          "mnemonic":   "PUSH",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "writes_memory": ["normal"],
+          "manual_ref": "ARM ARM A7.1.50 (Thumb F14)",
+          "cycles":     { "form": "(n-1)S+2N" },
+          "steps": [
+            { "op": "shl", "in": ["r_bit", { "const": 14 }], "out": "lr_pos" },
+            { "op": "or",  "in": ["reg_list_low", "lr_pos"], "out": "full_list" },
+            { "op": "block_store",
+              "list": "full_list",
+              "base_index": 13,
+              "p": 1, "u": 0, "w": 1 }
+          ]
+        },
+        {
+          "selector":   { "field": "l_bit", "value": "1" },
+          "mnemonic":   "POP",
+          "since":      "ARMv4T",
+          "writes_pc":  "conditional_via_rd",
+          "comment":    "POP can include PC (R=1) which then transfers control",
+          "cycles":     { "form": "(n+1)S+2N" },
+          "steps": [
+            { "op": "shl", "in": ["r_bit", { "const": 15 }], "out": "pc_pos" },
+            { "op": "or",  "in": ["reg_list_low", "pc_pos"], "out": "full_list" },
+            { "op": "block_load",
+              "list": "full_list",
+              "base_index": 13,
+              "p": 0, "u": 1, "w": 1 }
+          ]
+        }
+      ]
+    }
+  ]
+}
