@@ -36,13 +36,14 @@ public class ArmGoldenTests
         public HostRuntime Rt { get; }
         private readonly IDisposable _busBinding;
         private readonly IDisposable _swapBinding;
+        private readonly IDisposable _userRegBinding;
 
         public Setup(CpuExecutor exec, FlatMemoryBus bus, HostRuntime rt,
-                     IDisposable busBinding, IDisposable swapBinding)
-        { Exec = exec; Bus = bus; Rt = rt; _busBinding = busBinding; _swapBinding = swapBinding; }
+                     IDisposable busBinding, IDisposable swapBinding, IDisposable userRegBinding)
+        { Exec = exec; Bus = bus; Rt = rt; _busBinding = busBinding; _swapBinding = swapBinding; _userRegBinding = userRegBinding; }
 
         public void Dispose()
-        { _busBinding.Dispose(); _swapBinding.Dispose(); Rt.Dispose(); }
+        { _busBinding.Dispose(); _swapBinding.Dispose(); _userRegBinding.Dispose(); Rt.Dispose(); }
     }
 
     private static Setup BuildOne(uint instruction)
@@ -60,14 +61,16 @@ public class ArmGoldenTests
         var bus = new FlatMemoryBus(0x1000);
         bus.WriteWord(0, instruction);
 
-        var busBinding  = MemoryBusBindings.Install(rt, bus);
-        var swapBinding = BankSwapBindings.Install(rt, new Arm7tdmiBankSwapHandler(rt));
+        var swapHandler   = new Arm7tdmiBankSwapHandler(rt);
+        var busBinding    = MemoryBusBindings.Install(rt, bus);
+        var swapBinding   = BankSwapBindings.Install(rt, swapHandler);
+        var userRegBinding = UserModeRegBindings.Install(rt, swapHandler);
         rt.Compile();
 
         var exec = new CpuExecutor(rt, armSet, new DecoderTable(armSet), bus);
         exec.Pc = 0;
         exec.WriteStatus("CPSR", UserModeEnc);   // clean User-mode CPSR (no flags)
-        return new Setup(exec, bus, rt, busBinding, swapBinding);
+        return new Setup(exec, bus, rt, busBinding, swapBinding, userRegBinding);
     }
 
     private static (uint N, uint Z, uint C, uint V) FlagsOf(uint cpsr) =>

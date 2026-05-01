@@ -24,18 +24,20 @@ public class CpuExecutorTests
         public HostRuntime Rt { get; }
         private readonly IDisposable _busBinding;
         private readonly IDisposable _swapBinding;
+        private readonly IDisposable _userRegBinding;
 
         public Setup(CpuExecutor exec, FlatMemoryBus bus, HostRuntime rt,
-                     IDisposable busBinding, IDisposable swapBinding)
+                     IDisposable busBinding, IDisposable swapBinding, IDisposable userRegBinding)
         {
             Exec = exec; Bus = bus; Rt = rt;
-            _busBinding = busBinding; _swapBinding = swapBinding;
+            _busBinding = busBinding; _swapBinding = swapBinding; _userRegBinding = userRegBinding;
         }
 
         public void Dispose()
         {
             _busBinding.Dispose();
             _swapBinding.Dispose();
+            _userRegBinding.Dispose();
             Rt.Dispose();
         }
     }
@@ -57,14 +59,16 @@ public class CpuExecutorTests
         for (int i = 0; i < program.Length; i++)
             bus.WriteWord(loadAddr + (uint)(i * 4), program[i]);
 
-        var busBinding  = MemoryBusBindings.Install(rt, bus);
-        var swapBinding = BankSwapBindings.Install(rt, new Arm7tdmiBankSwapHandler(rt));
+        var swapHandler    = new Arm7tdmiBankSwapHandler(rt);
+        var busBinding     = MemoryBusBindings.Install(rt, bus);
+        var swapBinding    = BankSwapBindings.Install(rt, swapHandler);
+        var userRegBinding = UserModeRegBindings.Install(rt, swapHandler);
         rt.Compile();
 
         var decoder = new DecoderTable(armSet);
         var exec = new CpuExecutor(rt, armSet, decoder, bus);
         exec.Pc = loadAddr;
-        return new Setup(exec, bus, rt, busBinding, swapBinding);
+        return new Setup(exec, bus, rt, busBinding, swapBinding, userRegBinding);
     }
 
     [Fact]

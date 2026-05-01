@@ -124,11 +124,44 @@ public sealed unsafe class HostRuntime : IDisposable
         if (_finalized) return;
         EnsureJitInitialized();
 
+        // Auto-bind any extern global pointer the IR declared but no
+        // caller wired up. We point it at a trap stub so calls fail
+        // loudly instead of dereferencing NULL. Tests that exercise the
+        // extern install a real handler before Compile; those that don't
+        // touch the relevant code path get the safe default.
+        BindUnboundExternsToTrap();
+
         var options = new LLVMMCJITCompilerOptions { OptLevel = 0 };
         _engine = _module.CreateMCJITCompiler(ref options);
         _targetData = LLVM.GetExecutionEngineTargetData(_engine);
         StateSizeBytes = LLVM.SizeOfTypeInBits(_targetData, Layout.StructType) / 8;
         _finalized = true;
+    }
+
+    [System.Runtime.InteropServices.UnmanagedCallersOnly(
+        CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
+    private static void TrapStub() => throw new InvalidOperationException(
+        "HostRuntime: an extern was invoked but no handler was installed before Compile().");
+
+    private void BindUnboundExternsToTrap()
+    {
+        var trapAddr = (IntPtr)(delegate* unmanaged[Cdecl]<void>)&TrapStub;
+        var g = _module.FirstGlobal;
+        while (g.Handle != IntPtr.Zero)
+        {
+            // Only consider external globals that we declared as ptr-typed
+            // function slots (no initializer set yet → linkage stays External).
+            if (g.Linkage == LLVMLinkage.LLVMExternalLinkage && g.Initializer.Handle == IntPtr.Zero)
+            {
+                var i64 = LLVMTypeRef.Int64;
+                var addrConst = LLVMValueRef.CreateConstInt(i64, (ulong)trapAddr.ToInt64(), false);
+                var ptrType = LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0);
+                var ptrConst = LLVMValueRef.CreateConstIntToPtr(addrConst, ptrType);
+                g.Initializer = ptrConst;
+                g.Linkage = LLVMLinkage.LLVMInternalLinkage;
+            }
+            g = g.NextGlobal;
+        }
     }
 
     /// <summary>Look up the native entry point of a JIT'd function by its IR name.</summary>
