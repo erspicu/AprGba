@@ -118,4 +118,126 @@ public class SpecCompilerTests
         Assert.Contains("define void @Execute_ARM_DataProcessing_Immediate_ADD", content);
         Assert.Empty(result.Diagnostics);
     }
+
+    // ---------------- LR35902 (Phase 4.5C) ----------------
+
+    private static string Lr35902CpuJson => Path.Combine(TestPaths.SpecRoot, "lr35902", "cpu.json");
+
+    /// <summary>
+    /// Baseline: the spec loads, the module builds, and the trivial "no-step"
+    /// instructions (NOP and HALT-like) emit even before LR35902 emitters
+    /// land. Functions whose steps reference unimplemented micro-ops are
+    /// captured as diagnostics, not exceptions.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_LoadsAndEmitsAtLeastNop()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        Assert.Equal(2, result.DecoderTables.Count);
+        Assert.True(result.DecoderTables.ContainsKey("Main"));
+        Assert.True(result.DecoderTables.ContainsKey("CB"));
+
+        // NOP has empty steps[], so it compiles to bare entry+ret without
+        // any emitter being needed.
+        Assert.Contains("Main.Nop.NOP", result.Functions.Keys);
+
+        // The IR text should declare the function.
+        var ir = result.Module.PrintToString();
+        Assert.Contains("define void @Execute_Main_Nop_NOP", ir);
+    }
+
+    /// <summary>
+    /// First emitter wave: the F-flag-only ops (SCF, CCF, CPL) compile, plus
+    /// HALT/STOP which currently lower to no-op placeholders. Together with
+    /// NOP these constitute the smallest set that exercises the full
+    /// SpecCompiler path for an 8-bit CPU.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_FlagOnlyOpsCompile()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        Assert.Contains("Main.Scf.SCF", result.Functions.Keys);
+        Assert.Contains("Main.Ccf.CCF", result.Functions.Keys);
+        Assert.Contains("Main.Cpl.CPL", result.Functions.Keys);
+        Assert.Contains("Main.Halt.HALT", result.Functions.Keys);
+        Assert.Contains("Main.Stop.STOP", result.Functions.Keys);
+
+        var ir = result.Module.PrintToString();
+        Assert.Contains("define void @Execute_Main_Scf_SCF", ir);
+        Assert.Contains("define void @Execute_Main_Ccf_CCF", ir);
+        Assert.Contains("define void @Execute_Main_Cpl_CPL", ir);
+
+        // CPL must read A, invert it, and write it back. The bit pattern
+        // 0xFF appears as the XOR mask for the inversion.
+        var cplFnIdx = ir.IndexOf("@Execute_Main_Cpl_CPL", StringComparison.Ordinal);
+        Assert.True(cplFnIdx >= 0);
+        var nextDefine = ir.IndexOf("\ndefine ", cplFnIdx + 1, StringComparison.Ordinal);
+        var cplBody = nextDefine > 0 ? ir.Substring(cplFnIdx, nextDefine - cplFnIdx) : ir.Substring(cplFnIdx);
+        Assert.Contains("xor i8", cplBody);     // A = ~A
+        Assert.Contains("a_old",  cplBody);     // load A first
+        Assert.Contains("f_new",  cplBody);     // F write
+    }
+
+    /// <summary>
+    /// Block-0 col-7 A-rotates (RLCA/RRCA/RLA/RRA) compile and the IR
+    /// contains the expected shl/lshr i8 sequence.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_ARotatesCompile()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        Assert.Contains("Main.Rlca.RLCA", result.Functions.Keys);
+        Assert.Contains("Main.Rrca.RRCA", result.Functions.Keys);
+        Assert.Contains("Main.Rla.RLA",   result.Functions.Keys);
+        Assert.Contains("Main.Rra.RRA",   result.Functions.Keys);
+
+        var ir = result.Module.PrintToString();
+        // Each rotate body should have an i8 shift.
+        var rlcaIdx = ir.IndexOf("@Execute_Main_Rlca_RLCA", StringComparison.Ordinal);
+        Assert.True(rlcaIdx >= 0);
+        var nextDef = ir.IndexOf("\ndefine ", rlcaIdx + 1, StringComparison.Ordinal);
+        var rlcaBody = nextDef > 0 ? ir.Substring(rlcaIdx, nextDef - rlcaIdx) : ir.Substring(rlcaIdx);
+        Assert.Contains("shl i8",  rlcaBody);
+        Assert.Contains("lshr i8", rlcaBody);
+    }
+
+    /// <summary>
+    /// Track JsonCpu compilation coverage: how many of LR35902's instructions
+    /// produce a function vs. how many surface as "no emitter" diagnostics.
+    /// As more emitters land, the diagnostic count drops; this test merely
+    /// records the current threshold so a regression (an emitter accidentally
+    /// removed) shows up.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_CoverageBaseline()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        // Every function listed here is one that successfully emitted IR.
+        // Use this number as a baseline; assert it doesn't regress below
+        // the current set of emitters (NOP + 5 flag/halt-style + every
+        // CB-prefix instruction whose steps reference no extant emitter
+        // would also count if added).
+        var compiled = result.Functions.Count;
+        var failed = result.Diagnostics.Count(d => d.Contains("emission failed"));
+
+        // Print to test output so this test doubles as a coverage report.
+        var byMnemonic = result.Functions.Keys
+            .Select(k => k.Split('.').Last())
+            .GroupBy(m => m)
+            .OrderBy(g => g.Key)
+            .ToList();
+        var compiledMnemonics = string.Join(", ", byMnemonic.Select(g => $"{g.Key}×{g.Count()}"));
+        var sampleFailures = string.Join(" || ", result.Diagnostics.Take(3));
+
+        Assert.True(compiled >= 6,
+            $"At least NOP+SCF+CCF+CPL+HALT+STOP should compile (got {compiled}). " +
+            $"Compiled mnemonics: {compiledMnemonics}. " +
+            $"Sample failures: {sampleFailures}");
+        Assert.True(compiled + failed >= 100,
+            $"Spec should account for ≥100 instructions total (compiled+failed got {compiled}+{failed} = {compiled + failed}).");
+    }
 }

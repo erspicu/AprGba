@@ -53,6 +53,10 @@ public sealed unsafe class SpecCompiler
         {
             ArmEmitters.RegisterAll(registry);
         }
+        else if (string.Equals(family, "Sharp-SM83", StringComparison.OrdinalIgnoreCase))
+        {
+            Lr35902Emitters.RegisterAll(registry);
+        }
 
         var decoderTables = new Dictionary<string, DecoderTable>(StringComparer.Ordinal);
         var functions = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);

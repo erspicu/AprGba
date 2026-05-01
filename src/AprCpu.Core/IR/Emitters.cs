@@ -106,13 +106,13 @@ internal sealed class ReadReg : IMicroOpEmitter
         var outName   = StandardEmitters.GetOut(step.Raw);
 
         var ptr = ResolveRegPtr(ctx, indexExpr);
-        var v   = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, outName);
+        var v   = ctx.Builder.BuildLoad2(ctx.Layout.GprType, ptr, outName);
         ctx.Values[outName] = v;
     }
 
     internal static LLVMValueRef ResolveRegPtr(EmitContext ctx, JsonElement indexExpr)
     {
-        // index can be a string (field name) or integer (literal 0..15).
+        // index can be a string (field name) or integer (literal 0..N-1).
         if (indexExpr.ValueKind == JsonValueKind.Number)
         {
             var lit = indexExpr.GetInt32();
@@ -121,12 +121,25 @@ internal sealed class ReadReg : IMicroOpEmitter
         if (indexExpr.ValueKind == JsonValueKind.String)
         {
             var name = indexExpr.GetString()!;
-            // Field-name → runtime extraction → dynamic GEP
+            // Field-name → runtime extraction → dynamic GEP. Mask is sized
+            // to the GPR count, rounded up to a power of 2 (so a 16-GPR
+            // ARM file uses 0xF, an 8-entry encoding field on a 7-GPR file
+            // also uses 0x7 — value 6 is "(HL) memory" which the LR35902-
+            // specific emitter handles).
             var idx = ctx.Resolve(name);
-            var masked = ctx.Builder.BuildAnd(idx, ctx.ConstU32(0xF), $"{name}_idx");
+            var maskBits = NextPowerOfTwoMinusOne(ctx.Layout.GprCount);
+            var masked = ctx.Builder.BuildAnd(idx, ctx.ConstU32(maskBits), $"{name}_idx");
             return ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, masked);
         }
         throw new InvalidOperationException("read_reg/write_reg 'index' must be string or number.");
+    }
+
+    private static uint NextPowerOfTwoMinusOne(int count)
+    {
+        if (count <= 1) return 0;
+        uint v = 1;
+        while (v < (uint)count) v <<= 1;
+        return v - 1;
     }
 }
 
