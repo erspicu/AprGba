@@ -192,6 +192,74 @@ public class GbaRomExecutionTests
     }
 
     [Fact]
+    public void DumpBxIR()
+    {
+        var compileResult = SpecCompiler.Compile(CpuJson);
+        var ir = compileResult.Module.PrintToString();
+        File.WriteAllText(Path.Combine(TestPaths.RepoRoot, "temp", "thumb_full.ll"), ir);
+        _output.WriteLine($"contains 'bx_thumb_aligned': {ir.Contains("bx_thumb_aligned")}");
+        _output.WriteLine($"contains 'bx_arm_aligned': {ir.Contains("bx_arm_aligned")}");
+        _output.WriteLine($"contains 'bx_aligned': {ir.Contains("bx_aligned")}");
+    }
+
+    [Fact]
+    public void JsmolkaThumbGba_TraceArmAfterBackswitch()
+    {
+        var romPath = Path.Combine(TestPaths.TestRomsRoot, "gba-tests", "thumb", "thumb.gba");
+        var bus = new GbaMemoryBus();
+        bus.LoadRom(File.ReadAllBytes(romPath));
+        using var setup = BootGba(bus);
+
+        var ring = new (uint pc, uint instr, uint mode)[20];
+        int idx = 0;
+        for (int i = 0; i < 1000; i++)
+        {
+            var pc = setup.Exec.Pc;
+            var cpsr = setup.Exec.ReadStatus("CPSR");
+            var t = (cpsr >> 5) & 1;
+            uint instr = t == 1 ? bus.ReadHalfword(pc) : bus.ReadWord(pc);
+            ring[idx] = (pc, instr, t);
+            idx = (idx + 1) % ring.Length;
+            uint align = t == 1 ? 1u : 3u;
+            if ((pc & align) != 0)
+            {
+                _output.WriteLine($"PC misaligned at step {i}: pc=0x{pc:X8} mode={(t == 1 ? "Thumb" : "ARM")}");
+                break;
+            }
+            try { setup.Exec.Step(); }
+            catch (Exception ex) { _output.WriteLine($"step {i}: THROW {ex.Message}"); break; }
+        }
+        _output.WriteLine($"--- last 20 steps ---");
+        for (int i = 0; i < ring.Length; i++)
+        {
+            var k = (idx + i) % ring.Length;
+            var (pc, instr, t) = ring[k];
+            _output.WriteLine($"  pc=0x{pc:X8} {(t == 1 ? "Thumb" : "ARM  ")} instr=0x{instr:X8}");
+        }
+    }
+
+    [Fact]
+    public void JsmolkaThumbGba_TraceR0AroundBxAt5C8()
+    {
+        var romPath = Path.Combine(TestPaths.TestRomsRoot, "gba-tests", "thumb", "thumb.gba");
+        var bus = new GbaMemoryBus();
+        bus.LoadRom(File.ReadAllBytes(romPath));
+        using var setup = BootGba(bus);
+
+        for (int i = 0; i < 470; i++)
+        {
+            var pc = setup.Exec.Pc;
+            if (pc == 0x080005C6 || pc == 0x080005C8)
+            {
+                _output.WriteLine($"step {i} pc=0x{pc:X8} R0=0x{setup.Exec.ReadGpr(0):X8} R7=0x{setup.Exec.ReadGpr(7):X8}");
+            }
+            try { setup.Exec.Step(); }
+            catch { break; }
+        }
+        _output.WriteLine($"FINAL pc=0x{setup.Exec.Pc:X8} R0=0x{setup.Exec.ReadGpr(0):X8}");
+    }
+
+    [Fact]
     public void JsmolkaThumbGba_TraceUntilPcLeavesRomCode()
     {
         var romPath = Path.Combine(TestPaths.TestRomsRoot, "gba-tests", "thumb", "thumb.gba");
@@ -212,10 +280,11 @@ public class GbaRomExecutionTests
             ring[idx] = (pc, instr, t, r7);
             idx = (idx + 1) % ring.Length;
 
-            // Anomaly: PC misaligned (Thumb requires bit 0 = 0).
-            if (t == 1 && (pc & 1) == 1)
+            // Anomaly: misaligned PC for current mode.
+            uint align = t == 1 ? 1u : 3u;
+            if ((pc & align) != 0)
             {
-                _output.WriteLine($"PC went odd at step {n}: pc=0x{pc:X8}");
+                _output.WriteLine($"PC misaligned at step {n}: pc=0x{pc:X8} mode={(t == 1 ? "Thumb" : "ARM")}");
                 break;
             }
             // Anomaly: PC outside actual ROM bytes.

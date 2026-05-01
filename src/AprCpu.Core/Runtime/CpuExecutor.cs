@@ -175,6 +175,11 @@ public sealed unsafe class CpuExecutor
         var pcReadValue = pc + mode.PcOffsetBytes;
         WriteGpr(_pcRegIndex, pcReadValue);
 
+        // Snapshot the dispatch selector (e.g. CPSR.T) so we can detect
+        // mode switches even when the new PC value happens to equal the
+        // pre-set pcReadValue. (Real case: BX target == current+offset.)
+        uint preSelector = _readSelector?.Invoke(_state) ?? 0;
+
         // Fetch.
         uint instructionWord = mode.InstrSizeBytes switch
         {
@@ -192,11 +197,13 @@ public sealed unsafe class CpuExecutor
         fixed (byte* p = _state)
             fn(p, instructionWord);
 
-        // Did the instruction write PC?
+        // Did the instruction write PC or switch modes?
         var postR15 = ReadGpr(_pcRegIndex);
-        if (postR15 == pcReadValue)
+        uint postSelector = _readSelector?.Invoke(_state) ?? 0;
+        bool branched = postR15 != pcReadValue || postSelector != preSelector;
+        if (!branched)
             WriteGpr(_pcRegIndex, pc + mode.InstrSizeBytes);
-        // Else: branch / exception / ALU-to-PC wrote new PC directly.
+        // Else: branch / exception / ALU-to-PC / mode switch wrote new PC.
 
         return decoded;
     }

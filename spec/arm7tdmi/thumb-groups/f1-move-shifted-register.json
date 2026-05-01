@@ -54,29 +54,15 @@
             "form": "1S"
           },
           "steps": [
-            {
-              "op": "read_reg",
-              "index": "rs",
-              "out": "rs_val"
-            },
-            {
-              "op": "lsr",
-              "in": [
-                "rs_val",
-                "imm5"
-              ],
-              "out": "result",
-              "width": 32
-            },
-            {
-              "op": "write_reg",
-              "index": "rd",
-              "value": "result"
-            },
-            {
-              "op": "update_nz",
-              "value": "result"
-            }
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "select",
+              "cond": { "field": "imm5", "eq": 0 },
+              "if_true":  { "const": 32 },
+              "if_false": "imm5",
+              "out": "amount" },
+            { "op": "lsr_with_c", "in": ["rs_val", "amount"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
           ]
         },
         {
@@ -91,29 +77,15 @@
             "form": "1S"
           },
           "steps": [
-            {
-              "op": "read_reg",
-              "index": "rs",
-              "out": "rs_val"
-            },
-            {
-              "op": "asr",
-              "in": [
-                "rs_val",
-                "imm5"
-              ],
-              "out": "result",
-              "width": 32
-            },
-            {
-              "op": "write_reg",
-              "index": "rd",
-              "value": "result"
-            },
-            {
-              "op": "update_nz",
-              "value": "result"
-            }
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "select",
+              "cond": { "field": "imm5", "eq": 0 },
+              "if_true":  { "const": 32 },
+              "if_false": "imm5",
+              "out": "amount" },
+            { "op": "asr_with_c", "in": ["rs_val", "amount"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
           ]
         }
       ]
