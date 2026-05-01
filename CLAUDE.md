@@ -30,8 +30,11 @@ dotnet run --project src/AprCpu.Compiler -- --output temp/add.ll
 - `src/`        — .NET source (AprCpu.Core, AprCpu.Compiler, AprCpu.Tests)
 - `spec/`       — JSON CPU/PPU specifications (e.g. `spec/arm7tdmi/*.json`)
 - `test-roms/`  — small test ROMs for verification (armwrestler etc.)
-- `ref/`        — local-only vendor reference PDFs (gitignored, do NOT
-  commit — copyright belongs to ARM Ltd. / Nintendo / etc.)
+- `ref/`        — reference materials (vendor manuals, datasheets,
+  spec PDFs). Tracked in git so anyone cloning has the same references
+  to hand. Subdivide by topic (`ref/docs/`, future `ref/test-roms/`,
+  etc.). Note: vendor PDFs here are third-party copyright (ARM Ltd.,
+  Nintendo, ...) — kept for personal/dev reference only.
 - `etc/`        — local-only working notes (gitignored)
 - `temp/`       — local-only scratch files (gitignored, see rule above)
 
