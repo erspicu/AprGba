@@ -434,6 +434,9 @@ FodyWeavers.xsd
 # Third-party reference manuals (vendor copyright, keep local only)
 /ref/
 
+# Scratch / temporary working files (see CLAUDE.md "Scratch files" rule)
+/temp/
+
 # LLVM IR / Bitcode dumps from spike / dev runs
 *.ll
 *.bc
