@@ -25,6 +25,21 @@ public static class SpecLoader
         CommentHandling = JsonCommentHandling.Skip,
     };
 
+    /// <summary>
+    /// Read <paramref name="path"/>, run the <c>$include</c> resolver,
+    /// then parse the assembled JSON into a <see cref="JsonDocument"/>.
+    /// </summary>
+    private static JsonDocument LoadAndResolveDocument(string path)
+    {
+        var raw = File.ReadAllText(path);
+        var node = System.Text.Json.Nodes.JsonNode.Parse(raw)
+            ?? throw new SpecValidationException("File parsed to null.", path);
+        var resolved = IncludeResolver.Resolve(node, path);
+        var assembled = resolved?.ToJsonString()
+            ?? throw new SpecValidationException("Include resolution produced null.", path);
+        return JsonDocument.Parse(assembled, DocOpts);
+    }
+
     /// <summary>Load a cpu.json plus all its referenced instruction-set files.</summary>
     public static LoadedSpec LoadCpuSpec(string cpuJsonPath)
     {
@@ -32,7 +47,7 @@ public static class SpecLoader
         if (!File.Exists(fullPath))
             throw new SpecValidationException("File not found.", fullPath);
 
-        using var doc = JsonDocument.Parse(File.ReadAllText(fullPath), DocOpts);
+        using var doc = LoadAndResolveDocument(fullPath);
         var cpu = ParseCpuSpec(doc.RootElement, fullPath);
 
         var dir = Path.GetDirectoryName(fullPath)!;
@@ -47,7 +62,7 @@ public static class SpecLoader
                     $"Referenced instruction-set file '{setRef.File}' not found.",
                     fullPath, $"$.instruction_sets[?(@.name=='{setRef.Name}')].file");
             }
-            using var setDoc = JsonDocument.Parse(File.ReadAllText(setPath), DocOpts);
+            using var setDoc = LoadAndResolveDocument(setPath);
             var set = ParseInstructionSetSpec(setDoc.RootElement, setPath);
             SpecValidator.ValidateInstructionSet(set);
             sets[setRef.Name] = set;
@@ -62,7 +77,7 @@ public static class SpecLoader
         var fullPath = Path.GetFullPath(path);
         if (!File.Exists(fullPath))
             throw new SpecValidationException("File not found.", fullPath);
-        using var doc = JsonDocument.Parse(File.ReadAllText(fullPath), DocOpts);
+        using var doc = LoadAndResolveDocument(fullPath);
         var set = ParseInstructionSetSpec(doc.RootElement, fullPath);
 
         // Run semantic validators (hard errors throw).
