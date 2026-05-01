@@ -431,9 +431,6 @@ FodyWeavers.xsd
 # Local-only working notes / scratch
 /etc/
 
-# Third-party reference manuals (vendor copyright, keep local only)
-/ref/
-
 # Scratch / temporary working files (see CLAUDE.md "Scratch files" rule)
 /temp/
 
