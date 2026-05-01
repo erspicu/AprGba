@@ -86,6 +86,19 @@
         "status": {
           "type": "array",
           "items": { "$ref": "#/$defs/RegisterStatus" }
+        },
+        "register_pairs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "high", "low"],
+            "properties": {
+              "name": { "type": "string" },
+              "high": { "type": "string" },
+              "low":  { "type": "string" }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "additionalProperties": false

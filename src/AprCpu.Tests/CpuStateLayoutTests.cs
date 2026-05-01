@@ -121,6 +121,42 @@ public class CpuStateLayoutTests
             () => layout.GepBankedGpr(dummyBuilder, fn.GetParam(0), "FIQ", 7));
     }
 
+    [Fact]
+    public unsafe void Layout_ConstructsForLr35902_With8BitGprsAndPairs()
+    {
+        var loaded = SpecLoader.LoadCpuSpec(
+            Path.Combine(TestPaths.SpecRoot, "lr35902", "cpu.json"));
+        var ctx = LLVMContextRef.Create();
+        var layout = new CpuStateLayout(ctx, loaded.Cpu.RegisterFile, loaded.Cpu.ProcessorModes);
+
+        Assert.Equal(8, layout.GprCount);
+        Assert.Equal(8, layout.GprWidthBits);
+        Assert.Equal(LLVMTypeRef.Int8, layout.GprType);
+
+        // F register fields: Z=7, N=6, H=5, C=4
+        Assert.Equal(7, layout.GetStatusFlagBitIndex("F", "Z"));
+        Assert.Equal(6, layout.GetStatusFlagBitIndex("F", "N"));
+        Assert.Equal(5, layout.GetStatusFlagBitIndex("F", "H"));
+        Assert.Equal(4, layout.GetStatusFlagBitIndex("F", "C"));
+
+        // Register pairs are loadable from the spec.
+        var pairs = loaded.Cpu.RegisterFile.RegisterPairs;
+        Assert.Equal(4, pairs.Count);
+        Assert.Contains(pairs, p => p.Name == "BC" && p.High == "B" && p.Low == "C");
+
+        // Dynamic GEP works for 8-bit GPRs (was 32-bit-only before R5b).
+        var fnType = LLVMTypeRef.CreateFunction(ctx.VoidType, new[] { layout.PointerType });
+        using var module = ctx.CreateModuleWithName("t");
+        var fn = module.AddFunction("fn", fnType);
+        var entry = fn.AppendBasicBlock("e");
+        var b = ctx.CreateBuilder();
+        b.PositionAtEnd(entry);
+
+        var idx = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 5, false);
+        var ptr = layout.GepGprDynamic(b, fn.GetParam(0), idx);
+        Assert.True(ptr.Handle != IntPtr.Zero);
+    }
+
     // ---------------- helpers ----------------
 
     private static RegisterFile MakeMinimalRegisterFile(
@@ -134,7 +170,7 @@ public class CpuStateLayoutTests
             Names:      names,
             Aliases:    new Dictionary<string, string>(),
             PcIndex:    null);
-        return new RegisterFile(gp, statusRegisters ?? Array.Empty<StatusRegister>());
+        return new RegisterFile(gp, statusRegisters ?? Array.Empty<StatusRegister>(), Array.Empty<RegisterPair>());
     }
 
     private static StatusRegister MakeStatus(string name, int widthBits, Dictionary<string, string> fields)

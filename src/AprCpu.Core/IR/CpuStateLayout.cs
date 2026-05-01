@@ -229,18 +229,16 @@ public sealed unsafe class CpuStateLayout
 
     /// <summary>
     /// GEP into a GPR slot by a runtime-computed index. Bitcasts the state
-    /// pointer to a flat i32 pointer; valid only when GPRs are first in the
-    /// struct and stored as i32, which the constructor enforces (other widths
-    /// would need a per-element GEP with the right element type).
+    /// pointer to a flat <c>GprType</c> pointer; valid only when GPRs are
+    /// first in the struct and stored as a packed contiguous run, which the
+    /// constructor enforces. Supports 8/16/32/64-bit GPR widths; the chosen
+    /// element type matches <see cref="GprType"/>.
     /// </summary>
     public LLVMValueRef GepGprDynamic(LLVMBuilderRef builder, LLVMValueRef statePtr, LLVMValueRef regIdx)
     {
-        if (GprWidthBits != 32)
-            throw new NotSupportedException(
-                $"GepGprDynamic only supports 32-bit GPRs (got {GprWidthBits}-bit).");
-        var i32Ptr = LLVMTypeRef.CreatePointer(LLVMTypeRef.Int32, 0);
-        var asI32Ptr = builder.BuildBitCast(statePtr, i32Ptr, "state_as_i32p");
-        return builder.BuildGEP2(LLVMTypeRef.Int32, asI32Ptr, new[] { regIdx }, "rdyn_ptr");
+        var elemPtrType = LLVMTypeRef.CreatePointer(GprType, 0);
+        var asElemPtr   = builder.BuildBitCast(statePtr, elemPtrType, "state_as_gpr_p");
+        return builder.BuildGEP2(GprType, asElemPtr, new[] { regIdx }, "rdyn_ptr");
     }
 
     /// <summary>Lookup the spec definition of a status register (e.g. CPSR field positions).</summary>

@@ -146,7 +146,22 @@ public static class SpecLoader
             Aliases:    aliases,
             PcIndex:    OptInt(gp, "pc_index"));
 
-        return new RegisterFile(generalPurpose, status);
+        var pairs = new List<RegisterPair>();
+        if (el.TryGetProperty("register_pairs", out var rp) && rp.ValueKind == JsonValueKind.Array)
+        {
+            int idx = 0;
+            foreach (var item in rp.EnumerateArray())
+            {
+                var jp = $"$.register_file.register_pairs[{idx}]";
+                pairs.Add(new RegisterPair(
+                    Name: ReqString(item, "name", filePath, $"{jp}.name"),
+                    High: ReqString(item, "high", filePath, $"{jp}.high"),
+                    Low:  ReqString(item, "low",  filePath, $"{jp}.low")));
+                idx++;
+            }
+        }
+
+        return new RegisterFile(generalPurpose, status, pairs);
     }
 
     private static StatusRegister ParseStatusRegister(JsonElement el, string filePath, string jsonPath)
