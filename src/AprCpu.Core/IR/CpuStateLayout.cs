@@ -47,11 +47,17 @@ public sealed unsafe class CpuStateLayout
 
     // Field-index map. GPRs occupy [0, GprCount); status registers and
     // banked groups follow in declaration order.
-    private readonly Dictionary<string, int> _statusFieldIndex
-        = new(StringComparer.Ordinal);
+    // Status-register slot indices. Key tuple is (name, mode):
+    //   (name, null) for non-banked status (CPSR)
+    //   (name, modeId) for each per-mode bank (SPSR_<mode>)
+    private readonly Dictionary<(string Name, string? Mode), int> _statusFieldIndex
+        = new();
     private readonly Dictionary<string, int> _bankedGroupFirstIndex
         = new(StringComparer.Ordinal);
     private readonly Dictionary<string, int> _bankedGroupSize
+        = new(StringComparer.Ordinal);
+    // Modes for which a given banked status register has a slot.
+    private readonly Dictionary<string, IReadOnlyList<string>> _statusBankedModes
         = new(StringComparer.Ordinal);
 
     public int CycleCounterFieldIndex { get; }
@@ -78,11 +84,25 @@ public sealed unsafe class CpuStateLayout
         for (int i = 0; i < GprCount; i++)
             elements.Add(GprType);
 
-        // 2. Status registers
+        // 2. Status registers. Banked status (e.g. SPSR) gets one slot
+        //    per mode listed in BankedPerMode; non-banked (CPSR) gets one
+        //    shared slot.
         foreach (var status in registerFile.Status)
         {
-            _statusFieldIndex[status.Name] = elements.Count;
-            elements.Add(LlvmIntTypeForBits(status.WidthBits));
+            if (status.BankedPerMode.Count == 0)
+            {
+                _statusFieldIndex[(status.Name, null)] = elements.Count;
+                elements.Add(LlvmIntTypeForBits(status.WidthBits));
+            }
+            else
+            {
+                _statusBankedModes[status.Name] = status.BankedPerMode;
+                foreach (var mode in status.BankedPerMode)
+                {
+                    _statusFieldIndex[(status.Name, mode)] = elements.Count;
+                    elements.Add(LlvmIntTypeForBits(status.WidthBits));
+                }
+            }
         }
 
         // 3. Banked GPR groups (one cell per banked register listed in spec)
@@ -117,14 +137,32 @@ public sealed unsafe class CpuStateLayout
         return BuildGep(builder, statePtr, regIndex, $"r{regIndex}_ptr");
     }
 
-    /// <summary>GEP into the named status register (e.g. "CPSR", "SPSR").</summary>
-    public LLVMValueRef GepStatusRegister(LLVMBuilderRef builder, LLVMValueRef statePtr, string name)
+    /// <summary>
+    /// GEP into a named status register slot.
+    /// Non-banked status (CPSR): pass <paramref name="mode"/>=null.
+    /// Banked status (SPSR): pass the mode id (e.g. "FIQ", "IRQ").
+    /// </summary>
+    public LLVMValueRef GepStatusRegister(LLVMBuilderRef builder, LLVMValueRef statePtr, string name, string? mode = null)
     {
-        if (!_statusFieldIndex.TryGetValue(name, out var idx))
+        if (!_statusFieldIndex.TryGetValue((name, mode), out var idx))
+        {
+            var modeStr = mode is null ? "(none)" : mode;
+            var available = string.Join(", ", _statusFieldIndex.Keys.Select(k => k.Mode is null ? k.Name : $"{k.Name}/{k.Mode}"));
             throw new InvalidOperationException(
-                $"Status register '{name}' is not declared in register_file.status.");
-        return BuildGep(builder, statePtr, idx, $"{name.ToLowerInvariant()}_ptr");
+                $"Status register '{name}' (mode={modeStr}) is not declared in register_file.status. Available: {available}.");
+        }
+        var label = mode is null
+            ? $"{name.ToLowerInvariant()}_ptr"
+            : $"{name.ToLowerInvariant()}_{mode.ToLowerInvariant()}_ptr";
+        return BuildGep(builder, statePtr, idx, label);
     }
+
+    /// <summary>True iff <paramref name="name"/> is a banked status register.</summary>
+    public bool IsStatusRegisterBanked(string name) => _statusBankedModes.ContainsKey(name);
+
+    /// <summary>List of modes for a banked status register; empty for non-banked.</summary>
+    public IReadOnlyList<string> GetStatusBankedModes(string name)
+        => _statusBankedModes.TryGetValue(name, out var modes) ? modes : Array.Empty<string>();
 
     /// <summary>GEP into a banked GPR slot for a given processor mode.</summary>
     public LLVMValueRef GepBankedGpr(LLVMBuilderRef builder, LLVMValueRef statePtr, string mode, int idxInGroup)
