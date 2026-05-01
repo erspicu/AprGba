@@ -437,3 +437,7 @@ FodyWeavers.xsd
 # LLVM IR / Bitcode dumps from spike / dev runs
 *.ll
 *.bc
+
+# Knowledgebase query logs — local-only Q&A history with Gemini
+/tools/knowledgebase/message/
+/tools/knowledgebase/config.json
