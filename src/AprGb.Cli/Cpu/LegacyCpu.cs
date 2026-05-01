@@ -76,12 +76,14 @@ public sealed partial class LegacyCpu : ICpuBackend
         {
             if (flagHalt)
             {
+                _bus.Tick(4);            // timers tick during HALT too
                 _totalCycles += 4;
                 CheckInterrupts();
                 continue;
             }
             _cycles = 0;
             Step();
+            _bus.Tick(_cycles);          // advance hardware timers
             _totalCycles += _cycles;     // _cycles in t-cycles after `*= 4` in Step()
             TickEiDelay();
             CheckInterrupts();
