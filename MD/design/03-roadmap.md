@@ -50,22 +50,34 @@
 
 ---
 
-## Phase 2：JSON Parser + LLVM IR Emitter CLI（4–6 週）
+## Phase 2：JSON Parser + LLVM IR Emitter CLI（4–6 週） ✅ 完成
 
 **目標**：對應 Gemini 對談中的 `aprcpu.exe --input sample.json --output out.ll`
 
-任務：
-- [ ] JSON loader（System.Text.Json）
-- [ ] Bit pattern 解析器：`"cccc_001_..."` → mask/match 配對表
-- [ ] Field extractor：`"31:28"` → LLVM IR 的 shift+mask
-- [ ] Micro-op handler dictionary：每個 op 一個 emitter 函式
-- [ ] 主編譯器：給定一條指令 JSON，emit 對應 LLVM Function
-- [ ] CLI 介面：`--input` / `--output` / `--verify`
-- [ ] Round-trip 驗證：產出的 `.ll` 可被 `llc` / `opt` 認可
+完成項目：
+- [x] JSON loader（System.Text.Json，`AprCpu.Core.JsonSpec.SpecLoader`）
+- [x] Bit pattern 解析器：`AprCpu.Core.Decoder.BitPatternCompiler` — pattern → mask/match
+      + 與 JSON 宣告值 cross-validation（mask/match/fields 三者一致）
+- [x] Field extractor：runtime IR shift+mask（在 `EmitContext.ExtractField`）
+- [x] Micro-op handler dictionary：`EmitterRegistry` + `IMicroOpEmitter`，~16 個 emitter
+      已實作（read_reg/write_reg、add/sub/and/or/xor/shl/lsr/asr、6 種 flag update、
+      if/branch/branch_link/branch_indirect、restore_cpsr_from_spsr stub）
+- [x] Decoder dispatch table：`AprCpu.Core.Decoder.DecoderTable`（priority + first-match）
+- [x] CpuState LLVM struct layout（`AprCpu.Core.IR.CpuStateLayout`）
+- [x] 主編譯器：`AprCpu.Core.Compilation.SpecCompiler`
+- [x] CLI 介面：`aprcpu --spec <cpu.json> --output <out.ll>`
+- [x] Round-trip 驗證：LLVM `TryVerify` 成功（symbol-level shape OK）
 
-**驗收**：執行 `aprcpu.exe --input arm-mvp.json --output mvp.ll`，產出語法正確的 `.ll`，內容對應 5 條指令。
+**實際結果**：
+- 載入 `spec/arm7tdmi/cpu.json` 並編譯產出 15 個 LLVM 函式（ARM 7 個 + Thumb 8 個）
+- 35 個 xUnit 測試全綠（loader / pattern / decoder / spec-to-IR）
+- 產出的 `.ll` 結構正確：condition gate + S-bit 分支 + register file GEP 都齊全
 
-**里程碑 demo**：可獨立使用的 CLI 工具。
+**未做（保留至 Phase 4 擴充）**：
+- 完整 ARM cond table（目前只實作 AL/EQ/NE，其他 cond 預設 false）
+- LDM/STM block-data-transfer
+- Multiply、Halfword Transfer
+- 完整 banked register swap（restore_cpsr_from_spsr 是 stub）
 
 ---
 
@@ -214,22 +226,23 @@
 | 里程碑 | 內容 | 累計時間 |
 |---|---|---|
 | **M1** | Phase 0–1 完成（環境 + JSON schema） ✅ | ~1 月 |
-| **M2** | Phase 2–3 完成（CLI 工具 demo + 基本 ARM 直譯器） | ~3 月 |
+| **M2** | Phase 2 完成 ✅（CLI 工具 demo） + Phase 3 ARM 直譯器 | ~3 月 |
 | **M3** | Phase 4–5 完成（armwrestler 全綠 + 跑 BIOS） | ~6 月 |
 | **M4** | Phase 6 完成（Thumb 跑得動） | ~9 月 |
 | **M5** | Phase 7–8 完成（**畫面出來**） | ~12–15 月 |
 
 ---
 
-## 下一步：Phase 2 — JSON Parser + LLVM IR Emitter CLI
+## 下一步：Phase 3 — 最小直譯器 + ARM 指令完整集
 
-Phase 0 與 Phase 1 已完成：solution 骨架與 LLVM JIT spike 跑通；JSON
-schema、micro-op vocabulary、ARM7TDMI 範例 spec 都到位。
+Phase 0、1、2 已完成。CLI 已能 `aprcpu --spec ... --output ...` 從 JSON
+規格產出 LLVM IR。下一階段重點：
 
-進入 Phase 2 的具體切入點：
-
-1. 在 `AprCpu.Core` 新增 `JsonSpec/`：載入 cpu.json + 引用的 instruction-set 檔
-2. `Decoder/`：把 pattern 字串 compile 成 mask/match 比對表
-3. `IR/`：每個 micro-op 對應一個 emitter，組合產出 `LLVMValueRef`
-4. `Compiler` CLI 升級：`aprcpu --spec spec/arm7tdmi/cpu.json --output temp/arm.ll`
-5. 整合測試：載入 `arm.json` → 為 ADD/SUB/MOV/CMP 各 emit 一個函式 → 比對 `.ll` 文字符合預期
+1. **最小直譯器**：把生成的 `.ll` 用 LLVM JIT 起來執行，逐條跑指令
+   驗證語義（不上 block JIT）
+2. **CpuState 的 C# 端 struct**：使其 layout 與 `CpuStateLayout` 完全一致；
+   pinned + unsafe pointer pass 進 JIT
+3. **完整 ARM cond table**：補上 CS/CC/MI/PL/VS/VC/HI/LS/GE/LT/GT/LE
+4. **擴充指令集**：Data Processing Register、Single Data Transfer (LDR/STR)、
+   Multiply、Block Data Transfer (LDM/STM)
+5. **驗證**：拿 armwrestler 的子集 ROM 跑通

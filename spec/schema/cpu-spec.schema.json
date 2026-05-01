@@ -18,9 +18,9 @@
     },
 
     "BitString": {
-      "description": "Bit pattern with placeholders. Allowed chars: 0 1 x and a-z (field placeholders). Underscores allowed for grouping and ignored.",
+      "description": "Bit pattern with placeholders. Allowed chars: 0 1 x and a-z A-Z (field placeholders). Underscores and whitespace allowed as visual separators.",
       "type": "string",
-      "pattern": "^[01xa-z_]+$"
+      "pattern": "^[01xa-zA-Z_ \\t]+$"
     },
 
     "Endianness": { "enum": ["little", "big"] },
