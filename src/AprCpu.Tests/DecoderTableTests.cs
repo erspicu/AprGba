@@ -165,6 +165,50 @@ public class DecoderTableTests
         Assert.Equal("ADD", d.Instruction.Mnemonic);
     }
 
+    /// <summary>RegRegShift form: ADD R0, R1, R2, LSL R3 → 0xE0810312.</summary>
+    [Fact]
+    public void Decode_RegRegShift_AddByRegister()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE081_0312u);
+        Assert.NotNull(d);
+        Assert.Equal("DataProcessing_RegRegShift", d!.Format.Name);
+        Assert.Equal("ADD", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>MRS R0, CPSR → 0xE10F_0000.</summary>
+    [Fact]
+    public void Decode_MrsCpsr()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE10F_0000u);
+        Assert.NotNull(d);
+        Assert.Equal("PSR_MRS", d!.Format.Name);
+        Assert.Equal("MRS", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>MSR CPSR_fc, R0 → 0xE12F_F000  (mask=1111).</summary>
+    [Fact]
+    public void Decode_MsrReg()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE12F_F000u);
+        Assert.NotNull(d);
+        Assert.Equal("PSR_MSR_Reg", d!.Format.Name);
+        Assert.Equal("MSR", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>MSR CPSR_f, #0x80 → 0xE32F_F080.</summary>
+    [Fact]
+    public void Decode_MsrImm()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE32F_F080u);
+        Assert.NotNull(d);
+        Assert.Equal("PSR_MSR_Imm", d!.Format.Name);
+        Assert.Equal("MSR", d.Instruction.Mnemonic);
+    }
+
     /// <summary>Decoder coverage for all 16 ARM Data Processing Immediate ALU ops.</summary>
     [Theory]
     [InlineData(0xE20000FFu, "AND")]   // AND R0, R0, #0xFF
