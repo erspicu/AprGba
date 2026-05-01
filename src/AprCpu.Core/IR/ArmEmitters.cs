@@ -347,15 +347,83 @@ internal sealed class IfArmCondEmitter : IMicroOpEmitter
     }
 }
 
+/// <summary>
+/// Lower the ARM <c>SPSR -&gt; CPSR</c> restore that happens at exception
+/// return (e.g. <c>SUBS pc, lr, #4</c>, <c>LDM ... ^</c>). The current
+/// CPSR.M[4:0] selects which banked SPSR slot is the source. We emit a
+/// switch over CPSR.M with one arm per banked-SPSR mode declared in the
+/// spec; modes with no SPSR slot (User/System) hit the default arm and
+/// leave CPSR untouched (matches ARM ARM "UNPREDICTABLE in User mode").
+///
+/// After writing the new CPSR we call <c>host_swap_register_bank</c>
+/// with (old_mode, new_mode) so the host can re-shuffle banked GPRs.
+/// </summary>
 internal sealed class RestoreCpsrFromSpsr : IMicroOpEmitter
 {
     public string OpName => "restore_cpsr_from_spsr";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        // Stub: real semantics need mode-aware SPSR selection. Lands in
-        // Phase 2.5.7 (banked register swap).
+        var modes = ctx.Layout.ProcessorModes
+            ?? throw new InvalidOperationException(
+                "restore_cpsr_from_spsr requires processor_modes in the CPU spec.");
+        if (!ctx.Layout.IsStatusRegisterBanked("SPSR"))
+            throw new InvalidOperationException(
+                "restore_cpsr_from_spsr requires SPSR to be declared as banked_per_mode.");
+
         var cpsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR");
-        var _ = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "cpsr_stub_load");
+        var oldCpsr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "old_cpsr_for_restore");
+        const uint modeMask = 0x1F;
+        var oldMode = ctx.Builder.BuildAnd(oldCpsr, ctx.ConstU32(modeMask), "restore_old_mode");
+
+        // Build merge block where all arms join.
+        var mergeBB = ctx.AppendBlock("restore_cpsr_merge");
+
+        // Default arm: CPSR untouched, just branch to merge.
+        var defaultBB = ctx.AppendBlock("restore_cpsr_default");
+        var bankedModes = ctx.Layout.GetStatusBankedModes("SPSR");
+        var sw = ctx.Builder.BuildSwitch(oldMode, defaultBB, (uint)bankedModes.Count);
+
+        // PHI for the new CPSR value — defaults to oldCpsr in the no-SPSR arm.
+        var armResults = new List<(LLVMValueRef value, LLVMBasicBlockRef block)>();
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        armResults.Add((oldCpsr, defaultBB));
+        ctx.Builder.BuildBr(mergeBB);
+
+        foreach (var modeId in bankedModes)
+        {
+            var modeEntry = modes.Modes.FirstOrDefault(m => m.Id == modeId);
+            if (modeEntry?.Encoding is null)
+                throw new InvalidOperationException(
+                    $"Mode '{modeId}' is in SPSR.banked_per_mode but has no encoding in processor_modes.");
+            uint modeEnc = Convert.ToUInt32(modeEntry.Encoding, 2);
+
+            var armBB = ctx.AppendBlock($"restore_cpsr_from_spsr_{modeId.ToLowerInvariant()}");
+            sw.AddCase(ctx.ConstU32(modeEnc), armBB);
+
+            ctx.Builder.PositionAtEnd(armBB);
+            var spsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SPSR", modeId);
+            var spsrVal = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, spsrPtr, $"spsr_{modeId.ToLowerInvariant()}");
+            armResults.Add((spsrVal, armBB));
+            ctx.Builder.BuildBr(mergeBB);
+        }
+
+        // Merge: PHI new CPSR, store, swap if mode actually changed.
+        ctx.Builder.PositionAtEnd(mergeBB);
+        var phi = ctx.Builder.BuildPhi(LLVMTypeRef.Int32, "new_cpsr");
+        phi.AddIncoming(
+            armResults.Select(r => r.value).ToArray(),
+            armResults.Select(r => r.block).ToArray(),
+            (uint)armResults.Count);
+        ctx.Builder.BuildStore(phi, cpsrPtr);
+
+        var newMode = ctx.Builder.BuildAnd(phi, ctx.ConstU32(modeMask), "restore_new_mode");
+        var swapFn = HostHelpers.GetSwapRegisterBankFn(ctx.Module, ctx.Layout.PointerType);
+        var swapType = LLVMTypeRef.CreateFunction(
+            ctx.Module.Context.VoidType,
+            new[] { ctx.Layout.PointerType, LLVMTypeRef.Int32, LLVMTypeRef.Int32 });
+        ctx.Builder.BuildCall2(swapType, swapFn,
+            new[] { ctx.StatePtr, oldMode, newMode }, "");
     }
 }
 
