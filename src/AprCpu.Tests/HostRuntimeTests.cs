@@ -86,7 +86,7 @@ public class HostRuntimeTests
         var bus = new FlatMemoryBus(0x100);
         bus.WriteWord(0x14, 0xCAFEF00Du);  // R1=0x10, +4 = 0x14
         using var _ = MemoryBusBindings.Install(rt, bus);
-        rt.Finalize();
+        rt.Compile();
 
         var fnPtr = rt.GetFunctionPointer("Execute_ARM_SDT_Imm_LDR_LDR");
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
@@ -114,7 +114,7 @@ public class HostRuntimeTests
 
         var bus = new FlatMemoryBus(0x100);
         using var _ = MemoryBusBindings.Install(rt, bus);
-        rt.Finalize();
+        rt.Compile();
 
         var fnPtr = rt.GetFunctionPointer("Execute_ARM_SDT_Imm_STR_STR");
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
@@ -145,7 +145,7 @@ public class HostRuntimeTests
         var bus = new FlatMemoryBus(0x100);
         bus.WriteWord(0x10, 0xAABBCCDDu);  // pre-fill so we can detect spillover
         using var _ = MemoryBusBindings.Install(rt, bus);
-        rt.Finalize();
+        rt.Compile();
 
         var fnPtr = rt.GetFunctionPointer("Execute_ARM_SDT_Imm_STRB_STRB");
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
@@ -163,6 +163,63 @@ public class HostRuntimeTests
         Assert.Equal((byte)0x42, bus.ReadByte(0x11));  // written
         Assert.Equal((byte)0xBB, bus.ReadByte(0x12));  // unchanged
         Assert.Equal((byte)0xAA, bus.ReadByte(0x13));  // unchanged
+    }
+
+    [Fact]
+    public unsafe void ArmSwi_FullExceptionEntrySequence()
+    {
+        // ARM "SWI #0x42" — cccc 1111 oooooooooooooooooooooooo
+        //   1110 1111 0000 0000 0000 0000 0100 0010
+        //   = 0xEF000042
+        // Exception entry expectations (per spec exception_vectors[SoftwareInterrupt]):
+        //   - SPSR_Supervisor := old CPSR
+        //   - banked R14_Supervisor := next-PC = R15 - (pc_offset_bytes - instr_size) = R15 - 4
+        //   - CPSR.M := Supervisor (10011 = 0x13)
+        //   - CPSR.I (bit 7) := 1 (disable list per spec = ["I"])
+        //   - host_swap_register_bank invoked (visible R13/R14 swap with SVC bank)
+        //   - PC := 0x8 (SWI vector address)
+        const uint instruction = 0xEF000042;
+        const uint userModeEnc = 0b10000;       // 0x10
+        const uint svcModeEnc  = 0b10011;       // 0x13
+        const uint initialR15  = 0x100u;        // pretend we're executing at 0x100-pcoffset
+
+        var result = SpecCompiler.Compile(CpuJson);
+        var layout = GetLayout(result);
+        using var rt = HostRuntime.Build(result.Module, layout);
+
+        var swapHandler = new Arm7tdmiBankSwapHandler(rt);
+        using var _ = BankSwapBindings.Install(rt, swapHandler);
+        rt.Compile();
+
+        var fnPtr = rt.GetFunctionPointer("Execute_ARM_SWI_SWI");
+        var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
+
+        Span<byte> state = stackalloc byte[(int)rt.StateSizeBytes];
+        state.Clear();
+        WriteI32(state, rt.GprOffset(15), initialR15);
+        var initialCpsr = userModeEnc;          // User mode, no flags
+        WriteI32(state, rt.StatusOffset("CPSR"), initialCpsr);
+        // Pre-seed SVC bank R14 with a sentinel so we can detect the swap moved data
+        WriteI32(state, rt.BankedGprOffset("Supervisor", 1), 0xDEADBEEFu);  // index 1 = R14 in svc bank
+
+        fixed (byte* p = state)
+            fn(p, instruction);
+
+        // SPSR_Supervisor saved old CPSR
+        Assert.Equal(initialCpsr, ReadI32(state, rt.StatusOffset("SPSR", "Supervisor")));
+
+        // banked R14_Supervisor = next-PC = initialR15 - (8 - 4) = initialR15 - 4
+        var expectedNextPc = initialR15 - 4u;
+        // After swap, the visible R14 should now hold what was the SVC bank R14 (next_pc)
+        Assert.Equal(expectedNextPc, ReadI32(state, rt.GprOffset(14)));
+
+        // CPSR: mode bits → SVC, I bit set
+        var newCpsr = ReadI32(state, rt.StatusOffset("CPSR"));
+        Assert.Equal(svcModeEnc, newCpsr & 0x1Fu);
+        Assert.Equal(1u << 7, newCpsr & (1u << 7));
+
+        // PC = vector address
+        Assert.Equal(0x8u, ReadI32(state, rt.GprOffset(15)));
     }
 
     [Fact]

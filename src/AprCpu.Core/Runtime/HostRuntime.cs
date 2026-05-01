@@ -41,7 +41,7 @@ namespace AprCpu.Core.Runtime;
 ///   var rt = HostRuntime.Build(module, layout);
 ///   rt.BindExtern("memory_read_32", trampolinePtr);
 ///   ...
-///   rt.Finalize();
+///   rt.Compile();
 ///   var fnPtr = rt.GetFunctionPointer("Execute_...");
 /// </code>
 /// </summary>
@@ -81,7 +81,7 @@ public sealed unsafe class HostRuntime : IDisposable
     public static HostRuntime Create(LLVMModuleRef module, CpuStateLayout layout)
     {
         var rt = Build(module, layout);
-        rt.Finalize();
+        rt.Compile();
         return rt;
     }
 
@@ -119,7 +119,7 @@ public sealed unsafe class HostRuntime : IDisposable
     /// <see cref="GetFunctionPointer"/>. After this, <see cref="BindExtern"/>
     /// will throw.
     /// </summary>
-    public void Finalize()
+    public void Compile()
     {
         if (_finalized) return;
         EnsureJitInitialized();
@@ -158,7 +158,7 @@ public sealed unsafe class HostRuntime : IDisposable
     {
         if (!_finalized)
             throw new InvalidOperationException(
-                "HostRuntime: call Finalize() (or Create) before using JIT-dependent operations.");
+                "HostRuntime: call Compile() (or Create) before using JIT-dependent operations.");
     }
 
     private static void EnsureJitInitialized()
