@@ -205,6 +205,172 @@ public class SpecCompilerTests
     }
 
     /// <summary>
+    /// Wave 2: block 1 (LD r,r') compiles for all three formats — the
+    /// reg-to-reg general path, plus the (HL)-source and (HL)-dest splits
+    /// that depend on read_reg_pair_named + lr35902_read_r8/write_r8.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_Block1_LdRegReg_AllFormatsCompile()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        Assert.Contains("Main.LdReg_Reg.LD",    result.Functions.Keys);
+        Assert.Contains("Main.LdHlInd_Reg.LD",  result.Functions.Keys);
+        Assert.Contains("Main.LdReg_HlInd.LD",  result.Functions.Keys);
+
+        var ir = result.Module.PrintToString();
+        // The general LD r,r' must contain the runtime select chain that
+        // picks the source register based on sss.
+        var fnIdx = ir.IndexOf("@Execute_Main_LdReg_Reg_LD", StringComparison.Ordinal);
+        Assert.True(fnIdx >= 0);
+        var nextDef = ir.IndexOf("\ndefine ", fnIdx + 1, StringComparison.Ordinal);
+        var body = nextDef > 0 ? ir.Substring(fnIdx, nextDef - fnIdx) : ir.Substring(fnIdx);
+
+        // The select-chain produces "r8_sel0..r8_sel6" labels.
+        Assert.Contains("r8_sel0", body);
+        Assert.Contains("r8_sel6", body);
+        // And conditional-store merges of form "r8_w_merge_*".
+        Assert.Contains("r8_w_merge_", body);
+    }
+
+    /// <summary>
+    /// Wave 2: block 0 mem-indirect ops (LD (BC)/(DE)/(HL+)/(HL-) ↔ A)
+    /// compile via read_reg_pair_named + read/write_reg_named + the
+    /// inc/dec_pair helpers. Memory access is still placeholder.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_Block0_MemIndirect_Compiles()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        // All 8 mem-indirect formats compile.
+        Assert.Contains("Main.LdInd_BC_A.LD",    result.Functions.Keys);
+        Assert.Contains("Main.LdInd_DE_A.LD",    result.Functions.Keys);
+        Assert.Contains("Main.LdInd_HLi_A.LDI",  result.Functions.Keys);
+        Assert.Contains("Main.LdInd_HLd_A.LDD",  result.Functions.Keys);
+        Assert.Contains("Main.LdInd_A_BC.LD",    result.Functions.Keys);
+        Assert.Contains("Main.LdInd_A_DE.LD",    result.Functions.Keys);
+        Assert.Contains("Main.LdInd_A_HLi.LDI",  result.Functions.Keys);
+        Assert.Contains("Main.LdInd_A_HLd.LDD",  result.Functions.Keys);
+
+        // (HL+) variant must contain the HL increment sequence.
+        var ir = result.Module.PrintToString();
+        var hliIdx = ir.IndexOf("@Execute_Main_LdInd_HLi_A_LDI", StringComparison.Ordinal);
+        Assert.True(hliIdx >= 0);
+        var nextDef = ir.IndexOf("\ndefine ", hliIdx + 1, StringComparison.Ordinal);
+        var body = nextDef > 0 ? ir.Substring(hliIdx, nextDef - hliIdx) : ir.Substring(hliIdx);
+
+        Assert.Contains("HL_hi", body);     // pair compose
+        Assert.Contains("HL_lo", body);
+        Assert.Contains("hl_inc",   body);  // INC step
+    }
+
+    /// <summary>
+    /// Wave 2: 16-bit pair read + write_reg_named to SP — verifies the
+    /// SP/PC 16-bit status-register path through write_reg_named, and
+    /// that read_reg_pair_named composes HL correctly.
+    /// (JP HL needs lr35902_jp control-flow op — wave 3.)
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_LdSpHl_Compiles()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        Assert.Contains("Main.Ld_Sp_Hl.LD", result.Functions.Keys);
+
+        var ir = result.Module.PrintToString();
+        var fnIdx = ir.IndexOf("@Execute_Main_Ld_Sp_Hl_LD", StringComparison.Ordinal);
+        Assert.True(fnIdx >= 0);
+        var nextDef = ir.IndexOf("\ndefine ", fnIdx + 1, StringComparison.Ordinal);
+        var body = nextDef > 0 ? ir.Substring(fnIdx, nextDef - fnIdx) : ir.Substring(fnIdx);
+
+        // HL composed from H+L halves.
+        Assert.Contains("HL_hi", body);
+        Assert.Contains("HL_lo", body);
+        // i16 store into SP.
+        Assert.Contains("store i16", body);
+    }
+
+    /// <summary>
+    /// Wave 3: 8-bit ALU on A — block 2 (ALU A,r) and block 3 (ALU A,n).
+    /// Verifies all 8 ops × 3 source variants compile.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_Alu8OpsCompile()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        // Block 2 reg-source — 8 ops × 1 instruction-def each = 8 entries.
+        // Each instruction-def in spec disambiguates by ooo selector, so
+        // function key includes the selector value.
+        Assert.Contains("Main.AluA_Reg.ADD", result.Functions.Keys);
+        Assert.Contains("Main.AluA_Reg.ADC", result.Functions.Keys);
+        Assert.Contains("Main.AluA_Reg.SUB", result.Functions.Keys);
+        Assert.Contains("Main.AluA_Reg.SBC", result.Functions.Keys);
+        Assert.Contains("Main.AluA_Reg.AND", result.Functions.Keys);
+        Assert.Contains("Main.AluA_Reg.XOR", result.Functions.Keys);
+        Assert.Contains("Main.AluA_Reg.OR",  result.Functions.Keys);
+        Assert.Contains("Main.AluA_Reg.CP",  result.Functions.Keys);
+
+        // Block 2 (HL)-source.
+        Assert.Contains("Main.AluA_HlInd.ADD", result.Functions.Keys);
+        Assert.Contains("Main.AluA_HlInd.CP",  result.Functions.Keys);
+
+        // Block 3 imm8-source.
+        Assert.Contains("Main.AluA_Imm8.ADD", result.Functions.Keys);
+        Assert.Contains("Main.AluA_Imm8.CP",  result.Functions.Keys);
+
+        var ir = result.Module.PrintToString();
+        // ADD body should contain the F flag-store sequence (from StoreFlags).
+        var addIdx = ir.IndexOf("@Execute_Main_AluA_Reg_ADD", StringComparison.Ordinal);
+        Assert.True(addIdx >= 0);
+        var nextDef = ir.IndexOf("\ndefine ", addIdx + 1, StringComparison.Ordinal);
+        var body = nextDef > 0 ? ir.Substring(addIdx, nextDef - addIdx) : ir.Substring(addIdx);
+        Assert.Contains("z_cmp", body);
+        Assert.Contains("h_cmp", body);
+        Assert.Contains("c_cmp", body);
+        Assert.Contains("f_new", body);
+    }
+
+    /// <summary>
+    /// Wave 3: 8-bit INC/DEC selected by ddd field.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_IncDec8Compile()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        Assert.Contains("Main.Inc_R8.INC", result.Functions.Keys);
+        Assert.Contains("Main.Dec_R8.DEC", result.Functions.Keys);
+    }
+
+    /// <summary>
+    /// Wave 3: 16-bit ops on dd-field pairs — LD rr,nn / INC rr / DEC rr /
+    /// ADD HL,rr.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_RrOpsCompile()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        Assert.Contains("Main.LdRr_Imm16.LD",  result.Functions.Keys);
+        Assert.Contains("Main.Inc_Rr.INC",     result.Functions.Keys);
+        Assert.Contains("Main.Dec_Rr.DEC",     result.Functions.Keys);
+        Assert.Contains("Main.AddHl_Rr.ADD",   result.Functions.Keys);
+
+        // ADD HL,rr body must contain the 12-bit half-carry compute.
+        var ir = result.Module.PrintToString();
+        var addIdx = ir.IndexOf("@Execute_Main_AddHl_Rr_ADD", StringComparison.Ordinal);
+        Assert.True(addIdx >= 0);
+        var nextDef = ir.IndexOf("\ndefine ", addIdx + 1, StringComparison.Ordinal);
+        var body = nextDef > 0 ? ir.Substring(addIdx, nextDef - addIdx) : ir.Substring(addIdx);
+
+        Assert.Contains("hl_low12",  body);
+        Assert.Contains("rr_low12",  body);
+        Assert.Contains("low12_sum", body);
+    }
+
+    /// <summary>
     /// Track JsonCpu compilation coverage: how many of LR35902's instructions
     /// produce a function vs. how many surface as "no emitter" diagnostics.
     /// As more emitters land, the diagnostic count drops; this test merely
@@ -233,8 +399,8 @@ public class SpecCompilerTests
         var compiledMnemonics = string.Join(", ", byMnemonic.Select(g => $"{g.Key}×{g.Count()}"));
         var sampleFailures = string.Join(" || ", result.Diagnostics.Take(3));
 
-        Assert.True(compiled >= 6,
-            $"At least NOP+SCF+CCF+CPL+HALT+STOP should compile (got {compiled}). " +
+        Assert.True(compiled >= 60,
+            $"Coverage regression: expected ≥60 compiled instructions (got {compiled}). " +
             $"Compiled mnemonics: {compiledMnemonics}. " +
             $"Sample failures: {sampleFailures}");
         Assert.True(compiled + failed >= 100,

@@ -47,7 +47,7 @@
         "writes_pc": "always",
         "cycles": { "form": "1m" },
         "steps": [
-          { "op": "read_reg_pair", "name": "HL", "out": "target" },
+          { "op": "read_reg_pair_named", "name": "HL", "out": "target" },
           { "op": "lr35902_jp", "address": "target" }
         ]
       }]

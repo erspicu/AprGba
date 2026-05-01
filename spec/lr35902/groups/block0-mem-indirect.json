@@ -13,7 +13,7 @@
         "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD (BC),A",
         "writes_memory": ["A"], "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_pair", "name": "BC", "out": "addr" },
+          { "op": "read_reg_pair_named", "name": "BC", "out": "addr" },
           { "op": "read_reg_named", "name": "A", "out": "v" },
           { "op": "store_byte", "address": "addr", "value": "v" }
         ]
@@ -30,7 +30,7 @@
         "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD (DE),A",
         "writes_memory": ["A"], "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_pair", "name": "DE", "out": "addr" },
+          { "op": "read_reg_pair_named", "name": "DE", "out": "addr" },
           { "op": "read_reg_named", "name": "A", "out": "v" },
           { "op": "store_byte", "address": "addr", "value": "v" }
         ]
@@ -47,7 +47,7 @@
         "mnemonic": "LDI", "since": "LR35902", "manual_ref": "GB CPU §LD (HL+),A",
         "writes_memory": ["A"], "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_pair", "name": "HL", "out": "addr" },
+          { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
           { "op": "read_reg_named", "name": "A", "out": "v" },
           { "op": "store_byte", "address": "addr", "value": "v" },
           { "op": "lr35902_inc_pair", "name": "HL" }
@@ -65,7 +65,7 @@
         "mnemonic": "LDD", "since": "LR35902", "manual_ref": "GB CPU §LD (HL-),A",
         "writes_memory": ["A"], "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_pair", "name": "HL", "out": "addr" },
+          { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
           { "op": "read_reg_named", "name": "A", "out": "v" },
           { "op": "store_byte", "address": "addr", "value": "v" },
           { "op": "lr35902_dec_pair", "name": "HL" }
@@ -83,7 +83,7 @@
         "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD A,(BC)",
         "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_pair", "name": "BC", "out": "addr" },
+          { "op": "read_reg_pair_named", "name": "BC", "out": "addr" },
           { "op": "load_byte", "address": "addr", "out": "v" },
           { "op": "write_reg_named", "name": "A", "value": "v" }
         ]
@@ -100,7 +100,7 @@
         "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD A,(DE)",
         "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_pair", "name": "DE", "out": "addr" },
+          { "op": "read_reg_pair_named", "name": "DE", "out": "addr" },
           { "op": "load_byte", "address": "addr", "out": "v" },
           { "op": "write_reg_named", "name": "A", "value": "v" }
         ]
@@ -117,7 +117,7 @@
         "mnemonic": "LDI", "since": "LR35902", "manual_ref": "GB CPU §LD A,(HL+)",
         "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_pair", "name": "HL", "out": "addr" },
+          { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
           { "op": "load_byte", "address": "addr", "out": "v" },
           { "op": "write_reg_named", "name": "A", "value": "v" },
           { "op": "lr35902_inc_pair", "name": "HL" }
@@ -135,7 +135,7 @@
         "mnemonic": "LDD", "since": "LR35902", "manual_ref": "GB CPU §LD A,(HL-)",
         "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_pair", "name": "HL", "out": "addr" },
+          { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
           { "op": "load_byte", "address": "addr", "out": "v" },
           { "op": "write_reg_named", "name": "A", "value": "v" },
           { "op": "lr35902_dec_pair", "name": "HL" }
