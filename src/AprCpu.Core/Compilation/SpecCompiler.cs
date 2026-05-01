@@ -33,7 +33,10 @@ public sealed unsafe class SpecCompiler
     {
         var moduleName = $"AprCpu_{loaded.Cpu.Architecture.Id}";
         var module = LLVMModuleRef.CreateWithName(moduleName);
-        var layout = new CpuStateLayout(module.Context);
+        var layout = new CpuStateLayout(
+            module.Context,
+            loaded.Cpu.RegisterFile,
+            loaded.Cpu.ProcessorModes);
 
         var registry = new EmitterRegistry();
         StandardEmitters.RegisterAll(registry);
