@@ -43,7 +43,15 @@
             { "op": "block_load",
               "list": "full_list",
               "base_index": 13,
-              "p": 0, "u": 1, "w": 1 }
+              "p": 0, "u": 1, "w": 1 },
+            { "op": "if",
+              "cond": { "field": "r_bit", "eq": 1 },
+              "then": [
+                { "op": "read_reg", "index": 15, "out": "popped_pc" },
+                { "op": "and", "in": ["popped_pc", { "const": "0xFFFFFFFE" }], "out": "aligned_pc" },
+                { "op": "write_reg", "index": 15, "value": "aligned_pc" }
+              ]
+            }
           ]
         }
       ]

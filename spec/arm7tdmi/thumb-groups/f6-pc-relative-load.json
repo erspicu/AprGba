@@ -20,8 +20,7 @@
           "cycles":     { "form": "1S+1N+1I" },
           "steps": [
             { "op": "read_reg", "index": 15, "out": "raw_pc" },
-            { "op": "add", "in": ["raw_pc", { "const": 4 }], "out": "pc_pipelined" },
-            { "op": "and", "in": ["pc_pipelined", { "const": "0xFFFFFFFC" }], "out": "pc_aligned" },
+            { "op": "and", "in": ["raw_pc", { "const": "0xFFFFFFFC" }], "out": "pc_aligned" },
             { "op": "shl", "in": ["imm8", { "const": 2 }], "out": "scaled_offset" },
             { "op": "add", "in": ["pc_aligned", "scaled_offset"], "out": "address" },
             { "op": "load", "addr": "address", "size": 32, "out": "loaded" },

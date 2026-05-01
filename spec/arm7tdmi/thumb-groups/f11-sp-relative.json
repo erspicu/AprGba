@@ -26,7 +26,8 @@
             { "op": "read_reg", "index": "rd", "out": "data" },
             { "op": "shl", "in": ["imm8", { "const": 2 }], "out": "scaled_offset" },
             { "op": "add", "in": ["sp_val", "scaled_offset"], "out": "address" },
-            { "op": "store", "addr": "address", "value": "data", "size": 32 }
+            { "op": "and", "in": ["address", { "const": "0xFFFFFFFC" }], "out": "addr_aligned" },
+            { "op": "store", "addr": "addr_aligned", "value": "data", "size": 32 }
           ]
         },
         {
@@ -39,7 +40,11 @@
             { "op": "read_reg", "index": 13, "out": "sp_val" },
             { "op": "shl", "in": ["imm8", { "const": 2 }], "out": "scaled_offset" },
             { "op": "add", "in": ["sp_val", "scaled_offset"], "out": "address" },
-            { "op": "load", "addr": "address", "size": 32, "out": "loaded" },
+            { "op": "and", "in": ["address", { "const": 3 }], "out": "addr_lo2" },
+            { "op": "shl", "in": ["addr_lo2", { "const": 3 }], "out": "rot_amount" },
+            { "op": "and", "in": ["address", { "const": "0xFFFFFFFC" }], "out": "addr_aligned" },
+            { "op": "load", "addr": "addr_aligned", "size": 32, "out": "raw_word" },
+            { "op": "ror", "in": ["raw_word", "rot_amount"], "out": "loaded" },
             { "op": "write_reg", "index": "rd", "value": "loaded" }
           ]
         }
