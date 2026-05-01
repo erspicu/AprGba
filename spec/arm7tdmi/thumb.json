@@ -1,221 +1,22 @@
 {
   "$schema": "../schema/cpu-spec.schema.json",
   "spec_version": "1.0",
-
-  "name":               "Thumb",
-  "width_bits":         16,
-  "alignment_bytes":    2,
-  "pc_offset_bytes":    4,
+  "name": "Thumb",
+  "width_bits": 16,
+  "alignment_bytes": 2,
+  "pc_offset_bytes": 4,
   "endian_within_word": "little",
-
-  "$comment_no_global_condition":
-    "Thumb-1 has no per-instruction condition field; only Branch (Format 16) carries a 4-bit cond.",
-
+  "$comment_no_global_condition": "Thumb-1 has no per-instruction condition field; only Branch (Format 16) carries a 4-bit cond.",
   "decode_strategy": "mask_match_priority",
-
   "encoding_groups": [
-
     {
-      "name": "Format1_MoveShiftedRegister",
-      "formats": [
-
-        {
-          "name":    "Thumb_F1_MoveShiftedRegister",
-          "comment": "000 op iiiii sss ddd  (LSL/LSR/ASR Rd, Rs, #imm5)",
-          "pattern": "000_oo_iiiii_sss_ddd",
-          "fields": {
-            "op":    "12:11",
-            "imm5":  "10:6",
-            "rs":    "5:3",
-            "rd":    "2:0"
-          },
-          "mask":  "0xE000",
-          "match": "0x0000",
-
-          "instructions": [
-
-            {
-              "selector":   { "field": "op", "value": "00" },
-              "mnemonic":   "LSL",
-              "since":      "ARMv4T",
-              "writes_pc":  "never",
-              "manual_ref": "ARM ARM A7.1.40 (Thumb F1)",
-              "cycles":     { "form": "1S" },
-              "steps": [
-                { "op": "read_reg", "index": "rs", "out": "rs_val" },
-                { "op": "shl",
-                  "in": ["rs_val", "imm5"],
-                  "out": "result",
-                  "width": 32 },
-                { "op": "write_reg", "index": "rd", "value": "result" },
-                { "op": "update_nz", "value": "result" }
-              ]
-            },
-
-            {
-              "selector":   { "field": "op", "value": "01" },
-              "mnemonic":   "LSR",
-              "since":      "ARMv4T",
-              "writes_pc":  "never",
-              "cycles":     { "form": "1S" },
-              "steps": [
-                { "op": "read_reg", "index": "rs", "out": "rs_val" },
-                { "op": "lsr",
-                  "in": ["rs_val", "imm5"],
-                  "out": "result",
-                  "width": 32 },
-                { "op": "write_reg", "index": "rd", "value": "result" },
-                { "op": "update_nz", "value": "result" }
-              ]
-            },
-
-            {
-              "selector":   { "field": "op", "value": "10" },
-              "mnemonic":   "ASR",
-              "since":      "ARMv4T",
-              "writes_pc":  "never",
-              "cycles":     { "form": "1S" },
-              "steps": [
-                { "op": "read_reg", "index": "rs", "out": "rs_val" },
-                { "op": "asr",
-                  "in": ["rs_val", "imm5"],
-                  "out": "result",
-                  "width": 32 },
-                { "op": "write_reg", "index": "rd", "value": "result" },
-                { "op": "update_nz", "value": "result" }
-              ]
-            }
-
-          ]
-        }
-
-      ]
+      "$include": "thumb-groups/f1-move-shifted-register.json"
     },
-
     {
-      "name": "Format3_MoveCompareAddSubImmediate",
-      "formats": [
-
-        {
-          "name":    "Thumb_F3_ImmediateOps",
-          "comment": "001 op ddd iiiiiiii (MOV/CMP/ADD/SUB Rd, #imm8)",
-          "pattern": "001_oo_ddd_iiiiiiii",
-          "fields": {
-            "op":   "12:11",
-            "rd":   "10:8",
-            "imm8": "7:0"
-          },
-          "mask":  "0xE000",
-          "match": "0x2000",
-
-          "instructions": [
-
-            {
-              "selector":   { "field": "op", "value": "00" },
-              "mnemonic":   "MOV",
-              "since":      "ARMv4T",
-              "writes_pc":  "never",
-              "manual_ref": "ARM ARM A7.1.42 (Thumb F3)",
-              "cycles":     { "form": "1S" },
-              "steps": [
-                { "op": "write_reg", "index": "rd", "value": "imm8" },
-                { "op": "update_nz", "value": "imm8" }
-              ]
-            },
-
-            {
-              "selector":   { "field": "op", "value": "01" },
-              "mnemonic":   "CMP",
-              "since":      "ARMv4T",
-              "writes_pc":  "never",
-              "cycles":     { "form": "1S" },
-              "steps": [
-                { "op": "read_reg", "index": "rd", "out": "rd_val" },
-                { "op": "sub", "in": ["rd_val", "imm8"], "out": "result" },
-                { "op": "update_nz",    "value": "result" },
-                { "op": "update_c_sub", "in": ["rd_val", "imm8"] },
-                { "op": "update_v_sub", "in": ["rd_val", "imm8", "result"] }
-              ]
-            },
-
-            {
-              "selector":   { "field": "op", "value": "10" },
-              "mnemonic":   "ADD",
-              "since":      "ARMv4T",
-              "writes_pc":  "never",
-              "cycles":     { "form": "1S" },
-              "steps": [
-                { "op": "read_reg", "index": "rd", "out": "rd_val" },
-                { "op": "add", "in": ["rd_val", "imm8"], "out": "result" },
-                { "op": "write_reg", "index": "rd", "value": "result" },
-                { "op": "update_nz",    "value": "result" },
-                { "op": "update_c_add", "in": ["rd_val", "imm8"] },
-                { "op": "update_v_add", "in": ["rd_val", "imm8", "result"] }
-              ]
-            },
-
-            {
-              "selector":   { "field": "op", "value": "11" },
-              "mnemonic":   "SUB",
-              "since":      "ARMv4T",
-              "writes_pc":  "never",
-              "cycles":     { "form": "1S" },
-              "steps": [
-                { "op": "read_reg", "index": "rd", "out": "rd_val" },
-                { "op": "sub", "in": ["rd_val", "imm8"], "out": "result" },
-                { "op": "write_reg", "index": "rd", "value": "result" },
-                { "op": "update_nz",    "value": "result" },
-                { "op": "update_c_sub", "in": ["rd_val", "imm8"] },
-                { "op": "update_v_sub", "in": ["rd_val", "imm8", "result"] }
-              ]
-            }
-
-          ]
-        }
-
-      ]
+      "$include": "thumb-groups/f3-mov-cmp-add-sub-imm.json"
     },
-
     {
-      "name": "Format18_UnconditionalBranch",
-      "formats": [
-
-        {
-          "name":    "Thumb_F18_B",
-          "comment": "11100 ooooooooooo (signed 11-bit offset, <<1)",
-          "pattern": "11100_ooooooooooo",
-          "fields": {
-            "offset11": "10:0"
-          },
-          "mask":  "0xF800",
-          "match": "0xE000",
-
-          "operands": {
-            "branch_target": {
-              "kind":    "pc_relative_offset",
-              "outputs": ["address"]
-            }
-          },
-
-          "instructions": [
-
-            {
-              "mnemonic":   "B",
-              "since":      "ARMv4T",
-              "unconditional": true,
-              "writes_pc":  "always",
-              "manual_ref": "ARM ARM A7.1.5 (Thumb F18)",
-              "cycles":     { "form": "2S+1N" },
-              "steps": [
-                { "op": "branch", "target": "address" }
-              ]
-            }
-
-          ]
-        }
-
-      ]
+      "$include": "thumb-groups/f18-unconditional-branch.json"
     }
-
   ]
 }
