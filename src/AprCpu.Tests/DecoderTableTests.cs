@@ -137,9 +137,32 @@ public class DecoderTableTests
     public void Decode_ReturnsNullForUndefinedEncoding()
     {
         var t = new DecoderTable(LoadArm());
-        // Undefined / unallocated space.
-        var d = t.Decode(0xF000_0000u);
+        // Single Data Transfer space (bits 27:25 = 010) is not yet in spec
+        // (lands in Phase 2.5.3); decoder must currently return null for it.
+        var d = t.Decode(0xE500_0000u);
         Assert.Null(d);
+    }
+
+    /// <summary>RegImmShift form: MOV R0, R1, LSL #2 → 0xE1A00101.</summary>
+    [Fact]
+    public void Decode_RegImmShift_Mov()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE1A0_0101u);
+        Assert.NotNull(d);
+        Assert.Equal("DataProcessing_RegImmShift", d!.Format.Name);
+        Assert.Equal("MOV", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>RegImmShift form: ADD R0, R1, R2, LSL #3 → 0xE0810182.</summary>
+    [Fact]
+    public void Decode_RegImmShift_AddWithShift()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE081_0182u);
+        Assert.NotNull(d);
+        Assert.Equal("DataProcessing_RegImmShift", d!.Format.Name);
+        Assert.Equal("ADD", d.Instruction.Mnemonic);
     }
 
     /// <summary>Decoder coverage for all 16 ARM Data Processing Immediate ALU ops.</summary>
