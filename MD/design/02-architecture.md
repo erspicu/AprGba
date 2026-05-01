@@ -59,10 +59,15 @@
 - SMC 偵測：寫入「已編譯區域」時 invalidate
 - 進階：block linking（patch native call 直接跳下一個 block）
 
-### 5. Register File / CPU State（`AprCpu.Core/State`）
-- C# `unsafe struct`：R0–R15, CPSR, SPSR_*, banked registers
-- 透過 `unsafe` 指標傳給 JIT 機器碼直接存取
-- 避免每次都 marshal
+### 5. Register File / CPU State（`AprCpu.Core/IR/CpuStateLayout`）
+- **由 spec 動態建構**：layout 不寫死成 ARM 形狀；`CpuStateLayout` 讀取
+  `RegisterFile` + `ProcessorModes` 動態組出 LLVM struct
+- 結構：`[GPRs] + [status registers + per-mode banked status slots] +
+  [per-mode banked GPR groups] + [cycle_counter i64, pending_exceptions i32]`
+- 同一份 framework code 可同時為 ARM7TDMI（GPR×16 + CPSR + 5×SPSR + 5
+  banked groups）與 LR35902（GPR×7 8-bit + F flag）產生對應的 layout
+- C# host 端的 `CpuState` 鏡像此 layout（Phase 3 工作項），透過 `unsafe`
+  指標傳給 JIT 機器碼直接存取，避免 marshal
 
 ### 6. Memory Bus（`AprGba.Bus`）
 - `IMemoryBus` 介面，CPU JIT 透過 callback 呼叫
@@ -176,13 +181,20 @@ public interface IMemoryBus
 }
 ```
 
-### `CpuState`（傳給 JIT 的 context）
+### `CpuState`（傳給 JIT 的 context — **由 spec 決定 layout**）
+
+`CpuStateLayout` 從 spec 動態組出 LLVM struct；C# host 端用對應的
+`StructLayout(LayoutKind.Sequential)` mirror。**以下只是 ARM7TDMI 範例**，
+換 spec（如 LR35902）會產出不同的欄位序列。
+
+ARM7TDMI 的 layout 大致長這樣：
 
 ```csharp
+// 由 CpuStateLayout 在執行期決定 — 不是硬編碼
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct CpuState
+public unsafe struct CpuState_Arm7tdmi
 {
-    public fixed uint R[16];           // 通用暫存器（依模式 banked 切換時 swap）
+    public fixed uint R[16];           // 通用暫存器
     public uint CPSR;
     public uint SPSR_fiq, SPSR_irq, SPSR_svc, SPSR_abt, SPSR_und;
     public fixed uint R_fiq[7];        // R8–R14 banked
@@ -195,6 +207,9 @@ public unsafe struct CpuState
 }
 ```
 
+LR35902 會是完全不同的 layout（A/B/C/D/E/H/L/F 都 8-bit、SP/PC 16-bit、
+無 banked、無 SPSR）。framework code 不變，只 spec 不同。
+
 ### JIT block 函式簽章
 
 ```
@@ -205,54 +220,10 @@ ulong execute_block(CpuState* state, IMemoryBus* bus);
 
 ---
 
-## JSON Schema（精簡版，詳細見後續文件）
+## JSON Schema
 
-```json
-{
-  "architecture": "ARMv4T",
-  "instruction_sets": {
-    "ARM": {
-      "width_bits": 32,
-      "alignment": 4,
-      "pc_offset": 8,
-      "condition_field": "31:28",
-      "formats": [
-        {
-          "name": "DataProcessing_Imm",
-          "mask":  "0x0E000000",
-          "match": "0x02000000",
-          "fields": {
-            "cond":   "31:28",
-            "opcode": "24:21",
-            "s_bit":  "20",
-            "rn":     "19:16",
-            "rd":     "15:12",
-            "rotate": "11:8",
-            "imm8":   "7:0"
-          },
-          "operand_resolvers": {
-            "op2": { "op": "rotr", "value": "imm8", "amount": "rotate*2" }
-          },
-          "instructions": {
-            "0100": {
-              "mnemonic": "ADD",
-              "cycles": { "base": 1 },
-              "steps": [
-                { "op": "add", "out": "res", "in": ["rn", "op2"] },
-                { "op": "store_reg", "target": "rd", "source": "res" },
-                { "op": "if_s_bit", "then": [
-                  { "op": "update_nzcv_add", "in": ["rn", "op2", "res"] }
-                ]}
-              ]
-            }
-          }
-        }
-      ]
-    },
-    "Thumb": { "width_bits": 16, "pc_offset": 4, "formats": [ ... ] }
-  }
-}
-```
+完整 schema 規範見 `04-json-schema-spec.md`；micro-op 詞彙表見
+`05-microops-vocabulary.md`；實際 spec 範例見 `spec/arm7tdmi/`。
 
 ---
 

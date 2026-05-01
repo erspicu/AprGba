@@ -1,5 +1,14 @@
 # Phase 2.6：Framework 通用化 Refactor
 
+> **狀態：✅ 完成**（R1–R5 全部實作於 Phase 2.5 期間）
+>
+> R1–R5 的承諾——「換 CPU 只要換 JSON」——的**真正驗證**移到 Phase 4.5
+> （GB LR35902 移植）。見 `MD/design/09-gb-lr35902-validation-plan.md`。
+>
+> 下方文件保留為**歷史 plan doc**，供日後類似 refactor 參考結構。
+
+---
+
 ## 為什麼插在 2.5.2 與 2.5.3 之間
 
 Phase 2.5.2 結束後，parser/emitter 已涵蓋 ARM Data Processing 全集
@@ -206,17 +215,17 @@ if (loaded.Cpu.Architecture.Family == "ARM")
 - 把 `IR/Emitters.cs` 拆成 `Emitters/StandardEmitters.cs` + `Emitters/ArmEmitters.cs`
 - `SpecCompiler.cs`：family-based 註冊
 
-## 完成標準
+## 完成標準（已達成）
 
-- [ ] 64 既有測試全綠
-- [ ] CLI `aprcpu --spec spec/arm7tdmi/cpu.json --output temp/arm7tdmi.ll`
-      仍 emit 62 函式、0 diagnostics
-- [ ] `CpuStateLayout` 內無任何 `Cpsr` / `Spsr` 字串硬編碼
-- [ ] `OperandResolvers` 與 `Emitters` 各自有 ARM 特化檔，generic 檔
-      可由非 ARM spec 直接重用
-- [ ] 條件 gate 對所有 14 cond code 行為正確
-- [ ] 新增測試：用一個極簡的「假 CPU」spec（4 個 GPR、簡化 PSR）跑通
-      pipeline 證明 framework 真的可換 CPU
+- [x] 既有測試全綠（當時 64 個 → Phase 2.5 結束時 159 個）
+- [x] CLI 對 ARM7TDMI spec 仍 emit 完整指令（44 個 ARM mnemonic + ~30 個
+      Thumb mnemonic）、0 diagnostics
+- [x] `CpuStateLayout` 內無任何 `Cpsr` / `Spsr` 字串硬編碼
+- [x] `OperandResolvers` 與 `Emitters` 各自有 ARM 特化檔（`ArmEmitters`、
+      `ArmOperandResolvers`），generic 檔可由非 ARM spec 直接重用
+- [x] 條件 gate 對所有 14 cond code 行為正確
+- [ ] **真正用「另一顆 CPU」spec 跑通 pipeline** — 此項移到 Phase 4.5（GB
+      LR35902 移植），見 `09-gb-lr35902-validation-plan.md`
 
 ## 接下來銜接
 
