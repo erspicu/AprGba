@@ -1,0 +1,50 @@
+{
+  "name": "Thumb_F10_LdStHalfword",
+  "comment": "1000 L wwwww bbb ddd — load/store halfword with 5-bit immediate offset (scaled by 2). 2 instructions: STRH/LDRH.",
+  "formats": [
+    {
+      "name":    "Thumb_F10_LdStHalfword",
+      "pattern": "1000_a_wwwww_bbb_ddd",
+      "fields": {
+        "l_bit": "11",
+        "imm5":  "10:6",
+        "rb":    "5:3",
+        "rd":    "2:0"
+      },
+      "mask":  "0xF000",
+      "match": "0x8000",
+      "instructions": [
+        {
+          "selector":   { "field": "l_bit", "value": "0" },
+          "mnemonic":   "STRH",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "writes_memory": ["normal"],
+          "manual_ref": "ARM ARM A7.1.66 (Thumb F10)",
+          "cycles":     { "form": "2N" },
+          "steps": [
+            { "op": "read_reg", "index": "rb", "out": "base" },
+            { "op": "read_reg", "index": "rd", "out": "data" },
+            { "op": "shl", "in": ["imm5", { "const": 1 }], "out": "scaled_offset" },
+            { "op": "add", "in": ["base", "scaled_offset"], "out": "address" },
+            { "op": "store", "addr": "address", "value": "data", "size": 16 }
+          ]
+        },
+        {
+          "selector":   { "field": "l_bit", "value": "1" },
+          "mnemonic":   "LDRH",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "cycles":     { "form": "1S+1N+1I" },
+          "steps": [
+            { "op": "read_reg", "index": "rb", "out": "base" },
+            { "op": "shl", "in": ["imm5", { "const": 1 }], "out": "scaled_offset" },
+            { "op": "add", "in": ["base", "scaled_offset"], "out": "address" },
+            { "op": "load", "addr": "address", "size": 16, "signed": false, "out": "loaded" },
+            { "op": "write_reg", "index": "rd", "value": "loaded" }
+          ]
+        }
+      ]
+    }
+  ]
+}

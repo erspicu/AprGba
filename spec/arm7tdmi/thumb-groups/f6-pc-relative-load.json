@@ -1,0 +1,34 @@
+{
+  "name": "Thumb_F6_PcRelativeLoad",
+  "comment": "01001 ddd wwwwwwww — LDR Rd, [PC, #imm8*4]. PC value used is (current_addr + 4) & ~3 (Thumb pipeline +4, then word-align by clearing bit 1).",
+  "formats": [
+    {
+      "name":    "Thumb_F6_LDR_PC_Rel",
+      "pattern": "01001_ddd_wwwwwwww",
+      "fields": {
+        "rd":   "10:8",
+        "imm8": "7:0"
+      },
+      "mask":  "0xF800",
+      "match": "0x4800",
+      "instructions": [
+        {
+          "mnemonic":   "LDR",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "manual_ref": "ARM ARM A7.1.30 (Thumb F6)",
+          "cycles":     { "form": "1S+1N+1I" },
+          "steps": [
+            { "op": "read_reg", "index": 15, "out": "raw_pc" },
+            { "op": "add", "in": ["raw_pc", { "const": 4 }], "out": "pc_pipelined" },
+            { "op": "and", "in": ["pc_pipelined", { "const": "0xFFFFFFFC" }], "out": "pc_aligned" },
+            { "op": "shl", "in": ["imm8", { "const": 2 }], "out": "scaled_offset" },
+            { "op": "add", "in": ["pc_aligned", "scaled_offset"], "out": "address" },
+            { "op": "load", "addr": "address", "size": 32, "out": "loaded" },
+            { "op": "write_reg", "index": "rd", "value": "loaded" }
+          ]
+        }
+      ]
+    }
+  ]
+}

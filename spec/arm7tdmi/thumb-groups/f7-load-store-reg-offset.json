@@ -1,0 +1,79 @@
+{
+  "name": "Thumb_F7_LdStRegOffset",
+  "comment": "0101 LB 0 ooo bbb ddd — load/store with register offset. Address = Rb + Ro. 4 instructions: STR/STRB/LDR/LDRB.",
+  "formats": [
+    {
+      "name":    "Thumb_F7_LdStRegOffset",
+      "pattern": "0101_kk_0_ooo_bbb_ddd",
+      "fields": {
+        "lb": "11:10",
+        "ro": "8:6",
+        "rb": "5:3",
+        "rd": "2:0"
+      },
+      "mask":  "0xF200",
+      "match": "0x5000",
+      "instructions": [
+        {
+          "selector":   { "field": "lb", "value": "00" },
+          "mnemonic":   "STR",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "writes_memory": ["normal"],
+          "manual_ref": "ARM ARM A7.1.66 (Thumb F7)",
+          "cycles":     { "form": "2N" },
+          "steps": [
+            { "op": "read_reg", "index": "rb", "out": "base" },
+            { "op": "read_reg", "index": "ro", "out": "offset" },
+            { "op": "read_reg", "index": "rd", "out": "data" },
+            { "op": "add", "in": ["base", "offset"], "out": "address" },
+            { "op": "store", "addr": "address", "value": "data", "size": 32 }
+          ]
+        },
+        {
+          "selector":   { "field": "lb", "value": "01" },
+          "mnemonic":   "STRB",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "writes_memory": ["normal"],
+          "cycles":     { "form": "2N" },
+          "steps": [
+            { "op": "read_reg", "index": "rb", "out": "base" },
+            { "op": "read_reg", "index": "ro", "out": "offset" },
+            { "op": "read_reg", "index": "rd", "out": "data" },
+            { "op": "add", "in": ["base", "offset"], "out": "address" },
+            { "op": "store", "addr": "address", "value": "data", "size": 8 }
+          ]
+        },
+        {
+          "selector":   { "field": "lb", "value": "10" },
+          "mnemonic":   "LDR",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "cycles":     { "form": "1S+1N+1I" },
+          "steps": [
+            { "op": "read_reg", "index": "rb", "out": "base" },
+            { "op": "read_reg", "index": "ro", "out": "offset" },
+            { "op": "add", "in": ["base", "offset"], "out": "address" },
+            { "op": "load", "addr": "address", "size": 32, "out": "loaded" },
+            { "op": "write_reg", "index": "rd", "value": "loaded" }
+          ]
+        },
+        {
+          "selector":   { "field": "lb", "value": "11" },
+          "mnemonic":   "LDRB",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "cycles":     { "form": "1S+1N+1I" },
+          "steps": [
+            { "op": "read_reg", "index": "rb", "out": "base" },
+            { "op": "read_reg", "index": "ro", "out": "offset" },
+            { "op": "add", "in": ["base", "offset"], "out": "address" },
+            { "op": "load", "addr": "address", "size": 8, "signed": false, "out": "loaded" },
+            { "op": "write_reg", "index": "rd", "value": "loaded" }
+          ]
+        }
+      ]
+    }
+  ]
+}

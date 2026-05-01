@@ -218,6 +218,93 @@ public class DecoderTableTests
         Assert.Equal("ADD", d.Instruction.Mnemonic);
     }
 
+    /// <summary>Thumb F6 LDR R0, [PC, #4] → 0x4801</summary>
+    [Fact]
+    public void Decode_Thumb_F6_LdrPcRel()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x4801u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F6_LDR_PC_Rel", d!.Format.Name);
+        Assert.Equal("LDR", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F7 STR R0, [R1, R2] → 0x5088</summary>
+    [Fact]
+    public void Decode_Thumb_F7_StrRegOffset()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x5088u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F7_LdStRegOffset", d!.Format.Name);
+        Assert.Equal("STR", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F7 LDR R0, [R1, R2] → 0x5888 (lb=10)</summary>
+    [Fact]
+    public void Decode_Thumb_F7_LdrRegOffset()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x5888u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F7_LdStRegOffset", d!.Format.Name);
+        Assert.Equal("LDR", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F8 LDRSH R0, [R1, R2] → 0x5E88 (hs=11, bit 9=1)</summary>
+    [Fact]
+    public void Decode_Thumb_F8_Ldrsh()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x5E88u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F8_LdStSignExt", d!.Format.Name);
+        Assert.Equal("LDRSH", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F9 STR R0, [R1, #4] (imm5=1, scale 4) → 0x6048</summary>
+    [Fact]
+    public void Decode_Thumb_F9_StrImm()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x6048u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F9_LdStImm", d!.Format.Name);
+        Assert.Equal("STR", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F9 LDRB R0, [R1, #1] → 0x7C48</summary>
+    [Fact]
+    public void Decode_Thumb_F9_LdrbImm()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x7C48u);
+        Assert.NotNull(d);
+        Assert.Equal("LDRB", d!.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F10 STRH R0, [R1, #2] (imm5=1, scale 2) → 0x8048</summary>
+    [Fact]
+    public void Decode_Thumb_F10_StrhImm()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x8048u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F10_LdStHalfword", d!.Format.Name);
+        Assert.Equal("STRH", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F11 LDR R0, [SP, #4] (imm8=1, scale 4) → 0x9801</summary>
+    [Fact]
+    public void Decode_Thumb_F11_LdrSpRel()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x9801u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F11_SpRelative", d!.Format.Name);
+        Assert.Equal("LDR", d.Instruction.Mnemonic);
+    }
+
     // Note: prior "Decode_ReturnsNullForUndefinedEncoding" test was removed
     // in 2.5.5a because the spec's encoding-space coverage is approaching
     // 100% (Coprocessor stubs in 2.5.5b will close the remaining gap), and

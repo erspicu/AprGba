@@ -1,0 +1,49 @@
+{
+  "name": "Thumb_F11_SpRelativeLdSt",
+  "comment": "1001 L ddd wwwwwwww — load/store with SP (R13) base, 8-bit immediate offset scaled by 4. 2 instructions: STR/LDR.",
+  "formats": [
+    {
+      "name":    "Thumb_F11_SpRelative",
+      "pattern": "1001_a_ddd_wwwwwwww",
+      "fields": {
+        "l_bit": "11",
+        "rd":    "10:8",
+        "imm8":  "7:0"
+      },
+      "mask":  "0xF000",
+      "match": "0x9000",
+      "instructions": [
+        {
+          "selector":   { "field": "l_bit", "value": "0" },
+          "mnemonic":   "STR",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "writes_memory": ["normal"],
+          "manual_ref": "ARM ARM A7.1.66 (Thumb F11)",
+          "cycles":     { "form": "2N" },
+          "steps": [
+            { "op": "read_reg", "index": 13, "out": "sp_val" },
+            { "op": "read_reg", "index": "rd", "out": "data" },
+            { "op": "shl", "in": ["imm8", { "const": 2 }], "out": "scaled_offset" },
+            { "op": "add", "in": ["sp_val", "scaled_offset"], "out": "address" },
+            { "op": "store", "addr": "address", "value": "data", "size": 32 }
+          ]
+        },
+        {
+          "selector":   { "field": "l_bit", "value": "1" },
+          "mnemonic":   "LDR",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "cycles":     { "form": "1S+1N+1I" },
+          "steps": [
+            { "op": "read_reg", "index": 13, "out": "sp_val" },
+            { "op": "shl", "in": ["imm8", { "const": 2 }], "out": "scaled_offset" },
+            { "op": "add", "in": ["sp_val", "scaled_offset"], "out": "address" },
+            { "op": "load", "addr": "address", "size": 32, "out": "loaded" },
+            { "op": "write_reg", "index": "rd", "value": "loaded" }
+          ]
+        }
+      ]
+    }
+  ]
+}
