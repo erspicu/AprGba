@@ -253,6 +253,94 @@ public class DecoderTableTests
         Assert.Equal("LDRB", d.Instruction.Mnemonic);
     }
 
+    /// <summary>STRH R0, [R1, #4]  → 0xE1C100B4</summary>
+    [Fact]
+    public void Decode_HSDT_Imm_STRH()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE1C1_00B4u);
+        Assert.NotNull(d);
+        Assert.Equal("HSDT_Imm_STRH", d!.Format.Name);
+        Assert.Equal("STRH", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDRH R0, [R1, #4]  → 0xE1D100B4</summary>
+    [Fact]
+    public void Decode_HSDT_Imm_LDRH()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE1D1_00B4u);
+        Assert.NotNull(d);
+        Assert.Equal("HSDT_Imm_LDRH", d!.Format.Name);
+        Assert.Equal("LDRH", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDRSB R0, [R1, #4] → 0xE1D100D4</summary>
+    [Fact]
+    public void Decode_HSDT_Imm_LDRSB()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE1D1_00D4u);
+        Assert.NotNull(d);
+        Assert.Equal("HSDT_Imm_LDRSB", d!.Format.Name);
+        Assert.Equal("LDRSB", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDRSH R0, [R1, #4] → 0xE1D100F4</summary>
+    [Fact]
+    public void Decode_HSDT_Imm_LDRSH()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE1D1_00F4u);
+        Assert.NotNull(d);
+        Assert.Equal("HSDT_Imm_LDRSH", d!.Format.Name);
+        Assert.Equal("LDRSH", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>STRH R0, [R1, R2] → 0xE18100B2</summary>
+    [Fact]
+    public void Decode_HSDT_Reg_STRH()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE181_00B2u);
+        Assert.NotNull(d);
+        Assert.Equal("HSDT_Reg_STRH", d!.Format.Name);
+        Assert.Equal("STRH", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDRH R0, [R1, R2] → 0xE19100B2</summary>
+    [Fact]
+    public void Decode_HSDT_Reg_LDRH()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE191_00B2u);
+        Assert.NotNull(d);
+        Assert.Equal("HSDT_Reg_LDRH", d!.Format.Name);
+        Assert.Equal("LDRH", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDRSB R0, [R1, R2] → 0xE19100D2</summary>
+    [Fact]
+    public void Decode_HSDT_Reg_LDRSB()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE191_00D2u);
+        Assert.NotNull(d);
+        Assert.Equal("HSDT_Reg_LDRSB", d!.Format.Name);
+        Assert.Equal("LDRSB", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>LDRSH R0, [R1, R2] → 0xE19100F2</summary>
+    [Fact]
+    public void Decode_HSDT_Reg_LDRSH()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE191_00F2u);
+        Assert.NotNull(d);
+        Assert.Equal("HSDT_Reg_LDRSH", d!.Format.Name);
+        Assert.Equal("LDRSH", d.Instruction.Mnemonic);
+    }
+
     /// <summary>RegRegShift form: ADD R0, R1, R2, LSL R3 → 0xE0810312.</summary>
     [Fact]
     public void Decode_RegRegShift_AddByRegister()

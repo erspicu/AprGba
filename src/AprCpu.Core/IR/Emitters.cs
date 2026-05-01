@@ -50,8 +50,21 @@ public static class StandardEmitters
     internal static LLVMValueRef ResolveInput(EmitContext ctx, JsonElement step, int index, string defaultName = "in")
     {
         var arr = step.GetProperty(defaultName);
-        var name = arr[index].GetString()!;
-        return ctx.Resolve(name);
+        var item = arr[index];
+        return item.ValueKind switch
+        {
+            JsonValueKind.String => ctx.Resolve(item.GetString()!),
+            JsonValueKind.Object when item.TryGetProperty("const", out var c) =>
+                ctx.ConstU32(c.ValueKind switch
+                {
+                    JsonValueKind.Number => (uint)c.GetInt64(),
+                    JsonValueKind.String when c.GetString()!.StartsWith("0x") =>
+                        Convert.ToUInt32(c.GetString()!.Substring(2), 16),
+                    _ => throw new InvalidOperationException("'const' value must be a number or 0x-hex string")
+                }),
+            _ => throw new InvalidOperationException(
+                $"Step input[{index}] must be a name string or {{\"const\": <n>}} object; got {item.ValueKind}")
+        };
     }
 
     internal static string GetOut(JsonElement step) =>
