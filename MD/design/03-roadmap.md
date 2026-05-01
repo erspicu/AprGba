@@ -97,13 +97,14 @@
 `MD/design/06-arm7tdmi-completion-plan.md`。
 
 **子階段**：
-- 2.5.1 Spec authoring 規範 + lint 強化
-- 2.5.2 ARM Data Processing 全集（×3 編碼）+ PSR Transfer
+- 2.5.1 Spec authoring 規範 + lint 強化 ✅
+- 2.5.2 ARM Data Processing 全集（×3 編碼）+ PSR Transfer ✅
+- **2.6 — Framework 通用化 refactor**（R1–R5，插入於此）
 - 2.5.3 ARM Memory Transfers（SDT、Halfword/Signed、SWP）
 - 2.5.4 ARM Multiply（含 Multiply Long）
 - 2.5.5 ARM Block Transfer + SWI + Coprocessor stub + Undefined
 - 2.5.6 Thumb 剩餘 16 種格式（F2、F4–F17、F19）
-- 2.5.7 完整 cond table + banked register swap + restore_cpsr_from_spsr
+- 2.5.7 完整 cond table（受 R4 啟發，可能變得簡單） + banked register swap + restore_cpsr_from_spsr
 - 2.5.8 Coverage 驗證 + closeout
 
 **驗收**：
@@ -111,6 +112,32 @@
 - LLVM module 通過 Verify，0 diagnostics
 - 所有 micro-op 名稱與 operand_resolver kind 都有 emitter
 - 50+ known opcode 通過 decoder coverage test
+
+---
+
+---
+
+## Phase 2.6：Framework 通用化 Refactor（~3.5 天集中工）
+
+**插入時機**：Phase 2.5.2 結束、進 2.5.3 之前。
+
+**背景**：Phase 2 結束後做了通用化評估，發現 framework 約 30% 仍有
+ARM 寫死（CpuStateLayout 硬編、CPSR bit 常數、ARM-only operand
+resolver、cond gate 中的 ARM cond table、ARM-specific emitter）。趁
+footprint 還小（~14 個 emitter、4 個 resolver）做 refactor，避免之後
+2.5.3–2.5.6 補完更多 emitter 後重寫成本翻倍。
+
+**5 個 refactor**（詳見 `MD/design/08-portability-refactor.md`）：
+- R1：CpuStateLayout 從 `register_file` 動態建構
+- R2：旗標 bit 位置從 `register_file.status[].fields` 查詢
+- R3：OperandResolver 改 registry pattern
+- R4：Cond gate 從 `global_condition.table` 資料驅動
+- R5：ARM-only emitter 切到獨立 class，generic 部分留 `StandardEmitters`
+
+**驗收**：
+- 既有 64 測試全綠
+- CLI 對 ARM7TDMI spec 仍 emit 62 函式、0 diagnostics
+- 用一個極簡假 CPU spec 跑通 pipeline，證明真的可換 CPU
 
 ---
 
