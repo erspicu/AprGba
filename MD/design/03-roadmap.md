@@ -4,9 +4,10 @@
 
 業餘投入估計：每週 8–15 小時。
 
-> **狀態快照**（2026-05）：Phase 0/1/2/2.5/2.6 ✅ 完成；Phase 4 與 Phase 6
-> 的「JSON 涵蓋」工作已被 Phase 2.5 吸收；下一個進行中：**Phase 3 — Host
-> runtime + 直譯器驗證**。
+> **狀態快照**（2026-05）：Phase 0/1/2/2.5/2.6/3/4.1/4.2/4.3/4.4 ✅ 完成。
+> jsmolka **arm.gba 與 thumb.gba 兩支 ROM 全部 subtest 通過**（端到端
+> spec → IR → MCJIT → executor 跑通），195 個 unit test 全綠。
+> 下一個建議：**Phase 4.5 — GB LR35902 移植驗證 framework 通用性**。
 
 ---
 
@@ -99,22 +100,22 @@ Phase 2.5 期間。**
 
 ---
 
-## Phase 3：Host Runtime + 直譯器驗證（3–4 週） ⏳ 下一階段
+## Phase 3：Host Runtime + 直譯器驗證（3–4 週） ✅ 完成
 
 **目標**：把編出來的 LLVM IR 真的執行起來，確認指令語義正確。
 
 任務：
-- [ ] **3.1 Host runtime skeleton**
+- [x] **3.1 Host runtime skeleton**
   - C# 端 `CpuState` struct（與 `CpuStateLayout` 動態 layout 對齊）
   - Memory bus extern 實作（`host_mem_read8/16/32`、`host_mem_write8/16/32`）
   - `host_swap_register_bank` 實作（依 mode 把 banked R8–R14 swap 進可見槽位）
   - LLVM ORC JIT 綁定 externs
-- [ ] **3.2 Fetch-decode-execute loop**
+- [x] **3.2 Fetch-decode-execute loop**
   - 走 PC、`DecoderTable` 查身分、dispatch 到 JIT 過的函式、推進 PC
   - 條件執行已在 cond gate 內，主迴圈不再特別處理
   - R15 +8/+4 偏移已在 emitter 內，主迴圈不再特別處理
   - 無 code cache，每條指令一次 dispatch（先求對，不求快）
-- [ ] **3.3 Golden tests vs ARM 手冊**
+- [x] **3.3 Golden tests vs ARM 手冊**
   - 5–10 條手挑指令（ADD with flags、LDR with writeback、B with cond、
     MOV with shifter carry、MSR/MRS、SWI 驗證 banked swap）
   - 每個 test：建立 CpuState、跑、assert 後狀態符合 ARM ARM 預期值
@@ -127,20 +128,31 @@ de-risk。
 
 ---
 
-## Phase 4：armwrestler ARM 模式驗證（2–3 週）
+## Phase 4：jsmolka arm.gba + thumb.gba CPU 驗證（~2 週） ✅ 完成
 
-> **註**：原 Phase 4 的「JSON 涵蓋 ARM 模式所有主要指令」已被 Phase 2.5
-> 吸收（Data Processing / Multiply / SDT / Halfword / Block Transfer /
-> Branch / PSR / SWI / Coprocessor 全已 emit）。剩餘工作只剩「跑真的
-> ROM 驗證」。
+> **實際路線**：原規劃跑 armwrestler，後改用 jsmolka `gba-tests`（headless
+> 設計，更適合自動化）。Phase 4.1 GBA memory bus、4.2 halt detection、
+> 4.3 arm.gba 全綠、4.4 thumb.gba 全綠。armwrestler 留到 Phase 8 PPU
+> 出來後做視覺對照。
 
-任務：
-- [ ] armwrestler `arm.gba` ROM loader（極簡 GBA memory map：BIOS/IWRAM/
-  EWRAM/GamePak ROM）
-- [ ] 跑 ROM、attach scoreboard 讀取（通常在某個記憶體位置）
-- [ ] 失敗的指令逐條 debug：對照 mGBA / NanoBoyAdvance 行為比對
+完成項目：
+- [x] **4.1** GBA memory bus + ROM loader + IO stub（DISPSTAT toggle，
+  避免 m_vsync 死循環；BIOS 向量塞 MOVS PC, LR no-op）
+- [x] **4.2** CpuExecutor.RunUntilHalt 偵測 B-to-self halt loop
+- [x] **4.3** **jsmolka arm.gba 全部 subtest 通過**（R12=0，~535 個 subtests
+  涵蓋 Data Processing/Multiply/SDT/HSDT/SWP/Block Transfer/Branch/PSR/
+  SWI/Coprocessor stub/Undefined）。修了 13+ 個 ARMv4 真實 CPU 語意 bug。
+- [x] **4.4** **jsmolka thumb.gba 全部 subtest 通過**（R7=0，~230 個 subtests
+  涵蓋 logical/shifts/arithmetic/branches/memory）。修了 ~10 個 Thumb
+  特有 bug。multi-set CpuExecutor 透過 CPSR.T dispatch ARM/Thumb。
 
-**驗收**：armwrestler ARM 模式測試 100% 通過。
+**驗收結果**：
+- arm.gba R12=0 in 7409 instructions
+- thumb.gba R7=0 in 6874 instructions
+- **195/195 unit tests 全綠**
+
+CPU 正確性已通過真實 ROM 端到端驗證，framework 對 ARMv4T 完整指令集
+的語意理解過了非常嚴格的考驗。
 
 ---
 
@@ -187,18 +199,12 @@ de-risk。
 
 ---
 
-## Phase 6：Thumb 模式驗證（1–2 週）
+## Phase 6：Thumb 模式驗證 ✅ 完成（併入 Phase 4.4）
 
-> **註**：原 Phase 6 的 `thumb.json` 19 種格式、BX 切換、PC +4 偏移、
-> Low/High register 限制 全已在 Phase 2.5.6 spec 端做完。剩餘工作只剩
-> host 端 T-bit 狀態追蹤與跑 thumb.gba。
-
-任務：
-- [ ] Host 主迴圈追蹤 `CPSR.T` 狀態
-- [ ] BX 觸發指令集切換（IR 已寫入 PC.bit0；host 依 bit0 切換 fetch 寬度）
-- [ ] thumb.gba 測試 ROM 跑通
-
-**驗收**：thumb.gba 測試 100% 通過 + ARM 與 Thumb 互相 BX 切換正確。
+原規劃的 Thumb 工作（CPSR.T 狀態追蹤、BX 模式切換、thumb.gba 驗證）
+**全部在 Phase 4.4 完成**。CpuExecutor 用 multi-set 設計，每步讀
+CPSR.T dispatch 到對應 InstructionSet 的 decoder 與 PC 偏移。
+jsmolka thumb.gba 通過，ARM↔Thumb BX 切換在實 ROM 中驗證過。
 
 ---
 
@@ -283,22 +289,26 @@ de-risk。
 | **M1** | Phase 0–1 完成 | ~1 月 | ✅ |
 | **M2** | Phase 2 完成 | ~3 月 | ✅ |
 | **M2.5** | Phase 2.5 完成（ARM7TDMI 完整 spec + parser） | ~4 月 | ✅ 比預期快 |
-| **M3** | Phase 3–5 完成（直譯器 + armwrestler + 跑 BIOS） | ~7 月 | 進行中 |
-| **M3.5** | Phase 4.5 完成（GB 驗證 framework 通用性） | — | 新增 |
-| **M4** | Phase 6 完成（Thumb 跑得動） | ~9 月 | — |
+| **M3** | Phase 3 完成（host runtime + 直譯器） | ~7 月 | ✅ 比預期快 |
+| **M3.4** | Phase 4 完成（jsmolka arm.gba + thumb.gba 100% 通過） | — | ✅ |
+| **M3.5** | Phase 4.5 完成（GB 驗證 framework 通用性） | — | ⏳ 下一步 |
+| **M4** | Phase 5 完成（GBA memory map + 跑 BIOS） | ~9 月 | — |
 | **M5** | Phase 7–8 完成（**畫面出來**） | ~12–15 月 | — |
 
 ---
 
-## 下一步：Phase 3 — Host Runtime + 直譯器驗證
+## 下一步：Phase 4.5 — GB LR35902 移植驗證 framework 通用性
 
-Phase 0/1/2/2.5/2.6 已完成。CLI 已能從 JSON 產出 ARM7TDMI 完整 ISA 的
-LLVM IR；159 測試全綠。
+Phase 0/1/2/2.5/2.6/3/4 已完成。jsmolka arm.gba 與 thumb.gba 兩支 ROM
+全部 subtest 通過 — ARMv4T CPU 語意通過真實 ROM 端到端驗證。**195 個
+unit test 全綠**。
 
-接下來進 Phase 3：
-1. **3.1**：Host runtime skeleton（C# CpuState、memory bus、swap_register_bank、
-   LLVM ORC JIT 綁定）
-2. **3.2**：fetch-decode-execute 主迴圈
-3. **3.3**：Golden tests 對照 ARM 手冊
+下一步建議是 **Phase 4.5 — GB LR35902 移植驗證**：
+1. 把 GB CPU（Sharp LR35902，類 Z80）寫成 JSON spec
+2. 用 `erspicu/AprGBemu` 當 reference implementation 對拍
+3. 證明 framework 真的「換 CPU 只要換 JSON」
 
-之後 Phase 4 跑 armwrestler，Phase 4.5 用 GB 驗證 framework 通用性。
+詳見 `09-gb-lr35902-validation-plan.md`。
+
+或者跳過驗證，直接進 **Phase 5 — GBA memory map + 跑 BIOS**，往「跑遊戲
+畫面」的目標推進。兩條路線都可，4.5 偏研究/通用性，5 偏實用 demo。
