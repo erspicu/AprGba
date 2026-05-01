@@ -4,39 +4,68 @@ using LLVMSharp.Interop;
 namespace AprCpu.Core.IR;
 
 /// <summary>
-/// Lowers an <see cref="OperandResolver"/> into IR before any micro-op
-/// step runs. Outputs are added to <see cref="EmitContext.Values"/> and
-/// can then be referenced by name in subsequent steps.
+/// Built-in operand resolvers. <see cref="RegisterAll"/> populates an
+/// <see cref="OperandResolverRegistry"/> with the kinds shipped in the
+/// box; new architectures may also call
+/// <c>OperandResolverRegistry.Register(...)</c> with their own
+/// <see cref="IOperandResolver"/> implementations.
+///
+/// (R5 will split the ARM-specific kinds out of this file.)
 /// </summary>
-public static class OperandResolvers
+public static class StandardOperandResolvers
 {
-    public static void Apply(EmitContext ctx)
+    public static void RegisterAll(OperandResolverRegistry reg)
     {
-        foreach (var (name, resolver) in ctx.Format.Operands)
-        {
-            switch (resolver.Kind)
-            {
-                case "immediate_rotated":
-                    EmitImmediateRotated(ctx, name, resolver);
-                    break;
-                case "pc_relative_offset":
-                    EmitPcRelativeOffset(ctx, name, resolver);
-                    break;
-                case "register_direct":
-                    EmitRegisterDirect(ctx, name, resolver);
-                    break;
-                case "shifted_register_by_immediate":
-                    EmitShiftedRegisterByImmediate(ctx, name, resolver);
-                    break;
-                case "shifted_register_by_register":
-                    EmitShiftedRegisterByRegister(ctx, name, resolver);
-                    break;
-                default:
-                    throw new NotSupportedException(
-                        $"Operand resolver kind '{resolver.Kind}' is not yet implemented (operand '{name}' in format '{ctx.Format.Name}').");
-            }
-        }
+        reg.Register(new RegisterDirectResolver());
+        reg.Register(new PcRelativeOffsetResolver());
+        reg.Register(new ImmediateRotatedResolver());
+        reg.Register(new ShiftedRegisterByImmediateResolver());
+        reg.Register(new ShiftedRegisterByRegisterResolver());
     }
+}
+
+internal sealed class ImmediateRotatedResolver : IOperandResolver
+{
+    public string Kind => "immediate_rotated";
+    public void Resolve(EmitContext ctx, string name, OperandResolver resolver)
+        => OperandResolverImpl.EmitImmediateRotated(ctx, name, resolver);
+}
+
+internal sealed class PcRelativeOffsetResolver : IOperandResolver
+{
+    public string Kind => "pc_relative_offset";
+    public void Resolve(EmitContext ctx, string name, OperandResolver resolver)
+        => OperandResolverImpl.EmitPcRelativeOffset(ctx, name, resolver);
+}
+
+internal sealed class RegisterDirectResolver : IOperandResolver
+{
+    public string Kind => "register_direct";
+    public void Resolve(EmitContext ctx, string name, OperandResolver resolver)
+        => OperandResolverImpl.EmitRegisterDirect(ctx, name, resolver);
+}
+
+internal sealed class ShiftedRegisterByImmediateResolver : IOperandResolver
+{
+    public string Kind => "shifted_register_by_immediate";
+    public void Resolve(EmitContext ctx, string name, OperandResolver resolver)
+        => OperandResolverImpl.EmitShiftedRegisterByImmediate(ctx, name, resolver);
+}
+
+internal sealed class ShiftedRegisterByRegisterResolver : IOperandResolver
+{
+    public string Kind => "shifted_register_by_register";
+    public void Resolve(EmitContext ctx, string name, OperandResolver resolver)
+        => OperandResolverImpl.EmitShiftedRegisterByRegister(ctx, name, resolver);
+}
+
+/// <summary>
+/// Concrete IR-emit logic for each built-in resolver kind. Held in one
+/// internal static class so the (long) helpers can share private methods
+/// without exposing them publicly.
+/// </summary>
+internal static class OperandResolverImpl
+{
 
     /// <summary>
     /// ARM "immediate, rotated" operand:
@@ -46,7 +75,7 @@ public static class OperandResolvers
     /// minimal (uses bit 31 of the rotated value when rotate != 0, else
     /// re-uses the existing CPSR.C, modelled as an i32 0/1).
     /// </summary>
-    private static void EmitImmediateRotated(EmitContext ctx, string name, OperandResolver _)
+    internal static void EmitImmediateRotated(EmitContext ctx, string name, OperandResolver _)
     {
         var imm8   = ctx.Resolve("imm8");
         var rotate = ctx.Resolve("rotate");
@@ -85,7 +114,7 @@ public static class OperandResolvers
     /// callers can override via the resolver's <c>field</c> / <c>shift</c>
     /// attributes if needed.
     /// </summary>
-    private static void EmitPcRelativeOffset(EmitContext ctx, string _, OperandResolver resolver)
+    internal static void EmitPcRelativeOffset(EmitContext ctx, string _, OperandResolver resolver)
     {
         var raw = resolver.Raw;
         string fieldName;
@@ -134,7 +163,7 @@ public static class OperandResolvers
         ctx.Values["address"] = addr;
     }
 
-    private static void EmitRegisterDirect(EmitContext ctx, string name, OperandResolver _)
+    internal static void EmitRegisterDirect(EmitContext ctx, string name, OperandResolver _)
     {
         // For now this is a no-op: callers can resolve the register directly
         // via read_reg with the underlying field name.
@@ -161,7 +190,7 @@ public static class OperandResolvers
     /// <c>amount == 0</c>, then a final 4-way mux on <c>shift_type</c>.
     /// LLVM optimisation collapses unreached branches at use sites.
     /// </summary>
-    private static void EmitShiftedRegisterByImmediate(EmitContext ctx, string name, OperandResolver _)
+    internal static void EmitShiftedRegisterByImmediate(EmitContext ctx, string name, OperandResolver _)
     {
         var rm        = LoadRegisterByFieldIndex(ctx, "rm", "rm_val");
         var shiftType = ctx.Resolve("shift_type");
@@ -197,7 +226,7 @@ public static class OperandResolvers
     /// (carry-out = CPSR.C); when ≥ 32, behaviour depends on shift type
     /// (LSL/LSR ≥ 32 → 0, ASR ≥ 32 → sign-fill, ROR uses amount mod 32).
     /// </summary>
-    private static void EmitShiftedRegisterByRegister(EmitContext ctx, string name, OperandResolver _)
+    internal static void EmitShiftedRegisterByRegister(EmitContext ctx, string name, OperandResolver _)
     {
         var rm        = LoadRegisterByFieldIndex(ctx, "rm", "rm_val");
         var rs        = LoadRegisterByFieldIndex(ctx, "rs", "rs_val");

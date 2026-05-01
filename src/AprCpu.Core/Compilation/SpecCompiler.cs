@@ -41,6 +41,9 @@ public sealed unsafe class SpecCompiler
         var registry = new EmitterRegistry();
         StandardEmitters.RegisterAll(registry);
 
+        var resolverRegistry = new OperandResolverRegistry();
+        StandardOperandResolvers.RegisterAll(resolverRegistry);
+
         var decoderTables = new Dictionary<string, DecoderTable>(StringComparer.Ordinal);
         var functions = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         var diagnostics = new List<string>();
@@ -64,7 +67,7 @@ public sealed unsafe class SpecCompiler
             }
             decoderTables[setName] = table;
 
-            var fb = new InstructionFunctionBuilder(module, layout, registry);
+            var fb = new InstructionFunctionBuilder(module, layout, registry, resolverRegistry);
 
             foreach (var format in table.Formats)
             foreach (var def in format.Instructions)

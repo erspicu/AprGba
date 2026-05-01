@@ -11,14 +11,20 @@ namespace AprCpu.Core.IR;
 public sealed unsafe class InstructionFunctionBuilder
 {
     public LLVMModuleRef        Module    { get; }
-    public CpuStateLayout       Layout    { get; }
-    public EmitterRegistry      Registry  { get; }
+    public CpuStateLayout            Layout            { get; }
+    public EmitterRegistry           Registry          { get; }
+    public OperandResolverRegistry   ResolverRegistry  { get; }
 
-    public InstructionFunctionBuilder(LLVMModuleRef module, CpuStateLayout layout, EmitterRegistry registry)
+    public InstructionFunctionBuilder(
+        LLVMModuleRef module,
+        CpuStateLayout layout,
+        EmitterRegistry registry,
+        OperandResolverRegistry resolverRegistry)
     {
-        Module   = module;
-        Layout   = layout;
-        Registry = registry;
+        Module           = module;
+        Layout           = layout;
+        Registry         = registry;
+        ResolverRegistry = resolverRegistry;
     }
 
     public LLVMValueRef Build(InstructionSetSpec set, EncodingFormat format, InstructionDef def)
@@ -40,7 +46,7 @@ public sealed unsafe class InstructionFunctionBuilder
         var ctx = new EmitContext(Module, builder, fn, statePtr, instructionWord, Layout, set, format, def);
 
         // 1. Apply operand resolvers (pre-compute named outputs)
-        OperandResolvers.Apply(ctx);
+        ResolverRegistry.Apply(ctx);
 
         // 2. Conditional gate (if applicable)
         LLVMBasicBlockRef? endBlock = null;
