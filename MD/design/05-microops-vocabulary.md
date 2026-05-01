@@ -194,13 +194,61 @@ flags（見 §6）。這些保留給控制流條件判斷。
 
 | op | 說明 |
 |---|---|
-| `raise_exception` | `vector: "SWI" | "UndefinedInstruction" | ...` 立即進例外向量 |
-| `enter_mode`      | `mode_id`，附帶 banked register swap 與 SPSR 儲存 |
+| `raise_exception` | `vector: "SoftwareInterrupt" | "UndefinedInstruction" | ...` 完整流程：save CPSR→SPSR、save next-PC→banked LR、切 mode 與 disable bits、call host_swap_register_bank、PC ← vector address |
+| `restore_cpsr_from_spsr` | 用 runtime CPSR.M 選擇 SPSR_<mode> 的 banked slot 載回 CPSR；附帶 host_swap_register_bank 通知 |
+| `enter_mode`      | `mode_id`，附帶 banked register swap 與 SPSR 儲存（與 raise_exception 共用內部 helper） |
+| `if_arm_cond`     | 用 per-instruction `cond_field`（4-bit）gate 包住 then-block；給 Thumb F16 conditional branch 用（Thumb 沒有 global cond gate） |
 | `disable_interrupts` | `mask: ["I","F"]` |
 | `enable_interrupts`  | `mask: ["I","F"]` |
 | `wait_for_interrupt` | (ARMv6+) WFI 等 |
 | `coprocessor_call`   | `cp_num, op1, crd, crn, crm, op2` (ARMv4 已有 MCR/MRC) |
 | `breakpoint`         | BKPT (ARMv5+) |
+
+### `raise_exception` 詳細欄位
+
+```json
+{ "op": "raise_exception", "vector": "SoftwareInterrupt" }
+```
+
+`vector` 必須對應 spec `exception_vectors[]` 的某個 `name`。emitter 會
+從 vector 條目讀出 `enter_mode` 與 `disable`（要 set 的 CPSR bit 名稱
+列表，如 `["I"]`、`["I","F"]`），不在 step 內重複宣告。
+
+完整下放序列（見 `ArmEmitters.RaiseExceptionEmitter`）：
+1. read CPSR → `old_cpsr`
+2. 若 SPSR 是 banked 且該 mode 有 SPSR slot：store old_cpsr →
+   `SPSR_<enter_mode>`
+3. 計算 next-PC = R15 − (pc_offset_bytes − instruction_size_bytes)
+4. store next-PC → 該 mode 的 banked R14 slot（若有）
+5. 計算 new_cpsr = (old_cpsr & ~M_mask) | new_mode_enc | OR(disable bits...)
+6. store new_cpsr → CPSR
+7. call extern `host_swap_register_bank(state, old_mode, new_mode)`
+8. store vector.address → R15
+
+### `restore_cpsr_from_spsr` 詳細
+
+無欄位。emit 為 runtime switch over CPSR.M：
+- 對每個 spec 宣告為 `banked_per_mode` 的 mode（FIQ/IRQ/Supervisor/
+  Abort/Undefined）emit 一個 case，載入對應 SPSR_<mode>
+- default arm（User/System mode 等無 SPSR slot 的）保留 old CPSR
+- 用 PHI 合併、寫回 CPSR
+- 結尾 call `host_swap_register_bank(state, old_mode, new_mode)`
+
+### `if_arm_cond` 詳細
+
+```json
+{
+  "op": "if_arm_cond",
+  "cond_field": "cond",
+  "then": [ ...nested steps... ]
+}
+```
+
+`cond_field` 指向 format 的某個 4-bit field，內容為 ARM cond code
+（0-15）。emitter 用 `ConditionEvaluator.EmitCheckOnCondValue`（這個
+helper 是從 global cond gate 邏輯抽出來的）建立 cond gate，包住
+`then` 區塊。Thumb F16 conditional branch 用此 op，因為 Thumb 沒有
+instruction-set 層級的 global condition。
 
 ---
 
@@ -289,9 +337,9 @@ register     : read_reg, write_reg, read_psr, write_psr,
 operand      : imm_rotated, imm_sign_extend, pc_relative_address
 memory       : load, store, load_aligned, swap_word,
                block_load, block_store
-control      : if, switch, branch, branch_link, branch_indirect,
-               block_terminate, nop
-exception    : raise_exception, enter_mode,
+control      : if, if_arm_cond, switch, branch, branch_link,
+               branch_indirect, block_terminate, nop
+exception    : raise_exception, restore_cpsr_from_spsr, enter_mode,
                disable_interrupts, enable_interrupts,
                wait_for_interrupt, coprocessor_call, breakpoint
 barrier      : cycle_advance, io_write_barrier, dmb, dsb, isb

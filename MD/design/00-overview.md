@@ -24,11 +24,20 @@
 - Framebuffer 等級的 PPU（VRAM Mode 3/4）— 僅用於驗證 CPU 正確性
 - Windows 平台優先
 
+### 第一目標的延伸：framework 通用性驗證
+
+- **GB LR35902 移植**（Phase 4.5）— 用 `erspicu/AprGBemu`（既有 GB
+  emulator）當 reference，把 GB CPU 寫成 JSON spec、跑通同樣的 host
+  runtime，驗證「換 CPU 只要換 JSON」這個核心承諾。詳見
+  `MD/design/09-gb-lr35902-validation-plan.md`。
+
 ### 明確排除（第一版不做）
 
 - Master Clock cycle-accurate 模型（採 instruction-level catch-up）
 - 完整 PPU 渲染（Tile mode 0/1/2、Sprite、Window、Mosaic、Affine）
-- 跨主機 CPU 框架驗證（如 NES 6502、MIPS）— 框架預留設計，但不實作
+- 第三顆 CPU（MIPS、RISC-V、6502 等）— Phase 4.5 GB 驗證已涵蓋
+  framework 通用性的關鍵未驗證面（變動寬度、prefix opcode、paired
+  register、8-bit GPR），再加更多 CPU 的邊際效益遞減
 - 音訊 (APU)
 - 連線、紅外線、震動等周邊
 - 跨平台 host（Linux/Mac、ARM64 host CPU）
@@ -37,7 +46,6 @@
 
 - 完整 PPU + Sprite + 特效
 - DMA / Timer / Interrupt 完整模擬
-- 第二顆 CPU 驗證框架通用性
 - AOT 預編譯快取（`.bc` 檔）
 
 ## 命名
@@ -65,3 +73,9 @@
 - `01-feasibility.md` — 可行性分析（含風險）
 - `02-architecture.md` — 系統架構與組件設計
 - `03-roadmap.md` — 階段性實作路線圖
+- `04-json-schema-spec.md` — CPU spec JSON schema 完整規範
+- `05-microops-vocabulary.md` — micro-op 詞彙表
+- `06-arm7tdmi-completion-plan.md` — Phase 2.5 計畫（已完成）
+- `07-spec-authoring-conventions.md` — spec 寫作規範
+- `08-portability-refactor.md` — Phase 2.6 通用化 refactor（已完成）
+- `09-gb-lr35902-validation-plan.md` — Phase 4.5 GB CPU 移植驗證計畫
