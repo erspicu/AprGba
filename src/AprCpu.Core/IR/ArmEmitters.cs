@@ -32,6 +32,12 @@ public static class ArmEmitters
         reg.Register(new UpdateCAddCarry());
         reg.Register(new UpdateCSubCarry());
 
+        // By-register shift with carry-out + ARM7TDMI edge cases (Thumb F4)
+        reg.Register(new LslWithCarryEmitter());
+        reg.Register(new LsrWithCarryEmitter());
+        reg.Register(new AsrWithCarryEmitter());
+        reg.Register(new RorWithCarryEmitter());
+
         // PSR access
         reg.Register(new ReadPsr());
         reg.Register(new WritePsr());
@@ -122,6 +128,159 @@ internal sealed class UpdateVSub : IMicroOpEmitter
         var both = ctx.Builder.BuildAnd(ab, ares, "v_sub_and");
         var top  = ctx.Builder.BuildLShr(both, ctx.ConstU32(31), "v_sub_top");
         CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "V", top);
+    }
+}
+
+/// <summary>
+/// Thumb F4-style by-register shift with full ARM7TDMI carry-out
+/// semantics. Inputs: <c>in: [value, amount]</c>. Output:
+/// <c>out: &lt;result-name&gt;</c>. Updates CPSR.C as a side effect.
+/// Handles: amount==0 (preserve C, return value); 1..31 (normal);
+/// 32 (LSL/LSR result=0, carry=bit0/bit31); &gt;32 (LSL/LSR result=0,
+/// carry=0); ASR amount&gt;=32 (sign-fill, carry=bit31); ROR amount mod 32.
+/// Used by Thumb F4 ALU shift opcodes.
+/// </summary>
+internal abstract class ShiftWithCarryEmitter : IMicroOpEmitter
+{
+    public abstract string OpName { get; }
+    protected abstract (LLVMValueRef value, LLVMValueRef carry) Compute(
+        EmitContext ctx, LLVMValueRef value, LLVMValueRef amountFull,
+        LLVMValueRef amountIsZero);
+
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var value  = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
+        var amount = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var outName = StandardEmitters.GetOut(step.Raw);
+
+        var amountFull = ctx.Builder.BuildAnd(amount, ctx.ConstU32(0xFF), "shf_amt_full");
+        var amountIsZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, amountFull, ctx.ConstU32(0), "shf_amt_eq0");
+
+        var (result, carry) = Compute(ctx, value, amountFull, amountIsZero);
+        ctx.Values[outName] = result;
+        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "C", carry);
+    }
+}
+
+internal sealed class LslWithCarryEmitter : ShiftWithCarryEmitter
+{
+    public override string OpName => "lsl_with_c";
+    protected override (LLVMValueRef value, LLVMValueRef carry) Compute(
+        EmitContext ctx, LLVMValueRef value, LLVMValueRef amountFull, LLVMValueRef amountIsZero)
+    {
+        var amount31 = ctx.Builder.BuildAnd(amountFull, ctx.ConstU32(31), "lsl_amt31");
+        var safeAmt  = ctx.Builder.BuildSelect(amountIsZero, ctx.ConstU32(1), amount31, "lsl_safe_amt");
+        var shifted  = ctx.Builder.BuildShl(value, safeAmt, "lsl_shifted");
+        var carryShr = ctx.Builder.BuildSub(ctx.ConstU32(32), safeAmt, "lsl_carry_shr");
+        var carryRaw = ctx.Builder.BuildLShr(value, carryShr, "lsl_carry_pre");
+        var carryNorm = ctx.Builder.BuildAnd(carryRaw, ctx.ConstU32(1), "lsl_carry_norm");
+
+        var amountEQ32 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, amountFull, ctx.ConstU32(32), "lsl_amt_eq32");
+        var amountGT32 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, amountFull, ctx.ConstU32(32), "lsl_amt_gt32");
+        var amountGE32 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, amountFull, ctx.ConstU32(32), "lsl_amt_ge32");
+
+        var bit0 = ctx.Builder.BuildAnd(value, ctx.ConstU32(1), "lsl_bit0");
+        var carryForGE32 = ctx.Builder.BuildSelect(amountGT32, ctx.ConstU32(0), bit0, "lsl_carry_ge32");
+        var carryForNZ = ctx.Builder.BuildSelect(amountGE32, carryForGE32, carryNorm, "lsl_carry_nz");
+
+        var resultForGE32 = ctx.ConstU32(0);
+        var resultForNZ   = ctx.Builder.BuildSelect(amountGE32, resultForGE32, shifted, "lsl_result_nz");
+
+        var cpsrC = CarryReader.ReadCarryIn(ctx);
+        var result = ctx.Builder.BuildSelect(amountIsZero, value, resultForNZ, "lsl_result");
+        var carry  = ctx.Builder.BuildSelect(amountIsZero, cpsrC, carryForNZ,  "lsl_carry");
+        return (result, carry);
+    }
+}
+
+internal sealed class LsrWithCarryEmitter : ShiftWithCarryEmitter
+{
+    public override string OpName => "lsr_with_c";
+    protected override (LLVMValueRef value, LLVMValueRef carry) Compute(
+        EmitContext ctx, LLVMValueRef value, LLVMValueRef amountFull, LLVMValueRef amountIsZero)
+    {
+        var amount31 = ctx.Builder.BuildAnd(amountFull, ctx.ConstU32(31), "lsr_amt31");
+        var safeAmt  = ctx.Builder.BuildSelect(amountIsZero, ctx.ConstU32(1), amount31, "lsr_safe_amt");
+        var shifted  = ctx.Builder.BuildLShr(value, safeAmt, "lsr_shifted");
+        var carryShr = ctx.Builder.BuildSub(safeAmt, ctx.ConstU32(1), "lsr_carry_shr");
+        var carryRaw = ctx.Builder.BuildLShr(value, carryShr, "lsr_carry_pre");
+        var carryNorm = ctx.Builder.BuildAnd(carryRaw, ctx.ConstU32(1), "lsr_carry_norm");
+
+        var amountGT32 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, amountFull, ctx.ConstU32(32), "lsr_amt_gt32");
+        var amountGE32 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, amountFull, ctx.ConstU32(32), "lsr_amt_ge32");
+
+        var bit31 = ctx.Builder.BuildLShr(value, ctx.ConstU32(31), "lsr_bit31");
+        var carryForGE32 = ctx.Builder.BuildSelect(amountGT32, ctx.ConstU32(0), bit31, "lsr_carry_ge32");
+        var carryForNZ = ctx.Builder.BuildSelect(amountGE32, carryForGE32, carryNorm, "lsr_carry_nz");
+
+        var resultForNZ = ctx.Builder.BuildSelect(amountGE32, ctx.ConstU32(0), shifted, "lsr_result_nz");
+
+        var cpsrC = CarryReader.ReadCarryIn(ctx);
+        var result = ctx.Builder.BuildSelect(amountIsZero, value, resultForNZ, "lsr_result");
+        var carry  = ctx.Builder.BuildSelect(amountIsZero, cpsrC, carryForNZ,  "lsr_carry");
+        return (result, carry);
+    }
+}
+
+internal sealed class AsrWithCarryEmitter : ShiftWithCarryEmitter
+{
+    public override string OpName => "asr_with_c";
+    protected override (LLVMValueRef value, LLVMValueRef carry) Compute(
+        EmitContext ctx, LLVMValueRef value, LLVMValueRef amountFull, LLVMValueRef amountIsZero)
+    {
+        // ARM7TDMI ASR: amount in [1,31] → normal; amount >= 32 → sign-fill (0 or 0xFFFFFFFF), carry = bit 31.
+        var amount31 = ctx.Builder.BuildAnd(amountFull, ctx.ConstU32(31), "asr_amt31");
+        var safeAmt  = ctx.Builder.BuildSelect(amountIsZero, ctx.ConstU32(1), amount31, "asr_safe_amt");
+        var shifted  = ctx.Builder.BuildAShr(value, safeAmt, "asr_shifted");
+        var carryShr = ctx.Builder.BuildSub(safeAmt, ctx.ConstU32(1), "asr_carry_shr");
+        var carryRaw = ctx.Builder.BuildLShr(value, carryShr, "asr_carry_pre");
+        var carryNorm = ctx.Builder.BuildAnd(carryRaw, ctx.ConstU32(1), "asr_carry_norm");
+
+        var amountGE32 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, amountFull, ctx.ConstU32(32), "asr_amt_ge32");
+        var bit31 = ctx.Builder.BuildLShr(value, ctx.ConstU32(31), "asr_bit31");
+        var signFill = ctx.Builder.BuildAShr(value, ctx.ConstU32(31), "asr_sign_fill");
+
+        var resultForNZ = ctx.Builder.BuildSelect(amountGE32, signFill, shifted, "asr_result_nz");
+        var carryForNZ  = ctx.Builder.BuildSelect(amountGE32, bit31, carryNorm, "asr_carry_nz");
+
+        var cpsrC = CarryReader.ReadCarryIn(ctx);
+        var result = ctx.Builder.BuildSelect(amountIsZero, value, resultForNZ, "asr_result");
+        var carry  = ctx.Builder.BuildSelect(amountIsZero, cpsrC, carryForNZ,  "asr_carry");
+        return (result, carry);
+    }
+}
+
+internal sealed class RorWithCarryEmitter : ShiftWithCarryEmitter
+{
+    public override string OpName => "ror_with_c";
+    protected override (LLVMValueRef value, LLVMValueRef carry) Compute(
+        EmitContext ctx, LLVMValueRef value, LLVMValueRef amountFull, LLVMValueRef amountIsZero)
+    {
+        // ROR by register uses amount mod 32. If amount % 32 == 0 (and amount != 0):
+        // result = value, carry = bit 31 of value.
+        var amountMod32 = ctx.Builder.BuildAnd(amountFull, ctx.ConstU32(31), "ror_amt_mod32");
+        var modIsZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, amountMod32, ctx.ConstU32(0), "ror_mod_eq0");
+
+        // Normal rotation: value rotated right by amountMod32 (when mod != 0).
+        var safeAmt = ctx.Builder.BuildSelect(modIsZero, ctx.ConstU32(1), amountMod32, "ror_safe_amt");
+        var rightPart = ctx.Builder.BuildLShr(value, safeAmt, "ror_right");
+        var leftShift = ctx.Builder.BuildSub(ctx.ConstU32(32), safeAmt, "ror_left_shift");
+        var leftPart  = ctx.Builder.BuildShl(value, leftShift, "ror_left");
+        var rotated   = ctx.Builder.BuildOr(rightPart, leftPart, "ror_rotated");
+
+        var carryShr = ctx.Builder.BuildSub(safeAmt, ctx.ConstU32(1), "ror_carry_shr");
+        var carryRaw = ctx.Builder.BuildLShr(value, carryShr, "ror_carry_pre");
+        var carryNorm = ctx.Builder.BuildAnd(carryRaw, ctx.ConstU32(1), "ror_carry_norm");
+
+        // amount mod 32 == 0 (amount != 0): result = value, carry = bit31
+        var bit31 = ctx.Builder.BuildLShr(value, ctx.ConstU32(31), "ror_bit31");
+        var resultForNZ = ctx.Builder.BuildSelect(modIsZero, value, rotated, "ror_result_nz");
+        var carryForNZ  = ctx.Builder.BuildSelect(modIsZero, bit31, carryNorm, "ror_carry_nz");
+
+        var cpsrC = CarryReader.ReadCarryIn(ctx);
+        var result = ctx.Builder.BuildSelect(amountIsZero, value, resultForNZ, "ror_result");
+        var carry  = ctx.Builder.BuildSelect(amountIsZero, cpsrC, carryForNZ,  "ror_carry");
+        return (result, carry);
     }
 }
 

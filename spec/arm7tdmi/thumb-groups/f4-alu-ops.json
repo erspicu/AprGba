@@ -38,8 +38,7 @@
           "steps": [
             { "op": "read_reg", "index": "rd", "out": "rd_val" },
             { "op": "read_reg", "index": "rs", "out": "rs_val" },
-            { "op": "and", "in": ["rs_val", { "const": 255 }], "out": "shift_amt" },
-            { "op": "shl", "in": ["rd_val", "shift_amt"], "out": "result" },
+            { "op": "lsl_with_c", "in": ["rd_val", "rs_val"], "out": "result" },
             { "op": "write_reg", "index": "rd", "value": "result" },
             { "op": "update_nz", "value": "result" }
           ]
@@ -49,8 +48,7 @@
           "steps": [
             { "op": "read_reg", "index": "rd", "out": "rd_val" },
             { "op": "read_reg", "index": "rs", "out": "rs_val" },
-            { "op": "and", "in": ["rs_val", { "const": 255 }], "out": "shift_amt" },
-            { "op": "lsr", "in": ["rd_val", "shift_amt"], "out": "result" },
+            { "op": "lsr_with_c", "in": ["rd_val", "rs_val"], "out": "result" },
             { "op": "write_reg", "index": "rd", "value": "result" },
             { "op": "update_nz", "value": "result" }
           ]
@@ -60,8 +58,7 @@
           "steps": [
             { "op": "read_reg", "index": "rd", "out": "rd_val" },
             { "op": "read_reg", "index": "rs", "out": "rs_val" },
-            { "op": "and", "in": ["rs_val", { "const": 255 }], "out": "shift_amt" },
-            { "op": "asr", "in": ["rd_val", "shift_amt"], "out": "result" },
+            { "op": "asr_with_c", "in": ["rd_val", "rs_val"], "out": "result" },
             { "op": "write_reg", "index": "rd", "value": "result" },
             { "op": "update_nz", "value": "result" }
           ]
@@ -95,8 +92,7 @@
           "steps": [
             { "op": "read_reg", "index": "rd", "out": "rd_val" },
             { "op": "read_reg", "index": "rs", "out": "rs_val" },
-            { "op": "and", "in": ["rs_val", { "const": 255 }], "out": "shift_amt" },
-            { "op": "ror", "in": ["rd_val", "shift_amt"], "out": "result" },
+            { "op": "ror_with_c", "in": ["rd_val", "rs_val"], "out": "result" },
             { "op": "write_reg", "index": "rd", "value": "result" },
             { "op": "update_nz", "value": "result" }
           ]
