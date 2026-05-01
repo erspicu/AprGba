@@ -80,17 +80,38 @@ public sealed unsafe class SpecCompiler
             var fb = new InstructionFunctionBuilder(module, layout, registry, resolverRegistry);
 
             foreach (var format in table.Formats)
-            foreach (var def in format.Instructions)
             {
-                try
+                // Disambiguate the function key when a single format declares
+                // multiple instructions sharing a mnemonic (e.g. Thumb F2 has
+                // two ADDs and two SUBs distinguished only by selector value).
+                // Without this, a second registration silently overwrites the
+                // first in the dictionary AND collides on the LLVM module
+                // function name.
+                var mnemonicCounts = format.Instructions
+                    .GroupBy(d => d.Mnemonic, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+                foreach (var def in format.Instructions)
                 {
-                    var fn = fb.Build(set, format, def);
-                    functions[$"{setName}.{format.Name}.{def.Mnemonic}"] = fn;
-                }
-                catch (Exception ex)
-                {
-                    diagnostics.Add(
-                        $"[{setName}.{format.Name}.{def.Mnemonic}] emission failed: {ex.Message}");
+                    var ambiguousMnemonic = mnemonicCounts.TryGetValue(def.Mnemonic, out var c) && c > 1;
+                    var keySuffix = ambiguousMnemonic && def.Selector is not null
+                        ? $".{def.Mnemonic}_{def.Selector.Value}"
+                        : $".{def.Mnemonic}";
+                    var key = $"{setName}.{format.Name}{keySuffix}";
+
+                    try
+                    {
+                        // Pass an LLVM-safe disambiguating name through to the builder.
+                        var fn = fb.Build(set, format, def,
+                            ambiguousMnemonic && def.Selector is not null
+                                ? $"{def.Mnemonic}_{def.Selector.Value}"
+                                : def.Mnemonic);
+                        functions[key] = fn;
+                    }
+                    catch (Exception ex)
+                    {
+                        diagnostics.Add($"[{key}] emission failed: {ex.Message}");
+                    }
                 }
             }
         }

@@ -1,0 +1,189 @@
+{
+  "name": "Thumb_F4_AluOps",
+  "comment": "010000 oooo sss ddd  — 16 ALU operations between Rd and Rs. Auto-updates flags. Carry-out for shift ops (LSL/LSR/ASR/ROR) approximated (full Barrel-Shifter carry semantics deferred).",
+  "formats": [
+    {
+      "name":    "Thumb_F4_AluOps",
+      "pattern": "010000_oooo_sss_ddd",
+      "fields": {
+        "opcode": "9:6",
+        "rs":     "5:3",
+        "rd":     "2:0"
+      },
+      "mask":  "0xFC00",
+      "match": "0x4000",
+      "instructions": [
+        { "selector": { "field": "opcode", "value": "0000" }, "mnemonic": "AND",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "and", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "0001" }, "mnemonic": "EOR",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "xor", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "0010" }, "mnemonic": "LSL",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S+1I" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "and", "in": ["rs_val", { "const": 255 }], "out": "shift_amt" },
+            { "op": "shl", "in": ["rd_val", "shift_amt"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "0011" }, "mnemonic": "LSR",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S+1I" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "and", "in": ["rs_val", { "const": 255 }], "out": "shift_amt" },
+            { "op": "lsr", "in": ["rd_val", "shift_amt"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "0100" }, "mnemonic": "ASR",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S+1I" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "and", "in": ["rs_val", { "const": 255 }], "out": "shift_amt" },
+            { "op": "asr", "in": ["rd_val", "shift_amt"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "0101" }, "mnemonic": "ADC",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "adc", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" },
+            { "op": "update_c_add_carry", "in": ["rd_val", "rs_val", "__carry_in__"] },
+            { "op": "update_v_add",       "in": ["rd_val", "rs_val", "result"] }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "0110" }, "mnemonic": "SBC",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "sbc", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" },
+            { "op": "update_c_sub_carry", "in": ["rd_val", "rs_val", "__carry_in__"] },
+            { "op": "update_v_sub",       "in": ["rd_val", "rs_val", "result"] }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "0111" }, "mnemonic": "ROR",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S+1I" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "and", "in": ["rs_val", { "const": 255 }], "out": "shift_amt" },
+            { "op": "ror", "in": ["rd_val", "shift_amt"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "1000" }, "mnemonic": "TST",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "and", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "1001" }, "mnemonic": "NEG",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "comment": "NEG Rd, Rs  ==  Rd = 0 - Rs  (RSB-style)",
+          "steps": [
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "sub", "in": [{ "const": 0 }, "rs_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz",    "value": "result" },
+            { "op": "update_c_sub", "in": [{ "const": 0 }, "rs_val"] },
+            { "op": "update_v_sub", "in": [{ "const": 0 }, "rs_val", "result"] }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "1010" }, "mnemonic": "CMP",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "sub", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "update_nz",    "value": "result" },
+            { "op": "update_c_sub", "in": ["rd_val", "rs_val"] },
+            { "op": "update_v_sub", "in": ["rd_val", "rs_val", "result"] }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "1011" }, "mnemonic": "CMN",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "add", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "update_nz",    "value": "result" },
+            { "op": "update_c_add", "in": ["rd_val", "rs_val"] },
+            { "op": "update_v_add", "in": ["rd_val", "rs_val", "result"] }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "1100" }, "mnemonic": "ORR",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "or", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "1101" }, "mnemonic": "MUL",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S+nI", "computed_at": "runtime" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "mul", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "1110" }, "mnemonic": "BIC",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "bic", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        },
+        { "selector": { "field": "opcode", "value": "1111" }, "mnemonic": "MVN",
+          "since": "ARMv4T", "writes_pc": "never", "cycles": { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "mvn", "in": ["rs_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" }
+          ]
+        }
+      ]
+    }
+  ]
+}

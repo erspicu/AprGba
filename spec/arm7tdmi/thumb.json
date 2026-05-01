@@ -9,14 +9,11 @@
   "$comment_no_global_condition": "Thumb-1 has no per-instruction condition field; only Branch (Format 16) carries a 4-bit cond.",
   "decode_strategy": "mask_match_priority",
   "encoding_groups": [
-    {
-      "$include": "thumb-groups/f1-move-shifted-register.json"
-    },
-    {
-      "$include": "thumb-groups/f3-mov-cmp-add-sub-imm.json"
-    },
-    {
-      "$include": "thumb-groups/f18-unconditional-branch.json"
-    }
+    { "$include": "thumb-groups/f2-add-sub.json" },
+    { "$include": "thumb-groups/f1-move-shifted-register.json" },
+    { "$include": "thumb-groups/f3-mov-cmp-add-sub-imm.json" },
+    { "$include": "thumb-groups/f4-alu-ops.json" },
+    { "$include": "thumb-groups/f5-hi-register-ops.json" },
+    { "$include": "thumb-groups/f18-unconditional-branch.json" }
   ]
 }
