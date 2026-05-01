@@ -14,6 +14,12 @@
     { "$include": "thumb-groups/f3-mov-cmp-add-sub-imm.json" },
     { "$include": "thumb-groups/f4-alu-ops.json" },
     { "$include": "thumb-groups/f5-hi-register-ops.json" },
+    { "$include": "thumb-groups/f6-pc-relative-load.json" },
+    { "$include": "thumb-groups/f7-load-store-reg-offset.json" },
+    { "$include": "thumb-groups/f8-sign-extended.json" },
+    { "$include": "thumb-groups/f9-load-store-imm-offset.json" },
+    { "$include": "thumb-groups/f10-load-store-halfword.json" },
+    { "$include": "thumb-groups/f11-sp-relative.json" },
     { "$include": "thumb-groups/f18-unconditional-branch.json" }
   ]
 }
