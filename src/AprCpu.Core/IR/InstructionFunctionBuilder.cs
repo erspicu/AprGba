@@ -90,11 +90,13 @@ public sealed unsafe class InstructionFunctionBuilder
         ctx.Builder.BuildCondBr(isAlways, execBlock, checkBlock);
 
         // The non-AL path: for now only supports EQ/NE; otherwise we conservatively
-        // fall through to execute. A complete cond table is a future task.
+        // fall through to execute. A complete cond table lands in R4 (2.6).
         ctx.Builder.PositionAtEnd(checkBlock);
-        var cpsr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ctx.Layout.GepCpsr(ctx.Builder, ctx.StatePtr), "cpsr");
+        var zBitIndex = ctx.Layout.GetStatusFlagBitIndex("CPSR", "Z");
+        var cpsr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32,
+            ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR"), "cpsr");
         var zBit = ctx.Builder.BuildAnd(
-            ctx.Builder.BuildLShr(cpsr, ctx.ConstU32(CpuStateLayout.CpsrBit_Z), "cpsr_z_shr"),
+            ctx.Builder.BuildLShr(cpsr, ctx.ConstU32((uint)zBitIndex), "cpsr_z_shr"),
             ctx.ConstU32(1), "cpsr_z");
 
         var isEq = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, cond, ctx.ConstU32(0b0000), "is_eq");

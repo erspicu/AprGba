@@ -154,30 +154,49 @@ internal sealed class Binary : IMicroOpEmitter
 /// <summary>Common helpers for writing CPSR bits.</summary>
 internal static class CpsrHelpers
 {
-    public static void SetCpsrBit(EmitContext ctx, int bitIndex, LLVMValueRef boolValue, string label)
-    {
-        // Load CPSR
-        var cpsrPtr = ctx.Layout.GepCpsr(ctx.Builder, ctx.StatePtr);
-        var cpsr    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "cpsr_old");
+    /// <summary>
+    /// Set a single bit by spec-defined flag name (e.g. ("CPSR","N")).
+    /// Looks up the bit position via <see cref="CpuStateLayout.GetStatusFlagBitIndex"/>
+    /// so no ARM-specific constants are baked in.
+    /// </summary>
+    public static void SetStatusFlag(EmitContext ctx, string register, string flag, LLVMValueRef boolValue)
+        => SetStatusFlagAt(ctx, register, ctx.Layout.GetStatusFlagBitIndex(register, flag), boolValue, flag.ToLowerInvariant());
 
-        // bit_value (i32) = zext(i1 boolValue) << bitIndex
+    public static void SetStatusFlagFromI32Lsb(EmitContext ctx, string register, string flag, LLVMValueRef i32Value)
+        => SetStatusFlagAtFromI32Lsb(ctx, register, ctx.Layout.GetStatusFlagBitIndex(register, flag), i32Value, flag.ToLowerInvariant());
+
+    /// <summary>Convenience: read CPSR (or any status reg) bit as i32 0/1.</summary>
+    public static LLVMValueRef ReadStatusFlag(EmitContext ctx, string register, string flag)
+    {
+        var bitIndex = ctx.Layout.GetStatusFlagBitIndex(register, flag);
+        var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
+        var v   = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, $"{register.ToLowerInvariant()}_for_{flag.ToLowerInvariant()}");
+        var sh  = ctx.Builder.BuildLShr(v, ctx.ConstU32((uint)bitIndex), $"{flag.ToLowerInvariant()}_shr");
+        return ctx.Builder.BuildAnd(sh, ctx.ConstU32(1), $"{flag.ToLowerInvariant()}_bit");
+    }
+
+    private static void SetStatusFlagAt(EmitContext ctx, string register, int bitIndex, LLVMValueRef boolValue, string label)
+    {
+        var ptr  = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
+        var prev = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, $"{register.ToLowerInvariant()}_old");
+
         var asI32   = ctx.Builder.BuildZExt(boolValue, LLVMTypeRef.Int32, $"{label}_asi32");
         var shifted = ctx.Builder.BuildShl (asI32, ctx.ConstU32((uint)bitIndex), $"{label}_shifted");
 
-        // mask out the old bit
         var clearMask = ctx.ConstU32(~(1u << bitIndex));
-        var cleared = ctx.Builder.BuildAnd(cpsr, clearMask, $"cpsr_clear_{label}");
-        var newCpsr = ctx.Builder.BuildOr (cleared, shifted, $"cpsr_set_{label}");
-        ctx.Builder.BuildStore(newCpsr, cpsrPtr);
+        var cleared   = ctx.Builder.BuildAnd(prev, clearMask, $"{register.ToLowerInvariant()}_clear_{label}");
+        var newV      = ctx.Builder.BuildOr (cleared, shifted, $"{register.ToLowerInvariant()}_set_{label}");
+        ctx.Builder.BuildStore(newV, ptr);
     }
 
-    public static void SetCpsrBitFromI32Lsb(EmitContext ctx, int bitIndex, LLVMValueRef i32Value, string label)
+    private static void SetStatusFlagAtFromI32Lsb(EmitContext ctx, string register, int bitIndex, LLVMValueRef i32Value, string label)
     {
-        // Treat low bit of i32Value as the bit to write.
         var lowBit = ctx.Builder.BuildAnd(i32Value, ctx.ConstU32(1), $"{label}_lsb");
         var asBool = ctx.Builder.BuildTrunc(lowBit, LLVMTypeRef.Int1, $"{label}_b");
-        SetCpsrBit(ctx, bitIndex, asBool, label);
+        SetStatusFlagAt(ctx, register, bitIndex, asBool, label);
     }
+
+
 }
 
 internal sealed class UpdateNz : IMicroOpEmitter
@@ -193,8 +212,8 @@ internal sealed class UpdateNz : IMicroOpEmitter
         // Z = value == 0
         var zBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, value, ctx.ConstU32(0), "z_test");
 
-        CpsrHelpers.SetCpsrBit(ctx, CpuStateLayout.CpsrBit_N, nBool, "n");
-        CpsrHelpers.SetCpsrBit(ctx, CpuStateLayout.CpsrBit_Z, zBool, "z");
+        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "N", nBool);
+        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "Z", zBool);
     }
 }
 
@@ -209,7 +228,7 @@ internal sealed class UpdateCAdd : IMicroOpEmitter
         // Carry-out for unsigned add = (a + b) > MAX, equivalently (a + b) < a (wrap).
         var sum = ctx.Builder.BuildAdd(a, b, "c_add_sum");
         var cBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntULT, sum, a, "c_add_test");
-        CpsrHelpers.SetCpsrBit(ctx, CpuStateLayout.CpsrBit_C, cBool, "c");
+        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "C", cBool);
     }
 }
 
@@ -222,7 +241,7 @@ internal sealed class UpdateCSub : IMicroOpEmitter
         var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
         // ARM C for SUB = NOT borrow = (a >= b)
         var cBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, a, b, "c_sub_test");
-        CpsrHelpers.SetCpsrBit(ctx, CpuStateLayout.CpsrBit_C, cBool, "c");
+        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "C", cBool);
     }
 }
 
@@ -239,7 +258,7 @@ internal sealed class UpdateVAdd : IMicroOpEmitter
         var bXor = ctx.Builder.BuildXor(b, res, "v_add_bxor");
         var both = ctx.Builder.BuildAnd(aXor, bXor, "v_add_and");
         var top  = ctx.Builder.BuildLShr(both, ctx.ConstU32(31), "v_add_top");
-        CpsrHelpers.SetCpsrBitFromI32Lsb(ctx, CpuStateLayout.CpsrBit_V, top, "v");
+        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "V", top);
     }
 }
 
@@ -256,7 +275,7 @@ internal sealed class UpdateVSub : IMicroOpEmitter
         var ares = ctx.Builder.BuildXor(a, res, "v_sub_ares");
         var both = ctx.Builder.BuildAnd(ab, ares, "v_sub_and");
         var top  = ctx.Builder.BuildLShr(both, ctx.ConstU32(31), "v_sub_top");
-        CpsrHelpers.SetCpsrBitFromI32Lsb(ctx, CpuStateLayout.CpsrBit_V, top, "v");
+        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "V", top);
     }
 }
 
@@ -267,7 +286,7 @@ internal sealed class UpdateCShifter : IMicroOpEmitter
     {
         // step.in[0] = name of pre-computed shifter_carry_out (i32 0/1)
         var v = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        CpsrHelpers.SetCpsrBitFromI32Lsb(ctx, CpuStateLayout.CpsrBit_C, v, "c_shf");
+        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "C", v);
     }
 }
 
@@ -289,7 +308,7 @@ internal sealed class UpdateCAddCarry : IMicroOpEmitter
         var sum = ctx.Builder.BuildAdd(ctx.Builder.BuildAdd(aL, bL, "ab_l"), cL, "abc_l");
         var hi  = ctx.Builder.BuildLShr(sum, LLVMValueRef.CreateConstInt(i64, 32, false), "carry_hi");
         var hi32 = ctx.Builder.BuildTrunc(hi, LLVMTypeRef.Int32, "carry_hi_i32");
-        CpsrHelpers.SetCpsrBitFromI32Lsb(ctx, CpuStateLayout.CpsrBit_C, hi32, "c_addc");
+        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "C", hi32);
     }
 }
 
@@ -307,7 +326,7 @@ internal sealed class UpdateCSubCarry : IMicroOpEmitter
         var notCin = ctx.Builder.BuildXor(cin, ctx.ConstU32(1), "not_cin");
         var bPlus  = ctx.Builder.BuildAdd(b, notCin, "b_plus");
         var cBool  = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, a, bPlus, "c_subc_test");
-        CpsrHelpers.SetCpsrBit(ctx, CpuStateLayout.CpsrBit_C, cBool, "c_subc");
+        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "C", cBool);
     }
 }
 
@@ -320,10 +339,7 @@ internal static class CarryReader
 {
     public static LLVMValueRef ReadCarryIn(EmitContext ctx)
     {
-        var cpsrPtr = ctx.Layout.GepCpsr(ctx.Builder, ctx.StatePtr);
-        var cpsr    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "cpsr_for_cin");
-        var shifted = ctx.Builder.BuildLShr(cpsr, ctx.ConstU32(CpuStateLayout.CpsrBit_C), "cin_shr");
-        return ctx.Builder.BuildAnd(shifted, ctx.ConstU32(1), "cin");
+        return CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "C");
     }
 }
 
@@ -407,15 +423,12 @@ internal sealed class ReadPsr : IMicroOpEmitter
     public string OpName => "read_psr";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        // Phase 2.5 first iteration: only CPSR is supported; SPSR will be
-        // handled once banked-register swap lands in 2.5.7.
+        // SPSR is mode-banked; banked-register handling lands in R5/2.5.7,
+        // so for now we always read CPSR regardless of the `which` argument.
         var which = step.Raw.TryGetProperty("which", out var w) ? w.GetString() : "CPSR";
         var outName = StandardEmitters.GetOut(step.Raw);
-        if (which != "CPSR")
-        {
-            // Stub: just read CPSR for now.
-        }
-        var ptr = ctx.Layout.GepCpsr(ctx.Builder, ctx.StatePtr);
+        var target = which == "SPSR" ? "CPSR" : (which ?? "CPSR");
+        var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, target);
         var v = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, outName);
         ctx.Values[outName] = v;
     }
@@ -444,11 +457,10 @@ internal sealed class WritePsr : IMicroOpEmitter
         }
 
         var which = step.Raw.TryGetProperty("which", out var w) ? w.GetString() : "CPSR";
-        var ptr = ctx.Layout.GepCpsr(ctx.Builder, ctx.StatePtr);
-        if (which != "CPSR")
-        {
-            // SPSR write — Phase 2.5 stub: still target CPSR slot.
-        }
+        // SPSR is mode-banked (lands in 2.5.7); for now route SPSR writes
+        // to CPSR slot to keep the pipeline going.
+        var target = which == "SPSR" ? "CPSR" : (which ?? "CPSR");
+        var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, target);
 
         if (maskBits == 0xFFFFFFFFu)
         {
@@ -556,7 +568,7 @@ internal sealed class Branch : IMicroOpEmitter
         {
             // BX semantics: target's bit 0 selects Thumb (CPSR.T <- bit 0); aligned target written to PC.
             var bit0 = ctx.Builder.BuildAnd(target, ctx.ConstU32(1), "bx_bit0");
-            CpsrHelpers.SetCpsrBitFromI32Lsb(ctx, CpuStateLayout.CpsrBit_T, bit0, "t");
+            CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "T", bit0);
 
             var alignMask = ctx.ConstU32(0xFFFFFFFEu);
             var aligned   = ctx.Builder.BuildAnd(target, alignMask, "bx_aligned");
@@ -574,10 +586,9 @@ internal sealed class RestoreCpsrFromSpsr : IMicroOpEmitter
     public string OpName => "restore_cpsr_from_spsr";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        // Phase 2 stub: emit a no-op marker (extract+ignore CPSR). The
-        // proper behaviour requires mode-aware SPSR selection; we will fill
-        // it in once banked-register handling lands in a later phase.
-        var cpsrPtr = ctx.Layout.GepCpsr(ctx.Builder, ctx.StatePtr);
+        // Phase 2 stub: emit a no-op marker (extract+ignore CPSR). Proper
+        // behaviour needs mode-aware SPSR selection; lands in 2.5.7.
+        var cpsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR");
         var _ = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "cpsr_stub_load");
     }
 }
