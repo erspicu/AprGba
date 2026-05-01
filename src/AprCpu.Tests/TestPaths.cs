@@ -8,8 +8,9 @@ namespace AprCpu.Tests;
 internal static class TestPaths
 {
     public static string RepoRoot { get; } = ResolveRepoRoot();
-    public static string SpecRoot => Path.Combine(RepoRoot, "spec");
-    public static string TempRoot => Path.Combine(RepoRoot, "temp");
+    public static string SpecRoot     => Path.Combine(RepoRoot, "spec");
+    public static string TempRoot     => Path.Combine(RepoRoot, "temp");
+    public static string TestRomsRoot => Path.Combine(RepoRoot, "test-roms");
 
     private static string ResolveRepoRoot()
     {
