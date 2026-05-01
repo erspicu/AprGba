@@ -62,6 +62,38 @@ public static class BlockTransferEmitters
         var fnType = LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32, new[] { LLVMTypeRef.Int32 });
         return module.AddFunction(name, fnType);
     }
+
+    /// <summary>
+    /// Global pointer slots for the host-bound user-mode register access
+    /// functions. Used by block_load/block_store when the S-bit is set
+    /// (LDM/STM with the <c>^</c> suffix).
+    /// </summary>
+    internal static (LLVMValueRef Slot, LLVMTypeRef FnType, LLVMTypeRef PtrType)
+        GetUserRegReadSlot(LLVMModuleRef module, LLVMTypeRef statePtrType)
+    {
+        const string name = "host_user_reg_read";
+        var fnType  = LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32, new[] { statePtrType, LLVMTypeRef.Int32 });
+        var ptrType = LLVMTypeRef.CreatePointer(fnType, 0);
+        var existing = module.GetNamedGlobal(name);
+        if (existing.Handle != IntPtr.Zero) return (existing, fnType, ptrType);
+        var slot = module.AddGlobal(ptrType, name);
+        slot.Linkage = LLVMLinkage.LLVMExternalLinkage;
+        return (slot, fnType, ptrType);
+    }
+
+    internal static (LLVMValueRef Slot, LLVMTypeRef FnType, LLVMTypeRef PtrType)
+        GetUserRegWriteSlot(LLVMModuleRef module, LLVMTypeRef statePtrType)
+    {
+        const string name = "host_user_reg_write";
+        var fnType  = LLVMTypeRef.CreateFunction(module.Context.VoidType,
+            new[] { statePtrType, LLVMTypeRef.Int32, LLVMTypeRef.Int32 });
+        var ptrType = LLVMTypeRef.CreatePointer(fnType, 0);
+        var existing = module.GetNamedGlobal(name);
+        if (existing.Handle != IntPtr.Zero) return (existing, fnType, ptrType);
+        var slot = module.AddGlobal(ptrType, name);
+        slot.Linkage = LLVMLinkage.LLVMExternalLinkage;
+        return (slot, fnType, ptrType);
+    }
 }
 
 /// <summary>
@@ -181,6 +213,13 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
             ctx.Module, MemoryEmitters.ExternFunctionNames.Read32,
             LLVMTypeRef.Int32, LLVMTypeRef.Int32);
 
+        var sBit = step.Raw.TryGetProperty("s_field", out var sFE)
+            ? ctx.Resolve(sFE.GetString()!)
+            : ctx.ConstU32(0);
+        var sIsSet = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, sBit, ctx.ConstU32(0), "blkl_s_is1");
+        var (userWriteSlot, userWriteType, userWritePtrType) =
+            BlockTransferEmitters.GetUserRegWriteSlot(ctx.Module, ctx.Layout.PointerType);
+
         for (int i = 0; i < 16; i++)
         {
             var bit = ctx.Builder.BuildAnd(
@@ -196,8 +235,25 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
             var curAddr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, addrSlot, $"blkl_a{i}");
             var read32Fn = ctx.Builder.BuildLoad2(read32PtrType, read32Slot, $"blkl_read32_{i}");
             var loaded  = ctx.Builder.BuildCall2(read32Type, read32Fn, new[] { curAddr }, $"blkl_v{i}");
-            var rPtr    = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
+
+            // Conditional write: if S=1 → user-mode reg write, else visible.
+            var userWriteBB    = ctx.Function.AppendBasicBlock($"blkl_{i}_user");
+            var visibleWriteBB = ctx.Function.AppendBasicBlock($"blkl_{i}_vis");
+            var afterWriteBB   = ctx.Function.AppendBasicBlock($"blkl_{i}_afterw");
+            ctx.Builder.BuildCondBr(sIsSet, userWriteBB, visibleWriteBB);
+
+            ctx.Builder.PositionAtEnd(userWriteBB);
+            var userWriteFn = ctx.Builder.BuildLoad2(userWritePtrType, userWriteSlot, $"blkl_uwrite_{i}");
+            ctx.Builder.BuildCall2(userWriteType, userWriteFn,
+                new[] { ctx.StatePtr, ctx.ConstU32((uint)i), loaded }, "");
+            ctx.Builder.BuildBr(afterWriteBB);
+
+            ctx.Builder.PositionAtEnd(visibleWriteBB);
+            var rPtr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
             ctx.Builder.BuildStore(loaded, rPtr);
+            ctx.Builder.BuildBr(afterWriteBB);
+
+            ctx.Builder.PositionAtEnd(afterWriteBB);
             var nextAddr = ctx.Builder.BuildAdd(curAddr, ctx.ConstU32(4), $"blkl_a{i}_next");
             ctx.Builder.BuildStore(nextAddr, addrSlot);
 
@@ -223,6 +279,14 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
             ctx.Module, MemoryEmitters.ExternFunctionNames.Write32,
             ctx.Module.Context.VoidType, LLVMTypeRef.Int32, LLVMTypeRef.Int32);
 
+        // S-bit (user-mode register access) — optional. Default 0 = visible regs.
+        var sBit = step.Raw.TryGetProperty("s_field", out var sFE)
+            ? ctx.Resolve(sFE.GetString()!)
+            : ctx.ConstU32(0);
+        var sIsSet = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, sBit, ctx.ConstU32(0), "blks_s_is1");
+        var (userReadSlot, userReadType, userReadPtrType) =
+            BlockTransferEmitters.GetUserRegReadSlot(ctx.Module, ctx.Layout.PointerType);
+
         for (int i = 0; i < 16; i++)
         {
             var bit = ctx.Builder.BuildAnd(
@@ -236,16 +300,20 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
             ctx.Builder.PositionAtEnd(thenBB);
 
             var curAddr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, addrSlot, $"blks_a{i}");
-            var rPtr    = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
-            var rVal    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, rPtr, $"blks_r{i}");
-            // ARM7TDMI quirk: storing R15 in block transfer pushes PC + 12,
-            // i.e. R15 read value + 4. (R15 read = current_inst + 8;
-            // stored = current_inst + 12.)
-            var rValAdjusted = i == 15
-                ? ctx.Builder.BuildAdd(rVal, ctx.ConstU32(4), $"blks_r{i}_pc")
-                : rVal;
+            // Visible R[i] read.
+            var rPtr        = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
+            var visibleVal  = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, rPtr, $"blks_r{i}");
+            // User-mode R[i] read via host extern (only meaningful when S=1).
+            var userReadFn  = ctx.Builder.BuildLoad2(userReadPtrType, userReadSlot, $"blks_uread_{i}");
+            var userVal     = ctx.Builder.BuildCall2(userReadType, userReadFn,
+                new[] { ctx.StatePtr, ctx.ConstU32((uint)i) }, $"blks_user{i}");
+            var chosen      = ctx.Builder.BuildSelect(sIsSet, userVal, visibleVal, $"blks_chosen{i}");
+            // ARM7TDMI quirk: storing R15 in block transfer pushes PC + 12.
+            var chosenAdj   = i == 15
+                ? ctx.Builder.BuildAdd(chosen, ctx.ConstU32(4), $"blks_r{i}_pc")
+                : chosen;
             var write32Fn = ctx.Builder.BuildLoad2(write32PtrType, write32Slot, $"blks_write32_{i}");
-            ctx.Builder.BuildCall2(write32Type, write32Fn, new[] { curAddr, rValAdjusted }, "");
+            ctx.Builder.BuildCall2(write32Type, write32Fn, new[] { curAddr, chosenAdj }, "");
             var nextAddr = ctx.Builder.BuildAdd(curAddr, ctx.ConstU32(4), $"blks_a{i}_next");
             ctx.Builder.BuildStore(nextAddr, addrSlot);
 

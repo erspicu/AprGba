@@ -244,6 +244,18 @@ internal sealed class WritePsr : IMicroOpEmitter
     {
         var valueName = step.Raw.GetProperty("value").GetString()!;
         var value = ctx.Resolve(valueName);
+        var which = step.Raw.TryGetProperty("which", out var wEl) ? wEl.GetString() : "CPSR";
+        var isCpsr = which == "CPSR" || which is null;
+
+        // Capture old CPSR mode bits BEFORE write so we can detect mode
+        // change after the masked store completes.
+        var cpsrPtrEarly = isCpsr ? ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR") : default;
+        LLVMValueRef oldMode = default;
+        if (isCpsr)
+        {
+            var oldCpsr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtrEarly, "psr_old_for_modecheck");
+            oldMode = ctx.Builder.BuildAnd(oldCpsr, ctx.ConstU32(0x1F), "psr_old_mode");
+        }
 
         // Static mask form: { "mask": <constant> } — used by callers who
         // know at compile time which bits to update.
@@ -295,7 +307,6 @@ internal sealed class WritePsr : IMicroOpEmitter
             runtimeMask = accum;
         }
 
-        var which = step.Raw.TryGetProperty("which", out var w) ? w.GetString() : "CPSR";
         var target = which == "SPSR" ? "CPSR" : (which ?? "CPSR");
         var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, target);
 
@@ -319,6 +330,20 @@ internal sealed class WritePsr : IMicroOpEmitter
             var inV  = ctx.Builder.BuildAnd(value, ctx.ConstU32( maskBits), "psr_in");
             var newV = ctx.Builder.BuildOr (keep, inV, "psr_new");
             ctx.Builder.BuildStore(newV, ptr);
+        }
+
+        // CPSR mode-change → invoke host_swap_register_bank so banked R8-R14
+        // get re-shuffled. Only emit when writing CPSR (SPSR writes never
+        // affect the visible register file). Comparison is runtime; if
+        // oldMode == newMode the swap is a no-op inside the handler.
+        if (isCpsr)
+        {
+            var newCpsr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, "psr_new_for_modecheck");
+            var newMode = ctx.Builder.BuildAnd(newCpsr, ctx.ConstU32(0x1F), "psr_new_mode");
+            var (swapSlot, swapType, swapPtrType) = HostHelpers.GetSwapRegisterBankSlot(ctx.Module, ctx.Layout.PointerType);
+            var loadedSwap = ctx.Builder.BuildLoad2(swapPtrType, swapSlot, "psr_swap_fn");
+            ctx.Builder.BuildCall2(swapType, loadedSwap,
+                new[] { ctx.StatePtr, oldMode, newMode }, "");
         }
     }
 }

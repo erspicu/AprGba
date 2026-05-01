@@ -38,7 +38,8 @@
               "base_field": "rn",
               "p_field": "p_bit",
               "u_field": "u_bit",
-              "w_field": "w_bit"
+              "w_field": "w_bit",
+              "s_field": "s_bit"
             }
           ]
         }
@@ -82,7 +83,8 @@
               "base_field": "rn",
               "p_field": "p_bit",
               "u_field": "u_bit",
-              "w_field": "w_bit"
+              "w_field": "w_bit",
+              "s_field": "s_bit"
             }
           ]
         }
