@@ -35,6 +35,12 @@ public sealed partial class LegacyCpu : ICpuBackend
     private int  halt_cycle;
     private bool DMA_CYCLE;
 
+    // EI delays IME enable by one instruction (LR35902 spec). Set to 2
+    // by the EI opcode; decremented at end of every instruction; when
+    // it reaches 0, flagIME flips to true. RETI (0xD9) bypasses this
+    // and enables IME immediately, which is also correct.
+    private int _eiDelay;
+
     // Per-instruction cycle counter (m-cycles); flushed to total at end of Step.
     private int _cycles;
     private long _totalCycles;
@@ -59,6 +65,7 @@ public sealed partial class LegacyCpu : ICpuBackend
         flagHalt = false;
         halt_cycle = 0;
         DMA_CYCLE = false;
+        _eiDelay = 0;
         _totalCycles = 0;
     }
 
@@ -69,16 +76,24 @@ public sealed partial class LegacyCpu : ICpuBackend
         {
             if (flagHalt)
             {
-                // Halted — just consume cycles until an enabled IRQ fires.
                 _totalCycles += 4;
                 CheckInterrupts();
-                if (flagHalt) continue;     // still halted
+                continue;
             }
             _cycles = 0;
             Step();
-            _totalCycles += _cycles;     // _cycles already in t-cycles after `*= 4`
+            _totalCycles += _cycles;     // _cycles in t-cycles after `*= 4` in Step()
+            TickEiDelay();
+            CheckInterrupts();
         }
         return _totalCycles - start;
+    }
+
+    private void TickEiDelay()
+    {
+        if (_eiDelay <= 0) return;
+        _eiDelay--;
+        if (_eiDelay == 0) flagIME = true;
     }
 
     public ushort ReadReg16(GbReg16 reg) => reg switch

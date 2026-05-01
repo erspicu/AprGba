@@ -45,8 +45,12 @@ if (bus.SerialLog.Length > 0)
 if (opts.ScreenshotPath is not null)
 {
     var ppu = new GbPpu();
-    ppu.RenderFrameStub();   // placeholder until real PPU is wired
-    PpmWriter.SavePpm(ppu.Framebuffer, GbPpu.Width, GbPpu.Height, opts.ScreenshotPath);
+    ppu.RenderFrame(bus);
+    Directory.CreateDirectory(Path.GetDirectoryName(opts.ScreenshotPath) ?? ".");
+    if (opts.ScreenshotPath.EndsWith(".ppm", StringComparison.OrdinalIgnoreCase))
+        PpmWriter.SavePpm(ppu.Framebuffer, GbPpu.Width, GbPpu.Height, opts.ScreenshotPath);
+    else
+        PngWriter.SavePng(ppu.Framebuffer, GbPpu.Width, GbPpu.Height, opts.ScreenshotPath);
     Console.WriteLine($"  screenshot: {opts.ScreenshotPath} ({GbPpu.Width}×{GbPpu.Height})");
 }
 

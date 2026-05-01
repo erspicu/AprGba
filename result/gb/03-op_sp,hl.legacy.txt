@@ -1,0 +1,16 @@
+apr-gb  Game Boy harness (DMG only; legacy + json-llvm backends)
+  ROM:        test-roms/blargg-cpu/individual/03-op sp,hl.gb
+  backend:    legacy
+  cycles:     400000000
+  screenshot: result/gb/03-op_sp,hl.legacy.png
+  loaded:     32768 bytes  title='?' cartType=0x01 romSize=0x00 ramSize=0x00 cgbFlag=0x80
+  initial PC=0x0100 SP=0xFFFE
+  ran 400000004 cycles. final PC=0xCB44 halted=False
+--- serial output (21 bytes) ---
+03-op sp,hl
+
+
+Passed
+
+--- end serial ---
+  screenshot: result/gb/03-op_sp,hl.legacy.png (160144)
