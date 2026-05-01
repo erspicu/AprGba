@@ -313,15 +313,31 @@
       "additionalProperties": false
     },
 
+    "IncludeDirective": {
+      "description": "Spec-file fragment include. The named file's parsed JSON is spliced in place of this object. Path is relative to the file containing the directive.",
+      "type": "object",
+      "required": ["$include"],
+      "properties": {
+        "$include": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+
     "EncodingGroup": {
       "type": "object",
       "required": ["name", "formats"],
       "properties": {
         "name":         { "type": "string" },
+        "comment":      { "type": "string" },
         "applies_when": { "type": "string" },
         "formats": {
           "type": "array",
-          "items": { "$ref": "#/$defs/EncodingFormat" }
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/EncodingFormat" },
+              { "$ref": "#/$defs/IncludeDirective" }
+            ]
+          }
         }
       },
       "additionalProperties": false
@@ -433,7 +449,12 @@
         "width_decision":    { "$ref": "#/$defs/WidthDecision" },
         "encoding_groups": {
           "type": "array",
-          "items": { "$ref": "#/$defs/EncodingGroup" }
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/EncodingGroup" },
+              { "$ref": "#/$defs/IncludeDirective" }
+            ]
+          }
         },
         "extends": {
           "type": "object",

@@ -13,11 +13,47 @@
 |---|---|
 | `spec/<arch_id>/cpu.json`              | CPU model 頂層（一份） |
 | `spec/<arch_id>/<set_name>.json`       | 一個 instruction set（如 `arm.json`、`thumb.json`） |
+| `spec/<arch_id>/groups/*.json`         | （可選）encoding-group 分割檔，用 `$include` 引入 |
+| `spec/<arch_id>/formats/*.json`        | （可選）更細顆粒的 format / instruction 分割 |
 | `spec/schema/cpu-spec.schema.json`     | JSON Schema validator |
 | `MD/design/0X-...md`                   | 設計文件 |
 
 `<arch_id>` 用小寫去掉版本號（`arm7tdmi`、`mos6502`）。`<set_name>` 與
 JSON `name` 欄位完全一致（`ARM`、`Thumb`）。
+
+### 1.1 何時拆分
+
+當單一 instruction-set 檔超過 ~500 行、或包含多個概念分明的 encoding
+group 時，建議拆分。每個拆分檔通常代表一個 encoding group 或一個
+format family。
+
+### 1.2 `$include` 機制
+
+任何 array 內的元素可以是 `{ "$include": "<relative-path>" }` 指令：
+
+```json
+"encoding_groups": [
+  { "$include": "groups/branch-exchange.json" },
+  { "$include": "groups/data-processing.json" },
+  { "name": "InlineGroup", "formats": [ ... ] }
+]
+```
+
+規則：
+- **路徑相對於含 directive 的檔案**（不是相對於 cwd 或 repo root）
+- **被引入檔的 root 是 array 時**：splice 進父 array（多個元素一次引入）
+- **root 是 object 時**：替換 directive 物件位置（一對一）
+- **遞迴解析**：被引入檔本身可包含更多 `$include`
+- **Cycle 偵測**：A → B → A 會被拒絕（chain-based，同檔多處引用 OK）
+- **Schema 驗證在解析後**：拆分檔片段不需要單獨通過 schema，整體合併後才驗
+
+### 1.3 拆分慣例
+
+- 用 `kebab-case` 命名拆分檔（`data-processing.json` 而非
+  `DataProcessing.json`）
+- 每個 group 檔的 root 是該 group 的完整物件 `{ "name": "...", "formats": [...] }`
+- format-level 拆分（更細）：root 通常是單一 format 物件或 format 陣列
+- 拆分檔不需要 `$schema` / `spec_version` 欄位 — 那些只在頂層有意義
 
 ---
 
