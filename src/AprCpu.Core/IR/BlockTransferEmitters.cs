@@ -331,9 +331,13 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
             var userVal     = ctx.Builder.BuildCall2(userReadType, userReadFn,
                 new[] { ctx.StatePtr, ctx.ConstU32((uint)i) }, $"blks_user{i}");
             var chosen      = ctx.Builder.BuildSelect(sIsSet, userVal, visibleVal, $"blks_chosen{i}");
-            // ARM7TDMI quirk: storing R15 in block transfer pushes PC + 12.
+            // ARM7TDMI quirk: when R15 is in the store list, the stored
+            // value is R15 read + instruction_size (= current_pc + 2 ×
+            // instr_size). For ARM that's R15 + 4 (= current_pc + 12);
+            // for Thumb it's R15 + 2 (= current_pc + 6).
+            uint instrSize = (uint)(ctx.InstructionSet.WidthBits.Fixed!.Value / 8);
             var chosenAdj   = i == 15
-                ? ctx.Builder.BuildAdd(chosen, ctx.ConstU32(4), $"blks_r{i}_pc")
+                ? ctx.Builder.BuildAdd(chosen, ctx.ConstU32(instrSize), $"blks_r{i}_pc")
                 : chosen;
 
             // ARM7TDMI quirk: if i == Rn and Rn is NOT the first register
