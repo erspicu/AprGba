@@ -1,43 +1,58 @@
 using System.Buffers.Binary;
 using AprCpu.Core.Decoder;
+using AprCpu.Core.IR;
 using AprCpu.Core.JsonSpec;
 
 namespace AprCpu.Core.Runtime;
 
 /// <summary>
-/// Phase 3.2 — fetch-decode-execute loop. Walks PC, reads the
-/// instruction word from a host <see cref="IMemoryBus"/>, decodes it
-/// via <see cref="DecoderTable"/>, and dispatches to the JIT'd function
-/// pointer for that instruction.
+/// Phase 3.2 + 4.4 — fetch-decode-execute loop.
 ///
-/// No code cache yet (Phase 7 work). Function pointers ARE cached by
-/// disambiguated name, so the second hit on the same instruction skips
-/// MCJIT's name-resolution overhead.
+/// Walks PC, reads the instruction word from a host
+/// <see cref="IMemoryBus"/>, decodes it via the appropriate
+/// <see cref="DecoderTable"/> for the CPU's <b>current instruction set</b>,
+/// and dispatches to the JIT'd function pointer.
 ///
-/// PC convention (matches what the IR emitters expect):
-/// - State.R15 (or whatever <c>register_file.general_purpose.pc_index</c>
-///   declares) holds <b>"address of currently-executing instruction +
-///   pc_offset_bytes"</b> while the JIT'd code is running.
-/// - Between Step() calls, R15 holds <b>"address of next instruction to
-///   execute"</b>.
-/// - Step() handles the +/- pc_offset_bytes adjustment around the JIT
-///   call, and detects PC writes by comparing post-execution R15 against
-///   the pre-set "current + offset" value.
+/// Supports multi-instruction-set CPUs (ARM7TDMI = ARM + Thumb) via the
+/// spec's <c>instruction_set_dispatch</c>: each <see cref="Step"/> reads
+/// the selector (e.g. <c>CPSR.T</c>) and picks the matching set's
+/// metadata (decoder, PC offset, instruction width). Mode switches
+/// happen automatically on the next step after BX writes CPSR.T.
+///
+/// No code cache yet (Phase 7 work). Function pointers are cached by
+/// disambiguated name across all instruction sets.
 /// </summary>
 public sealed unsafe class CpuExecutor
 {
-    private readonly HostRuntime          _rt;
-    private readonly InstructionSetSpec   _set;
-    private readonly DecoderTable         _decoder;
-    private readonly IMemoryBus           _bus;
-    private readonly byte[]               _state;
+    private readonly HostRuntime _rt;
+    private readonly IMemoryBus  _bus;
+    private readonly byte[]      _state;
     private readonly Dictionary<string, IntPtr> _fnPtrCache = new(StringComparer.Ordinal);
 
-    private readonly int  _pcRegIndex;
-    private readonly uint _pcOffsetBytes;
-    private readonly uint _instrSizeBytes;
-    private readonly ulong _pcSlotOffset;
+    private readonly int   _pcRegIndex;
+    private readonly ModeInfo _defaultMode;
+    private readonly Dictionary<uint, ModeInfo>? _modesBySelectorValue;
+    private readonly Func<byte[], uint>?         _readSelector;
 
+    private readonly struct ModeInfo
+    {
+        public readonly InstructionSetSpec Set;
+        public readonly DecoderTable       Decoder;
+        public readonly uint               PcOffsetBytes;
+        public readonly uint               InstrSizeBytes;
+        public ModeInfo(InstructionSetSpec set, DecoderTable decoder)
+        {
+            Set = set;
+            Decoder = decoder;
+            if (!set.WidthBits.Fixed.HasValue)
+                throw new NotSupportedException(
+                    $"Instruction set '{set.Name}' has variable width — not supported by CpuExecutor yet.");
+            InstrSizeBytes = (uint)(set.WidthBits.Fixed.Value / 8);
+            PcOffsetBytes  = (uint)set.PcOffsetBytes;
+        }
+    }
+
+    /// <summary>Single-set constructor — for tests / chips with no mode switching.</summary>
     public CpuExecutor(
         HostRuntime rt,
         InstructionSetSpec instructionSet,
@@ -45,42 +60,91 @@ public sealed unsafe class CpuExecutor
         IMemoryBus bus)
     {
         _rt = rt;
-        _set = instructionSet;
-        _decoder = decoder;
         _bus = bus;
-
-        if (!_set.WidthBits.Fixed.HasValue)
-            throw new NotSupportedException(
-                $"Instruction set '{_set.Name}' has variable width — Phase 3.2 only supports fixed-width sets.");
-        _instrSizeBytes  = (uint)(_set.WidthBits.Fixed.Value / 8);
-        _pcOffsetBytes   = (uint)_set.PcOffsetBytes;
-
-        _pcRegIndex = _rt.Layout.RegisterFile.GeneralPurpose.PcIndex
-            ?? throw new InvalidOperationException(
-                "register_file.general_purpose.pc_index must be declared in spec for the executor to know which GPR is PC.");
-
+        _defaultMode = new ModeInfo(instructionSet, decoder);
+        _pcRegIndex = ResolvePcIndex(rt);
         _state = new byte[(int)_rt.StateSizeBytes];
-        _pcSlotOffset = _rt.GprOffset(_pcRegIndex);
+    }
+
+    /// <summary>
+    /// Multi-set constructor — for ARM/Thumb-style chips. The
+    /// <paramref name="dispatch"/> tells us which selector to read
+    /// (e.g. <c>"CPSR.T"</c>) and which selector value picks which
+    /// instruction set name.
+    /// </summary>
+    public CpuExecutor(
+        HostRuntime rt,
+        IReadOnlyDictionary<string, (InstructionSetSpec Set, DecoderTable Decoder)> setsByName,
+        InstructionSetDispatch dispatch,
+        IMemoryBus bus)
+    {
+        _rt  = rt;
+        _bus = bus;
+        _pcRegIndex = ResolvePcIndex(rt);
+        _state = new byte[(int)_rt.StateSizeBytes];
+
+        // Build value→ModeInfo map from selector_values.
+        _modesBySelectorValue = new Dictionary<uint, ModeInfo>();
+        foreach (var (k, setName) in dispatch.SelectorValues)
+        {
+            if (!setsByName.TryGetValue(setName, out var pair))
+                throw new InvalidOperationException(
+                    $"instruction_set_dispatch.selector_values references unknown set '{setName}'.");
+            _modesBySelectorValue[ParseSelectorKey(k)] = new ModeInfo(pair.Set, pair.Decoder);
+        }
+
+        // Selector parser for the most common form: "CPSR.T" → bit 5 of CPSR.T (= bit 5).
+        // For now hardcode CPSR.<flag>; generalise when a non-ARM spec needs it.
+        _readSelector = BuildSelectorReader(dispatch.Selector);
+
+        // Sentinel default — used only by accessors that need _something_
+        // before any Step has run.
+        _defaultMode = _modesBySelectorValue.Values.First();
+    }
+
+    private static int ResolvePcIndex(HostRuntime rt)
+        => rt.Layout.RegisterFile.GeneralPurpose.PcIndex
+           ?? throw new InvalidOperationException(
+               "register_file.general_purpose.pc_index must be declared in spec.");
+
+    private static uint ParseSelectorKey(string s) => s switch
+    {
+        "0" => 0u,
+        "1" => 1u,
+        _ when s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+              => Convert.ToUInt32(s.Substring(2), 16),
+        _   => uint.Parse(s),
+    };
+
+    private Func<byte[], uint>? BuildSelectorReader(string selector)
+    {
+        // Forms supported: "CPSR.T", "CPSR.M[0]", or generic "<status>.<flag>".
+        var parts = selector.Split('.');
+        if (parts.Length != 2)
+            throw new NotSupportedException($"Unsupported selector form '{selector}'.");
+        var statusName = parts[0];
+        var flagName   = parts[1];
+        var bitIdx = _rt.Layout.GetStatusFlagBitIndex(statusName, flagName);
+        var statusOff = _rt.StatusOffset(statusName);
+        return state =>
+        {
+            var v = BinaryPrimitives.ReadUInt32LittleEndian(state.AsSpan((int)statusOff, 4));
+            return (v >> bitIdx) & 1u;
+        };
     }
 
     /// <summary>Backing CPU state buffer (mirrors the LLVM struct layout).</summary>
     public Span<byte> State => _state;
 
-    /// <summary>
-    /// Address of the next instruction to fetch. Reading/writing this
-    /// goes through the PC register slot.
-    /// </summary>
     public uint Pc
     {
         get => ReadGpr(_pcRegIndex);
         set => WriteGpr(_pcRegIndex, value);
     }
 
-    /// <summary>Read a GPR from the host-side state buffer.</summary>
     public uint ReadGpr(int regIndex)
         => BinaryPrimitives.ReadUInt32LittleEndian(_state.AsSpan((int)_rt.GprOffset(regIndex), 4));
 
-    /// <summary>Write a GPR to the host-side state buffer.</summary>
     public void WriteGpr(int regIndex, uint value)
         => BinaryPrimitives.WriteUInt32LittleEndian(_state.AsSpan((int)_rt.GprOffset(regIndex), 4), value);
 
@@ -90,83 +154,63 @@ public sealed unsafe class CpuExecutor
     public void WriteStatus(string name, uint value, string? mode = null)
         => BinaryPrimitives.WriteUInt32LittleEndian(_state.AsSpan((int)_rt.StatusOffset(name, mode), 4), value);
 
-    /// <summary>
-    /// Run exactly one instruction. Returns the decoded instruction
-    /// metadata (useful for tracing / tests). Throws if the bus returns
-    /// an undecodable word at the current PC.
-    /// </summary>
+    private ModeInfo CurrentMode()
+    {
+        if (_readSelector is null) return _defaultMode;
+        var sel = _readSelector(_state);
+        if (!_modesBySelectorValue!.TryGetValue(sel, out var m))
+            throw new InvalidOperationException(
+                $"Selector value 0x{sel:X} has no mapped instruction set in dispatch table.");
+        return m;
+    }
+
+    /// <summary>Run exactly one instruction.</summary>
     public DecodedInstruction Step()
     {
+        var mode = CurrentMode();
         var pc = Pc;
 
         // Pre-set R15 to PC + pc_offset_bytes so the IR's "read R15"
         // returns the correct pipeline-offset value mid-execution.
-        var pcReadValue = pc + _pcOffsetBytes;
+        var pcReadValue = pc + mode.PcOffsetBytes;
         WriteGpr(_pcRegIndex, pcReadValue);
 
         // Fetch.
-        uint instructionWord = _instrSizeBytes switch
+        uint instructionWord = mode.InstrSizeBytes switch
         {
             4 => _bus.ReadWord(pc),
             2 => _bus.ReadHalfword(pc),
-            _ => throw new NotSupportedException($"instruction size {_instrSizeBytes} unsupported.")
+            _ => throw new NotSupportedException($"instruction size {mode.InstrSizeBytes} unsupported.")
         };
 
-        // Decode.
-        var decoded = _decoder.Decode(instructionWord)
+        var decoded = mode.Decoder.Decode(instructionWord)
             ?? throw new InvalidOperationException(
-                $"Undecodable instruction 0x{instructionWord:X8} at PC=0x{pc:X8} ({_set.Name}).");
+                $"Undecodable instruction 0x{instructionWord:X8} at PC=0x{pc:X8} ({mode.Set.Name}).");
 
-        // Look up (or cache) the JIT'd function pointer.
-        var fnPtr = ResolveFunctionPointer(decoded);
+        var fnPtr = ResolveFunctionPointer(decoded, mode.Set.Name);
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
-
-        // Invoke.
         fixed (byte* p = _state)
             fn(p, instructionWord);
 
-        // Determine next PC.
+        // Did the instruction write PC?
         var postR15 = ReadGpr(_pcRegIndex);
         if (postR15 == pcReadValue)
-        {
-            // Instruction did not write PC — advance.
-            WriteGpr(_pcRegIndex, pc + _instrSizeBytes);
-        }
-        // Else: instruction wrote PC (branch / exception / ALU-to-PC) — postR15
-        // already holds the next instruction address; leave it.
+            WriteGpr(_pcRegIndex, pc + mode.InstrSizeBytes);
+        // Else: branch / exception / ALU-to-PC wrote new PC directly.
 
         return decoded;
     }
 
-    /// <summary>
-    /// Run up to <paramref name="maxSteps"/> instructions. Returns the
-    /// number actually executed.
-    /// </summary>
     public int Run(int maxSteps)
     {
         int n = 0;
-        while (n < maxSteps)
-        {
-            Step();
-            n++;
-        }
+        while (n < maxSteps) { Step(); n++; }
         return n;
     }
 
-    /// <summary>
-    /// Run until the program traps at a self-branch (the canonical
-    /// "halt" idiom: <c>idle: b idle</c>) or <paramref name="maxSteps"/>
-    /// is reached. Returns (executed, halted).
-    ///
-    /// Halt detection: if PC at the start of an iteration equals PC
-    /// at the start of the previous iteration, the last instruction
-    /// did not advance PC (it branched to itself or wrote PC=self).
-    /// One step is "wasted" detecting this — that's harmless for our
-    /// use case (detecting end of test ROM execution).
-    /// </summary>
     public (int Executed, bool Halted) RunUntilHalt(int maxSteps)
     {
-        uint lastPc = uint.MaxValue;     // sentinel — first iter never matches
+        uint lastPc = uint.MaxValue;
         int n = 0;
         while (n < maxSteps)
         {
@@ -179,13 +223,11 @@ public sealed unsafe class CpuExecutor
         return (n, false);
     }
 
-    private IntPtr ResolveFunctionPointer(DecodedInstruction decoded)
+    private IntPtr ResolveFunctionPointer(DecodedInstruction decoded, string setName)
     {
         var format = decoded.Format;
         var def    = decoded.Instruction;
 
-        // Mirror SpecCompiler's name-disambiguation: if multiple instructions
-        // in this format share a mnemonic, suffix the one with the selector value.
         var ambiguous = false;
         for (int i = 0, hits = 0; i < format.Instructions.Count; i++)
             if (format.Instructions[i].Mnemonic == def.Mnemonic && ++hits > 1)
@@ -194,7 +236,7 @@ public sealed unsafe class CpuExecutor
         var disambig = ambiguous && def.Selector is not null
             ? $"{def.Mnemonic}_{def.Selector.Value}"
             : def.Mnemonic;
-        var fnName = $"Execute_{_set.Name}_{format.Name}_{disambig}";
+        var fnName = $"Execute_{setName}_{format.Name}_{disambig}";
 
         if (_fnPtrCache.TryGetValue(fnName, out var p)) return p;
         p = _rt.GetFunctionPointer(fnName);

@@ -53,7 +53,6 @@ public class GbaRomExecutionTests
 
         var compileResult = SpecCompiler.Compile(CpuJson);
         var loaded = SpecLoader.LoadCpuSpec(CpuJson);
-        var armSet = loaded.InstructionSets["ARM"];
         var layout = new CpuStateLayout(
             compileResult.Module.Context,
             loaded.Cpu.RegisterFile,
@@ -67,7 +66,13 @@ public class GbaRomExecutionTests
         var userBinding  = UserModeRegBindings.Install(rt, swapHandler);
         rt.Compile();
 
-        var exec = new CpuExecutor(rt, armSet, new DecoderTable(armSet), bus);
+        // Multi-set executor: read CPSR.T to dispatch ARM vs Thumb.
+        var setsByName = new Dictionary<string, (InstructionSetSpec, DecoderTable)>(StringComparer.Ordinal);
+        foreach (var (name, set) in loaded.InstructionSets)
+            setsByName[name] = (set, new DecoderTable(set));
+        var dispatch = loaded.Cpu.InstructionSetDispatch
+            ?? throw new InvalidOperationException("CPU spec missing instruction_set_dispatch");
+        var exec = new CpuExecutor(rt, setsByName, dispatch, bus);
 
         // Post-BIOS initial state.
         exec.WriteStatus("CPSR", 0x1Fu);             // System mode, no flags
@@ -184,6 +189,83 @@ public class GbaRomExecutionTests
 
         Assert.True(halted);
         Assert.Equal(0u, setup.Exec.ReadGpr(12));
+    }
+
+    [Fact]
+    public void JsmolkaThumbGba_TraceLastBeforeHalt()
+    {
+        var romPath = Path.Combine(TestPaths.TestRomsRoot, "gba-tests", "thumb", "thumb.gba");
+        var bus = new GbaMemoryBus();
+        bus.LoadRom(File.ReadAllBytes(romPath));
+        using var setup = BootGba(bus);
+
+        var ring = new (uint pc, uint instr, uint t)[20];
+        int idx = 0, n = 0;
+        uint lastPc = uint.MaxValue;
+        while (n < 200_000)
+        {
+            var pc = setup.Exec.Pc;
+            if (pc == lastPc) break;
+            var cpsr = setup.Exec.ReadStatus("CPSR");
+            var t = (cpsr >> 5) & 1;
+            uint instr = t == 1 ? bus.ReadHalfword(pc) : bus.ReadWord(pc);
+            ring[idx] = (pc, instr, t);
+            idx = (idx + 1) % ring.Length;
+            try { setup.Exec.Step(); }
+            catch (Exception ex) { _output.WriteLine($"step {n}: THROW {ex.Message}"); break; }
+            lastPc = pc;
+            n++;
+        }
+        _output.WriteLine($"--- last 20 steps before halt (n={n}) ---");
+        for (int i = 0; i < ring.Length; i++)
+        {
+            var k = (idx + i) % ring.Length;
+            var (pc, instr, t) = ring[k];
+            _output.WriteLine($"  pc=0x{pc:X8} {(t == 1 ? "Thumb" : "ARM")} instr=0x{instr:X8}");
+        }
+        _output.WriteLine($"R7 = 0x{setup.Exec.ReadGpr(7):X8}");
+    }
+
+    [Fact]
+    public void JsmolkaThumbGba_TraceFirstSteps()
+    {
+        var romPath = Path.Combine(TestPaths.TestRomsRoot, "gba-tests", "thumb", "thumb.gba");
+        var bus = new GbaMemoryBus();
+        bus.LoadRom(File.ReadAllBytes(romPath));
+        using var setup = BootGba(bus);
+
+        for (int i = 0; i < 50; i++)
+        {
+            var pc = setup.Exec.Pc;
+            var cpsr = setup.Exec.ReadStatus("CPSR");
+            var t = (cpsr >> 5) & 1;
+            uint instr = t == 1 ? bus.ReadHalfword(pc) : bus.ReadWord(pc);
+            _output.WriteLine($"step {i,3} pc=0x{pc:X8} {(t == 1 ? "Thumb" : "ARM")} instr=0x{instr:X8} R7=0x{setup.Exec.ReadGpr(7):X8}");
+            try { setup.Exec.Step(); }
+            catch (Exception ex) { _output.WriteLine($"  THROW: {ex.Message}"); break; }
+        }
+    }
+
+    [Fact]
+    public void JsmolkaThumbGba_RunsToHaltLoop()
+    {
+        // Phase 4.4 infrastructure check: thumb.gba loads, executes
+        // (with ARM↔Thumb mode switching via BX), and reaches halt.
+        // R7 (not R12!) holds the failed-test signal in thumb.gba.
+        var romPath = Path.Combine(TestPaths.TestRomsRoot, "gba-tests", "thumb", "thumb.gba");
+        if (!File.Exists(romPath))
+            throw new Xunit.Sdk.XunitException($"ROM missing: {romPath}");
+
+        var bus = new GbaMemoryBus();
+        bus.LoadRom(File.ReadAllBytes(romPath));
+        using var setup = BootGba(bus);
+
+        var (executed, halted) = setup.Exec.RunUntilHalt(maxSteps: 200_000);
+
+        var r7 = setup.Exec.ReadGpr(7);
+        var cpsr = setup.Exec.ReadStatus("CPSR");
+        _output.WriteLine($"executed={executed} halted={halted} r7=0x{r7:X8} pc=0x{setup.Exec.Pc:X8} cpsr=0x{cpsr:X8}");
+        Assert.True(halted, $"thumb.gba did not reach halt loop in {executed} steps (PC=0x{setup.Exec.Pc:X8} R7=0x{r7:X8})");
     }
 
 }
