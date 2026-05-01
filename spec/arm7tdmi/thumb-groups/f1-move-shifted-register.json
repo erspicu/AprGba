@@ -27,28 +27,18 @@
             "form": "1S"
           },
           "steps": [
-            {
-              "op": "read_reg",
-              "index": "rs",
-              "out": "rs_val"
-            },
-            {
-              "op": "shl",
-              "in": [
-                "rs_val",
-                "imm5"
-              ],
-              "out": "result",
-              "width": 32
-            },
-            {
-              "op": "write_reg",
-              "index": "rd",
-              "value": "result"
-            },
-            {
-              "op": "update_nz",
-              "value": "result"
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "shl", "in": ["rs_val", "imm5"], "out": "result", "width": 32 },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz", "value": "result" },
+            { "op": "if",
+              "cond": { "field": "imm5", "ne": 0 },
+              "then": [
+                { "op": "rsb", "in": ["imm5", { "const": 32 }], "out": "shamt_inv" },
+                { "op": "lsr", "in": ["rs_val", "shamt_inv"], "out": "carry_raw" },
+                { "op": "and", "in": ["carry_raw", { "const": 1 }], "out": "shifter_carry_out" },
+                { "op": "update_c_shifter", "in": ["shifter_carry_out"] }
+              ]
             }
           ]
         },

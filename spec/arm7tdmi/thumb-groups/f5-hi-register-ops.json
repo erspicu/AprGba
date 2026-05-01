@@ -31,7 +31,12 @@
             { "op": "read_reg", "index": "eff_rd", "out": "rd_val" },
             { "op": "read_reg", "index": "eff_rs", "out": "rs_val" },
             { "op": "add", "in": ["rd_val", "rs_val"], "out": "result" },
-            { "op": "write_reg", "index": "eff_rd", "value": "result" }
+            { "op": "and", "in": ["result", { "const": "0xFFFFFFFE" }], "out": "result_aligned" },
+            { "op": "select",
+              "cond": { "var": "eff_rd", "eq": 15 },
+              "if_true": "result_aligned", "if_false": "result",
+              "out": "final_val" },
+            { "op": "write_reg", "index": "eff_rd", "value": "final_val" }
           ]
         },
         {
@@ -67,7 +72,12 @@
             { "op": "shl", "in": ["h2_bit", { "const": 3 }], "out": "h2_shl" },
             { "op": "or",  "in": ["h2_shl", "rs"], "out": "eff_rs" },
             { "op": "read_reg", "index": "eff_rs", "out": "rs_val" },
-            { "op": "write_reg", "index": "eff_rd", "value": "rs_val" }
+            { "op": "and", "in": ["rs_val", { "const": "0xFFFFFFFE" }], "out": "rs_val_aligned" },
+            { "op": "select",
+              "cond": { "var": "eff_rd", "eq": 15 },
+              "if_true": "rs_val_aligned", "if_false": "rs_val",
+              "out": "final_val" },
+            { "op": "write_reg", "index": "eff_rd", "value": "final_val" }
           ]
         },
         {

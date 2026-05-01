@@ -192,38 +192,50 @@ public class GbaRomExecutionTests
     }
 
     [Fact]
-    public void JsmolkaThumbGba_TraceLastBeforeHalt()
+    public void JsmolkaThumbGba_TraceUntilPcLeavesRomCode()
     {
         var romPath = Path.Combine(TestPaths.TestRomsRoot, "gba-tests", "thumb", "thumb.gba");
+        var romBytes = File.ReadAllBytes(romPath);
         var bus = new GbaMemoryBus();
-        bus.LoadRom(File.ReadAllBytes(romPath));
+        bus.LoadRom(romBytes);
         using var setup = BootGba(bus);
 
-        var ring = new (uint pc, uint instr, uint t)[20];
+        var ring = new (uint pc, uint instr, uint t, uint r7)[20];
         int idx = 0, n = 0;
-        uint lastPc = uint.MaxValue;
         while (n < 200_000)
         {
             var pc = setup.Exec.Pc;
-            if (pc == lastPc) break;
             var cpsr = setup.Exec.ReadStatus("CPSR");
             var t = (cpsr >> 5) & 1;
             uint instr = t == 1 ? bus.ReadHalfword(pc) : bus.ReadWord(pc);
-            ring[idx] = (pc, instr, t);
+            var r7 = setup.Exec.ReadGpr(7);
+            ring[idx] = (pc, instr, t, r7);
             idx = (idx + 1) % ring.Length;
+
+            // Anomaly: PC misaligned (Thumb requires bit 0 = 0).
+            if (t == 1 && (pc & 1) == 1)
+            {
+                _output.WriteLine($"PC went odd at step {n}: pc=0x{pc:X8}");
+                break;
+            }
+            // Anomaly: PC outside actual ROM bytes.
+            uint pcOff = pc - 0x08000000u;
+            if (pcOff >= (uint)romBytes.Length)
+            {
+                _output.WriteLine($"PC left ROM bytes at step {n}: pc=0x{pc:X8} (rom size 0x{romBytes.Length:X})");
+                break;
+            }
             try { setup.Exec.Step(); }
             catch (Exception ex) { _output.WriteLine($"step {n}: THROW {ex.Message}"); break; }
-            lastPc = pc;
             n++;
         }
-        _output.WriteLine($"--- last 20 steps before halt (n={n}) ---");
+        _output.WriteLine($"--- last 20 steps before anomaly (n={n}) ---");
         for (int i = 0; i < ring.Length; i++)
         {
             var k = (idx + i) % ring.Length;
-            var (pc, instr, t) = ring[k];
-            _output.WriteLine($"  pc=0x{pc:X8} {(t == 1 ? "Thumb" : "ARM")} instr=0x{instr:X8}");
+            var (pc, instr, t, r7) = ring[k];
+            _output.WriteLine($"  pc=0x{pc:X8} {(t == 1 ? "Thumb" : "ARM  ")} instr=0x{instr:X8} R7=0x{r7:X8}");
         }
-        _output.WriteLine($"R7 = 0x{setup.Exec.ReadGpr(7):X8}");
     }
 
     [Fact]
