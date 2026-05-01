@@ -1,0 +1,66 @@
+{
+  "name": "Branch",
+  "formats": [
+    {
+      "name": "Branch_BL",
+      "comment": "cccc 101 L oooooooooooooooooooooooo (24-bit signed offset, <<2)",
+      "pattern": "cccc_101_L_oooooooooooooooooooooooo",
+      "fields": {
+        "cond": "31:28",
+        "L": "24",
+        "offset24": "23:0"
+      },
+      "mask": "0x0E000000",
+      "match": "0x0A000000",
+      "operands": {
+        "branch_target": {
+          "kind": "pc_relative_offset",
+          "outputs": [
+            "address"
+          ]
+        }
+      },
+      "instructions": [
+        {
+          "selector": {
+            "field": "L",
+            "value": "0"
+          },
+          "mnemonic": "B",
+          "since": "ARMv4",
+          "writes_pc": "always",
+          "manual_ref": "ARM ARM A4.1.5",
+          "cycles": {
+            "form": "2S+1N",
+            "extra_when_load_pc": ""
+          },
+          "steps": [
+            {
+              "op": "branch",
+              "target": "address"
+            }
+          ]
+        },
+        {
+          "selector": {
+            "field": "L",
+            "value": "1"
+          },
+          "mnemonic": "BL",
+          "since": "ARMv4",
+          "writes_pc": "always",
+          "manual_ref": "ARM ARM A4.1.5",
+          "cycles": {
+            "form": "2S+1N"
+          },
+          "steps": [
+            {
+              "op": "branch_link",
+              "target": "address"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

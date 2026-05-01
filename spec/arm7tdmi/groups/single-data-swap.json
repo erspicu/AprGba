@@ -1,0 +1,125 @@
+{
+  "name": "SingleDataSwap",
+  "comment": "ARM atomic swap (SWP/SWPB). Encoded in DataProcessing space (bits 27:23 = 00010, bit 22 = B) with bits 7:4 = 1001. Distinguished from Multiply (bits 27:22 = 000000) by bit 24 = 1.",
+  "formats": [
+    {
+      "name": "SWP_Word",
+      "comment": "cccc 00010 0 00 nnnn dddd 0000 1001 mmmm  (SWP Rd, Rm, [Rn])",
+      "pattern": "cccc_00010_0_00_nnnn_dddd_0000_1001_mmmm",
+      "fields": {
+        "cond": "31:28",
+        "rn": "19:16",
+        "rd": "15:12",
+        "rm": "3:0"
+      },
+      "mask": "0x0FF00FF0",
+      "match": "0x01000090",
+      "instructions": [
+        {
+          "mnemonic": "SWP",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "writes_memory": [
+            "normal"
+          ],
+          "manual_ref": "ARM ARM A4.1.108",
+          "cycles": {
+            "form": "1S+2N+1I"
+          },
+          "quirks": [
+            "non_atomic_emulation"
+          ],
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "addr"
+            },
+            {
+              "op": "read_reg",
+              "index": "rm",
+              "out": "src"
+            },
+            {
+              "op": "load",
+              "addr": "addr",
+              "size": 32,
+              "out": "old_value"
+            },
+            {
+              "op": "store",
+              "addr": "addr",
+              "value": "src",
+              "size": 32
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "old_value"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "SWP_Byte",
+      "comment": "cccc 00010 1 00 nnnn dddd 0000 1001 mmmm  (SWPB Rd, Rm, [Rn])",
+      "pattern": "cccc_00010_1_00_nnnn_dddd_0000_1001_mmmm",
+      "fields": {
+        "cond": "31:28",
+        "rn": "19:16",
+        "rd": "15:12",
+        "rm": "3:0"
+      },
+      "mask": "0x0FF00FF0",
+      "match": "0x01400090",
+      "instructions": [
+        {
+          "mnemonic": "SWPB",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "writes_memory": [
+            "normal"
+          ],
+          "manual_ref": "ARM ARM A4.1.108",
+          "cycles": {
+            "form": "1S+2N+1I"
+          },
+          "quirks": [
+            "non_atomic_emulation"
+          ],
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "addr"
+            },
+            {
+              "op": "read_reg",
+              "index": "rm",
+              "out": "src"
+            },
+            {
+              "op": "load",
+              "addr": "addr",
+              "size": 8,
+              "signed": false,
+              "out": "old_value"
+            },
+            {
+              "op": "store",
+              "addr": "addr",
+              "value": "src",
+              "size": 8
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "old_value"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

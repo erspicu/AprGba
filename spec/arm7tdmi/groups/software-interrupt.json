@@ -1,0 +1,33 @@
+{
+  "name": "SoftwareInterrupt",
+  "formats": [
+    {
+      "name": "SWI",
+      "comment": "cccc 1111 iiiiiiiiiiiiiiiiiiiiiiii  (24-bit SWI immediate, used by HLE BIOS dispatch)",
+      "pattern": "cccc_1111_iiiiiiiiiiiiiiiiiiiiiiii",
+      "fields": {
+        "cond": "31:28",
+        "swi_id": "23:0"
+      },
+      "mask": "0x0F000000",
+      "match": "0x0F000000",
+      "instructions": [
+        {
+          "mnemonic": "SWI",
+          "since": "ARMv4",
+          "writes_pc": "always",
+          "manual_ref": "ARM ARM A4.1.111",
+          "cycles": {
+            "form": "2S+1N"
+          },
+          "steps": [
+            {
+              "op": "raise_exception",
+              "vector": "SoftwareInterrupt"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

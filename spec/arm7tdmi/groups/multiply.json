@@ -1,0 +1,141 @@
+{
+  "name": "Multiply",
+  "comment": "ARMv4 32-bit multiply (MUL) and multiply-accumulate (MLA). Encoded with bits 27:22 = 000000 + bits 7:4 = 1001. Uses the unusual register-position swap where Rd is at bits 19:16 and Rn (accumulate) is at bits 15:12.",
+  "formats": [
+    {
+      "name": "Multiply_32",
+      "comment": "cccc 000000 a s dddd nnnn pppp 1001 mmmm  (MUL/MLA Rd, Rm, Rs[, Rn])",
+      "pattern": "cccc_000000_a_s_dddd_nnnn_pppp_1001_mmmm",
+      "fields": {
+        "cond": "31:28",
+        "a_bit": "21",
+        "s_bit": "20",
+        "rd": "19:16",
+        "rn": "15:12",
+        "rs": "11:8",
+        "rm": "3:0"
+      },
+      "mask": "0x0FC000F0",
+      "match": "0x00000090",
+      "instructions": [
+        {
+          "selector": {
+            "field": "a_bit",
+            "value": "0"
+          },
+          "mnemonic": "MUL",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "manual_ref": "ARM ARM A4.1.40",
+          "cycles": {
+            "form": "1S+nI",
+            "computed_at": "runtime"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rm",
+              "out": "rm_val"
+            },
+            {
+              "op": "read_reg",
+              "index": "rs",
+              "out": "rs_val"
+            },
+            {
+              "op": "mul",
+              "in": [
+                "rm_val",
+                "rs_val"
+              ],
+              "out": "result"
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "result"
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "s_bit",
+                "eq": 1
+              },
+              "then": [
+                {
+                  "op": "update_nz",
+                  "value": "result"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "selector": {
+            "field": "a_bit",
+            "value": "1"
+          },
+          "mnemonic": "MLA",
+          "since": "ARMv4",
+          "writes_pc": "never",
+          "manual_ref": "ARM ARM A4.1.32",
+          "cycles": {
+            "form": "1S+(n+1)I",
+            "computed_at": "runtime"
+          },
+          "steps": [
+            {
+              "op": "read_reg",
+              "index": "rm",
+              "out": "rm_val"
+            },
+            {
+              "op": "read_reg",
+              "index": "rs",
+              "out": "rs_val"
+            },
+            {
+              "op": "mul",
+              "in": [
+                "rm_val",
+                "rs_val"
+              ],
+              "out": "product"
+            },
+            {
+              "op": "read_reg",
+              "index": "rn",
+              "out": "acc"
+            },
+            {
+              "op": "add",
+              "in": [
+                "product",
+                "acc"
+              ],
+              "out": "result"
+            },
+            {
+              "op": "write_reg",
+              "index": "rd",
+              "value": "result"
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "s_bit",
+                "eq": 1
+              },
+              "then": [
+                {
+                  "op": "update_nz",
+                  "value": "result"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
