@@ -80,6 +80,30 @@ public class SpecCompilerTests
     }
 
     [Fact]
+    public void Compile_EmittedIRForSubsContainsRestoreCpsrSwitch()
+    {
+        // 2.5.7c: restore_cpsr_from_spsr lowers to a switch over CPSR.M[4:0]
+        // with one case per banked-SPSR mode (FIQ/IRQ/Supervisor/Abort/Undefined),
+        // a PHI to merge the chosen SPSR (or oldCpsr in default), and a swap call.
+        var result = SpecCompiler.Compile(CpuJson);
+        var ir = result.Module.PrintToString();
+
+        // restore is wired into ALU bodies via the if-S-and-Rd=PC path —
+        // SUBS Register-shifted is one such function.
+        var fnIdx = ir.IndexOf("@Execute_ARM_DataProcessing_Immediate_SUB", StringComparison.Ordinal);
+        Assert.True(fnIdx >= 0, "SUB function should be emitted");
+        var nextDefine = ir.IndexOf("\ndefine ", fnIdx + 1, StringComparison.Ordinal);
+        var body = nextDefine > 0 ? ir.Substring(fnIdx, nextDefine - fnIdx) : ir.Substring(fnIdx);
+
+        Assert.Contains("restore_cpsr_merge", body);
+        Assert.Contains("restore_cpsr_default", body);
+        Assert.Contains("restore_cpsr_from_spsr_supervisor", body);
+        Assert.Contains("restore_cpsr_from_spsr_fiq", body);
+        Assert.Contains("phi i32", body);
+        Assert.Contains("call void @host_swap_register_bank", body);
+    }
+
+    [Fact]
     public void CompileToFile_WritesValidLlFile()
     {
         var temp = Path.Combine(TestPaths.RepoRoot, "temp", "spec_compiler_test.ll");
