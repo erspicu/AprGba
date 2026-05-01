@@ -5,13 +5,16 @@ using LLVMSharp.Interop;
 namespace AprCpu.Core.IR;
 
 /// <summary>
-/// Helpers + the initial set of micro-op emitters. Just enough to cover
-/// ARM7TDMI Data Processing Immediate, Branch and BX, plus the Thumb
-/// shift-immediate / immediate-ALU formats.
+/// Built-in CPU-agnostic micro-op emitters: register I/O, arithmetic /
+/// logical / shift, simple bitwise extras (mvn, bic), control flow
+/// (if, branch, branch_link). ARM-specific emitters (carry-aware ALU,
+/// CPSR flag updates, PSR access, BX-style indirect branch with T-bit)
+/// live in <see cref="ArmEmitters"/> and are registered separately
+/// based on the spec's <c>architecture.family</c>.
 /// </summary>
 public static class StandardEmitters
 {
-    /// <summary>Register every emitter in this initial set into <paramref name="reg"/>.</summary>
+    /// <summary>Register every generic emitter into <paramref name="reg"/>.</summary>
     public static void RegisterAll(EmitterRegistry reg)
     {
         // Register access
@@ -27,39 +30,14 @@ public static class StandardEmitters
         reg.Register(new Binary("shl", (b, l, r, n) => b.BuildShl (l, r, n)));
         reg.Register(new Binary("lsr", (b, l, r, n) => b.BuildLShr(l, r, n)));
         reg.Register(new Binary("asr", (b, l, r, n) => b.BuildAShr(l, r, n)));
-        // Reverse subtract: result = b - a (operands swapped)
         reg.Register(new Binary("rsb", (b, l, r, n) => b.BuildSub(r, l, n)));
-        // BIC: a AND NOT b
-        reg.Register(new BicEmitter());
-        // Unary
-        reg.Register(new MvnEmitter());
-        // Carry-aware arithmetic (read CPSR.C as carry-in)
-        reg.Register(new AdcEmitter());
-        reg.Register(new SbcEmitter());
-        reg.Register(new RscEmitter());
+        reg.Register(new BicEmitter());   // a AND NOT b
+        reg.Register(new MvnEmitter());   // NOT a
 
-        // Flag updates (write into CPSR)
-        reg.Register(new UpdateNz());
-        reg.Register(new UpdateCAdd());
-        reg.Register(new UpdateCSub());
-        reg.Register(new UpdateVAdd());
-        reg.Register(new UpdateVSub());
-        reg.Register(new UpdateCShifter());
-        reg.Register(new UpdateCAddCarry());
-        reg.Register(new UpdateCSubCarry());
-
-        // PSR access
-        reg.Register(new ReadPsr());
-        reg.Register(new WritePsr());
-
-        // Control flow
+        // Control flow (generic — branch_indirect is in ArmEmitters)
         reg.Register(new IfStep());
-        reg.Register(new Branch("branch",          BranchKind.Plain));
-        reg.Register(new Branch("branch_link",     BranchKind.Link));
-        reg.Register(new Branch("branch_indirect", BranchKind.Indirect));
-
-        // Stub / placeholder
-        reg.Register(new RestoreCpsrFromSpsr());
+        reg.Register(new Branch("branch",      BranchKind.Plain));
+        reg.Register(new Branch("branch_link", BranchKind.Link));
     }
 
     // ---------------- helpers ----------------
@@ -199,198 +177,11 @@ internal static class CpsrHelpers
 
 }
 
-internal sealed class UpdateNz : IMicroOpEmitter
-{
-    public string OpName => "update_nz";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var valueName = step.Raw.GetProperty("value").GetString()!;
-        var value = ctx.Resolve(valueName);
+// (UpdateNz / UpdateC*/UpdateV*/Update*Carry / Adc/Sbc/Rsc / ReadPsr /
+// WritePsr / RestoreCpsrFromSpsr / CarryReader were moved to ArmEmitters.cs
+// in R5.)
 
-        // N = value bit 31
-        var nBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntSLT, value, ctx.ConstU32(0), "n_test");
-        // Z = value == 0
-        var zBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, value, ctx.ConstU32(0), "z_test");
 
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "N", nBool);
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "Z", zBool);
-    }
-}
-
-internal sealed class UpdateCAdd : IMicroOpEmitter
-{
-    public string OpName => "update_c_add";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
-
-        // Carry-out for unsigned add = (a + b) > MAX, equivalently (a + b) < a (wrap).
-        var sum = ctx.Builder.BuildAdd(a, b, "c_add_sum");
-        var cBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntULT, sum, a, "c_add_test");
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "C", cBool);
-    }
-}
-
-internal sealed class UpdateCSub : IMicroOpEmitter
-{
-    public string OpName => "update_c_sub";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
-        // ARM C for SUB = NOT borrow = (a >= b)
-        var cBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, a, b, "c_sub_test");
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "C", cBool);
-    }
-}
-
-internal sealed class UpdateVAdd : IMicroOpEmitter
-{
-    public string OpName => "update_v_add";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var a   = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        var b   = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
-        var res = StandardEmitters.ResolveInput(ctx, step.Raw, 2);
-        // V = ((a XOR res) AND (b XOR res))[31]
-        var aXor = ctx.Builder.BuildXor(a, res, "v_add_axor");
-        var bXor = ctx.Builder.BuildXor(b, res, "v_add_bxor");
-        var both = ctx.Builder.BuildAnd(aXor, bXor, "v_add_and");
-        var top  = ctx.Builder.BuildLShr(both, ctx.ConstU32(31), "v_add_top");
-        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "V", top);
-    }
-}
-
-internal sealed class UpdateVSub : IMicroOpEmitter
-{
-    public string OpName => "update_v_sub";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var a   = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        var b   = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
-        var res = StandardEmitters.ResolveInput(ctx, step.Raw, 2);
-        // V = ((a XOR b) AND (a XOR res))[31]
-        var ab   = ctx.Builder.BuildXor(a, b,   "v_sub_ab");
-        var ares = ctx.Builder.BuildXor(a, res, "v_sub_ares");
-        var both = ctx.Builder.BuildAnd(ab, ares, "v_sub_and");
-        var top  = ctx.Builder.BuildLShr(both, ctx.ConstU32(31), "v_sub_top");
-        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "V", top);
-    }
-}
-
-internal sealed class UpdateCShifter : IMicroOpEmitter
-{
-    public string OpName => "update_c_shifter";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        // step.in[0] = name of pre-computed shifter_carry_out (i32 0/1)
-        var v = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "C", v);
-    }
-}
-
-internal sealed class UpdateCAddCarry : IMicroOpEmitter
-{
-    public string OpName => "update_c_add_carry";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var a   = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        var b   = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
-        var cin = StandardEmitters.ResolveInput(ctx, step.Raw, 2); // i32 0/1
-
-        // Carry-out = (a + b + cin) wraps past UInt32.MaxValue
-        // Compute via 64-bit add and check bit 32.
-        var i64 = LLVMTypeRef.Int64;
-        var aL = ctx.Builder.BuildZExt(a,   i64, "a_l");
-        var bL = ctx.Builder.BuildZExt(b,   i64, "b_l");
-        var cL = ctx.Builder.BuildZExt(cin, i64, "c_l");
-        var sum = ctx.Builder.BuildAdd(ctx.Builder.BuildAdd(aL, bL, "ab_l"), cL, "abc_l");
-        var hi  = ctx.Builder.BuildLShr(sum, LLVMValueRef.CreateConstInt(i64, 32, false), "carry_hi");
-        var hi32 = ctx.Builder.BuildTrunc(hi, LLVMTypeRef.Int32, "carry_hi_i32");
-        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "C", hi32);
-    }
-}
-
-internal sealed class UpdateCSubCarry : IMicroOpEmitter
-{
-    public string OpName => "update_c_sub_carry";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        // ARM SBC: result = a - b - !cin, C-out = NOT borrow
-        // Equivalently, C-out = (a >= b + !cin)
-        var a   = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        var b   = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
-        var cin = StandardEmitters.ResolveInput(ctx, step.Raw, 2);
-
-        var notCin = ctx.Builder.BuildXor(cin, ctx.ConstU32(1), "not_cin");
-        var bPlus  = ctx.Builder.BuildAdd(b, notCin, "b_plus");
-        var cBool  = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, a, bPlus, "c_subc_test");
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "C", cBool);
-    }
-}
-
-// ---------------- additional ALU emitters ----------------
-
-/// <summary>
-/// Reads CPSR.C as an i32 (0 or 1) for use as a carry-in operand.
-/// </summary>
-internal static class CarryReader
-{
-    public static LLVMValueRef ReadCarryIn(EmitContext ctx)
-    {
-        return CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "C");
-    }
-}
-
-internal sealed class AdcEmitter : IMicroOpEmitter
-{
-    public string OpName => "adc";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
-        var cin = CarryReader.ReadCarryIn(ctx);
-        var ab = ctx.Builder.BuildAdd(a, b, "adc_ab");
-        var res = ctx.Builder.BuildAdd(ab, cin, StandardEmitters.GetOut(step.Raw));
-        ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
-        // Cache the carry-in for any subsequent flag update.
-        ctx.Values["__carry_in__"] = cin;
-    }
-}
-
-internal sealed class SbcEmitter : IMicroOpEmitter
-{
-    public string OpName => "sbc";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
-        var cin = CarryReader.ReadCarryIn(ctx);
-        var notCin = ctx.Builder.BuildXor(cin, ctx.ConstU32(1), "sbc_notcin");
-        var ab = ctx.Builder.BuildSub(a, b, "sbc_ab");
-        var res = ctx.Builder.BuildSub(ab, notCin, StandardEmitters.GetOut(step.Raw));
-        ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
-        ctx.Values["__carry_in__"] = cin;
-    }
-}
-
-internal sealed class RscEmitter : IMicroOpEmitter
-{
-    public string OpName => "rsc";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        // RSC: result = b - a - !cin (operands swapped relative to SBC)
-        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
-        var cin = CarryReader.ReadCarryIn(ctx);
-        var notCin = ctx.Builder.BuildXor(cin, ctx.ConstU32(1), "rsc_notcin");
-        var ba = ctx.Builder.BuildSub(b, a, "rsc_ba");
-        var res = ctx.Builder.BuildSub(ba, notCin, StandardEmitters.GetOut(step.Raw));
-        ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
-        ctx.Values["__carry_in__"] = cin;
-    }
-}
 
 internal sealed class MvnEmitter : IMicroOpEmitter
 {
@@ -413,67 +204,6 @@ internal sealed class BicEmitter : IMicroOpEmitter
         var notB = ctx.Builder.BuildXor(b, ctx.ConstU32(0xFFFFFFFFu), "bic_notb");
         var res = ctx.Builder.BuildAnd(a, notB, StandardEmitters.GetOut(step.Raw));
         ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
-    }
-}
-
-// ---------------- PSR access ----------------
-
-internal sealed class ReadPsr : IMicroOpEmitter
-{
-    public string OpName => "read_psr";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        // SPSR is mode-banked; banked-register handling lands in R5/2.5.7,
-        // so for now we always read CPSR regardless of the `which` argument.
-        var which = step.Raw.TryGetProperty("which", out var w) ? w.GetString() : "CPSR";
-        var outName = StandardEmitters.GetOut(step.Raw);
-        var target = which == "SPSR" ? "CPSR" : (which ?? "CPSR");
-        var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, target);
-        var v = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, outName);
-        ctx.Values[outName] = v;
-    }
-}
-
-internal sealed class WritePsr : IMicroOpEmitter
-{
-    public string OpName => "write_psr";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        // For MSR. step.value = name of value to write; step.mask = field
-        // mask (which CPSR bytes to update). Mask defaults to all bytes.
-        var valueName = step.Raw.GetProperty("value").GetString()!;
-        var value = ctx.Resolve(valueName);
-
-        uint maskBits = 0xFFFFFFFFu;
-        if (step.Raw.TryGetProperty("mask", out var mEl))
-        {
-            maskBits = mEl.ValueKind switch
-            {
-                JsonValueKind.Number => (uint)mEl.GetInt64(),
-                JsonValueKind.String when mEl.GetString()!.StartsWith("0x") =>
-                    Convert.ToUInt32(mEl.GetString()!.Substring(2), 16),
-                _ => 0xFFFFFFFFu
-            };
-        }
-
-        var which = step.Raw.TryGetProperty("which", out var w) ? w.GetString() : "CPSR";
-        // SPSR is mode-banked (lands in 2.5.7); for now route SPSR writes
-        // to CPSR slot to keep the pipeline going.
-        var target = which == "SPSR" ? "CPSR" : (which ?? "CPSR");
-        var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, target);
-
-        if (maskBits == 0xFFFFFFFFu)
-        {
-            ctx.Builder.BuildStore(value, ptr);
-        }
-        else
-        {
-            var oldV = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, "psr_old");
-            var keep = ctx.Builder.BuildAnd(oldV,  ctx.ConstU32(~maskBits), "psr_keep");
-            var inV  = ctx.Builder.BuildAnd(value, ctx.ConstU32( maskBits), "psr_in");
-            var newV = ctx.Builder.BuildOr (keep, inV, "psr_new");
-            ctx.Builder.BuildStore(newV, ptr);
-        }
     }
 }
 
@@ -533,7 +263,11 @@ internal sealed class IfStep : IMicroOpEmitter
     }
 }
 
-internal enum BranchKind { Plain, Link, Indirect }
+/// <summary>
+/// Generic branch kinds. ARM-specific BX (T-bit + alignment) lives as
+/// <c>BranchIndirectArm</c> in <see cref="ArmEmitters"/>.
+/// </summary>
+internal enum BranchKind { Plain, Link }
 
 internal sealed class Branch : IMicroOpEmitter
 {
@@ -553,43 +287,21 @@ internal sealed class Branch : IMicroOpEmitter
 
         if (_kind == BranchKind.Link)
         {
-            // LR <- PC (next instruction) ; PC <- target
-            var pcOff = ctx.ConstU32((uint)ctx.InstructionSet.PcOffsetBytes);
+            // LR <- PC (next instruction); PC <- target. Uses GPR-15 as PC
+            // and GPR-14 as LR by ARM convention; non-ARM specs that want
+            // a different "link register" should provide their own emitter.
             var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
             var r15    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "r15");
-            // Next-instruction PC = current R15 - pc_offset + instruction_size
             var width  = ctx.InstructionSet.WidthBits.Fixed!.Value / 8;
-            var nextPc = ctx.Builder.BuildAdd(r15, ctx.ConstU32((uint)(width - ctx.InstructionSet.PcOffsetBytes)), "next_pc");
+            var nextPc = ctx.Builder.BuildAdd(
+                r15, ctx.ConstU32((uint)(width - ctx.InstructionSet.PcOffsetBytes)), "next_pc");
             var lrPtr  = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 14);
             ctx.Builder.BuildStore(nextPc, lrPtr);
-        }
-
-        if (_kind == BranchKind.Indirect)
-        {
-            // BX semantics: target's bit 0 selects Thumb (CPSR.T <- bit 0); aligned target written to PC.
-            var bit0 = ctx.Builder.BuildAnd(target, ctx.ConstU32(1), "bx_bit0");
-            CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "T", bit0);
-
-            var alignMask = ctx.ConstU32(0xFFFFFFFEu);
-            var aligned   = ctx.Builder.BuildAnd(target, alignMask, "bx_aligned");
-            target = aligned;
         }
 
         // Store target as new PC (R15)
         var pcSlot = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
         ctx.Builder.BuildStore(target, pcSlot);
-    }
-}
-
-internal sealed class RestoreCpsrFromSpsr : IMicroOpEmitter
-{
-    public string OpName => "restore_cpsr_from_spsr";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        // Phase 2 stub: emit a no-op marker (extract+ignore CPSR). Proper
-        // behaviour needs mode-aware SPSR selection; lands in 2.5.7.
-        var cpsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR");
-        var _ = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "cpsr_stub_load");
     }
 }
 

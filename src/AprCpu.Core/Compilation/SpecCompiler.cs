@@ -44,6 +44,15 @@ public sealed unsafe class SpecCompiler
         var resolverRegistry = new OperandResolverRegistry();
         StandardOperandResolvers.RegisterAll(resolverRegistry);
 
+        // R5: register architecture-specific emitter / resolver bundles.
+        // Generic CPU specs that don't reference ARM-specific micro-ops or
+        // operand kinds will simply not exercise any of these.
+        var family = loaded.Cpu.Architecture.Family;
+        if (string.Equals(family, "ARM", StringComparison.OrdinalIgnoreCase))
+        {
+            ArmEmitters.RegisterAll(registry);
+        }
+
         var decoderTables = new Dictionary<string, DecoderTable>(StringComparer.Ordinal);
         var functions = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
         var diagnostics = new List<string>();
