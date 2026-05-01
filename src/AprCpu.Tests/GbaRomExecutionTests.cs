@@ -169,7 +169,7 @@ public class GbaRomExecutionTests
         Assert.Equal(32u, storedR8);   // User R8, not FIQ R8 (=64)
     }
 
-    [Fact(Skip = "Tracking: ROM reports R12=0x162=354 (single_transfer test #4 fails). Real CPU semantic bug to fix in Phase 4.3.")]
+    [Fact]
     public void JsmolkaArmGba_AllTestsPass_R12IsZero()
     {
         var romPath = Path.Combine(TestPaths.TestRomsRoot, "gba-tests", "arm", "arm.gba");
