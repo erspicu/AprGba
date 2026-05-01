@@ -1,0 +1,91 @@
+{
+  "name": "Thumb_F5_HiRegisterOps",
+  "comment": "010001 oo H1 H2 sss ddd  — ADD/CMP/MOV with H1/H2 to access R8-R15 (full register file), plus BX. Effective Rd = (H1<<3)|rd_field, effective Rs = (H2<<3)|rs_field.",
+  "formats": [
+    {
+      "name":    "Thumb_F5_HiRegOps",
+      "pattern": "010001_oo_h_g_sss_ddd",
+      "fields": {
+        "opcode": "9:8",
+        "h1_bit": "7",
+        "h2_bit": "6",
+        "rs":     "5:3",
+        "rd":     "2:0"
+      },
+      "mask":  "0xFC00",
+      "match": "0x4400",
+      "instructions": [
+        {
+          "selector":   { "field": "opcode", "value": "00" },
+          "mnemonic":   "ADD",
+          "since":      "ARMv4T",
+          "writes_pc":  "conditional_via_rd",
+          "manual_ref": "ARM ARM A7.1.5 (Thumb F5)",
+          "comment":    "Hi-register ADD; flags NOT updated (unlike F2/F4 ADD)",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "shl", "in": ["h1_bit", { "const": 3 }], "out": "h1_shl" },
+            { "op": "or",  "in": ["h1_shl", "rd"], "out": "eff_rd" },
+            { "op": "shl", "in": ["h2_bit", { "const": 3 }], "out": "h2_shl" },
+            { "op": "or",  "in": ["h2_shl", "rs"], "out": "eff_rs" },
+            { "op": "read_reg", "index": "eff_rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "eff_rs", "out": "rs_val" },
+            { "op": "add", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "write_reg", "index": "eff_rd", "value": "result" }
+          ]
+        },
+        {
+          "selector":   { "field": "opcode", "value": "01" },
+          "mnemonic":   "CMP",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "comment":    "Hi-register CMP; updates flags",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "shl", "in": ["h1_bit", { "const": 3 }], "out": "h1_shl" },
+            { "op": "or",  "in": ["h1_shl", "rd"], "out": "eff_rd" },
+            { "op": "shl", "in": ["h2_bit", { "const": 3 }], "out": "h2_shl" },
+            { "op": "or",  "in": ["h2_shl", "rs"], "out": "eff_rs" },
+            { "op": "read_reg", "index": "eff_rd", "out": "rd_val" },
+            { "op": "read_reg", "index": "eff_rs", "out": "rs_val" },
+            { "op": "sub", "in": ["rd_val", "rs_val"], "out": "result" },
+            { "op": "update_nz",    "value": "result" },
+            { "op": "update_c_sub", "in": ["rd_val", "rs_val"] },
+            { "op": "update_v_sub", "in": ["rd_val", "rs_val", "result"] }
+          ]
+        },
+        {
+          "selector":   { "field": "opcode", "value": "10" },
+          "mnemonic":   "MOV",
+          "since":      "ARMv4T",
+          "writes_pc":  "conditional_via_rd",
+          "comment":    "Hi-register MOV; flags NOT updated",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "shl", "in": ["h1_bit", { "const": 3 }], "out": "h1_shl" },
+            { "op": "or",  "in": ["h1_shl", "rd"], "out": "eff_rd" },
+            { "op": "shl", "in": ["h2_bit", { "const": 3 }], "out": "h2_shl" },
+            { "op": "or",  "in": ["h2_shl", "rs"], "out": "eff_rs" },
+            { "op": "read_reg", "index": "eff_rs", "out": "rs_val" },
+            { "op": "write_reg", "index": "eff_rd", "value": "rs_val" }
+          ]
+        },
+        {
+          "selector":   { "field": "opcode", "value": "11" },
+          "mnemonic":   "BX",
+          "since":      "ARMv4T",
+          "writes_pc":  "always",
+          "switches_instruction_set": true,
+          "manual_ref": "ARM ARM A7.1.10 (Thumb F5 BX)",
+          "cycles":     { "form": "2S+1N" },
+          "steps": [
+            { "op": "shl", "in": ["h2_bit", { "const": 3 }], "out": "h2_shl" },
+            { "op": "or",  "in": ["h2_shl", "rs"], "out": "eff_rs" },
+            { "op": "read_reg", "index": "eff_rs", "out": "target" },
+            { "op": "branch_indirect", "target": "target" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -31,6 +31,21 @@ public static class StandardEmitters
         reg.Register(new Binary("lsr", (b, l, r, n) => b.BuildLShr(l, r, n)));
         reg.Register(new Binary("asr", (b, l, r, n) => b.BuildAShr(l, r, n)));
         reg.Register(new Binary("rsb", (b, l, r, n) => b.BuildSub(r, l, n)));
+        // ROR: rotate-right 32-bit. count is masked to 5 bits; count==0
+        // returns the value unchanged (matches ARM/most ISA conventions).
+        reg.Register(new Binary("ror", (b, l, r, n) =>
+        {
+            var i32 = LLVMTypeRef.Int32;
+            var c5    = b.BuildAnd(r, LLVMValueRef.CreateConstInt(i32, 31, false), $"{n}_c5");
+            var zero  = LLVMValueRef.CreateConstInt(i32, 0, false);
+            var isZero = b.BuildICmp(LLVMIntPredicate.LLVMIntEQ, c5, zero, $"{n}_zc");
+            var safeC = b.BuildSelect(isZero, LLVMValueRef.CreateConstInt(i32, 1, false), c5, $"{n}_sc");
+            var lo = b.BuildLShr(l, safeC, $"{n}_lo");
+            var inv = b.BuildSub(LLVMValueRef.CreateConstInt(i32, 32, false), safeC, $"{n}_inv");
+            var hi = b.BuildShl(l, inv, $"{n}_hi");
+            var rot = b.BuildOr(lo, hi, $"{n}_r");
+            return b.BuildSelect(isZero, l, rot, n);
+        }));
         reg.Register(new BicEmitter());   // a AND NOT b
         reg.Register(new MvnEmitter());   // NOT a
 

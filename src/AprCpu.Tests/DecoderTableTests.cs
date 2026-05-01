@@ -133,6 +133,91 @@ public class DecoderTableTests
         Assert.Equal("B", d!.Instruction.Mnemonic);
     }
 
+    /// <summary>Thumb F2 ADD R0, R1, R2 (reg form) → 0x1888</summary>
+    [Fact]
+    public void Decode_Thumb_F2_AddReg()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x1888u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F2_AddSub", d!.Format.Name);
+        Assert.Equal("ADD", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F2 ADD R0, R1, #5 (imm3 form) → 0x1D48</summary>
+    [Fact]
+    public void Decode_Thumb_F2_AddImm3()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x1D48u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F2_AddSub", d!.Format.Name);
+        Assert.Equal("ADD", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F2 SUB R0, R1, R2 (reg) → 0x1A88</summary>
+    [Fact]
+    public void Decode_Thumb_F2_SubReg()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x1A88u);
+        Assert.NotNull(d);
+        Assert.Equal("SUB", d!.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F4 AND R0, R1 → 0x4008</summary>
+    [Fact]
+    public void Decode_Thumb_F4_And()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x4008u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F4_AluOps", d!.Format.Name);
+        Assert.Equal("AND", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F4 NEG R0, R1 → 0x4248</summary>
+    [Fact]
+    public void Decode_Thumb_F4_Neg()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x4248u);
+        Assert.NotNull(d);
+        Assert.Equal("NEG", d!.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F4 MUL R0, R1 → 0x4348</summary>
+    [Fact]
+    public void Decode_Thumb_F4_Mul()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x4348u);
+        Assert.NotNull(d);
+        Assert.Equal("MUL", d!.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F5 BX R8 (Hi reg, H2=1) → 0x4740</summary>
+    [Fact]
+    public void Decode_Thumb_F5_BxHiReg()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x4740u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F5_HiRegOps", d!.Format.Name);
+        Assert.Equal("BX", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>Thumb F5 ADD R0, R8 (H2=1) → 0x4440</summary>
+    [Fact]
+    public void Decode_Thumb_F5_AddHi()
+    {
+        var t = new DecoderTable(LoadThumb());
+        var d = t.Decode(0x4440u);
+        Assert.NotNull(d);
+        Assert.Equal("Thumb_F5_HiRegOps", d!.Format.Name);
+        Assert.Equal("ADD", d.Instruction.Mnemonic);
+    }
+
     // Note: prior "Decode_ReturnsNullForUndefinedEncoding" test was removed
     // in 2.5.5a because the spec's encoding-space coverage is approaching
     // 100% (Coprocessor stubs in 2.5.5b will close the remaining gap), and

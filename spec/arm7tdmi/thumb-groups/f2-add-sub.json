@@ -1,0 +1,85 @@
+{
+  "name": "Thumb_F2_AddSubtract",
+  "comment": "00011 I op nnn sss ddd  — add/sub Rd = Rs +/- (Rn or imm3). Auto-updates NZCV (Thumb has no S-bit).",
+  "formats": [
+    {
+      "name":    "Thumb_F2_AddSub",
+      "pattern": "00011_kk_nnn_sss_ddd",
+      "fields": {
+        "iop":         "10:9",
+        "rn_or_imm3":  "8:6",
+        "rs":          "5:3",
+        "rd":          "2:0"
+      },
+      "mask":  "0xF800",
+      "match": "0x1800",
+      "instructions": [
+        {
+          "selector":   { "field": "iop", "value": "00" },
+          "mnemonic":   "ADD",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "manual_ref": "ARM ARM A7.1.5 (Thumb F2)",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rs",         "out": "rs_val" },
+            { "op": "read_reg", "index": "rn_or_imm3", "out": "rn_val" },
+            { "op": "add", "in": ["rs_val", "rn_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz",    "value": "result" },
+            { "op": "update_c_add", "in": ["rs_val", "rn_val"] },
+            { "op": "update_v_add", "in": ["rs_val", "rn_val", "result"] }
+          ]
+        },
+        {
+          "selector":   { "field": "iop", "value": "01" },
+          "mnemonic":   "SUB",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rs",         "out": "rs_val" },
+            { "op": "read_reg", "index": "rn_or_imm3", "out": "rn_val" },
+            { "op": "sub", "in": ["rs_val", "rn_val"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz",    "value": "result" },
+            { "op": "update_c_sub", "in": ["rs_val", "rn_val"] },
+            { "op": "update_v_sub", "in": ["rs_val", "rn_val", "result"] }
+          ]
+        },
+        {
+          "selector":   { "field": "iop", "value": "10" },
+          "mnemonic":   "ADD",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "comment":    "ADD Rd, Rs, #imm3 — bits 8:6 are unsigned imm3",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "add", "in": ["rs_val", "rn_or_imm3"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz",    "value": "result" },
+            { "op": "update_c_add", "in": ["rs_val", "rn_or_imm3"] },
+            { "op": "update_v_add", "in": ["rs_val", "rn_or_imm3", "result"] }
+          ]
+        },
+        {
+          "selector":   { "field": "iop", "value": "11" },
+          "mnemonic":   "SUB",
+          "since":      "ARMv4T",
+          "writes_pc":  "never",
+          "comment":    "SUB Rd, Rs, #imm3",
+          "cycles":     { "form": "1S" },
+          "steps": [
+            { "op": "read_reg", "index": "rs", "out": "rs_val" },
+            { "op": "sub", "in": ["rs_val", "rn_or_imm3"], "out": "result" },
+            { "op": "write_reg", "index": "rd", "value": "result" },
+            { "op": "update_nz",    "value": "result" },
+            { "op": "update_c_sub", "in": ["rs_val", "rn_or_imm3"] },
+            { "op": "update_v_sub", "in": ["rs_val", "rn_or_imm3", "result"] }
+          ]
+        }
+      ]
+    }
+  ]
+}

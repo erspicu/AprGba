@@ -27,9 +27,9 @@ public sealed unsafe class InstructionFunctionBuilder
         ResolverRegistry = resolverRegistry;
     }
 
-    public LLVMValueRef Build(InstructionSetSpec set, EncodingFormat format, InstructionDef def)
+    public LLVMValueRef Build(InstructionSetSpec set, EncodingFormat format, InstructionDef def, string? mnemonicSuffix = null)
     {
-        var name = $"Execute_{set.Name}_{format.Name}_{def.Mnemonic}";
+        var name = $"Execute_{set.Name}_{format.Name}_{mnemonicSuffix ?? def.Mnemonic}";
         var paramTypes = new[] { Layout.PointerType, LLVMTypeRef.Int32 };
         var fnType = LLVMTypeRef.CreateFunction(Module.Context.VoidType, paramTypes);
         var fn = Module.AddFunction(name, fnType);
