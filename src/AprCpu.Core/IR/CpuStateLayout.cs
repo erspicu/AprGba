@@ -32,8 +32,9 @@ public sealed unsafe class CpuStateLayout
     public LLVMTypeRef    PointerType { get; }
     public LLVMContextRef Context     { get; }
 
-    public RegisterFile    RegisterFile    { get; }
-    public ProcessorModes? ProcessorModes  { get; }
+    public RegisterFile               RegisterFile      { get; }
+    public ProcessorModes?            ProcessorModes    { get; }
+    public IReadOnlyList<ExceptionVector> ExceptionVectors { get; }
 
     /// <summary>GPR count (from <c>register_file.general_purpose.count</c>).</summary>
     public int GprCount { get; }
@@ -56,11 +57,16 @@ public sealed unsafe class CpuStateLayout
     public int CycleCounterFieldIndex { get; }
     public int PendingExceptionsFieldIndex { get; }
 
-    public CpuStateLayout(LLVMContextRef context, RegisterFile registerFile, ProcessorModes? processorModes)
+    public CpuStateLayout(
+        LLVMContextRef context,
+        RegisterFile registerFile,
+        ProcessorModes? processorModes,
+        IReadOnlyList<ExceptionVector>? exceptionVectors = null)
     {
-        Context        = context;
-        RegisterFile   = registerFile;
-        ProcessorModes = processorModes;
+        Context          = context;
+        RegisterFile     = registerFile;
+        ProcessorModes   = processorModes;
+        ExceptionVectors = exceptionVectors ?? Array.Empty<ExceptionVector>();
 
         GprCount     = registerFile.GeneralPurpose.Count;
         GprWidthBits = registerFile.GeneralPurpose.WidthBits;
