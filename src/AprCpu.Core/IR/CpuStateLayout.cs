@@ -203,28 +203,4 @@ public sealed unsafe class CpuStateLayout
         _  => throw new NotSupportedException($"Unsupported register width {bits}-bit."),
     };
 
-    // ----- LEGACY constants (kept for compile compatibility during R2 transition) -----
-    // These will be removed once R2 finishes and all emitters migrate to
-    // GetStatusFlagBitIndex(). Hardcoded ARM CPSR values.
-
-    [Obsolete("Use Layout.GepStatusRegister(\"CPSR\") via the layout instance.")]
-    public LLVMValueRef GepCpsr(LLVMBuilderRef builder, LLVMValueRef statePtr)
-        => GepStatusRegister(builder, statePtr, "CPSR");
-
-    [Obsolete("Use Layout.GetStatusFlagBitIndex(\"CPSR\", \"N\") (or other) — to be removed in R2.")]
-    public const int CpsrBit_N = 31;
-    [Obsolete("Use Layout.GetStatusFlagBitIndex(\"CPSR\", \"Z\")")]
-    public const int CpsrBit_Z = 30;
-    [Obsolete("Use Layout.GetStatusFlagBitIndex(\"CPSR\", \"C\")")]
-    public const int CpsrBit_C = 29;
-    [Obsolete("Use Layout.GetStatusFlagBitIndex(\"CPSR\", \"V\")")]
-    public const int CpsrBit_V = 28;
-    [Obsolete("Use Layout.GetStatusFlagBitIndex(\"CPSR\", \"Q\")")]
-    public const int CpsrBit_Q = 27;
-    [Obsolete("Use Layout.GetStatusFlagBitIndex(\"CPSR\", \"I\")")]
-    public const int CpsrBit_I = 7;
-    [Obsolete("Use Layout.GetStatusFlagBitIndex(\"CPSR\", \"F\")")]
-    public const int CpsrBit_F = 6;
-    [Obsolete("Use Layout.GetStatusFlagBitIndex(\"CPSR\", \"T\")")]
-    public const int CpsrBit_T = 5;
 }
