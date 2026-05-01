@@ -72,6 +72,100 @@ public class HostRuntimeTests
     }
 
     [Fact]
+    public unsafe void ArmLdrImmediate_LoadsWordFromMemoryBus()
+    {
+        // ARM "LDR R0, [R1, #4]" pre-index, add, no writeback, word
+        //   cccc 010 P U 0 W 1 nnnn dddd iiiiiiiiiiii
+        //   1110 010 1 1 0 0 1 0001 0000 000000000100
+        //   = 0xE5910004
+        const uint instruction = 0xE5910004;
+
+        var result = SpecCompiler.Compile(CpuJson);
+        using var rt = HostRuntime.Build(result.Module, GetLayout(result));
+
+        var bus = new FlatMemoryBus(0x100);
+        bus.WriteWord(0x14, 0xCAFEF00Du);  // R1=0x10, +4 = 0x14
+        using var _ = MemoryBusBindings.Install(rt, bus);
+        rt.Finalize();
+
+        var fnPtr = rt.GetFunctionPointer("Execute_ARM_SDT_Imm_LDR_LDR");
+        var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
+
+        Span<byte> state = stackalloc byte[(int)rt.StateSizeBytes];
+        state.Clear();
+        WriteI32(state, rt.GprOffset(1), 0x10u);
+
+        fixed (byte* p = state)
+            fn(p, instruction);
+
+        Assert.Equal(0xCAFEF00Du, ReadI32(state, rt.GprOffset(0)));
+    }
+
+    [Fact]
+    public unsafe void ArmStrImmediate_StoresWordToMemoryBus()
+    {
+        // ARM "STR R2, [R3, #8]" pre-index, add, no writeback, word
+        //   1110 010 1 1 0 0 0 0011 0010 000000001000
+        //   = 0xE5832008
+        const uint instruction = 0xE5832008;
+
+        var result = SpecCompiler.Compile(CpuJson);
+        using var rt = HostRuntime.Build(result.Module, GetLayout(result));
+
+        var bus = new FlatMemoryBus(0x100);
+        using var _ = MemoryBusBindings.Install(rt, bus);
+        rt.Finalize();
+
+        var fnPtr = rt.GetFunctionPointer("Execute_ARM_SDT_Imm_STR_STR");
+        var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
+
+        Span<byte> state = stackalloc byte[(int)rt.StateSizeBytes];
+        state.Clear();
+        WriteI32(state, rt.GprOffset(2), 0x12345678u);
+        WriteI32(state, rt.GprOffset(3), 0x20u);
+
+        fixed (byte* p = state)
+            fn(p, instruction);
+
+        Assert.Equal(0x12345678u, bus.ReadWord(0x28u));
+    }
+
+    [Fact]
+    public unsafe void ArmStrbImmediate_OnlyWritesOneByte()
+    {
+        // ARM "STRB R0, [R1, #1]" — byte write should not touch neighbors
+        //   cccc 010 P U 1 W 0 nnnn dddd iiiiiiiiiiii
+        //   1110 010 1 1 1 0 0 0001 0000 000000000001
+        //   = 0xE5C10001
+        const uint instruction = 0xE5C10001;
+
+        var result = SpecCompiler.Compile(CpuJson);
+        using var rt = HostRuntime.Build(result.Module, GetLayout(result));
+
+        var bus = new FlatMemoryBus(0x100);
+        bus.WriteWord(0x10, 0xAABBCCDDu);  // pre-fill so we can detect spillover
+        using var _ = MemoryBusBindings.Install(rt, bus);
+        rt.Finalize();
+
+        var fnPtr = rt.GetFunctionPointer("Execute_ARM_SDT_Imm_STRB_STRB");
+        var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
+
+        Span<byte> state = stackalloc byte[(int)rt.StateSizeBytes];
+        state.Clear();
+        WriteI32(state, rt.GprOffset(0), 0x42u);   // STRB writes only low byte
+        WriteI32(state, rt.GprOffset(1), 0x10u);
+
+        fixed (byte* p = state)
+            fn(p, instruction);
+
+        // Address 0x11 should be 0x42; the rest of the word at 0x10 untouched
+        Assert.Equal((byte)0xDD, bus.ReadByte(0x10));  // unchanged
+        Assert.Equal((byte)0x42, bus.ReadByte(0x11));  // written
+        Assert.Equal((byte)0xBB, bus.ReadByte(0x12));  // unchanged
+        Assert.Equal((byte)0xAA, bus.ReadByte(0x13));  // unchanged
+    }
+
+    [Fact]
     public unsafe void ArmAddImmediate_RespectsConditionGate()
     {
         // Same ADD as above but with cond=NE (0001) and Z flag set in CPSR.

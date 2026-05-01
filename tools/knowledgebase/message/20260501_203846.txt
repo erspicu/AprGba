@@ -1,0 +1,118 @@
+Timestamp: 2026-05-01T20:38:46
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I'm using LLVM 20 MCJIT (via LLVMSharp.Interop) on Windows x64 + .NET 10. I declared an external global function pointer in IR:
+
+  @memory_read_32 = external global ptr
+
+A function loads it and calls through it:
+
+  define i32 @Execute_LDR(ptr %state, i32 %ins) {
+  entry:
+    ; ... computes addr ...
+    %fn = load ptr, ptr @memory_read_32, align 8
+    %v = call i32 %fn(i32 %addr)
+    ; ...
+  }
+
+Host code uses LLVMAddGlobalMapping(engine, @memory_read_32, slot_addr) where slot_addr is a heap-allocated IntPtr-sized slot containing the trampoline function pointer.
+
+A standalone repro with this exact pattern WORKS — the trampoline gets called.
+
+But when applied to a real spec module (compiled by SpecCompiler before the engine is created), invoking the JIT'd function crashes with 0xC0000005 access violation. The trampoline is never called. AddGlobalMapping is called BEFORE GetFunctionAddress.
+
+Possible causes I've ruled out:
+- The standalone repro shows AddGlobalMapping for global ptrs DOES work in MCJIT 20
+- AddSymbol + SearchForAddressOfSymbol roundtrip succeeds but MCJIT doesn't consult that table
+- AddGlobalMapping for function declarations definitely doesn't work (also crashes)
+- Trampoline is [UnmanagedCallersOnly(CallConvCdecl)] static method, address taken with &Method
+
+What could differ between a small repro module and a large module that would cause AddGlobalMapping to silently fail to bind a global ptr declaration? Could it be related to: module being already partially compiled by the time AddGlobalMapping is called? Need to call FinalizeObject? Order of declarations? Module having multiple references to the same global?
+
+========================================================================
+RESPONSE
+========================================================================
+This is a classic and notoriously difficult class of bugs when integrating LLVM (especially older/legacy JIT architectures like MCJIT) with managed runtimes like .NET on Windows x64.
+
+Given that a standalone repro works but the large spec module crashes—and specifically that mapping function declarations directly *also* crashes—the issue is almost certainly related to **Memory Layout (The 2GB Relocation Limit)** or **MCJIT's Eager Compilation behavior**.
+
+Here is a breakdown of the most likely culprits and how to fix them.
+
+---
+
+### 1. The 2GB Relocation Limit (Code Model) - *Most Likely*
+By default, LLVM uses the `Small` code model. On x64, this model assumes that all code and data reside within a 2GB address space. 
+
+When LLVM compiles your IR:
+`%fn = load ptr, ptr @memory_read_32, align 8`
+It generates an instruction like:
+`mov rax, qword ptr [rip + offset32]`
+
+When you call `AddGlobalMapping`, you are passing a pointer allocated by .NET (e.g., `Marshal.AllocHGlobal` or `GC.AllocateArray`). In a small repro, the .NET heap and the memory MCJIT allocates for its generated code *might* happen to be allocated close to each other (within 2GB) by pure luck. 
+
+In a large application, the JIT code and your `.NET` memory slot are highly likely to be separated by more than 2GB. When MCJIT's `RuntimeDyld` linker tries to patch the 32-bit RIP-relative offset, it silently overflows/truncates. The assembly ends up reading from a garbage memory address, resulting in `0xC0000005`.
+
+**This also perfectly explains why `AddGlobalMapping` on function declarations crashed.** If LLVM emits `CALL [rip + rel32]` and the .NET trampoline is >2GB away, the call jumps to garbage.
+
+**How to test/fix:**
+When setting up your MCJIT engine options, force the `Large` code model. This forces LLVM to emit absolute 64-bit addresses instead of RIP-relative 32-bit offsets.
+
+```csharp
+LLVMMCJITCompilerOptions options = new LLVMMCJITCompilerOptions();
+LLVM.InitializeMCJITCompilerOptions(ref options, (UIntPtr)Marshal.SizeOf<LLVMMCJITCompilerOptions>());
+
+// Set code model to Large
+options.CodeModel = LLVMCodeModel.LLVMCodeModelLarge;
+
+LLVM.CreateMCJITCompilerForModule(out var engine, module, ref options, (UIntPtr)Marshal.SizeOf<LLVMMCJITCompilerOptions>(), out string error);
+```
+
+### 2. MCJIT's Eager Compilation Trap
+MCJIT operates on a module level. When you call `LLVMGetFunctionAddress(engine, "AnyFunction")`, MCJIT doesn't just compile that one function—**it compiles the entire module** (or at least all reachable functions) and resolves *all* relocations at that exact moment.
+
+If your large application does something like this:
+1. Initialize Engine.
+2. `GetFunctionAddress(engine, "SomeInitFunction")`  *(MCJIT compiles the module here!)*
+3. `AddGlobalMapping(engine, memory_read_32_val, slot_addr)` *(Too late)*
+4. `GetFunctionAddress(engine, "Execute_LDR")`
+
+At step 2, MCJIT sees the unmapped `@memory_read_32`, fails to resolve it (often silently resolving it to `0x0` or ignoring it in release builds), and bakes that bad address into the machine code. Step 3 updates the engine's map, but the machine code is already generated.
+
+**How to fix:**
+Ensure `LLVMAddGlobalMapping` is called **before the very first call** to `LLVMGetFunctionAddress` or `LLVMGetPointerToGlobal` on that engine.
+
+### 3. Module/ValueRef Identity Mismatch
+If your "SpecCompiler" generates IR across multiple `LLVMModuleRef` instances and links them together, you must be careful about which `LLVMValueRef` you are passing to `AddGlobalMapping`.
+
+An `LLVMValueRef` for a global declaration is unique to its specific `LLVMModuleRef`. If you look up `@memory_read_32` in Module A and map it, but the engine is actually executing a function originating from Module B (which has its own unresolved `external global` declaration of the same name), MCJIT will not bridge them automatically via the global map.
+
+**How to fix:**
+Use `LLVMGetNamedGlobal(module_attached_to_engine, "memory_read_32")` to get the exact reference *right before* mapping, ensuring you are mapping the exact value the JIT is about to compile.
+
+### 4. The Bulletproof Workaround: `inttoptr` (Bypassing Relocations entirely)
+If you continue fighting MCJIT's linker, relocation models, and OS-specific bugs, the most robust way to inject a host pointer into LLVM IR from .NET is to completely bypass global variables and the JIT linker.
+
+Instead of an external global, declare your global as an actual initialized `i64` (or let the host inject it). Better yet, write a pass/builder step that replaces the global load with an `inttoptr` instruction containing the literal 64-bit address of your .NET pointer.
+
+```llvm
+; Instead of loading from a global, hardcode the 64-bit address of your C# slot/trampoline:
+%fn = inttoptr i64 123456789098765 to ptr 
+%v = call i32 %fn(i32 %addr)
+```
+
+In your SpecCompiler (C# side), when you are generating the IR for the load, do this:
+
+```csharp
+// Get the actual 64-bit address of your UnmanagedCallersOnly method
+long trampolineAddress = (long)(IntPtr)(delegate* unmanaged[Cdecl]<int, int>)&MyTrampoline;
+
+// Inject it directly into the IR as a constant integer, cast to a pointer
+LLVMValueRef constAddr = LLVM.ConstInt(LLVM.Int64Type(), (ulong)trampolineAddress, 0);
+LLVMValueRef fnPtr = LLVM.BuildIntToPtr(builder, constAddr, LLVM.PointerType(0, 0), "fn");
+
+// Call it
+LLVM.BuildCall2(builder, fnType, fnPtr, args, "v");
+```
+*Why this is better:* It relies on zero JIT relocation logic. The LLVM backend will emit an absolute 64-bit load (e.g., `mov rax, 0x00007FF...`) straight into a register and `call rax`. It is immune to the 2GB limit and module boundary issues.

@@ -177,10 +177,9 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
         var addrSlot = ctx.Builder.BuildAlloca(LLVMTypeRef.Int32, "blkl_addr");
         ctx.Builder.BuildStore(startAddr, addrSlot);
 
-        var read32Fn = MemoryEmitters.GetOrDeclareMemoryFunction(
+        var (read32Slot, read32Type, read32PtrType) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
             ctx.Module, MemoryEmitters.ExternFunctionNames.Read32,
             LLVMTypeRef.Int32, LLVMTypeRef.Int32);
-        var read32Type = LLVMTypeRef.CreateFunction(LLVMTypeRef.Int32, new[] { LLVMTypeRef.Int32 });
 
         for (int i = 0; i < 16; i++)
         {
@@ -195,6 +194,7 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
             ctx.Builder.PositionAtEnd(thenBB);
 
             var curAddr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, addrSlot, $"blkl_a{i}");
+            var read32Fn = ctx.Builder.BuildLoad2(read32PtrType, read32Slot, $"blkl_read32_{i}");
             var loaded  = ctx.Builder.BuildCall2(read32Type, read32Fn, new[] { curAddr }, $"blkl_v{i}");
             var rPtr    = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
             ctx.Builder.BuildStore(loaded, rPtr);
@@ -219,11 +219,9 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
         var addrSlot = ctx.Builder.BuildAlloca(LLVMTypeRef.Int32, "blks_addr");
         ctx.Builder.BuildStore(startAddr, addrSlot);
 
-        var write32Fn = MemoryEmitters.GetOrDeclareMemoryFunction(
+        var (write32Slot, write32Type, write32PtrType) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
             ctx.Module, MemoryEmitters.ExternFunctionNames.Write32,
             ctx.Module.Context.VoidType, LLVMTypeRef.Int32, LLVMTypeRef.Int32);
-        var write32Type = LLVMTypeRef.CreateFunction(
-            ctx.Module.Context.VoidType, new[] { LLVMTypeRef.Int32, LLVMTypeRef.Int32 });
 
         for (int i = 0; i < 16; i++)
         {
@@ -240,6 +238,7 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
             var curAddr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, addrSlot, $"blks_a{i}");
             var rPtr    = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
             var rVal    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, rPtr, $"blks_r{i}");
+            var write32Fn = ctx.Builder.BuildLoad2(write32PtrType, write32Slot, $"blks_write32_{i}");
             ctx.Builder.BuildCall2(write32Type, write32Fn, new[] { curAddr, rVal }, "");
             var nextAddr = ctx.Builder.BuildAdd(curAddr, ctx.ConstU32(4), $"blks_a{i}_next");
             ctx.Builder.BuildStore(nextAddr, addrSlot);

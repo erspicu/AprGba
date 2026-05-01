@@ -24,22 +24,22 @@ public class MemoryEmittersTests
     }
 
     [Fact]
-    public void ExternFunction_DeclaredOnFirstUse()
+    public void ExternFunctionPointer_DeclaredOnFirstUse()
     {
         // Use a minimal in-memory module to test the helper directly.
         var ctx = LLVMContextRef.Create();
         using var module = ctx.CreateModuleWithName("test_externs");
 
-        var fn1 = MemoryEmitters.GetOrDeclareMemoryFunction(
+        var (slot1, _, _) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
             module, MemoryEmitters.ExternFunctionNames.Read32,
             LLVMTypeRef.Int32, LLVMTypeRef.Int32);
-        Assert.NotEqual(IntPtr.Zero, fn1.Handle);
+        Assert.NotEqual(IntPtr.Zero, slot1.Handle);
 
-        // Same name again — same function returned (no duplicate declaration).
-        var fn2 = MemoryEmitters.GetOrDeclareMemoryFunction(
+        // Same name again — same global returned (no duplicate declaration).
+        var (slot2, _, _) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
             module, MemoryEmitters.ExternFunctionNames.Read32,
             LLVMTypeRef.Int32, LLVMTypeRef.Int32);
-        Assert.Equal(fn1.Handle, fn2.Handle);
+        Assert.Equal(slot1.Handle, slot2.Handle);
     }
 
     [Fact]

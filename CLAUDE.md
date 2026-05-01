@@ -9,6 +9,22 @@ repository. Keep concise; add new rules as they emerge.
 方案討論、結尾摘要）。**程式碼、commit message、檔案內容、設計文件
 等寫到檔案的內容仍維持英文**，避免污染現有 codebase 的語言一致性。
 
+## Knowledgebase — Gemini 查詢工具
+
+碰到瓶頸（卡住的 LLVM/MCJIT 行為、文件查不到的 vendor 細節、ARM ARM
+某個 corner case 的權威解釋等）可呼叫 `tools/knowledgebase/gemini_query.py`
+查詢 Gemini API：
+
+```
+python tools/knowledgebase/gemini_query.py "你的問題"
+```
+
+規則：
+- **一次只問一個問題**，等回答出來再問下一個（避免 spam）
+- 問題盡量具體：附上版本號、錯誤訊息、已試過的做法
+- 工具會自動 log 到 `tools/knowledgebase/message/<timestamp>.txt`
+- 用於「找解法」「對照權威說法」，**不取代**自己讀 source / 跑 repro
+
 ## Scratch files — use `/temp/`
 
 **Always write temporary / scratch / one-off output files to the `/temp/`

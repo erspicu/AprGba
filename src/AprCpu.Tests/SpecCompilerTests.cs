@@ -65,15 +65,17 @@ public class SpecCompilerTests
         var result = SpecCompiler.Compile(CpuJson);
         var ir = result.Module.PrintToString();
 
-        Assert.Contains("declare void @host_swap_register_bank(", ir);
-        // The SWI emit body must call the swap helper and store the vector address.
+        // Phase 3.1.b: extern is now an indirect call through a global ptr
+        // (MCJIT can't reliably bind function decls in LLVM 20).
+        Assert.Contains("@host_swap_register_bank = external global ptr", ir);
+        // The SWI emit body must load the swap-fn slot, call through it, and store the vector address.
         var swiFnIdx = ir.IndexOf("@Execute_ARM_SWI_SWI", StringComparison.Ordinal);
         Assert.True(swiFnIdx >= 0, "SWI function should be emitted");
-        // Slice from SWI body to next 'define' to scope the asserts.
         var nextDefine = ir.IndexOf("\ndefine ", swiFnIdx + 1, StringComparison.Ordinal);
         var swiBody = nextDefine > 0 ? ir.Substring(swiFnIdx, nextDefine - swiFnIdx) : ir.Substring(swiFnIdx);
 
-        Assert.Contains("call void @host_swap_register_bank", swiBody);
+        Assert.Contains("load ptr, ptr @host_swap_register_bank", swiBody);
+        Assert.Contains("call void %swap_fn(", swiBody);
         Assert.Contains("store i32 8,", swiBody);          // PC := 0x8 (SoftwareInterrupt vector)
         Assert.Contains("cpsr_with_new_mode", swiBody);    // mode bits replaced
         Assert.Contains("cpsr_disable_i", swiBody);        // I bit set per spec disable=["I"]
@@ -100,7 +102,7 @@ public class SpecCompilerTests
         Assert.Contains("restore_cpsr_from_spsr_supervisor", body);
         Assert.Contains("restore_cpsr_from_spsr_fiq", body);
         Assert.Contains("phi i32", body);
-        Assert.Contains("call void @host_swap_register_bank", body);
+        Assert.Contains("call void %swap_fn(", body);
     }
 
     [Fact]
