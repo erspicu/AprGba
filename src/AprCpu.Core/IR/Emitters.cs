@@ -27,6 +27,16 @@ public static class StandardEmitters
         reg.Register(new Binary("shl", (b, l, r, n) => b.BuildShl (l, r, n)));
         reg.Register(new Binary("lsr", (b, l, r, n) => b.BuildLShr(l, r, n)));
         reg.Register(new Binary("asr", (b, l, r, n) => b.BuildAShr(l, r, n)));
+        // Reverse subtract: result = b - a (operands swapped)
+        reg.Register(new Binary("rsb", (b, l, r, n) => b.BuildSub(r, l, n)));
+        // BIC: a AND NOT b
+        reg.Register(new BicEmitter());
+        // Unary
+        reg.Register(new MvnEmitter());
+        // Carry-aware arithmetic (read CPSR.C as carry-in)
+        reg.Register(new AdcEmitter());
+        reg.Register(new SbcEmitter());
+        reg.Register(new RscEmitter());
 
         // Flag updates (write into CPSR)
         reg.Register(new UpdateNz());
@@ -35,6 +45,12 @@ public static class StandardEmitters
         reg.Register(new UpdateVAdd());
         reg.Register(new UpdateVSub());
         reg.Register(new UpdateCShifter());
+        reg.Register(new UpdateCAddCarry());
+        reg.Register(new UpdateCSubCarry());
+
+        // PSR access
+        reg.Register(new ReadPsr());
+        reg.Register(new WritePsr());
 
         // Control flow
         reg.Register(new IfStep());
@@ -252,6 +268,200 @@ internal sealed class UpdateCShifter : IMicroOpEmitter
         // step.in[0] = name of pre-computed shifter_carry_out (i32 0/1)
         var v = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
         CpsrHelpers.SetCpsrBitFromI32Lsb(ctx, CpuStateLayout.CpsrBit_C, v, "c_shf");
+    }
+}
+
+internal sealed class UpdateCAddCarry : IMicroOpEmitter
+{
+    public string OpName => "update_c_add_carry";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var a   = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
+        var b   = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var cin = StandardEmitters.ResolveInput(ctx, step.Raw, 2); // i32 0/1
+
+        // Carry-out = (a + b + cin) wraps past UInt32.MaxValue
+        // Compute via 64-bit add and check bit 32.
+        var i64 = LLVMTypeRef.Int64;
+        var aL = ctx.Builder.BuildZExt(a,   i64, "a_l");
+        var bL = ctx.Builder.BuildZExt(b,   i64, "b_l");
+        var cL = ctx.Builder.BuildZExt(cin, i64, "c_l");
+        var sum = ctx.Builder.BuildAdd(ctx.Builder.BuildAdd(aL, bL, "ab_l"), cL, "abc_l");
+        var hi  = ctx.Builder.BuildLShr(sum, LLVMValueRef.CreateConstInt(i64, 32, false), "carry_hi");
+        var hi32 = ctx.Builder.BuildTrunc(hi, LLVMTypeRef.Int32, "carry_hi_i32");
+        CpsrHelpers.SetCpsrBitFromI32Lsb(ctx, CpuStateLayout.CpsrBit_C, hi32, "c_addc");
+    }
+}
+
+internal sealed class UpdateCSubCarry : IMicroOpEmitter
+{
+    public string OpName => "update_c_sub_carry";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // ARM SBC: result = a - b - !cin, C-out = NOT borrow
+        // Equivalently, C-out = (a >= b + !cin)
+        var a   = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
+        var b   = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var cin = StandardEmitters.ResolveInput(ctx, step.Raw, 2);
+
+        var notCin = ctx.Builder.BuildXor(cin, ctx.ConstU32(1), "not_cin");
+        var bPlus  = ctx.Builder.BuildAdd(b, notCin, "b_plus");
+        var cBool  = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, a, bPlus, "c_subc_test");
+        CpsrHelpers.SetCpsrBit(ctx, CpuStateLayout.CpsrBit_C, cBool, "c_subc");
+    }
+}
+
+// ---------------- additional ALU emitters ----------------
+
+/// <summary>
+/// Reads CPSR.C as an i32 (0 or 1) for use as a carry-in operand.
+/// </summary>
+internal static class CarryReader
+{
+    public static LLVMValueRef ReadCarryIn(EmitContext ctx)
+    {
+        var cpsrPtr = ctx.Layout.GepCpsr(ctx.Builder, ctx.StatePtr);
+        var cpsr    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "cpsr_for_cin");
+        var shifted = ctx.Builder.BuildLShr(cpsr, ctx.ConstU32(CpuStateLayout.CpsrBit_C), "cin_shr");
+        return ctx.Builder.BuildAnd(shifted, ctx.ConstU32(1), "cin");
+    }
+}
+
+internal sealed class AdcEmitter : IMicroOpEmitter
+{
+    public string OpName => "adc";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
+        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var cin = CarryReader.ReadCarryIn(ctx);
+        var ab = ctx.Builder.BuildAdd(a, b, "adc_ab");
+        var res = ctx.Builder.BuildAdd(ab, cin, StandardEmitters.GetOut(step.Raw));
+        ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
+        // Cache the carry-in for any subsequent flag update.
+        ctx.Values["__carry_in__"] = cin;
+    }
+}
+
+internal sealed class SbcEmitter : IMicroOpEmitter
+{
+    public string OpName => "sbc";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
+        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var cin = CarryReader.ReadCarryIn(ctx);
+        var notCin = ctx.Builder.BuildXor(cin, ctx.ConstU32(1), "sbc_notcin");
+        var ab = ctx.Builder.BuildSub(a, b, "sbc_ab");
+        var res = ctx.Builder.BuildSub(ab, notCin, StandardEmitters.GetOut(step.Raw));
+        ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
+        ctx.Values["__carry_in__"] = cin;
+    }
+}
+
+internal sealed class RscEmitter : IMicroOpEmitter
+{
+    public string OpName => "rsc";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // RSC: result = b - a - !cin (operands swapped relative to SBC)
+        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
+        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var cin = CarryReader.ReadCarryIn(ctx);
+        var notCin = ctx.Builder.BuildXor(cin, ctx.ConstU32(1), "rsc_notcin");
+        var ba = ctx.Builder.BuildSub(b, a, "rsc_ba");
+        var res = ctx.Builder.BuildSub(ba, notCin, StandardEmitters.GetOut(step.Raw));
+        ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
+        ctx.Values["__carry_in__"] = cin;
+    }
+}
+
+internal sealed class MvnEmitter : IMicroOpEmitter
+{
+    public string OpName => "mvn";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var v = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
+        var res = ctx.Builder.BuildXor(v, ctx.ConstU32(0xFFFFFFFFu), StandardEmitters.GetOut(step.Raw));
+        ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
+    }
+}
+
+internal sealed class BicEmitter : IMicroOpEmitter
+{
+    public string OpName => "bic";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
+        var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var notB = ctx.Builder.BuildXor(b, ctx.ConstU32(0xFFFFFFFFu), "bic_notb");
+        var res = ctx.Builder.BuildAnd(a, notB, StandardEmitters.GetOut(step.Raw));
+        ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
+    }
+}
+
+// ---------------- PSR access ----------------
+
+internal sealed class ReadPsr : IMicroOpEmitter
+{
+    public string OpName => "read_psr";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // Phase 2.5 first iteration: only CPSR is supported; SPSR will be
+        // handled once banked-register swap lands in 2.5.7.
+        var which = step.Raw.TryGetProperty("which", out var w) ? w.GetString() : "CPSR";
+        var outName = StandardEmitters.GetOut(step.Raw);
+        if (which != "CPSR")
+        {
+            // Stub: just read CPSR for now.
+        }
+        var ptr = ctx.Layout.GepCpsr(ctx.Builder, ctx.StatePtr);
+        var v = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, outName);
+        ctx.Values[outName] = v;
+    }
+}
+
+internal sealed class WritePsr : IMicroOpEmitter
+{
+    public string OpName => "write_psr";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // For MSR. step.value = name of value to write; step.mask = field
+        // mask (which CPSR bytes to update). Mask defaults to all bytes.
+        var valueName = step.Raw.GetProperty("value").GetString()!;
+        var value = ctx.Resolve(valueName);
+
+        uint maskBits = 0xFFFFFFFFu;
+        if (step.Raw.TryGetProperty("mask", out var mEl))
+        {
+            maskBits = mEl.ValueKind switch
+            {
+                JsonValueKind.Number => (uint)mEl.GetInt64(),
+                JsonValueKind.String when mEl.GetString()!.StartsWith("0x") =>
+                    Convert.ToUInt32(mEl.GetString()!.Substring(2), 16),
+                _ => 0xFFFFFFFFu
+            };
+        }
+
+        var which = step.Raw.TryGetProperty("which", out var w) ? w.GetString() : "CPSR";
+        var ptr = ctx.Layout.GepCpsr(ctx.Builder, ctx.StatePtr);
+        if (which != "CPSR")
+        {
+            // SPSR write — Phase 2.5 stub: still target CPSR slot.
+        }
+
+        if (maskBits == 0xFFFFFFFFu)
+        {
+            ctx.Builder.BuildStore(value, ptr);
+        }
+        else
+        {
+            var oldV = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, "psr_old");
+            var keep = ctx.Builder.BuildAnd(oldV,  ctx.ConstU32(~maskBits), "psr_keep");
+            var inV  = ctx.Builder.BuildAnd(value, ctx.ConstU32( maskBits), "psr_in");
+            var newV = ctx.Builder.BuildOr (keep, inV, "psr_new");
+            ctx.Builder.BuildStore(newV, ptr);
+        }
     }
 }
 

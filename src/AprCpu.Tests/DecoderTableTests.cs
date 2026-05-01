@@ -141,4 +141,31 @@ public class DecoderTableTests
         var d = t.Decode(0xF000_0000u);
         Assert.Null(d);
     }
+
+    /// <summary>Decoder coverage for all 16 ARM Data Processing Immediate ALU ops.</summary>
+    [Theory]
+    [InlineData(0xE20000FFu, "AND")]   // AND R0, R0, #0xFF
+    [InlineData(0xE2211001u, "EOR")]   // EOR R1, R1, #1
+    [InlineData(0xE26AA000u, "RSB")]   // RSB R10, R10, #0
+    [InlineData(0xE282_1003u, "ADD")]
+    [InlineData(0xE2A88001u, "ADC")]   // ADC R8, R8, #1
+    [InlineData(0xE2C99000u, "SBC")]   // SBC R9, R9, #0
+    [InlineData(0xE2EBB000u, "RSC")]   // RSC R11, R11, #0
+    [InlineData(0xE3150001u, "TST")]   // TST R5, #1
+    [InlineData(0xE3360000u, "TEQ")]   // TEQ R6, #0
+    [InlineData(0xE350_0000u, "CMP")]
+    [InlineData(0xE3770005u, "CMN")]   // CMN R7, #5
+    [InlineData(0xE3822080u, "ORR")]   // ORR R2, R2, #0x80
+    [InlineData(0xE3A0_0001u, "MOV")]
+    [InlineData(0xE3C3300Fu, "BIC")]   // BIC R3, R3, #0xF
+    [InlineData(0xE3E04000u, "MVN")]   // MVN R4, #0
+    [InlineData(0xE2400001u, "SUB")]
+    public void Decode_AllArmDataProcessingImmediate(uint encoding, string expectedMnemonic)
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(encoding);
+        Assert.NotNull(d);
+        Assert.Equal("DataProcessing_Immediate", d!.Format.Name);
+        Assert.Equal(expectedMnemonic, d.Instruction.Mnemonic);
+    }
 }

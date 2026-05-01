@@ -15,10 +15,17 @@ public class SpecCompilerTests
         Assert.Empty(result.Diagnostics);
         Assert.Equal(2, result.DecoderTables.Count);
 
-        Assert.Contains("ARM.DataProcessing_Immediate.MOV", result.Functions.Keys);
-        Assert.Contains("ARM.DataProcessing_Immediate.ADD", result.Functions.Keys);
-        Assert.Contains("ARM.DataProcessing_Immediate.SUB", result.Functions.Keys);
-        Assert.Contains("ARM.DataProcessing_Immediate.CMP", result.Functions.Keys);
+        // Phase 2.5.2a: full set of 16 ARM Data Processing Immediate ALU ops
+        var allArmAlu = new[]
+        {
+            "AND", "EOR", "SUB", "RSB", "ADD", "ADC", "SBC", "RSC",
+            "TST", "TEQ", "CMP", "CMN", "ORR", "MOV", "BIC", "MVN"
+        };
+        foreach (var mnemonic in allArmAlu)
+        {
+            Assert.Contains($"ARM.DataProcessing_Immediate.{mnemonic}", result.Functions.Keys);
+        }
+
         Assert.Contains("ARM.Branch_BL.B",                result.Functions.Keys);
         Assert.Contains("ARM.Branch_BL.BL",               result.Functions.Keys);
         Assert.Contains("ARM.Branch_Exchange.BX",         result.Functions.Keys);
