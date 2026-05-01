@@ -1,0 +1,47 @@
+{
+  "name": "Block2_AluReg",
+  "comment": "ALU A, r — 10_ooo_sss. ooo selects the operation (ADD/ADC/SUB/SBC/AND/XOR/OR/CP), sss the source register using the LR35902 lookup B/C/D/E/H/L/(HL)/A. Two formats split the (HL)-source case (2 m-cycles, memory access) from the reg-source case (1 m-cycle).",
+  "formats": [
+    {
+      "name": "AluA_HlInd",
+      "comment": "10_ooo_110 — ALU op with memory[HL] as the second operand.",
+      "pattern": "10ooo110",
+      "fields": {
+        "ooo": "5:3"
+      },
+      "mask": "0xC7",
+      "match": "0x86",
+      "instructions": [
+        { "selector": { "field": "ooo", "value": "000" }, "mnemonic": "ADD", "since": "LR35902", "manual_ref": "GB CPU §ADD A,(HL)", "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_hl", "alu_op": "add" }] },
+        { "selector": { "field": "ooo", "value": "001" }, "mnemonic": "ADC", "since": "LR35902", "manual_ref": "GB CPU §ADC A,(HL)", "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_hl", "alu_op": "adc" }] },
+        { "selector": { "field": "ooo", "value": "010" }, "mnemonic": "SUB", "since": "LR35902", "manual_ref": "GB CPU §SUB (HL)",   "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_hl", "alu_op": "sub" }] },
+        { "selector": { "field": "ooo", "value": "011" }, "mnemonic": "SBC", "since": "LR35902", "manual_ref": "GB CPU §SBC A,(HL)", "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_hl", "alu_op": "sbc" }] },
+        { "selector": { "field": "ooo", "value": "100" }, "mnemonic": "AND", "since": "LR35902", "manual_ref": "GB CPU §AND (HL)",   "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_hl", "alu_op": "and" }] },
+        { "selector": { "field": "ooo", "value": "101" }, "mnemonic": "XOR", "since": "LR35902", "manual_ref": "GB CPU §XOR (HL)",   "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_hl", "alu_op": "xor" }] },
+        { "selector": { "field": "ooo", "value": "110" }, "mnemonic": "OR",  "since": "LR35902", "manual_ref": "GB CPU §OR (HL)",    "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_hl", "alu_op": "or"  }] },
+        { "selector": { "field": "ooo", "value": "111" }, "mnemonic": "CP",  "since": "LR35902", "manual_ref": "GB CPU §CP (HL)",    "cycles": { "form": "2m" }, "steps": [{ "op": "lr35902_alu_a_hl", "alu_op": "cp"  }] }
+      ]
+    },
+    {
+      "name": "AluA_Reg",
+      "comment": "10_ooo_sss — general ALU op A, r. (HL)-source case shadowed by AluA_HlInd above.",
+      "pattern": "10ooosss",
+      "fields": {
+        "ooo": "5:3",
+        "sss": "2:0"
+      },
+      "mask": "0xC0",
+      "match": "0x80",
+      "instructions": [
+        { "selector": { "field": "ooo", "value": "000" }, "mnemonic": "ADD", "since": "LR35902", "manual_ref": "GB CPU §ADD A,r", "cycles": { "form": "1m" }, "steps": [{ "op": "lr35902_alu_a_r8", "alu_op": "add", "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "001" }, "mnemonic": "ADC", "since": "LR35902", "manual_ref": "GB CPU §ADC A,r", "cycles": { "form": "1m" }, "steps": [{ "op": "lr35902_alu_a_r8", "alu_op": "adc", "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "010" }, "mnemonic": "SUB", "since": "LR35902", "manual_ref": "GB CPU §SUB r",   "cycles": { "form": "1m" }, "steps": [{ "op": "lr35902_alu_a_r8", "alu_op": "sub", "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "011" }, "mnemonic": "SBC", "since": "LR35902", "manual_ref": "GB CPU §SBC A,r", "cycles": { "form": "1m" }, "steps": [{ "op": "lr35902_alu_a_r8", "alu_op": "sbc", "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "100" }, "mnemonic": "AND", "since": "LR35902", "manual_ref": "GB CPU §AND r",   "cycles": { "form": "1m" }, "steps": [{ "op": "lr35902_alu_a_r8", "alu_op": "and", "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "101" }, "mnemonic": "XOR", "since": "LR35902", "manual_ref": "GB CPU §XOR r",   "cycles": { "form": "1m" }, "steps": [{ "op": "lr35902_alu_a_r8", "alu_op": "xor", "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "110" }, "mnemonic": "OR",  "since": "LR35902", "manual_ref": "GB CPU §OR r",    "cycles": { "form": "1m" }, "steps": [{ "op": "lr35902_alu_a_r8", "alu_op": "or",  "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "111" }, "mnemonic": "CP",  "since": "LR35902", "manual_ref": "GB CPU §CP r",    "cycles": { "form": "1m" }, "steps": [{ "op": "lr35902_alu_a_r8", "alu_op": "cp",  "field": "sss" }] }
+      ]
+    }
+  ]
+}

@@ -903,4 +903,57 @@ public class DecoderTableTests
         Assert.Equal("DataProcessing_Immediate", d!.Format.Name);
         Assert.Equal(expectedMnemonic, d.Instruction.Mnemonic);
     }
+
+    // ---------------- LR35902 main set, block 1 (LD r,r' + HALT) ----------------
+
+    private static InstructionSetSpec LoadLr35902Main() =>
+        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "lr35902", "main.json"));
+
+    [Theory]
+    [InlineData(0x76, "Halt",         "HALT")]      // 01_110_110 — must beat LdHlInd_Reg
+    [InlineData(0x40, "LdReg_Reg",    "LD")]        // LD B, B
+    [InlineData(0x47, "LdReg_Reg",    "LD")]        // LD B, A
+    [InlineData(0x7F, "LdReg_Reg",    "LD")]        // LD A, A
+    [InlineData(0x70, "LdHlInd_Reg",  "LD")]        // LD (HL), B
+    [InlineData(0x77, "LdHlInd_Reg",  "LD")]        // LD (HL), A — adjacent to HALT
+    [InlineData(0x46, "LdReg_HlInd",  "LD")]        // LD B, (HL)
+    [InlineData(0x7E, "LdReg_HlInd",  "LD")]        // LD A, (HL)
+    public void Decode_Lr35902_Block1(uint encoding, string expectedFormat, string expectedMnemonic)
+    {
+        var t = new DecoderTable(LoadLr35902Main());
+        var d = t.Decode(encoding);
+        Assert.NotNull(d);
+        Assert.Equal(expectedFormat,   d!.Format.Name);
+        Assert.Equal(expectedMnemonic, d.Instruction.Mnemonic);
+    }
+
+    [Theory]
+    // Block 2: ALU A, r (10_ooo_sss). 8 ops × 8 sources, plus the (HL)-source split.
+    [InlineData(0x80, "AluA_Reg",     "ADD")]   // ADD A, B
+    [InlineData(0x87, "AluA_Reg",     "ADD")]   // ADD A, A
+    [InlineData(0x88, "AluA_Reg",     "ADC")]   // ADC A, B
+    [InlineData(0x90, "AluA_Reg",     "SUB")]   // SUB B
+    [InlineData(0x98, "AluA_Reg",     "SBC")]   // SBC A, B
+    [InlineData(0xA0, "AluA_Reg",     "AND")]   // AND B
+    [InlineData(0xA8, "AluA_Reg",     "XOR")]   // XOR B
+    [InlineData(0xB0, "AluA_Reg",     "OR")]    // OR B
+    [InlineData(0xB8, "AluA_Reg",     "CP")]    // CP B
+    [InlineData(0xBF, "AluA_Reg",     "CP")]    // CP A
+    // (HL)-source variants — must be matched by AluA_HlInd, not AluA_Reg.
+    [InlineData(0x86, "AluA_HlInd",   "ADD")]   // ADD A, (HL)
+    [InlineData(0x8E, "AluA_HlInd",   "ADC")]   // ADC A, (HL)
+    [InlineData(0x96, "AluA_HlInd",   "SUB")]   // SUB (HL)
+    [InlineData(0x9E, "AluA_HlInd",   "SBC")]   // SBC A, (HL)
+    [InlineData(0xA6, "AluA_HlInd",   "AND")]   // AND (HL)
+    [InlineData(0xAE, "AluA_HlInd",   "XOR")]   // XOR (HL)
+    [InlineData(0xB6, "AluA_HlInd",   "OR")]    // OR (HL)
+    [InlineData(0xBE, "AluA_HlInd",   "CP")]    // CP (HL)
+    public void Decode_Lr35902_Block2(uint encoding, string expectedFormat, string expectedMnemonic)
+    {
+        var t = new DecoderTable(LoadLr35902Main());
+        var d = t.Decode(encoding);
+        Assert.NotNull(d);
+        Assert.Equal(expectedFormat,   d!.Format.Name);
+        Assert.Equal(expectedMnemonic, d.Instruction.Mnemonic);
+    }
 }

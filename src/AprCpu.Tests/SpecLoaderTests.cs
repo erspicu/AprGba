@@ -131,9 +131,16 @@ public class SpecLoaderTests
         Assert.True(loaded.InstructionSets.ContainsKey("CB"));
 
         var main = loaded.InstructionSets["Main"];
-        Assert.True(main.WidthBits.IsVariable);
+        Assert.Equal(8, main.WidthBits.Fixed);
 
         var cb = loaded.InstructionSets["CB"];
         Assert.Equal(8, cb.WidthBits.Fixed);
+
+        // Block 1 (LD r,r' + HALT) loaded.
+        var formats = main.EncodingGroups.SelectMany(g => g.Formats).ToList();
+        Assert.Contains(formats, f => f.Name == "Halt");
+        Assert.Contains(formats, f => f.Name == "LdReg_Reg");
+        Assert.Contains(formats, f => f.Name == "LdHlInd_Reg");
+        Assert.Contains(formats, f => f.Name == "LdReg_HlInd");
     }
 }
