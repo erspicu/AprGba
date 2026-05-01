@@ -200,7 +200,6 @@
           "instructions": [
 
             {
-              "selector":   { "field": "offset11", "value": "0" },
               "mnemonic":   "B",
               "since":      "ARMv4T",
               "unconditional": true,

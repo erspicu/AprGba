@@ -44,6 +44,11 @@ public sealed unsafe class SpecCompiler
 
         foreach (var (setName, set) in loaded.InstructionSets)
         {
+            // Surface SpecValidator warnings as diagnostics (hard errors
+            // already threw at load time).
+            foreach (var w in SpecValidator.ValidateInstructionSet(set))
+                diagnostics.Add($"[warn] {w}");
+
             DecoderTable table;
             try
             {
