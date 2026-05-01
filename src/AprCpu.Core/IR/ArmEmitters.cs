@@ -245,6 +245,8 @@ internal sealed class WritePsr : IMicroOpEmitter
         var valueName = step.Raw.GetProperty("value").GetString()!;
         var value = ctx.Resolve(valueName);
 
+        // Static mask form: { "mask": <constant> } — used by callers who
+        // know at compile time which bits to update.
         uint maskBits = 0xFFFFFFFFu;
         if (step.Raw.TryGetProperty("mask", out var mEl))
         {
@@ -257,11 +259,56 @@ internal sealed class WritePsr : IMicroOpEmitter
             };
         }
 
+        // Runtime mask form: { "mask_from_psr_field": "field_name" } —
+        // expands ARM's 4-bit MSR field selector (f/s/x/c) into a 32-bit
+        // mask word at runtime, then applies it like the static path.
+        // Bits: 19=f→0xFF000000, 18=s→0x00FF0000, 17=x→0x0000FF00, 16=c→0x000000FF.
+        LLVMValueRef? runtimeMask = null;
+        if (step.Raw.TryGetProperty("mask_from_psr_field", out var fEl))
+        {
+            var fieldName = fEl.GetString()!;
+            var fieldVal  = ctx.Resolve(fieldName);   // 4-bit field, low 4 bits
+
+            // mask = ((field & 8) ? 0xFF000000 : 0)
+            //      | ((field & 4) ? 0x00FF0000 : 0)
+            //      | ((field & 2) ? 0x0000FF00 : 0)
+            //      | ((field & 1) ? 0x000000FF : 0)
+            // Implemented branchlessly: for each bit, isolate, sign-extend
+            // to 0/-1 worth of the byte, and OR in the byte mask.
+            LLVMValueRef accum = ctx.ConstU32(0);
+            (uint bitIdx, uint byteMask)[] entries = {
+                (3, 0xFF000000u),   // f
+                (2, 0x00FF0000u),   // s
+                (1, 0x0000FF00u),   // x
+                (0, 0x000000FFu),   // c
+            };
+            foreach (var (bitIdx, byteMask) in entries)
+            {
+                var bit  = ctx.Builder.BuildAnd(
+                    ctx.Builder.BuildLShr(fieldVal, ctx.ConstU32(bitIdx), $"mskf_shr{bitIdx}"),
+                    ctx.ConstU32(1), $"mskf_bit{bitIdx}");
+                // Multiply bit (0 or 1) by byteMask: bit * byteMask works because
+                // bit is 0 or 1 and we want 0 or byteMask.
+                var contribution = ctx.Builder.BuildMul(bit, ctx.ConstU32(byteMask), $"mskf_c{bitIdx}");
+                accum = ctx.Builder.BuildOr(accum, contribution, $"mskf_or{bitIdx}");
+            }
+            runtimeMask = accum;
+        }
+
         var which = step.Raw.TryGetProperty("which", out var w) ? w.GetString() : "CPSR";
         var target = which == "SPSR" ? "CPSR" : (which ?? "CPSR");
         var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, target);
 
-        if (maskBits == 0xFFFFFFFFu)
+        if (runtimeMask is { } rm)
+        {
+            var oldV = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, "psr_old");
+            var notMask = ctx.Builder.BuildXor(rm, ctx.ConstU32(0xFFFFFFFFu), "psr_notmask");
+            var keep = ctx.Builder.BuildAnd(oldV,  notMask, "psr_keep");
+            var inV  = ctx.Builder.BuildAnd(value, rm, "psr_in");
+            var newV = ctx.Builder.BuildOr (keep, inV, "psr_new");
+            ctx.Builder.BuildStore(newV, ptr);
+        }
+        else if (maskBits == 0xFFFFFFFFu)
         {
             ctx.Builder.BuildStore(value, ptr);
         }

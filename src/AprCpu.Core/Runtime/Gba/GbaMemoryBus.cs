@@ -31,6 +31,32 @@ public sealed class GbaMemoryBus : IMemoryBus
     public byte[] Oam      { get; } = new byte[GbaMemoryMap.OamSize];
     public byte[] Rom      { get; private set; } = Array.Empty<byte>();
 
+    // DISPSTAT.VBLANK_FLG must oscillate, not stay set, otherwise jsmolka's
+    // m_vsync macro deadlocks. The macro waits for the flag to CLEAR, then
+    // for it to SET. We toggle on every read; both loops exit after 1-2 reads.
+    private int _dispstatReadCount;
+
+    /// <summary>
+    /// Install a minimal "BIOS" that just returns from every exception
+    /// vector via <c>MOVS PC, LR</c> (encoding 0xE1B0F00E).
+    ///
+    /// Used by Phase 4.x test runs that want SWI / Undefined / etc. to
+    /// be no-ops rather than full HLE. Real HLE BIOS (Div, Sqrt, etc.)
+    /// would land in a later phase.
+    ///
+    /// Without this, a ROM that issues SWI sees PC jump to 0x00000008
+    /// in our zeroed BIOS region, decodes 0x00000000 as AND with cond=EQ,
+    /// and wanders unpredictably.
+    /// </summary>
+    public void InstallMinimalBiosStubs()
+    {
+        // MOVS PC, LR : 1110_0001_1011_0000_1111_0000_0000_1110 = 0xE1B0F00E
+        const uint MovsPcLr = 0xE1B0F00Eu;
+        // Vectors at 0x00,04,08,0C,10,(reserved 14),18,1C.
+        foreach (var vecOff in new uint[] { 0x00, 0x04, 0x08, 0x0C, 0x10, 0x18, 0x1C })
+            BinaryPrimitives.WriteUInt32LittleEndian(Bios.AsSpan((int)vecOff, 4), MovsPcLr);
+    }
+
     /// <summary>
     /// Load a .gba ROM image into the GamePak ROM region. Caller is
     /// expected to have already read the file into bytes.
@@ -177,28 +203,35 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     private byte ReadIoByte(uint off)
     {
-        // For DISPSTAT we want VBLANK_FLG forever — return the proper bit
-        // when the half/byte read hits offset 0x004 or 0x005.
-        if (off == GbaMemoryMap.DISPSTAT_Off)     return (byte)(GbaMemoryMap.STAT_VBLANK_FLG & 0xFF);
-        if (off == GbaMemoryMap.DISPSTAT_Off + 1) return (byte)((GbaMemoryMap.STAT_VBLANK_FLG >> 8) & 0xFF);
+        if (off == GbaMemoryMap.DISPSTAT_Off)     return (byte)(NextDispstat() & 0xFF);
+        if (off == GbaMemoryMap.DISPSTAT_Off + 1) return (byte)((NextDispstat() >> 8) & 0xFF);
         return Io[off];
     }
 
     private ushort ReadIoHalfword(uint off)
     {
-        if (off == GbaMemoryMap.DISPSTAT_Off) return GbaMemoryMap.STAT_VBLANK_FLG;
+        if (off == GbaMemoryMap.DISPSTAT_Off) return NextDispstat();
         return BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)off, 2));
     }
 
     private uint ReadIoWord(uint off)
     {
-        // DISPSTAT (16-bit) sits in lower half of word at 0x04; upper half is VCOUNT (16-bit).
         if (off == GbaMemoryMap.DISPSTAT_Off)
         {
-            // VCOUNT = 0x9F (line 159 = end of VBlank window). Arbitrary
-            // value just to keep tests that read VCOUNT happy.
-            return ((uint)0x9F << 16) | GbaMemoryMap.STAT_VBLANK_FLG;
+            // VCOUNT in upper 16 bits — arbitrary line number kept stable.
+            return ((uint)0x9F << 16) | NextDispstat();
         }
         return BinaryPrimitives.ReadUInt32LittleEndian(Io.AsSpan((int)off, 4));
+    }
+
+    /// <summary>
+    /// Pseudo-VBlank toggle: alternates VBLANK_FLG between 1 and 0 on
+    /// successive reads, so m_vsync (wait-for-clear, then wait-for-set)
+    /// completes in 1-2 reads per loop instead of deadlocking.
+    /// </summary>
+    private ushort NextDispstat()
+    {
+        _dispstatReadCount++;
+        return (_dispstatReadCount & 1) == 1 ? GbaMemoryMap.STAT_VBLANK_FLG : (ushort)0;
     }
 }
