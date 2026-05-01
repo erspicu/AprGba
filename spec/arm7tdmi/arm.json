@@ -215,7 +215,6 @@
           "instructions": [
 
             {
-              "selector":   { "field": "rm", "value": "0" },
               "mnemonic":   "BX",
               "since":      "ARMv4T",
               "writes_pc":  "always",

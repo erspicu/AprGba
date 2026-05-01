@@ -49,6 +49,7 @@ public static class SpecLoader
             }
             using var setDoc = JsonDocument.Parse(File.ReadAllText(setPath), DocOpts);
             var set = ParseInstructionSetSpec(setDoc.RootElement, setPath);
+            SpecValidator.ValidateInstructionSet(set);
             sets[setRef.Name] = set;
         }
 
@@ -62,7 +63,12 @@ public static class SpecLoader
         if (!File.Exists(fullPath))
             throw new SpecValidationException("File not found.", fullPath);
         using var doc = JsonDocument.Parse(File.ReadAllText(fullPath), DocOpts);
-        return ParseInstructionSetSpec(doc.RootElement, fullPath);
+        var set = ParseInstructionSetSpec(doc.RootElement, fullPath);
+
+        // Run semantic validators (hard errors throw).
+        SpecValidator.ValidateInstructionSet(set);
+
+        return set;
     }
 
     // ---------------- CPU spec ----------------
