@@ -34,6 +34,9 @@ public static class StandardEmitters
         reg.Register(new BicEmitter());   // a AND NOT b
         reg.Register(new MvnEmitter());   // NOT a
 
+        // Memory access (architecture-agnostic; lowers to host-bound externs)
+        MemoryEmitters.RegisterAll(reg);
+
         // Control flow (generic — branch_indirect is in ArmEmitters)
         reg.Register(new IfStep());
         reg.Register(new Branch("branch",      BranchKind.Plain));
