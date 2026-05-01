@@ -1,0 +1,139 @@
+{
+  "name": "Block0_MiscControl",
+  "comment": "Standalone block 0 opcodes that don't fit any encoding family: NOP/STOP plus the 'col 7' rotate/decimal-adjust/flag-twiddle group (00_xxx_111). Every opcode listed individually with mask 0xFF for clarity — these are control-flow misc, not a regular grid.",
+  "formats": [
+    {
+      "name": "Nop",
+      "comment": "0x00 — NOP",
+      "pattern": "00000000",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x00",
+      "instructions": [{
+        "mnemonic": "NOP", "since": "LR35902", "manual_ref": "GB CPU §NOP",
+        "cycles": { "form": "1m" },
+        "steps": []
+      }]
+    },
+    {
+      "name": "Stop",
+      "comment": "0x10 0x00 — STOP. Two bytes; second byte is normally 0x00 and ignored.",
+      "pattern": "00010000",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x10",
+      "instructions": [{
+        "mnemonic": "STOP", "since": "LR35902", "manual_ref": "GB CPU §STOP",
+        "cycles": { "form": "1m" },
+        "steps": [
+          { "op": "read_imm8", "out": "_unused" },
+          { "op": "stop" }
+        ]
+      }]
+    },
+    {
+      "name": "Rlca",
+      "comment": "0x07 — RLCA. Like CB-prefix RLC A but always clears Z (rather than setting it on zero result).",
+      "pattern": "00000111",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x07",
+      "instructions": [{
+        "mnemonic": "RLCA", "since": "LR35902", "manual_ref": "GB CPU §RLCA",
+        "cycles": { "form": "1m" },
+        "steps": [{ "op": "lr35902_rlca" }]
+      }]
+    },
+    {
+      "name": "Rrca",
+      "comment": "0x0F — RRCA. Z always cleared.",
+      "pattern": "00001111",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x0F",
+      "instructions": [{
+        "mnemonic": "RRCA", "since": "LR35902", "manual_ref": "GB CPU §RRCA",
+        "cycles": { "form": "1m" },
+        "steps": [{ "op": "lr35902_rrca" }]
+      }]
+    },
+    {
+      "name": "Rla",
+      "comment": "0x17 — RLA. Z always cleared; rotates through C.",
+      "pattern": "00010111",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x17",
+      "instructions": [{
+        "mnemonic": "RLA", "since": "LR35902", "manual_ref": "GB CPU §RLA",
+        "cycles": { "form": "1m" },
+        "steps": [{ "op": "lr35902_rla" }]
+      }]
+    },
+    {
+      "name": "Rra",
+      "comment": "0x1F — RRA. Z always cleared; rotates through C.",
+      "pattern": "00011111",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x1F",
+      "instructions": [{
+        "mnemonic": "RRA", "since": "LR35902", "manual_ref": "GB CPU §RRA",
+        "cycles": { "form": "1m" },
+        "steps": [{ "op": "lr35902_rra" }]
+      }]
+    },
+    {
+      "name": "Daa",
+      "comment": "0x27 — DAA. Decimal-adjust A after BCD arithmetic; flag semantics depend on N flag from the previous op.",
+      "pattern": "00100111",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x27",
+      "instructions": [{
+        "mnemonic": "DAA", "since": "LR35902", "manual_ref": "GB CPU §DAA",
+        "cycles": { "form": "1m" },
+        "steps": [{ "op": "lr35902_daa" }]
+      }]
+    },
+    {
+      "name": "Cpl",
+      "comment": "0x2F — CPL. A ← ~A; sets N=H=1, Z/C unchanged.",
+      "pattern": "00101111",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x2F",
+      "instructions": [{
+        "mnemonic": "CPL", "since": "LR35902", "manual_ref": "GB CPU §CPL",
+        "cycles": { "form": "1m" },
+        "steps": [{ "op": "lr35902_cpl" }]
+      }]
+    },
+    {
+      "name": "Scf",
+      "comment": "0x37 — SCF. C←1, N=H=0, Z unchanged.",
+      "pattern": "00110111",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x37",
+      "instructions": [{
+        "mnemonic": "SCF", "since": "LR35902", "manual_ref": "GB CPU §SCF",
+        "cycles": { "form": "1m" },
+        "steps": [{ "op": "lr35902_scf" }]
+      }]
+    },
+    {
+      "name": "Ccf",
+      "comment": "0x3F — CCF. C←!C, N=H=0, Z unchanged.",
+      "pattern": "00111111",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x3F",
+      "instructions": [{
+        "mnemonic": "CCF", "since": "LR35902", "manual_ref": "GB CPU §CCF",
+        "cycles": { "form": "1m" },
+        "steps": [{ "op": "lr35902_ccf" }]
+      }]
+    }
+  ]
+}

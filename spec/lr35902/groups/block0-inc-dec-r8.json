@@ -1,0 +1,48 @@
+{
+  "name": "Block0_IncDecR8",
+  "comment": "INC r (00_ddd_100) and DEC r (00_ddd_101). 16 opcodes total. ddd=110 is the (HL) memory variant (3 m-cycles instead of 1). H flag affected; C flag preserved per LR35902 spec.",
+  "formats": [
+    {
+      "name": "Inc_R8",
+      "comment": "00_ddd_100",
+      "pattern": "00ddd100",
+      "fields": {
+        "ddd": "5:3"
+      },
+      "mask": "0xC7",
+      "match": "0x04",
+      "instructions": [
+        {
+          "mnemonic": "INC",
+          "since": "LR35902",
+          "manual_ref": "GB CPU §INC r / INC (HL)",
+          "cycles": { "form": "1m", "extra_when_dest_pc": "+2m if (HL)" },
+          "steps": [
+            { "op": "lr35902_inc_r8", "field": "ddd" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Dec_R8",
+      "comment": "00_ddd_101",
+      "pattern": "00ddd101",
+      "fields": {
+        "ddd": "5:3"
+      },
+      "mask": "0xC7",
+      "match": "0x05",
+      "instructions": [
+        {
+          "mnemonic": "DEC",
+          "since": "LR35902",
+          "manual_ref": "GB CPU §DEC r / DEC (HL)",
+          "cycles": { "form": "1m", "extra_when_dest_pc": "+2m if (HL)" },
+          "steps": [
+            { "op": "lr35902_dec_r8", "field": "ddd" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -8,14 +8,26 @@
   "endian_within_word": "little",
   "decode_strategy": "mask_match_priority",
   "encoding_groups": [
-    {
-      "$include": "groups/block1-halt.json"
-    },
-    {
-      "$include": "groups/block1-ld-reg-reg.json"
-    },
-    {
-      "$include": "groups/block2-alu-reg.json"
-    }
+    { "$include": "groups/block0-misc-control.json" },
+    { "$include": "groups/block0-jr.json" },
+    { "$include": "groups/block0-ld-nn-sp.json" },
+    { "$include": "groups/block0-mem-indirect.json" },
+    { "$include": "groups/block0-ld-rr-imm16.json" },
+    { "$include": "groups/block0-alu-rr.json" },
+    { "$include": "groups/block0-inc-dec-r8.json" },
+    { "$include": "groups/block0-ld-r8-imm8.json" },
+    { "$include": "groups/block1-halt.json" },
+    { "$include": "groups/block1-ld-reg-reg.json" },
+    { "$include": "groups/block2-alu-reg.json" },
+    { "$include": "groups/block3-jp.json" },
+    { "$include": "groups/block3-call.json" },
+    { "$include": "groups/block3-ret.json" },
+    { "$include": "groups/block3-rst.json" },
+    { "$include": "groups/block3-push-pop.json" },
+    { "$include": "groups/block3-ldh-mem-high.json" },
+    { "$include": "groups/block3-stack-arith.json" },
+    { "$include": "groups/block3-di-ei.json" },
+    { "$include": "groups/block3-cb-prefix.json" },
+    { "$include": "groups/block3-alu-imm8.json" }
   ]
 }

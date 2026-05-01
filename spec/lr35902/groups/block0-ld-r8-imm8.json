@@ -1,0 +1,28 @@
+{
+  "name": "Block0_LdR8Imm8",
+  "comment": "LD r, n — 00_ddd_110. 8 opcodes (one per dest reg incl. (HL) which costs an extra m-cycle).",
+  "formats": [
+    {
+      "name": "LdR8_Imm8",
+      "comment": "00_ddd_110",
+      "pattern": "00ddd110",
+      "fields": {
+        "ddd": "5:3"
+      },
+      "mask": "0xC7",
+      "match": "0x06",
+      "instructions": [
+        {
+          "mnemonic": "LD",
+          "since": "LR35902",
+          "manual_ref": "GB CPU §LD r,n / LD (HL),n",
+          "cycles": { "form": "2m", "extra_when_dest_pc": "+1m if (HL)" },
+          "steps": [
+            { "op": "read_imm8", "out": "imm" },
+            { "op": "lr35902_write_r8", "field": "ddd", "value": "imm" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "name": "CbPrefix_Shift",
+  "comment": "CB-prefix shift/rotate ops — 00_ooo_sss. 8 operations × 8 source registers. ooo selects RLC/RRC/RL/RR/SLA/SRA/SWAP/SRL; sss selects target reg using the LR35902 lookup (110 = (HL) memory, 4 m-cycles instead of 2).",
+  "formats": [
+    {
+      "name": "Cb_Shift",
+      "comment": "00_ooo_sss",
+      "pattern": "00ooosss",
+      "fields": {
+        "ooo": "5:3",
+        "sss": "2:0"
+      },
+      "mask": "0xC0",
+      "match": "0x00",
+      "instructions": [
+        { "selector": { "field": "ooo", "value": "000" }, "mnemonic": "RLC",  "since": "LR35902", "manual_ref": "GB CPU §RLC r",  "cycles": { "form": "2m_or_4m" }, "steps": [{ "op": "lr35902_cb_shift", "shift_op": "rlc",  "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "001" }, "mnemonic": "RRC",  "since": "LR35902", "manual_ref": "GB CPU §RRC r",  "cycles": { "form": "2m_or_4m" }, "steps": [{ "op": "lr35902_cb_shift", "shift_op": "rrc",  "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "010" }, "mnemonic": "RL",   "since": "LR35902", "manual_ref": "GB CPU §RL r",   "cycles": { "form": "2m_or_4m" }, "steps": [{ "op": "lr35902_cb_shift", "shift_op": "rl",   "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "011" }, "mnemonic": "RR",   "since": "LR35902", "manual_ref": "GB CPU §RR r",   "cycles": { "form": "2m_or_4m" }, "steps": [{ "op": "lr35902_cb_shift", "shift_op": "rr",   "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "100" }, "mnemonic": "SLA",  "since": "LR35902", "manual_ref": "GB CPU §SLA r",  "cycles": { "form": "2m_or_4m" }, "steps": [{ "op": "lr35902_cb_shift", "shift_op": "sla",  "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "101" }, "mnemonic": "SRA",  "since": "LR35902", "manual_ref": "GB CPU §SRA r",  "cycles": { "form": "2m_or_4m" }, "steps": [{ "op": "lr35902_cb_shift", "shift_op": "sra",  "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "110" }, "mnemonic": "SWAP", "since": "LR35902", "manual_ref": "GB CPU §SWAP r", "cycles": { "form": "2m_or_4m" }, "steps": [{ "op": "lr35902_cb_shift", "shift_op": "swap", "field": "sss" }] },
+        { "selector": { "field": "ooo", "value": "111" }, "mnemonic": "SRL",  "since": "LR35902", "manual_ref": "GB CPU §SRL r",  "cycles": { "form": "2m_or_4m" }, "steps": [{ "op": "lr35902_cb_shift", "shift_op": "srl",  "field": "sss" }] }
+      ]
+    }
+  ]
+}

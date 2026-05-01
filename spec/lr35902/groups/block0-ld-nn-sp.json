@@ -1,0 +1,24 @@
+{
+  "name": "Block0_LdNnSp",
+  "comment": "0x08 — LD (nn), SP. Stores SP to a 16-bit immediate-addressed memory location, low byte first.",
+  "formats": [
+    {
+      "name": "Ld_Nn_Sp",
+      "comment": "00001000",
+      "pattern": "00001000",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x08",
+      "instructions": [{
+        "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD (nn),SP",
+        "writes_memory": ["SP_lo", "SP_hi"],
+        "cycles": { "form": "5m" },
+        "steps": [
+          { "op": "read_imm16", "out": "addr" },
+          { "op": "read_reg_named", "name": "SP", "out": "sp" },
+          { "op": "store_word", "address": "addr", "value": "sp" }
+        ]
+      }]
+    }
+  ]
+}

@@ -21,15 +21,15 @@
 
   "register_file": {
     "general_purpose": {
-      "count":      8,
+      "count":      7,
       "width_bits": 8,
-      "names":      ["A", "F", "B", "C", "D", "E", "H", "L"],
+      "names":      ["A", "B", "C", "D", "E", "H", "L"],
       "aliases":    {},
       "pc_index":   null
     },
 
     "register_pairs": [
-      { "name": "AF", "high": "A", "low": "F" },
+      { "name": "AF", "high": "A", "low": "F"  },
       { "name": "BC", "high": "B", "low": "C" },
       { "name": "DE", "high": "D", "low": "E" },
       { "name": "HL", "high": "H", "low": "L" }
@@ -45,6 +45,16 @@
           "H": "5",
           "C": "4"
         }
+      },
+      {
+        "name":       "SP",
+        "width_bits": 16,
+        "fields":     {}
+      },
+      {
+        "name":       "PC",
+        "width_bits": 16,
+        "fields":     {}
       }
     ]
   },

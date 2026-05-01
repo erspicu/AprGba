@@ -1,0 +1,32 @@
+{
+  "name": "Block3_DiEi",
+  "comment": "Interrupt master enable control. DI clears IME immediately; EI schedules IME=1 to take effect AFTER the next instruction (one-instruction delay per LR35902 spec). RETI in block3-ret.json bypasses this and enables IME immediately.",
+  "formats": [
+    {
+      "name": "Di",
+      "comment": "0xF3",
+      "pattern": "11110011",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xF3",
+      "instructions": [{
+        "mnemonic": "DI", "since": "LR35902", "manual_ref": "GB CPU §DI",
+        "cycles": { "form": "1m" },
+        "steps": [{ "op": "lr35902_ime", "value": 0 }]
+      }]
+    },
+    {
+      "name": "Ei",
+      "comment": "0xFB",
+      "pattern": "11111011",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xFB",
+      "instructions": [{
+        "mnemonic": "EI", "since": "LR35902", "manual_ref": "GB CPU §EI",
+        "cycles": { "form": "1m" },
+        "steps": [{ "op": "lr35902_ime_delayed" }]
+      }]
+    }
+  ]
+}

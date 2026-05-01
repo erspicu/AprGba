@@ -1,0 +1,37 @@
+{
+  "name": "Block3_PushPop",
+  "comment": "Stack ops on register pairs: PUSH rr (0xC5/D5/E5/F5) and POP rr (0xC1/D1/E1/F1). qq selects BC/DE/HL/AF. POP AF must mask the low nibble of F to 0 since those bits are unused/zero on LR35902.",
+  "formats": [
+    {
+      "name": "Push_Rr",
+      "comment": "11_qq0_101 — PUSH (decrement SP twice, store high then low byte).",
+      "pattern": "11qq0101",
+      "fields": {
+        "qq": "5:4"
+      },
+      "mask": "0xCF",
+      "match": "0xC5",
+      "instructions": [{
+        "mnemonic": "PUSH", "since": "LR35902", "manual_ref": "GB CPU §PUSH rr",
+        "writes_memory": ["pair_lo", "pair_hi"],
+        "cycles": { "form": "4m" },
+        "steps": [{ "op": "lr35902_push_qq", "field": "qq" }]
+      }]
+    },
+    {
+      "name": "Pop_Rr",
+      "comment": "11_qq0_001 — POP (load low then high; SP += 2). qq=11 → AF, low nibble of F masked to 0.",
+      "pattern": "11qq0001",
+      "fields": {
+        "qq": "5:4"
+      },
+      "mask": "0xCF",
+      "match": "0xC1",
+      "instructions": [{
+        "mnemonic": "POP", "since": "LR35902", "manual_ref": "GB CPU §POP rr",
+        "cycles": { "form": "3m" },
+        "steps": [{ "op": "lr35902_pop_qq", "field": "qq" }]
+      }]
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "name": "Block0_AluRr",
+  "comment": "16-bit operations on register pairs: INC rr (00_dd0_011), DEC rr (00_dd1_011), ADD HL,rr (00_dd1_001). 12 opcodes total. INC/DEC rr don't affect any flags; ADD HL,rr affects H/C/N (Z preserved).",
+  "formats": [
+    {
+      "name": "Inc_Rr",
+      "comment": "00_dd0_011",
+      "pattern": "00dd0011",
+      "fields": {
+        "dd": "5:4"
+      },
+      "mask": "0xCF",
+      "match": "0x03",
+      "instructions": [
+        {
+          "mnemonic": "INC",
+          "since": "LR35902",
+          "manual_ref": "GB CPU §INC rr",
+          "cycles": { "form": "2m" },
+          "steps": [
+            { "op": "lr35902_inc_rr_dd", "field": "dd" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Dec_Rr",
+      "comment": "00_dd1_011",
+      "pattern": "00dd1011",
+      "fields": {
+        "dd": "5:4"
+      },
+      "mask": "0xCF",
+      "match": "0x0B",
+      "instructions": [
+        {
+          "mnemonic": "DEC",
+          "since": "LR35902",
+          "manual_ref": "GB CPU §DEC rr",
+          "cycles": { "form": "2m" },
+          "steps": [
+            { "op": "lr35902_dec_rr_dd", "field": "dd" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "AddHl_Rr",
+      "comment": "00_dd1_001",
+      "pattern": "00dd1001",
+      "fields": {
+        "dd": "5:4"
+      },
+      "mask": "0xCF",
+      "match": "0x09",
+      "instructions": [
+        {
+          "mnemonic": "ADD",
+          "since": "LR35902",
+          "manual_ref": "GB CPU §ADD HL,rr",
+          "cycles": { "form": "2m" },
+          "steps": [
+            { "op": "lr35902_add_hl_rr", "field": "dd" }
+          ]
+        }
+      ]
+    }
+  ]
+}

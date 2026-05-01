@@ -1,0 +1,20 @@
+{
+  "name": "Block3_CbPrefix",
+  "comment": "0xCB — opcode prefix that switches the next byte's decoding to the CB instruction set. The host runtime intercepts this and dispatches to spec/lr35902/cb.json for the actual instruction; PC advances past both the 0xCB and the CB-byte's payload.",
+  "formats": [
+    {
+      "name": "CbPrefix",
+      "comment": "0xCB",
+      "pattern": "11001011",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xCB",
+      "instructions": [{
+        "mnemonic": "CB_PREFIX", "since": "LR35902", "manual_ref": "GB CPU §CB prefix",
+        "switches_instruction_set": true,
+        "cycles": { "form": "1m_plus_cb" },
+        "steps": [{ "op": "lr35902_cb_dispatch" }]
+      }]
+    }
+  ]
+}

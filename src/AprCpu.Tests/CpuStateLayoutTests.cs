@@ -129,7 +129,7 @@ public class CpuStateLayoutTests
         var ctx = LLVMContextRef.Create();
         var layout = new CpuStateLayout(ctx, loaded.Cpu.RegisterFile, loaded.Cpu.ProcessorModes);
 
-        Assert.Equal(8, layout.GprCount);
+        Assert.Equal(7, layout.GprCount);
         Assert.Equal(8, layout.GprWidthBits);
         Assert.Equal(LLVMTypeRef.Int8, layout.GprType);
 
@@ -138,6 +138,10 @@ public class CpuStateLayoutTests
         Assert.Equal(6, layout.GetStatusFlagBitIndex("F", "N"));
         Assert.Equal(5, layout.GetStatusFlagBitIndex("F", "H"));
         Assert.Equal(4, layout.GetStatusFlagBitIndex("F", "C"));
+
+        // SP/PC are 16-bit specials in the status section (not GPRs).
+        Assert.Equal(16, layout.GetStatusRegisterDef("SP").WidthBits);
+        Assert.Equal(16, layout.GetStatusRegisterDef("PC").WidthBits);
 
         // Register pairs are loadable from the spec.
         var pairs = loaded.Cpu.RegisterFile.RegisterPairs;

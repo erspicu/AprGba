@@ -1,0 +1,40 @@
+{
+  "name": "Block3_Call",
+  "comment": "Subroutine calls: CALL nn (0xCD) + 4 conditional CALL cc, nn variants. 5 opcodes total.",
+  "formats": [
+    {
+      "name": "Call_Nn",
+      "comment": "0xCD — unconditional CALL nn",
+      "pattern": "11001101",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xCD",
+      "instructions": [{
+        "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL nn",
+        "writes_pc": "always",
+        "writes_memory": ["return_pc_lo", "return_pc_hi"],
+        "cycles": { "form": "6m" },
+        "steps": [
+          { "op": "read_imm16", "out": "target" },
+          { "op": "lr35902_call", "address": "target" }
+        ]
+      }]
+    },
+    {
+      "name": "Call_Cc_Nn",
+      "comment": "110cc100 — CALL cc, nn",
+      "pattern": "110cc100",
+      "fields": {
+        "cc": "4:3"
+      },
+      "mask": "0xE7",
+      "match": "0xC4",
+      "instructions": [
+        { "selector": { "field": "cc", "value": "00" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL NZ,nn", "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "lr35902_call_cc", "cond": "NZ", "address": "target" }] },
+        { "selector": { "field": "cc", "value": "01" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL Z,nn",  "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "lr35902_call_cc", "cond": "Z",  "address": "target" }] },
+        { "selector": { "field": "cc", "value": "10" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL NC,nn", "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "lr35902_call_cc", "cond": "NC", "address": "target" }] },
+        { "selector": { "field": "cc", "value": "11" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL C,nn",  "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "lr35902_call_cc", "cond": "C",  "address": "target" }] }
+      ]
+    }
+  ]
+}
