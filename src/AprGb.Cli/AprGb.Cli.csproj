@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\AprCpu.Core\AprCpu.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>apr-gb</AssemblyName>
+    <RootNamespace>AprGb.Cli</RootNamespace>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+</Project>
