@@ -27,7 +27,8 @@
             { "op": "read_reg", "index": "ro", "out": "offset" },
             { "op": "read_reg", "index": "rd", "out": "data" },
             { "op": "add", "in": ["base", "offset"], "out": "address" },
-            { "op": "store", "addr": "address", "value": "data", "size": 16 }
+            { "op": "and", "in": ["address", { "const": "0xFFFFFFFE" }], "out": "addr_aligned" },
+            { "op": "store", "addr": "addr_aligned", "value": "data", "size": 16 }
           ]
         },
         {
@@ -54,7 +55,11 @@
             { "op": "read_reg", "index": "rb", "out": "base" },
             { "op": "read_reg", "index": "ro", "out": "offset" },
             { "op": "add", "in": ["base", "offset"], "out": "address" },
-            { "op": "load", "addr": "address", "size": 16, "signed": false, "out": "loaded" },
+            { "op": "and", "in": ["address", { "const": 1 }], "out": "addr_lo1" },
+            { "op": "shl", "in": ["addr_lo1", { "const": 3 }], "out": "rot_amount" },
+            { "op": "and", "in": ["address", { "const": "0xFFFFFFFE" }], "out": "addr_aligned" },
+            { "op": "load", "addr": "addr_aligned", "size": 16, "signed": false, "out": "raw_half" },
+            { "op": "ror", "in": ["raw_half", "rot_amount"], "out": "loaded" },
             { "op": "write_reg", "index": "rd", "value": "loaded" }
           ]
         },
@@ -68,7 +73,14 @@
             { "op": "read_reg", "index": "rb", "out": "base" },
             { "op": "read_reg", "index": "ro", "out": "offset" },
             { "op": "add", "in": ["base", "offset"], "out": "address" },
-            { "op": "load", "addr": "address", "size": 16, "signed": true, "out": "loaded" },
+            { "op": "and", "in": ["address", { "const": 1 }], "out": "addr_lo1" },
+            { "op": "and", "in": ["address", { "const": "0xFFFFFFFE" }], "out": "addr_aligned" },
+            { "op": "load", "addr": "addr_aligned", "size": 16, "signed": true, "out": "loaded_h" },
+            { "op": "load", "addr": "address", "size": 8, "signed": true, "out": "loaded_b" },
+            { "op": "select",
+              "cond": { "var": "addr_lo1", "eq": 0 },
+              "if_true": "loaded_h", "if_false": "loaded_b",
+              "out": "loaded" },
             { "op": "write_reg", "index": "rd", "value": "loaded" }
           ]
         }
