@@ -341,6 +341,28 @@ public class DecoderTableTests
         Assert.Equal("LDRSH", d.Instruction.Mnemonic);
     }
 
+    /// <summary>SWP R0, R1, [R2]  → 0xE1020091</summary>
+    [Fact]
+    public void Decode_SWP_Word()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE102_0091u);
+        Assert.NotNull(d);
+        Assert.Equal("SWP_Word", d!.Format.Name);
+        Assert.Equal("SWP", d.Instruction.Mnemonic);
+    }
+
+    /// <summary>SWPB R0, R1, [R2] → 0xE1420091</summary>
+    [Fact]
+    public void Decode_SWP_Byte()
+    {
+        var t = new DecoderTable(LoadArm());
+        var d = t.Decode(0xE142_0091u);
+        Assert.NotNull(d);
+        Assert.Equal("SWP_Byte", d!.Format.Name);
+        Assert.Equal("SWPB", d.Instruction.Mnemonic);
+    }
+
     /// <summary>RegRegShift form: ADD R0, R1, R2, LSL R3 → 0xE0810312.</summary>
     [Fact]
     public void Decode_RegRegShift_AddByRegister()
