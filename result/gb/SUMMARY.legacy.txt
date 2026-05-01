@@ -1,0 +1,37 @@
+# Blargg cpu_instrs results — legacy backend (port of AprGBemu/Emu_GB/CPU.cs)
+#
+# Each subtest run for 4×10⁸ t-cycles. Serial output + 160×144 BG-layer
+# screenshot saved alongside this summary.
+
+## Individual subtests
+
+01-special                PASS
+02-interrupts             FAIL  (Failed #4)
+03-op_sp,hl               PASS
+04-op_r,imm               PASS
+05-op_rp                  PASS
+06-ld_r,r                 PASS
+07-jr,jp,call,ret,rst     PASS
+08-misc_instrs            PASS
+09-op_r,r                 PASS
+10-bit_ops                PASS
+11-op_a,(hl)              PASS
+
+## Master cpu_instrs.gb (MBC1 64KB; runs all 11 subtests in sequence)
+
+cpu_instrs
+
+01:ok  02:04  03:ok  04:ok  05:ok  06:ok  07:ok  08:ok  09:ok  10:ok  11:ok  
+
+Failed 1 tests.
+
+--- end serial ---
+  screenshot: result/gb/cpu_instrs.legacy.png (160144)
+
+## Notes
+
+- 02-interrupts fails at sub-step 4 (timing/interrupt edge case);
+  consistent across both individual and master ROM runs.
+- All other 10 subtests pass cleanly.
+- json-llvm backend results (when GB JSON spec is written) will be
+  saved as <name>.json-llvm.png alongside these legacy.* files.

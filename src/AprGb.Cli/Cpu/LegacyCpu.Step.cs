@@ -1132,8 +1132,8 @@ public sealed partial class LegacyCpu
                 case 0xF3://DI
                     flagIME = false;
                     break;
-                case 0xFB://EI
-                    flagIME = true;
+                case 0xFB://EI — delayed by one instruction (LR35902 spec)
+                    _eiDelay = 2;
                     break;
                 #endregion
                 #region jumps , calls ,restarts , returns

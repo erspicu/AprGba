@@ -1,0 +1,26 @@
+apr-gb  Game Boy harness (DMG only; legacy + json-llvm backends)
+  ROM:        test-roms/blargg-cpu/cpu_instrs.gb
+  backend:    legacy
+  cycles:     2000000000
+  screenshot: result/gb/cpu_instrs.legacy.png
+  loaded:     65536 bytes  title='CPU_INSTRS?' cartType=0x01 romSize=0x01 ramSize=0x00 cgbFlag=0x80
+  initial PC=0x0100 SP=0xFFFE
+stop: 0xc303
+stop: 0xc303
+stop: 0xc303
+stop: 0xc303
+stop: 0xc303
+stop: 0xc303
+stop: 0xc303
+stop: 0xc303
+stop: 0xc303
+  ran 2000000000 cycles. final PC=0x06F1 halted=False
+--- serial output (107 bytes) ---
+cpu_instrs
+
+01:ok  02:04  03:ok  04:ok  05:ok  06:ok  07:ok  08:ok  09:ok  10:ok  11:ok  
+
+Failed 1 tests.
+
+--- end serial ---
+  screenshot: result/gb/cpu_instrs.legacy.png (160144)
