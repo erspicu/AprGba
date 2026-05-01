@@ -1,0 +1,76 @@
+{
+  "name": "Block1_LdRegReg",
+  "comment": "LD r, r' — 01_ddd_sss. The 3-bit register fields use the LR35902 lookup B/C/D/E/H/L/(HL)/A. Three formats in priority order capture the (HL)-as-destination, (HL)-as-source, and reg-to-reg variants. HALT (0x76) is shadowed by the higher-priority Halt format declared in block1-halt.json.",
+  "formats": [
+    {
+      "name": "LdHlInd_Reg",
+      "comment": "01_110_sss — store register sss to memory[HL]. sss=110 is HALT (handled separately).",
+      "pattern": "01110sss",
+      "fields": {
+        "sss": "2:0"
+      },
+      "mask": "0xF8",
+      "match": "0x70",
+      "instructions": [
+        {
+          "mnemonic": "LD",
+          "since": "LR35902",
+          "writes_memory": ["data"],
+          "manual_ref": "GB CPU manual §LD (HL),r",
+          "cycles": { "form": "2m" },
+          "steps": [
+            { "op": "lr35902_read_r8",  "field": "sss", "out": "src" },
+            { "op": "read_reg_pair",    "name": "HL",   "out": "addr" },
+            { "op": "store_byte",       "address": "addr", "value": "src" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "LdReg_HlInd",
+      "comment": "01_ddd_110 — load memory[HL] into register ddd. ddd=110 would be LD (HL),(HL) which is HALT (shadowed).",
+      "pattern": "01ddd110",
+      "fields": {
+        "ddd": "5:3"
+      },
+      "mask": "0xC7",
+      "match": "0x46",
+      "instructions": [
+        {
+          "mnemonic": "LD",
+          "since": "LR35902",
+          "manual_ref": "GB CPU manual §LD r,(HL)",
+          "cycles": { "form": "2m" },
+          "steps": [
+            { "op": "read_reg_pair",     "name": "HL",   "out": "addr" },
+            { "op": "load_byte",         "address": "addr", "out": "src" },
+            { "op": "lr35902_write_r8",  "field": "ddd", "value": "src" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "LdReg_Reg",
+      "comment": "01_ddd_sss general reg-to-reg. The (HL) cases are caught by higher-priority formats above; HALT is caught even earlier in block1-halt.json.",
+      "pattern": "01dddsss",
+      "fields": {
+        "ddd": "5:3",
+        "sss": "2:0"
+      },
+      "mask": "0xC0",
+      "match": "0x40",
+      "instructions": [
+        {
+          "mnemonic": "LD",
+          "since": "LR35902",
+          "manual_ref": "GB CPU manual §LD r,r'",
+          "cycles": { "form": "1m" },
+          "steps": [
+            { "op": "lr35902_read_r8",  "field": "sss", "out": "src" },
+            { "op": "lr35902_write_r8", "field": "ddd", "value": "src" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "name": "Block1_Halt",
+  "comment": "HALT (0x76) sits in the 01_ddd_sss LD r,r' grid at ddd=110, sss=110 (which would otherwise mean 'LD (HL),(HL)'). It must be matched BEFORE the general LD r,r' format because that format's mask (0xC0) would also accept 0x76.",
+  "formats": [
+    {
+      "name": "Halt",
+      "comment": "01110110 (0x76)",
+      "pattern": "01110110",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x76",
+      "instructions": [
+        {
+          "mnemonic": "HALT",
+          "since": "LR35902",
+          "manual_ref": "GB CPU manual §HALT",
+          "cycles": { "form": "1m" },
+          "steps": [
+            { "op": "halt" }
+          ]
+        }
+      ]
+    }
+  ]
+}
