@@ -130,6 +130,15 @@ public class SpecCompilerTests
     /// captured as diagnostics, not exceptions.
     /// </summary>
     [Fact]
+    public void Dump_Lr35902_Ir_ToTemp()
+    {
+        var temp = Path.Combine(TestPaths.RepoRoot, "temp", "lr35902_full.ll");
+        if (File.Exists(temp)) File.Delete(temp);
+        SpecCompiler.CompileToFile(Lr35902CpuJson, temp);
+        Assert.True(File.Exists(temp));
+    }
+
+    [Fact]
     public void Compile_Lr35902_LoadsAndEmitsAtLeastNop()
     {
         var result = SpecCompiler.Compile(Lr35902CpuJson);

@@ -12,6 +12,7 @@
     <AssemblyName>apr-gb</AssemblyName>
     <RootNamespace>AprGb.Cli</RootNamespace>
     <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 </Project>
