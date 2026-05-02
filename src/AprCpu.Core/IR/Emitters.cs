@@ -237,6 +237,19 @@ internal sealed class Binary : IMicroOpEmitter
     {
         var lhs = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
         var rhs = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        // Auto-coerce widths via zero-extension when one input is narrower.
+        // Pre-Step 5.5 this was a hard error — required for LR35902 IO
+        // address composition where i8 offsets get OR'd with i32 page
+        // bases (e.g. LDH offset | 0xFF00). Safe for add/sub/and/or/xor:
+        // result mod 2^N is unchanged. ARM specs already use uniform i32
+        // operands so this is a no-op for them.
+        if (lhs.TypeOf != rhs.TypeOf)
+        {
+            var lw = lhs.TypeOf.IntWidth;
+            var rw = rhs.TypeOf.IntWidth;
+            if (lw < rw) lhs = ctx.Builder.BuildZExt(lhs, rhs.TypeOf, "binop_lhs_zx");
+            else         rhs = ctx.Builder.BuildZExt(rhs, lhs.TypeOf, "binop_rhs_zx");
+        }
         var outName = StandardEmitters.GetOut(step.Raw);
         var result  = _build(ctx.Builder, lhs, rhs, outName);
         ctx.Values[outName] = result;
