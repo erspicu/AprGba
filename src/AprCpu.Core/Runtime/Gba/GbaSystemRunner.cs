@@ -96,7 +96,13 @@ public sealed unsafe class GbaSystemRunner
     /// <summary>
     /// Standard ARM IRQ entry. Called after each Step when an enabled
     /// IRQ is pending. No-op if CPSR.I disables IRQs.
+    /// Phase 7 B.h: AggressiveInlining hint — DeliverIrqIfPending is
+    /// called every instruction in RunCycles' hot loop; the fast path
+    /// (no IRQ pending) is just one method call + branch. Inlining lets
+    /// JIT fold the call into the loop.
     /// </summary>
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public void DeliverIrqIfPending()
     {
         if (!Bus.HasPendingInterrupt()) return;
