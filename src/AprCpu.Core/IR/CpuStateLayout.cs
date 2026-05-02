@@ -62,6 +62,18 @@ public sealed unsafe class CpuStateLayout
 
     public int CycleCounterFieldIndex { get; }
     public int PendingExceptionsFieldIndex { get; }
+    /// <summary>
+    /// Index of the i8 "PC was written" flag. Set to 1 by any emitter that
+    /// stores into the PC register slot (Branch, BX, LDM-with-R15, ALU
+    /// with Rd=PC). The executor clears it pre-step and reads it post-step
+    /// to disambiguate "branch taken to a target that happens to equal
+    /// the pre-set R15 = pc + PcOffsetBytes" (e.g. Thumb BCond +0, the
+    /// compiler idiom "skip next instruction") from "no branch happened".
+    /// Without this flag, branches with target == pc + PcOffsetBytes look
+    /// identical to no-ops and the executor would falsely advance PC
+    /// linearly, breaking GBA BIOS LZ77 decompression among other things.
+    /// </summary>
+    public int PcWrittenFieldIndex { get; }
 
     public CpuStateLayout(
         LLVMContextRef context,
@@ -123,6 +135,8 @@ public sealed unsafe class CpuStateLayout
         elements.Add(LLVMTypeRef.Int64);
         PendingExceptionsFieldIndex = elements.Count;
         elements.Add(LLVMTypeRef.Int32);
+        PcWrittenFieldIndex         = elements.Count;
+        elements.Add(LLVMTypeRef.Int8);
 
         StructType  = LLVMTypeRef.CreateStruct(elements.ToArray(), Packed: false);
         PointerType = LLVMTypeRef.CreatePointer(StructType, 0);
@@ -226,6 +240,10 @@ public sealed unsafe class CpuStateLayout
     /// <summary>GEP into the pending-exceptions bitmask slot (i32).</summary>
     public LLVMValueRef GepPendingExceptions(LLVMBuilderRef builder, LLVMValueRef statePtr)
         => BuildGep(builder, statePtr, PendingExceptionsFieldIndex, "pending_exc_ptr");
+
+    /// <summary>GEP into the i8 "pc was written" sticky flag slot.</summary>
+    public LLVMValueRef GepPcWritten(LLVMBuilderRef builder, LLVMValueRef statePtr)
+        => BuildGep(builder, statePtr, PcWrittenFieldIndex, "pc_written_ptr");
 
     /// <summary>
     /// GEP into a GPR slot by a runtime-computed index. Bitcasts the state

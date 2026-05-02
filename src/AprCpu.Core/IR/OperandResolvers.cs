@@ -233,7 +233,11 @@ internal static class OperandResolverImpl
     /// </summary>
     internal static void EmitShiftedRegisterByRegister(EmitContext ctx, string name, OperandResolver _)
     {
-        var rm        = LoadRegisterByFieldIndex(ctx, "rm", "rm_val");
+        // ARM ARM A5.1.5: in shift-by-register form, PC reads as
+        // address + 12 (one extra cycle for register shift). The same
+        // adjustment must be applied to Rn reads in this format — see
+        // the read_reg_shift_by_reg op below.
+        var rm        = LoadRegisterPcAdjustedShiftByReg(ctx, "rm", "rm_val");
         var rs        = LoadRegisterByFieldIndex(ctx, "rs", "rs_val");
         var shiftType = ctx.Resolve("shift_type");
         var cpsrC     = CarryReader.ReadCarryIn(ctx);
@@ -266,8 +270,8 @@ internal static class OperandResolverImpl
         // Predict whether result becomes saturated (count >= 32).
         var amountGE32 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, amountFull, ctx.ConstU32(32), "amt_ge_32");
 
-        var (lslV, lslC) = EmitLslShiftByReg(ctx, rm, amountClamped, amountGE32);
-        var (lsrV, lsrC) = EmitLsrShiftByReg(ctx, rm, amountClamped, amountGE32);
+        var (lslV, lslC) = EmitLslShiftByReg(ctx, rm, amountClamped, amountFull, amountGE32);
+        var (lsrV, lsrC) = EmitLsrShiftByReg(ctx, rm, amountClamped, amountFull, amountGE32);
         var (asrV, asrC) = EmitAsrShiftByReg(ctx, rm, amountClamped, amountGE32);
         var (rorV, rorC) = EmitRorShiftByReg(ctx, rm, amountFull);
 
@@ -300,6 +304,24 @@ internal static class OperandResolverImpl
         var masked = ctx.Builder.BuildAnd(idx, ctx.ConstU32(0xF), $"{fieldName}_idx_masked");
         var ptr    = ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, masked);
         return ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, outName);
+    }
+
+    /// <summary>
+    /// Same as <see cref="LoadRegisterByFieldIndex"/> but adds 4 to the
+    /// loaded value when the index resolves to PC. Used in the data-
+    /// processing shift-by-register form where ARM ARM A5.1.5 specifies
+    /// that PC reads as <c>address + 12</c> rather than the usual
+    /// <c>+8</c> (one extra cycle for the register shift).
+    /// </summary>
+    private static LLVMValueRef LoadRegisterPcAdjustedShiftByReg(EmitContext ctx, string fieldName, string outName)
+    {
+        var idx    = ctx.Resolve(fieldName);
+        var masked = ctx.Builder.BuildAnd(idx, ctx.ConstU32(0xF), $"{fieldName}_idx_masked");
+        var ptr    = ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, masked);
+        var raw    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, $"{outName}_raw");
+        var isPc   = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, masked, ctx.ConstU32(15), $"{fieldName}_is_pc");
+        var plus4  = ctx.Builder.BuildAdd(raw, ctx.ConstU32(4), $"{outName}_plus4");
+        return ctx.Builder.BuildSelect(isPc, plus4, raw, outName);
     }
 
     private static (LLVMValueRef value, LLVMValueRef carry) EmitLslShift(
@@ -382,28 +404,40 @@ internal static class OperandResolverImpl
     }
 
     private static (LLVMValueRef value, LLVMValueRef carry) EmitLslShiftByReg(
-        EmitContext ctx, LLVMValueRef rm, LLVMValueRef amountClamped, LLVMValueRef ge32)
+        EmitContext ctx, LLVMValueRef rm, LLVMValueRef amountClamped, LLVMValueRef amountFull, LLVMValueRef ge32)
     {
         // Normal LSL by 1..31, plus saturation when ge32.
+        // Per ARM ARM A5.1.7 (Data-processing operands - shift by register):
+        //   count == 32:  result = 0, carry = Rm[0]
+        //   count >  32:  result = 0, carry = 0
         var v = ctx.Builder.BuildShl(rm, amountClamped, "lslr_v");
         var carryShr = ctx.Builder.BuildSub(ctx.ConstU32(32), amountClamped, "lslr_carry_shr");
         var carryRaw = ctx.Builder.BuildLShr(rm, carryShr, "lslr_carry_raw");
         var c = ctx.Builder.BuildAnd(carryRaw, ctx.ConstU32(1), "lslr_c");
-        // ge32 → value=0, carry= (count==32) ? rm[0] : 0  — approximated as 0
+        var amountIs32 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, amountFull, ctx.ConstU32(32), "lslr_amt_eq_32");
+        var rmBit0     = ctx.Builder.BuildAnd(rm, ctx.ConstU32(1), "lslr_rm_bit0");
+        var ge32Carry  = ctx.Builder.BuildSelect(amountIs32, rmBit0, ctx.ConstU32(0), "lslr_ge32_c");
         var v2 = ctx.Builder.BuildSelect(ge32, ctx.ConstU32(0), v, "lslr_v_sat");
-        var c2 = ctx.Builder.BuildSelect(ge32, ctx.ConstU32(0), c, "lslr_c_sat");
+        var c2 = ctx.Builder.BuildSelect(ge32, ge32Carry, c, "lslr_c_sat");
         return (v2, c2);
     }
 
     private static (LLVMValueRef value, LLVMValueRef carry) EmitLsrShiftByReg(
-        EmitContext ctx, LLVMValueRef rm, LLVMValueRef amountClamped, LLVMValueRef ge32)
+        EmitContext ctx, LLVMValueRef rm, LLVMValueRef amountClamped, LLVMValueRef amountFull, LLVMValueRef ge32)
     {
+        // Normal LSR by 1..31, plus saturation when ge32.
+        // Per ARM ARM A5.1.7:
+        //   count == 32:  result = 0, carry = Rm[31]
+        //   count >  32:  result = 0, carry = 0
         var v = ctx.Builder.BuildLShr(rm, amountClamped, "lsrr_v");
         var carryShr = ctx.Builder.BuildSub(amountClamped, ctx.ConstU32(1), "lsrr_carry_shr");
         var carryRaw = ctx.Builder.BuildLShr(rm, carryShr, "lsrr_carry_raw");
         var c = ctx.Builder.BuildAnd(carryRaw, ctx.ConstU32(1), "lsrr_c");
+        var amountIs32 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, amountFull, ctx.ConstU32(32), "lsrr_amt_eq_32");
+        var rmBit31    = ctx.Builder.BuildLShr(rm, ctx.ConstU32(31), "lsrr_rm_bit31");
+        var ge32Carry  = ctx.Builder.BuildSelect(amountIs32, rmBit31, ctx.ConstU32(0), "lsrr_ge32_c");
         var v2 = ctx.Builder.BuildSelect(ge32, ctx.ConstU32(0), v, "lsrr_v_sat");
-        var c2 = ctx.Builder.BuildSelect(ge32, ctx.ConstU32(0), c, "lsrr_c_sat");
+        var c2 = ctx.Builder.BuildSelect(ge32, ge32Carry, c, "lsrr_c_sat");
         return (v2, c2);
     }
 

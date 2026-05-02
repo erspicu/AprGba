@@ -1,6 +1,6 @@
 {
   "name": "DataProcessing",
-  "comment": "Three encoding variants (Immediate, RegImmShift, RegRegShift) share the same 16-opcode ALU table. Step lists are identical across variants — only the op2 operand resolution differs.",
+  "comment": "Three encoding variants (Immediate, RegImmShift, RegRegShift) share the same 16-opcode ALU table. Step lists are identical across variants \u2014 only the op2 operand resolution differs.",
   "formats": [
     {
       "name": "DataProcessing_RegRegShift",
@@ -43,7 +43,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -110,7 +110,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -177,7 +177,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -253,7 +253,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -329,7 +329,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -405,7 +405,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -482,7 +482,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -559,7 +559,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -635,7 +635,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -673,7 +673,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -711,7 +711,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -758,7 +758,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -806,7 +806,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
@@ -927,7 +927,7 @@
           },
           "steps": [
             {
-              "op": "read_reg",
+              "op": "read_reg_shift_by_reg",
               "index": "rn",
               "out": "rn_val"
             },
