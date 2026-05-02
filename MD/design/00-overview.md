@@ -17,18 +17,26 @@
 
 ## 範圍 (Scope)
 
-### 第一目標 (MVP)
+### 第一目標 (MVP) ✅ 全部完成 (2026-05-02)
 
-- ARM7TDMI (ARMv4T) — ARM 32-bit 與 Thumb 16-bit 雙模式 ✅ 完成
-- 跑通 jsmolka GBA test ROM（arm.gba / thumb.gba）並能用 PNG 截圖
-  做視覺驗證
+- ARM7TDMI (ARMv4T) — ARM 32-bit 與 Thumb 16-bit 雙模式 ✅
+- 跑通 jsmolka GBA test ROM（arm.gba / thumb.gba / bios.gba）+ PNG 截圖
+  做視覺驗證 ✅
 - **真的帶 BIOS file 啟動**（LLE，跑完官方 BIOS intro → ROM entry），
-  讓驗證更有公信力（不是 HLE shortcut）
-- 最小 PPU（Mode 3 framebuffer + Mode 0 tile-based BG）— **hand-written
-  host code，不走 JSON spec**（理由見下方「明確排除」）
-- **headless CLI 模式**（學 apr-gb 設計）：`apr-gba --rom=X --cycles=N
-  --screenshot=Y.png`，**不做 GUI / 60fps loop / 即時播放**
-- Windows 平台優先
+  讓驗證更有公信力（不是 HLE shortcut） ✅ — 開機 logo 視覺與 mGBA 同等
+- PPU（Mode 0/1/2/3/4 + 完整 OBJ + BLDCNT alpha/brighten/darken +
+  WININ/WINOUT/OBJ Window）— **hand-written host code，不走 JSON spec**
+  （理由見下方「明確排除」） ✅
+- **headless CLI 模式**：`apr-gba --rom=X --bios=B
+  [--cycles=N | --frames=N | --seconds=N] --screenshot=Y.png`，
+  **不做 GUI / 60fps loop / 即時播放** ✅
+- Windows 平台優先 ✅
+
+完工狀態快照：345 unit tests 全綠；arm/thumb/bios.gba 三 ROM 透過
+真 BIOS LLE 6 GBA-秒內全 PASS；GB 端拿到 BIOS LLE + DMG Nintendo®
+logo 截圖。完整收工筆記：
+- `MD/note/phase5-gba-mvp-complete-2026-05.md`（5.1–5.4）
+- `MD/note/phase5.7-bios-lle-and-ppu-2026-05.md`（5.5–5.7 + Phase 8）
 
 ### 第一目標的延伸：framework 通用性驗證 ✅ 完成 (2026-05-02)
 
