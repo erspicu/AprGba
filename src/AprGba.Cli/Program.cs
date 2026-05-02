@@ -84,7 +84,14 @@ else
 }
 
 var runSw = System.Diagnostics.Stopwatch.StartNew();
-runner.RunCycles(opts.Cycles);
+if (opts.TraceBiosPath is not null)
+{
+    RunWithBiosTrace(runner, cpu, bus, opts.Cycles, opts.TraceBiosPath);
+}
+else
+{
+    runner.RunCycles(opts.Cycles);
+}
 runSw.Stop();
 Console.WriteLine($"  ran {opts.Cycles:N0} cycles in {runSw.Elapsed.TotalSeconds:F3} s");
 Console.WriteLine($"  final PC = 0x{cpu.Pc:X8}, R0..R15 = {DumpRegs(cpu)}");
@@ -106,6 +113,53 @@ if (opts.ScreenshotPath is not null)
 foreach (var d in disposables) d.Dispose();
 rt.Dispose();
 return 0;
+
+/// <summary>
+/// Run the system with a per-step PC log restricted to BIOS-region PCs
+/// (0x00000000..0x00003FFF). Emits a tab-separated trace file:
+///   step  pc  cpsr  ie  if  ime  haltcnt_writes
+/// Useful for finding where real-BIOS LLE diverges from expected
+/// behaviour without flooding the console with millions of lines.
+/// Throttled: writes one line every 100 BIOS-region steps so a 200M
+/// cycle run produces a few thousand lines, not 50M.
+/// </summary>
+static void RunWithBiosTrace(GbaSystemRunner runner, CpuExecutor cpu, GbaMemoryBus bus,
+                              long cycleBudget, string outPath)
+{
+    using var fs = new StreamWriter(outPath);
+    fs.WriteLine("step\tPC\tCPSR\tIE\tIF\tIME\tHALTCNT_writes\tR0\tR14");
+    long step = 0;
+    long throttle = 0;
+    while (runner.Scheduler.FrameCount * (long)GbaScheduler.CyclesPerFrame +
+           runner.Scheduler.CycleInScanline +
+           runner.Scheduler.Scanline * (long)GbaScheduler.CyclesPerScanline < cycleBudget)
+    {
+        if (bus.CpuHalted)
+        {
+            runner.Scheduler.Tick(4);
+            if (runner.HasAnyPendingIrqPublic()) bus.CpuHalted = false;
+            runner.DeliverIrqIfPending();
+            continue;
+        }
+
+        var pc = cpu.Pc;
+        cpu.Step();
+        runner.Scheduler.Tick(4);
+        runner.DeliverIrqIfPending();
+        step++;
+
+        if (pc < 0x00004000)
+        {
+            throttle++;
+            if (throttle % 100 == 0)
+            {
+                var ime = bus.ReadWord(0x04000208);
+                fs.WriteLine($"{step}\t0x{pc:X4}\t0x{cpu.ReadStatus("CPSR"):X8}\t0x{bus.ReadHalfword(0x04000200):X4}\t0x{bus.ReadHalfword(0x04000202):X4}\t0x{ime:X4}\t{bus.HaltCntWriteCount}\t0x{cpu.ReadGpr(0):X8}\t0x{cpu.ReadGpr(14):X8}");
+            }
+        }
+    }
+    fs.Flush();
+}
 
 static (CpuExecutor Cpu, Arm7tdmiBankSwapHandler Swap, HostRuntime Rt, IDisposable[] Bindings)
     BootCpu(GbaMemoryBus bus)
@@ -186,6 +240,7 @@ static Options? ParseArgs(string[] args)
         else if (arg.StartsWith("--cycles="))     opts.Cycles = long.Parse(arg.Substring("--cycles=".Length));
         else if (arg.StartsWith("--frames="))     opts.Cycles = long.Parse(arg.Substring("--frames=".Length)) * GbaScheduler.CyclesPerFrame;
         else if (arg.StartsWith("--screenshot=")) opts.ScreenshotPath = arg.Substring("--screenshot=".Length);
+        else if (arg.StartsWith("--trace-bios=")) opts.TraceBiosPath = arg.Substring("--trace-bios=".Length);
         else if (arg == "--info")                 opts.InfoOnly = true;
         else                                      return null;
     }
@@ -209,5 +264,6 @@ internal sealed class Options
     public string?  BiosPath;
     public long     Cycles  = GbaScheduler.CyclesPerFrame;
     public string?  ScreenshotPath;
+    public string?  TraceBiosPath;
     public bool     InfoOnly;
 }
