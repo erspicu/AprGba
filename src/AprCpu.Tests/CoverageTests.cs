@@ -54,6 +54,12 @@ public class CoverageTests
             // LR35902 JP cc / JR (cc) / CALL cc / RET cc / RST after
             // the spec migration; invisible to this ARM7TDMI scan.
             "branch_cc", "call_cc", "ret_cc", "read_pc", "sext",
+
+            // Step 5.4 — generic bit primitives. Used by LR35902
+            // CB-prefix BIT/SET/RES (192 of the 256 CB opcodes); the
+            // remaining 64 (RLC/RRC/RL/RR/SLA/SRA/SWAP/SRL) still go
+            // through lr35902_cb_shift until the shift-family migration.
+            "bit_test", "bit_set", "bit_clear",
         };
 
         var (registered, used) = CollectOps();
