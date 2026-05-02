@@ -73,6 +73,7 @@ public static class StandardEmitters
         reg.Register(new BranchCc());
         reg.Register(new ReadPc());
         reg.Register(new SextEmitter());
+        reg.Register(new TruncEmitter());
     }
 
     // ---------------- helpers ----------------
@@ -674,6 +675,37 @@ internal sealed class ReadPc : IMicroOpEmitter
         var outName = StandardEmitters.GetOut(step.Raw);
         var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
         ctx.Values[outName] = ctx.Builder.BuildLoad2(pcType, pcPtr, outName);
+    }
+}
+
+/// <summary>
+/// trunc { in, width, out } — narrow an integer value to a smaller
+/// bit width via low-bits extraction. Width must be 8/16/32/64.
+/// Pass-through if input is already at the target width; errors if
+/// narrowing isn't possible (caller should sext / zext to widen).
+/// Sister to <see cref="SextEmitter"/>.
+/// </summary>
+internal sealed class TruncEmitter : IMicroOpEmitter
+{
+    public string OpName => "trunc";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var inName  = step.Raw.GetProperty("in").GetString()!;
+        var outName = StandardEmitters.GetOut(step.Raw);
+        var width   = step.Raw.GetProperty("width").GetInt32();
+        var v = ctx.Resolve(inName);
+        var t = width switch
+        {
+            8  => LLVMTypeRef.Int8,
+            16 => LLVMTypeRef.Int16,
+            32 => LLVMTypeRef.Int32,
+            64 => LLVMTypeRef.Int64,
+            _  => throw new NotSupportedException($"trunc width {width} not supported")
+        };
+        var srcW = v.TypeOf.IntWidth;
+        if (srcW == width)      ctx.Values[outName] = v;
+        else if (srcW > width)  ctx.Values[outName] = ctx.Builder.BuildTrunc(v, t, outName);
+        else throw new InvalidOperationException($"trunc cannot widen i{srcW} to i{width} — use sext or zext");
     }
 }
 

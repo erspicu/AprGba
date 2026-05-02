@@ -1,6 +1,6 @@
 {
   "name": "Block0_IncDecR8",
-  "comment": "INC r (00_ddd_100) and DEC r (00_ddd_101). 16 opcodes total. The (HL) memory variants (0x34 / 0x35) are split into their own formats since they need a memory R-M-W; priority order shadows them ahead of the general r-form.",
+  "comment": "INC r (00_ddd_100) and DEC r (00_ddd_101). 16 opcodes total. The (HL) memory variants (0x34/0x35) are split into their own formats since they need a memory R-M-W; priority order shadows them ahead of the general r-form. All four lowered to generic ops via lr35902_read_r8/write_r8 (operand resolver) + add/sub + trunc + update_zero/update_h_inc/update_h_dec + set_flag(N).",
   "formats": [
     {
       "name": "Inc_Hl_Mem",
@@ -9,16 +9,20 @@
       "fields": {},
       "mask": "0xFF",
       "match": "0x34",
-      "instructions": [
-        {
-          "mnemonic": "INC",
-          "since": "LR35902",
-          "manual_ref": "GB CPU §INC (HL)",
-          "writes_memory": ["mem_hl"],
-          "cycles": { "form": "3m" },
-          "steps": [{ "op": "lr35902_inc_hl_mem" }]
-        }
-      ]
+      "instructions": [{
+        "mnemonic": "INC", "since": "LR35902", "manual_ref": "GB CPU §INC (HL)",
+        "writes_memory": ["mem_hl"], "cycles": { "form": "3m" },
+        "steps": [
+          { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
+          { "op": "load_byte",           "address": "addr", "out": "v" },
+          { "op": "add",                 "in": ["v", { "const": 1 }], "out": "result_i32" },
+          { "op": "trunc",               "in": "result_i32", "width": 8, "out": "result" },
+          { "op": "store_byte",          "address": "addr", "value": "result" },
+          { "op": "update_zero",         "in": "result", "reg": "F", "flag": "Z" },
+          { "op": "set_flag",            "reg": "F", "flag": "N", "value": 0 },
+          { "op": "update_h_inc",        "in": "result", "reg": "F", "flag": "H" }
+        ]
+      }]
     },
     {
       "name": "Dec_Hl_Mem",
@@ -27,58 +31,62 @@
       "fields": {},
       "mask": "0xFF",
       "match": "0x35",
-      "instructions": [
-        {
-          "mnemonic": "DEC",
-          "since": "LR35902",
-          "manual_ref": "GB CPU §DEC (HL)",
-          "writes_memory": ["mem_hl"],
-          "cycles": { "form": "3m" },
-          "steps": [{ "op": "lr35902_dec_hl_mem" }]
-        }
-      ]
+      "instructions": [{
+        "mnemonic": "DEC", "since": "LR35902", "manual_ref": "GB CPU §DEC (HL)",
+        "writes_memory": ["mem_hl"], "cycles": { "form": "3m" },
+        "steps": [
+          { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
+          { "op": "load_byte",           "address": "addr", "out": "v" },
+          { "op": "sub",                 "in": ["v", { "const": 1 }], "out": "result_i32" },
+          { "op": "trunc",               "in": "result_i32", "width": 8, "out": "result" },
+          { "op": "store_byte",          "address": "addr", "value": "result" },
+          { "op": "update_zero",         "in": "result", "reg": "F", "flag": "Z" },
+          { "op": "set_flag",            "reg": "F", "flag": "N", "value": 1 },
+          { "op": "update_h_dec",        "in": "result", "reg": "F", "flag": "H" }
+        ]
+      }]
     },
     {
       "name": "Inc_R8",
       "comment": "00_ddd_100. ddd=110 ((HL)) is shadowed by Inc_Hl_Mem above.",
       "pattern": "00ddd100",
-      "fields": {
-        "ddd": "5:3"
-      },
+      "fields": { "ddd": "5:3" },
       "mask": "0xC7",
       "match": "0x04",
-      "instructions": [
-        {
-          "mnemonic": "INC",
-          "since": "LR35902",
-          "manual_ref": "GB CPU §INC r",
-          "cycles": { "form": "1m" },
-          "steps": [
-            { "op": "lr35902_inc_r8", "field": "ddd" }
-          ]
-        }
-      ]
+      "instructions": [{
+        "mnemonic": "INC", "since": "LR35902", "manual_ref": "GB CPU §INC r",
+        "cycles": { "form": "1m" },
+        "steps": [
+          { "op": "lr35902_read_r8",  "field": "ddd", "out": "v" },
+          { "op": "add",              "in": ["v", { "const": 1 }], "out": "result_i32" },
+          { "op": "trunc",            "in": "result_i32", "width": 8, "out": "result" },
+          { "op": "lr35902_write_r8", "field": "ddd", "value": "result" },
+          { "op": "update_zero",      "in": "result", "reg": "F", "flag": "Z" },
+          { "op": "set_flag",         "reg": "F", "flag": "N", "value": 0 },
+          { "op": "update_h_inc",     "in": "result", "reg": "F", "flag": "H" }
+        ]
+      }]
     },
     {
       "name": "Dec_R8",
       "comment": "00_ddd_101. ddd=110 ((HL)) is shadowed by Dec_Hl_Mem above.",
       "pattern": "00ddd101",
-      "fields": {
-        "ddd": "5:3"
-      },
+      "fields": { "ddd": "5:3" },
       "mask": "0xC7",
       "match": "0x05",
-      "instructions": [
-        {
-          "mnemonic": "DEC",
-          "since": "LR35902",
-          "manual_ref": "GB CPU §DEC r",
-          "cycles": { "form": "1m" },
-          "steps": [
-            { "op": "lr35902_dec_r8", "field": "ddd" }
-          ]
-        }
-      ]
+      "instructions": [{
+        "mnemonic": "DEC", "since": "LR35902", "manual_ref": "GB CPU §DEC r",
+        "cycles": { "form": "1m" },
+        "steps": [
+          { "op": "lr35902_read_r8",  "field": "ddd", "out": "v" },
+          { "op": "sub",              "in": ["v", { "const": 1 }], "out": "result_i32" },
+          { "op": "trunc",            "in": "result_i32", "width": 8, "out": "result" },
+          { "op": "lr35902_write_r8", "field": "ddd", "value": "result" },
+          { "op": "update_zero",      "in": "result", "reg": "F", "flag": "Z" },
+          { "op": "set_flag",         "reg": "F", "flag": "N", "value": 1 },
+          { "op": "update_h_dec",     "in": "result", "reg": "F", "flag": "H" }
+        ]
+      }]
     }
   ]
 }
