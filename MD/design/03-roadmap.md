@@ -490,9 +490,13 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
   + region switch。**GBA arm +2.5% (8.05 → 8.25 MIPS)**, GBA thumb 持平
   (噪聲)。收益 modest 因 B.g 已把 bus.ReadWord inline 進 caller，剩下
   switch 本身不大。
-- [ ] **E.b JIT-side data load/store fast path** (extern trampoline side)
-  — JIT'd code 對 LDR/STR 走 memory_read_8/write_8 extern；trampoline
-  內加 region check + 直接 array index，省 bus 整套 dispatch。
+- [x] **E.b JIT-side data load/store fast path** (extern trampoline side)
+  （2026-05-03，perf note `MD/performance/202605030125-jit-mem-trampoline-fast-path.md`）
+  — MemoryBusBindings 加 typed cache `_currentGba` + 3 個 fast-path helper
+  for ROM/IWRAM/EWRAM reads。Reads 的 3 個 trampoline 加 fast lane；writes
+  保留 slow path（IO/Palette/VRAM/OAM 寫入有 side effects）。
+  **loop100 上 +0.6% noise** — 這 ROM ALU-heavy 不是 mem-heavy；改動正確
+  但要 mem-heavy bench 才看得出實際收益。
 - [ ] **Mem-bus region table inline check**：JIT'd code 自帶
   「addr ∈ ROM/RAM region 直接 GEP；else fallback to extern call」
   fast path（IR 層改動，比 trampoline 更激進）
