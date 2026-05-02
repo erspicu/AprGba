@@ -55,11 +55,11 @@ public static class Lr35902Emitters
         // a real emitter is a follow-up since it needs N/H/C-driven flow.
         reg.Register(new SimpleNoOpEmitter("lr35902_daa"));
 
-        // Immediate-byte reads are stubbed to constant 0 until the
-        // host-bus extern shim lands. This lets instructions whose
-        // immediate is unused (STOP padding byte) compile cleanly.
-        reg.Register(new ImmediatePlaceholderEmitter("read_imm8",  LLVMTypeRef.Int8));
-        reg.Register(new ImmediatePlaceholderEmitter("read_imm16", LLVMTypeRef.Int16));
+        // Immediate-byte reads: fetch from PC, advance PC by N. Lower
+        // to memory_read_8 calls (read_imm16 issues two of them, low
+        // byte first per LR35902 little-endian).
+        reg.Register(new Lr35902ReadImm8Emitter());
+        reg.Register(new Lr35902ReadImm16Emitter());
 
         // A-rotate ops in block 0 column 7 (RLCA/RRCA/RLA/RRA). Each
         // rotates A by 1 bit and sets C from the bit that fell out;
@@ -83,13 +83,13 @@ public static class Lr35902Emitters
         reg.Register(new Lr35902ReadR8Emitter());
         reg.Register(new Lr35902WriteR8Emitter());
 
-        // Memory-bus extern placeholders (load_byte / store_byte /
-        // store_word). Until JsonCpu wires the GB bus, these compile
-        // to no-ops (load returns 0). Real impl follows the ARM
-        // host_swap_register_bank inttoptr-in-initializer pattern.
-        reg.Register(new ImmediatePlaceholderEmitter("load_byte", LLVMTypeRef.Int8));
-        reg.Register(new SimpleNoOpEmitter("store_byte"));
-        reg.Register(new SimpleNoOpEmitter("store_word"));
+        // Memory-bus extern calls. Lower to memory_read_8 / memory_write_8 /
+        // memory_write_16 calls into the host runtime (JsonCpu binds these
+        // to GbMemoryBus shims). Address is widened to i32 to match the
+        // existing extern signature shared with ARM.
+        reg.Register(new Lr35902LoadByteEmitter());
+        reg.Register(new Lr35902StoreByteEmitter());
+        reg.Register(new Lr35902StoreWordEmitter());
 
         // 16-bit pair INC/DEC by name (used in (HL+) / (HL-) variants).
         reg.Register(new Lr35902IncDecPairEmitter("lr35902_inc_pair", isInc: true));
@@ -146,8 +146,8 @@ public static class Lr35902Emitters
         // funky H/C-from-low-byte flag rules.
         reg.Register(new Lr35902AddSpE8Emitter());
         reg.Register(new Lr35902LdHlSpE8Emitter());
-        reg.Register(new Lr35902LdhIoLoadPlaceholder());
-        reg.Register(new SimpleNoOpEmitter("lr35902_ldh_io_store"));
+        reg.Register(new Lr35902LdhIoLoadEmitter());
+        reg.Register(new Lr35902LdhIoStoreEmitter());
     }
 
     /// <summary>
@@ -1826,20 +1826,8 @@ internal sealed class Lr35902AddSpE8Emitter : IMicroOpEmitter
     }
 }
 
-/// <summary>
-/// Placeholder for lr35902_ldh_io_load — emits an i8 0 in the named
-/// `out` slot so dependent steps can resolve. Real impl: load from
-/// 0xFF00 + offset via the bus extern.
-/// </summary>
-internal sealed class Lr35902LdhIoLoadPlaceholder : IMicroOpEmitter
-{
-    public string OpName => "lr35902_ldh_io_load";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var outName = StandardEmitters.GetOut(step.Raw);
-        ctx.Values[outName] = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false);
-    }
-}
+// (Lr35902LdhIoLoadPlaceholder removed — replaced by the real
+//  Lr35902LdhIoLoadEmitter at the end of this file.)
 
 /// <summary>
 /// LD HL, SP+e8 — HL ← SP + signed-extended 8-bit. Same flag rules as
@@ -1888,5 +1876,179 @@ internal sealed class Lr35902LdHlSpE8Emitter : IMicroOpEmitter
 
         var zero = LLVMValueRef.CreateConstInt(i8, 0, false);
         Lr35902Emitters.StoreFlags(ctx, zero, zero, h, c);
+    }
+}
+
+// ---------------- memory-bus extern calls ----------------
+
+/// <summary>
+/// Helpers shared by the LR35902 memory ops — all of them lower to the
+/// same memory_read_8 / memory_write_8 / memory_write_16 externs that
+/// ARM uses, with i32 addresses.
+/// </summary>
+internal static class Lr35902MemoryHelpers
+{
+    public static LLVMValueRef CallRead8(EmitContext ctx, LLVMValueRef addrI32, string outLabel)
+    {
+        var (slot, fnType, ptrType) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, MemoryEmitters.ExternFunctionNames.Read8, LLVMTypeRef.Int8, LLVMTypeRef.Int32);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, $"{outLabel}_fn");
+        return ctx.Builder.BuildCall2(fnType, fn, new[] { addrI32 }, outLabel);
+    }
+
+    public static void CallWrite8(EmitContext ctx, LLVMValueRef addrI32, LLVMValueRef valueI8)
+    {
+        var (slot, fnType, ptrType) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, MemoryEmitters.ExternFunctionNames.Write8,
+            ctx.Module.Context.VoidType, LLVMTypeRef.Int32, LLVMTypeRef.Int8);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, "w8_fn");
+        ctx.Builder.BuildCall2(fnType, fn, new[] { addrI32, valueI8 }, "");
+    }
+
+    public static void CallWrite16(EmitContext ctx, LLVMValueRef addrI32, LLVMValueRef valueI16)
+    {
+        var (slot, fnType, ptrType) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, MemoryEmitters.ExternFunctionNames.Write16,
+            ctx.Module.Context.VoidType, LLVMTypeRef.Int32, LLVMTypeRef.Int16);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, "w16_fn");
+        ctx.Builder.BuildCall2(fnType, fn, new[] { addrI32, valueI16 }, "");
+    }
+
+    public static LLVMValueRef AddrToI32(EmitContext ctx, LLVMValueRef addr, string label)
+    {
+        var w = addr.TypeOf.IntWidth;
+        if (w == 32) return addr;
+        if (w < 32)  return ctx.Builder.BuildZExt(addr, LLVMTypeRef.Int32, $"{label}_z32");
+        return ctx.Builder.BuildTrunc(addr, LLVMTypeRef.Int32, $"{label}_t32");
+    }
+}
+
+internal sealed class Lr35902LoadByteEmitter : IMicroOpEmitter
+{
+    public string OpName => "load_byte";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var addrName = step.Raw.GetProperty("address").GetString()!;
+        var outName  = StandardEmitters.GetOut(step.Raw);
+        var addr32 = Lr35902MemoryHelpers.AddrToI32(ctx, ctx.Resolve(addrName), addrName);
+        ctx.Values[outName] = Lr35902MemoryHelpers.CallRead8(ctx, addr32, outName);
+    }
+}
+
+internal sealed class Lr35902StoreByteEmitter : IMicroOpEmitter
+{
+    public string OpName => "store_byte";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var addrName  = step.Raw.GetProperty("address").GetString()!;
+        var valueName = step.Raw.GetProperty("value").GetString()!;
+        var addr32 = Lr35902MemoryHelpers.AddrToI32(ctx, ctx.Resolve(addrName), addrName);
+        var raw    = ctx.Resolve(valueName);
+        var v8 = raw.TypeOf.IntWidth == 8 ? raw
+            : raw.TypeOf.IntWidth < 8
+                ? ctx.Builder.BuildZExt(raw, LLVMTypeRef.Int8, $"{valueName}_z8")
+                : ctx.Builder.BuildTrunc(raw, LLVMTypeRef.Int8, $"{valueName}_t8");
+        Lr35902MemoryHelpers.CallWrite8(ctx, addr32, v8);
+    }
+}
+
+internal sealed class Lr35902StoreWordEmitter : IMicroOpEmitter
+{
+    public string OpName => "store_word";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var addrName  = step.Raw.GetProperty("address").GetString()!;
+        var valueName = step.Raw.GetProperty("value").GetString()!;
+        var addr32 = Lr35902MemoryHelpers.AddrToI32(ctx, ctx.Resolve(addrName), addrName);
+        var raw    = ctx.Resolve(valueName);
+        var v16 = raw.TypeOf.IntWidth == 16 ? raw
+            : raw.TypeOf.IntWidth < 16
+                ? ctx.Builder.BuildZExt(raw, LLVMTypeRef.Int16, $"{valueName}_z16")
+                : ctx.Builder.BuildTrunc(raw, LLVMTypeRef.Int16, $"{valueName}_t16");
+        Lr35902MemoryHelpers.CallWrite16(ctx, addr32, v16);
+    }
+}
+
+internal sealed class Lr35902ReadImm8Emitter : IMicroOpEmitter
+{
+    public string OpName => "read_imm8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var outName = StandardEmitters.GetOut(step.Raw);
+        var pcPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "PC");
+        var pc16 = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "pc_for_imm8");
+        var pc32 = ctx.Builder.BuildZExt(pc16, LLVMTypeRef.Int32, "pc_z32");
+        var byteV = Lr35902MemoryHelpers.CallRead8(ctx, pc32, outName);
+        var newPc = ctx.Builder.BuildAdd(pc16,
+            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int16, 1, false), "pc_after_imm8");
+        ctx.Builder.BuildStore(newPc, pcPtr);
+        ctx.Values[outName] = byteV;
+    }
+}
+
+internal sealed class Lr35902ReadImm16Emitter : IMicroOpEmitter
+{
+    public string OpName => "read_imm16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var outName = StandardEmitters.GetOut(step.Raw);
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var pcPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "PC");
+        var pc16 = ctx.Builder.BuildLoad2(i16, pcPtr, "pc_for_imm16");
+        var pc32Lo = ctx.Builder.BuildZExt(pc16, i32, "pc_z32");
+        var lo8 = Lr35902MemoryHelpers.CallRead8(ctx, pc32Lo, $"{outName}_lo");
+
+        var pcPlus1 = ctx.Builder.BuildAdd(pc16,
+            LLVMValueRef.CreateConstInt(i16, 1, false), "pc_plus1");
+        var pc32Hi = ctx.Builder.BuildZExt(pcPlus1, i32, "pc_plus1_z32");
+        var hi8 = Lr35902MemoryHelpers.CallRead8(ctx, pc32Hi, $"{outName}_hi");
+
+        var loZ = ctx.Builder.BuildZExt(lo8, i16, $"{outName}_loz");
+        var hiZ = ctx.Builder.BuildZExt(hi8, i16, $"{outName}_hiz");
+        var hiSh = ctx.Builder.BuildShl(hiZ,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{outName}_hi_shl");
+        var word = ctx.Builder.BuildOr(hiSh, loZ, outName);
+
+        var newPc = ctx.Builder.BuildAdd(pc16,
+            LLVMValueRef.CreateConstInt(i16, 2, false), "pc_after_imm16");
+        ctx.Builder.BuildStore(newPc, pcPtr);
+
+        ctx.Values[outName] = word;
+    }
+}
+
+internal sealed class Lr35902LdhIoLoadEmitter : IMicroOpEmitter
+{
+    public string OpName => "lr35902_ldh_io_load";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var offsetName = step.Raw.GetProperty("offset").GetString()!;
+        var outName = StandardEmitters.GetOut(step.Raw);
+        var off = ctx.Resolve(offsetName);
+        var off32 = Lr35902MemoryHelpers.AddrToI32(ctx, off, offsetName);
+        var addr = ctx.Builder.BuildOr(off32, ctx.ConstU32(0xFF00), $"{outName}_addr");
+        ctx.Values[outName] = Lr35902MemoryHelpers.CallRead8(ctx, addr, outName);
+    }
+}
+
+internal sealed class Lr35902LdhIoStoreEmitter : IMicroOpEmitter
+{
+    public string OpName => "lr35902_ldh_io_store";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var offsetName = step.Raw.GetProperty("offset").GetString()!;
+        var valueName  = step.Raw.GetProperty("value").GetString()!;
+        var off = ctx.Resolve(offsetName);
+        var off32 = Lr35902MemoryHelpers.AddrToI32(ctx, off, offsetName);
+        var addr = ctx.Builder.BuildOr(off32, ctx.ConstU32(0xFF00), "ldh_addr");
+
+        var raw = ctx.Resolve(valueName);
+        var v8 = raw.TypeOf.IntWidth == 8 ? raw
+            : raw.TypeOf.IntWidth < 8
+                ? ctx.Builder.BuildZExt(raw, LLVMTypeRef.Int8, $"{valueName}_z8")
+                : ctx.Builder.BuildTrunc(raw, LLVMTypeRef.Int8, $"{valueName}_t8");
+        Lr35902MemoryHelpers.CallWrite8(ctx, addr, v8);
     }
 }
