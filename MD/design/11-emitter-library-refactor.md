@@ -12,6 +12,53 @@
 
 ---
 
+## 0. 實作進度（持續更新）
+
+| Step | 狀態 | Commits | 檔案/op 變化 |
+|---|---|---|---|
+| 5.1 stack ops generalisation | ✅ 完成 | `29b0351` | +`StackOps.cs` 新 4 ops (`push_pair`/`pop_pair`/`call`/`ret`) + spec `stack_pointer` metadata |
+| 5.2 flag setters generalisation | ✅ 完成 | `6c377ec` | +`FlagOps.cs` 新 3 ops (`set_flag`/`update_h_add`/`update_h_sub`)；LR35902 SCF migration |
+| 5.3 branch / call_cc / ret_cc unification | ✅ 完成 | `7c0f486` `bd8f46d` `afe5dad` | 新 5 ops (`branch_cc`/`call_cc`/`ret_cc`/`read_pc`/`sext`) + `target_const`；LR35902 JP/JR/CALL/RET/RST 全 cc 變體；cleanup `-408 lines` |
+| 5.4 bit ops + shift unification | ✅ 完成 | `1c1f6a5` `0e23ad7` `390eb7e` | +`BitOps.cs` 新 4 ops (`bit_test`/`bit_set`/`bit_clear`/`shift`)；LR35902 BIT/SET/RES + 8 種 CB shift + 4 個 A-rotate；cleanup `-485 lines` |
+| 5.5 memory IO region 統一 | ⏳ 待做 | — | LR35902 `lr35902_ldh_io_load/store` 收掉 |
+| 5.6 IME / interrupt enable 統一 | ⏳ 待做 | — | LR35902 `lr35902_ime`/`ime_delayed`/`cb_dispatch` 收掉 |
+| 5.7 operand resolver 通用化 | ⏳ 待做 | — | LR35902 `lr35902_read_r8`/`write_r8`/`write_rr_dd` (sss/dd 解碼) |
+| 5.8 L3 cleanup + intrinsic naming | ⏳ 待做 | — | 把剩下真 L3 集中 `*Intrinsics.cs` |
+| 5.9 第三 CPU 驗證 | ⏳ 待做 | — | RISC-V RV32I 或 MIPS R3000 |
+
+**5.4 收工 snapshot (2026-05-02)**：
+
+| 檔案 | 起點 (5.0 前) | 5.4 收工 | 變化 |
+|---|---:|---:|---:|
+| `Lr35902Emitters.cs` | ~2620 行 | 1646 行 | **−37%** |
+| `Emitters.cs` (通用) | 613 行 | ~700 行 | +14%（吸收 LR35902 通用化） |
+| 新增 `StackOps.cs` | — | ~415 行 | — |
+| 新增 `FlagOps.cs` | — | ~88 行 | — |
+| 新增 `BitOps.cs` | — | ~195 行 | — |
+| **net delta** | — | — | **−約 200 行** + 結構大幅清晰 |
+
+**驗證面**：每個 step 都跑 345/345 unit test + 至少 3 個 Blargg sub-test
+（含 07-jr,jp,call,ret,rst / 10-bit ops）在 legacy + json-llvm 兩條後端
+Passed。345 unit test 從 5.0 到 5.4 結束數量沒變過 — 純結構，沒新增
+測試也沒掉測試。
+
+**移除的 LR35902-specific emitters（5.1–5.4 累計）**：
+
+```
+push_qq / pop_qq                                   (5.1 stack)
+jp / jp_cc / jr / jr_cc / call / call_cc /
+  ret / ret_cc / rst                                (5.3 branch)
+cb_bit / cb_bit_hl_mem / cb_set / cb_resset_hl_mem /
+  cb_res / cb_shift / cb_shift_hl_mem               (5.4 CB-prefix)
+ARotateEmitter (lr35902_rlca/rrca/rla/rra)         (5.4.B A-rotates)
+EvalCondition / PcPointer / NormaliseToI16 helpers (5.3 cleanup)
+```
+
+合計刪除 **18 個 LR35902-specific ops + 多個 helper**。剩下的
+LR35902 ops 預計在 5.5–5.8 收掉再剩 4–6 個真 L3。
+
+---
+
 ## 1. 現況盤點
 
 ### 1.1 Emitter 檔案 + op 數
