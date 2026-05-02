@@ -33,6 +33,9 @@ internal static class FlagOps
         reg.Register(new ToggleFlag());
         reg.Register(new UpdateHAdd());
         reg.Register(new UpdateHSub());
+        reg.Register(new UpdateZero());
+        reg.Register(new UpdateHInc());
+        reg.Register(new UpdateHDec());
     }
 
     private sealed class SetFlag : IMicroOpEmitter
@@ -106,6 +109,73 @@ internal static class FlagOps
             var bLow = ctx.Builder.BuildAnd(b, ctx.ConstU32(mask), "h_sub_b_low");
             var hBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntULT,
                            aLow, bLow, "h_sub_test");
+            CpsrHelpers.SetStatusFlag(ctx, reg, flag, hBool);
+        }
+    }
+
+    /// <summary>
+    /// update_zero { in, reg, flag } — Z = (in == 0). Compares the input
+    /// value to zero at its native width; the spec is responsible for
+    /// truncating beforehand if it cares about a specific byte/word range.
+    /// </summary>
+    private sealed class UpdateZero : IMicroOpEmitter
+    {
+        public string OpName => "update_zero";
+        public void Emit(EmitContext ctx, MicroOpStep step)
+        {
+            var inName = step.Raw.GetProperty("in").GetString()!;
+            var v = ctx.Resolve(inName);
+            var zero = LLVMValueRef.CreateConstInt(v.TypeOf, 0, false);
+            var isZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, v, zero, $"upd_z_{inName}");
+            var reg  = step.Raw.GetProperty("reg").GetString()!;
+            var flag = step.Raw.GetProperty("flag").GetString()!;
+            CpsrHelpers.SetStatusFlag(ctx, reg, flag, isZero);
+        }
+    }
+
+    /// <summary>
+    /// update_h_inc { in, reg, flag, boundary?: 4 } — H from increment:
+    /// H = ((in &amp; mask) == 0). For LR35902 INC r the new value's low
+    /// nibble being 0 means a carry crossed bit 3 during +1.
+    /// </summary>
+    private sealed class UpdateHInc : IMicroOpEmitter
+    {
+        public string OpName => "update_h_inc";
+        public void Emit(EmitContext ctx, MicroOpStep step)
+        {
+            var inName = step.Raw.GetProperty("in").GetString()!;
+            var v = ctx.Resolve(inName);
+            var boundary = step.Raw.TryGetProperty("boundary", out var bd) ? bd.GetInt32() : 4;
+            ulong mask = (1UL << boundary) - 1;
+            var maskC = LLVMValueRef.CreateConstInt(v.TypeOf, mask, false);
+            var lowNib = ctx.Builder.BuildAnd(v, maskC, $"h_inc_{inName}_low");
+            var zero = LLVMValueRef.CreateConstInt(v.TypeOf, 0, false);
+            var hBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, lowNib, zero, $"h_inc_{inName}");
+            var reg  = step.Raw.GetProperty("reg").GetString()!;
+            var flag = step.Raw.GetProperty("flag").GetString()!;
+            CpsrHelpers.SetStatusFlag(ctx, reg, flag, hBool);
+        }
+    }
+
+    /// <summary>
+    /// update_h_dec { in, reg, flag, boundary?: 4 } — H from decrement:
+    /// H = ((in &amp; mask) == mask). For LR35902 DEC r the new value's
+    /// low nibble being 0xF means a borrow crossed bit 4 during −1.
+    /// </summary>
+    private sealed class UpdateHDec : IMicroOpEmitter
+    {
+        public string OpName => "update_h_dec";
+        public void Emit(EmitContext ctx, MicroOpStep step)
+        {
+            var inName = step.Raw.GetProperty("in").GetString()!;
+            var v = ctx.Resolve(inName);
+            var boundary = step.Raw.TryGetProperty("boundary", out var bd) ? bd.GetInt32() : 4;
+            ulong mask = (1UL << boundary) - 1;
+            var maskC = LLVMValueRef.CreateConstInt(v.TypeOf, mask, false);
+            var lowNib = ctx.Builder.BuildAnd(v, maskC, $"h_dec_{inName}_low");
+            var hBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, lowNib, maskC, $"h_dec_{inName}");
+            var reg  = step.Raw.GetProperty("reg").GetString()!;
+            var flag = step.Raw.GetProperty("flag").GetString()!;
             CpsrHelpers.SetStatusFlag(ctx, reg, flag, hBool);
         }
     }

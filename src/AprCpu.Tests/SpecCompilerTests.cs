@@ -265,16 +265,18 @@ public class SpecCompilerTests
         Assert.Contains("Main.LdInd_A_HLi.LDI",  result.Functions.Keys);
         Assert.Contains("Main.LdInd_A_HLd.LDD",  result.Functions.Keys);
 
-        // (HL+) variant must contain the HL increment sequence.
+        // (HL+) variant must contain the HL increment sequence. After
+        // Step 5.7.B migration this is read_reg_pair_named(HL) →
+        // store_byte → read_reg_pair_named(HL) → add(1) → write_reg_pair_named.
         var ir = result.Module.PrintToString();
         var hliIdx = ir.IndexOf("@Execute_Main_LdInd_HLi_A_LDI", StringComparison.Ordinal);
         Assert.True(hliIdx >= 0);
         var nextDef = ir.IndexOf("\ndefine ", hliIdx + 1, StringComparison.Ordinal);
         var body = nextDef > 0 ? ir.Substring(hliIdx, nextDef - hliIdx) : ir.Substring(hliIdx);
 
-        Assert.Contains("HL_hi", body);     // pair compose
+        Assert.Contains("HL_hi", body);     // pair compose (read_reg_pair_named labels)
         Assert.Contains("HL_lo", body);
-        Assert.Contains("hl_inc",   body);  // INC step
+        Assert.Contains("hl_new", body);    // add result feeding write_reg_pair_named
     }
 
     /// <summary>

@@ -94,8 +94,9 @@ public static class Lr35902Emitters
         reg.Register(new Lr35902StoreWordEmitter());
 
         // 16-bit pair INC/DEC by name (used in (HL+) / (HL-) variants).
-        reg.Register(new Lr35902IncDecPairEmitter("lr35902_inc_pair", isInc: true));
-        reg.Register(new Lr35902IncDecPairEmitter("lr35902_dec_pair", isInc: false));
+        // inc_pair / dec_pair migrated to generic
+        // read_reg_pair_named + add/sub + write_reg_pair_named
+        // (Phase 5.8 Step 5.7.B). Used by LD (HL+),A / LD A,(HL+) etc.
 
         // Wave 3: 8-bit ALU on A. All three source variants share the
         // same operation table (ADD/ADC/SUB/SBC/AND/XOR/OR/CP) but
@@ -108,10 +109,10 @@ public static class Lr35902Emitters
         reg.Register(new Lr35902Alu8Emitter("lr35902_alu_a_imm8", Lr35902Alu8Source.Immediate));
 
         // Wave 3: 8-bit INC / DEC selected by 3-bit ddd field.
-        reg.Register(new Lr35902IncDecR8Emitter("lr35902_inc_r8", isInc: true));
-        reg.Register(new Lr35902IncDecR8Emitter("lr35902_dec_r8", isInc: false));
-        reg.Register(new Lr35902IncDecHlMemEmitter("lr35902_inc_hl_mem", isInc: true));
-        reg.Register(new Lr35902IncDecHlMemEmitter("lr35902_dec_hl_mem", isInc: false));
+        // INC r / DEC r / INC (HL) / DEC (HL) migrated to generic chain
+        // (Phase 5.8 Step 5.7.B): lr35902_read_r8 (or load_byte for HL)
+        // + add/sub + trunc + lr35902_write_r8 (or store_byte) +
+        // update_zero + set_flag(N) + update_h_inc/dec.
 
         // CB-prefix (HL) variants — memory R-M-W siblings of cb_shift /
         // cb_bit / cb_res / cb_set. Spec splits the sss=110 case out of
@@ -567,56 +568,8 @@ internal sealed class Lr35902WriteR8Emitter : IMicroOpEmitter
     }
 }
 
-/// <summary>
-/// lr35902_inc_pair / lr35902_dec_pair — adjust a named register pair
-/// by ±1 in place. Used by LD (HL+),A and LD (HL-),A variants.
-/// </summary>
-internal sealed class Lr35902IncDecPairEmitter : IMicroOpEmitter
-{
-    public string OpName { get; }
-    private readonly bool _isInc;
-
-    public Lr35902IncDecPairEmitter(string opName, bool isInc)
-    {
-        OpName = opName;
-        _isInc = isInc;
-    }
-
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var name = step.Raw.GetProperty("name").GetString()!;
-        var pair = Lr35902Emitters.LocateRegisterPair(ctx, name);
-
-        LLVMValueRef cur;
-        if (pair is not null)
-        {
-            cur = Lr35902Emitters.ComposePairValue(ctx, pair, $"{name.ToLowerInvariant()}_cur");
-        }
-        else
-        {
-            var (ptr, elem) = Lr35902Emitters.LocateRegister(ctx, name);
-            if (elem.IntWidth != 16)
-                throw new InvalidOperationException(
-                    $"lr35902_inc/dec_pair '{name}': resolved register is {elem.IntWidth}-bit; expected 16.");
-            cur = ctx.Builder.BuildLoad2(elem, ptr, $"{name.ToLowerInvariant()}_cur");
-        }
-
-        var one = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int16, 1, false);
-        var next = _isInc
-            ? ctx.Builder.BuildAdd(cur, one, $"{name.ToLowerInvariant()}_inc")
-            : ctx.Builder.BuildSub(cur, one, $"{name.ToLowerInvariant()}_dec");
-
-        if (pair is not null)
-        {
-            Lr35902Emitters.DecomposePairValue(ctx, pair, next);
-        }
-        else
-        {
-            var (ptr, _) = Lr35902Emitters.LocateRegister(ctx, name);
-            ctx.Builder.BuildStore(next, ptr);
-        }
-    }
-}
+// inc_pair / dec_pair (named-pair) deleted in Phase 5.8 Step 5.7.B cleanup —
+// migrated to generic read_reg_pair_named + add/sub + write_reg_pair_named.
 
 // ---------------- 8-bit ALU on A ----------------
 
@@ -802,99 +755,9 @@ internal sealed class Lr35902Alu8Emitter : IMicroOpEmitter
         => ctx.Builder.BuildZExt(i1, LLVMTypeRef.Int8, "to_i8");
 }
 
-// ---------------- 8-bit INC/DEC ----------------
-
-/// <summary>
-/// lr35902_inc_r8 / lr35902_dec_r8 — INC r / DEC r selected by 3-bit
-/// ddd field. Updates Z/N/H; C preserved. (HL) variant uses memory
-/// (placeholder until bus extern lands).
-/// </summary>
-internal sealed class Lr35902IncDecR8Emitter : IMicroOpEmitter
-{
-    public string OpName { get; }
-    private readonly bool _isInc;
-
-    public Lr35902IncDecR8Emitter(string opName, bool isInc)
-    {
-        OpName = opName;
-        _isInc = isInc;
-    }
-
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var fieldName = step.Raw.GetProperty("field").GetString()!;
-        var field32 = ctx.Resolve(fieldName);
-        var i8 = LLVMTypeRef.Int8;
-        var i32 = LLVMTypeRef.Int32;
-        var one = LLVMValueRef.CreateConstInt(i8, 1, false);
-
-        // For each ddd 0..7, compute current → next, conditionally store and
-        // update F. (HL) skipped for now (placeholder).
-        for (int ddd = 0; ddd < 8; ddd++)
-        {
-            int gprIdx = Lr35902Emitters.Sss3BitToGprIndex(ddd);
-            if (gprIdx < 0) continue;
-
-            var ptr  = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, gprIdx);
-            var prev = ctx.Builder.BuildLoad2(i8, ptr, $"r8_idx{ddd}_prev");
-            var next = _isInc
-                ? ctx.Builder.BuildAdd(prev, one, $"r8_idx{ddd}_inc")
-                : ctx.Builder.BuildSub(prev, one, $"r8_idx{ddd}_dec");
-
-            var cmp = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, field32,
-                LLVMValueRef.CreateConstInt(i32, (uint)ddd, false), $"is_ddd{ddd}");
-            var stored = ctx.Builder.BuildSelect(cmp, next, prev, $"r8_idx{ddd}_st");
-            ctx.Builder.BuildStore(stored, ptr);
-        }
-
-        // Compute flag candidates from a single representative ddd value via
-        // the same select chain — but for simplicity here we just stamp Z/N/H
-        // based on the ddd-selected result. Use field-driven select to pick
-        // which stored byte to use for Z computation.
-        // (Approach: re-derive next-value via select chain from the just-stored slots.)
-        var values = new LLVMValueRef[8];
-        for (int ddd = 0; ddd < 8; ddd++)
-        {
-            int gprIdx = Lr35902Emitters.Sss3BitToGprIndex(ddd);
-            if (gprIdx < 0)
-            {
-                values[ddd] = LLVMValueRef.CreateConstInt(i8, 0, false);
-                continue;
-            }
-            var ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, gprIdx);
-            values[ddd] = ctx.Builder.BuildLoad2(i8, ptr, $"r8_for_flags_{ddd}");
-        }
-        var newVal = values[7];
-        for (int ddd = 6; ddd >= 0; ddd--)
-        {
-            var cmp = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, field32,
-                LLVMValueRef.CreateConstInt(i32, (uint)ddd, false), $"f_is_ddd{ddd}");
-            newVal = ctx.Builder.BuildSelect(cmp, values[ddd], newVal, $"f_sel{ddd}");
-        }
-
-        var z = ctx.Builder.BuildZExt(
-                    ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, newVal,
-                        LLVMValueRef.CreateConstInt(i8, 0, false), "z_cmp"),
-                    i8, "z_i8");
-        var n = LLVMValueRef.CreateConstInt(i8, _isInc ? 0u : 1u, false);
-        // H for INC r: low nibble of newVal == 0 (i.e. carry from bit 3).
-        // H for DEC r: low nibble of OLD value == 0 (i.e. borrow from bit 4).
-        // We use newVal-derived H here; old-value would need additional book-keeping.
-        // For INC: H = (newVal & 0xF) == 0
-        // For DEC: H = (newVal & 0xF) == 0xF
-        var lowNibble = ctx.Builder.BuildAnd(newVal, LLVMValueRef.CreateConstInt(i8, 0xF, false), "low_nib");
-        var hCheck = _isInc
-            ? LLVMValueRef.CreateConstInt(i8, 0x0, false)
-            : LLVMValueRef.CreateConstInt(i8, 0xF, false);
-        var h = ctx.Builder.BuildZExt(
-                    ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, lowNibble, hCheck, "h_cmp"),
-                    i8, "h_i8");
-
-        // C preserved: read existing C and pass through.
-        var cPreserved = Lr35902Emitters.ReadCarry(ctx);
-        Lr35902Emitters.StoreFlags(ctx, z, n, h, cPreserved);
-    }
-}
+// 8-bit INC r / DEC r emitters (lr35902_inc_r8 / dec_r8) deleted in Phase 5.8 Step 5.7.B
+// cleanup — migrated to generic lr35902_read_r8 + add/sub + trunc + lr35902_write_r8 +
+// update_zero + set_flag(N) + update_h_inc/dec.
 
 // ---------------- 16-bit ops on dd-field pairs ----------------
 
@@ -1489,61 +1352,9 @@ internal sealed class Lr35902DaaEmitter : IMicroOpEmitter
     }
 }
 
-/// <summary>
-/// INC/DEC (HL) memory R-M-W. Reads memory[HL], adjusts ±1, writes
-/// back, updates Z/N/H per LR35902 (C preserved).
-/// </summary>
-internal sealed class Lr35902IncDecHlMemEmitter : IMicroOpEmitter
-{
-    public string OpName { get; }
-    private readonly bool _isInc;
-
-    public Lr35902IncDecHlMemEmitter(string opName, bool isInc)
-    {
-        OpName = opName;
-        _isInc = isInc;
-    }
-
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var i8 = LLVMTypeRef.Int8;
-        var i32 = LLVMTypeRef.Int32;
-
-        // Compute (HL) address.
-        var hlPair = Lr35902Emitters.LocateRegisterPair(ctx, "HL")!;
-        var hl16 = Lr35902Emitters.ComposePairValue(ctx, hlPair, "incdec_hl");
-        var hl32 = ctx.Builder.BuildZExt(hl16, i32, "incdec_hl32");
-
-        // Read, adjust, write back.
-        var mem = Lr35902MemoryHelpers.CallRead8(ctx, hl32, "incdec_mem_old");
-        var one = LLVMValueRef.CreateConstInt(i8, 1, false);
-        var newVal = _isInc
-            ? ctx.Builder.BuildAdd(mem, one, "incdec_mem_new")
-            : ctx.Builder.BuildSub(mem, one, "incdec_mem_new");
-        Lr35902MemoryHelpers.CallWrite8(ctx, hl32, newVal);
-
-        // Z = (newVal == 0).
-        var z = ctx.Builder.BuildZExt(
-                    ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, newVal,
-                        LLVMValueRef.CreateConstInt(i8, 0, false), "incdec_z_cmp"),
-                    i8, "incdec_z");
-
-        // H: INC → low nibble of newVal == 0 (carry from bit 3).
-        //    DEC → low nibble of newVal == 0xF (borrow from bit 4).
-        var lowNib = ctx.Builder.BuildAnd(newVal,
-            LLVMValueRef.CreateConstInt(i8, 0xF, false), "incdec_lowm");
-        var hCheck = _isInc
-            ? LLVMValueRef.CreateConstInt(i8, 0x0, false)
-            : LLVMValueRef.CreateConstInt(i8, 0xF, false);
-        var h = ctx.Builder.BuildZExt(
-                    ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, lowNib, hCheck, "incdec_h_cmp"),
-                    i8, "incdec_h");
-
-        var n = LLVMValueRef.CreateConstInt(i8, _isInc ? 0u : 1u, false);
-        var c = Lr35902Emitters.ReadCarry(ctx);
-        Lr35902Emitters.StoreFlags(ctx, z, n, h, c);
-    }
-}
+// INC/DEC (HL)-mem emitter deleted in Phase 5.8 Step 5.7.B cleanup —
+// migrated to generic read_reg_pair_named + load_byte + add/sub + trunc + store_byte
+// + update_zero + set_flag(N) + update_h_inc/dec.
 
 // CB-prefix (HL)-mem variants deleted in Phase 5.8 Step 5.4 cleanup —
 // migrated to generic read_reg_pair_named + load_byte + bit_*/shift + store_byte chain.

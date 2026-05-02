@@ -50,7 +50,9 @@
           { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
           { "op": "read_reg_named", "name": "A", "out": "v" },
           { "op": "store_byte", "address": "addr", "value": "v" },
-          { "op": "lr35902_inc_pair", "name": "HL" }
+          { "op": "read_reg_pair_named",  "name": "HL", "out": "hl_pre" },
+          { "op": "add",                   "in": ["hl_pre", { "const": 1 }], "out": "hl_new" },
+          { "op": "write_reg_pair_named",  "name": "HL", "value": "hl_new" }
         ]
       }]
     },
@@ -68,7 +70,9 @@
           { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
           { "op": "read_reg_named", "name": "A", "out": "v" },
           { "op": "store_byte", "address": "addr", "value": "v" },
-          { "op": "lr35902_dec_pair", "name": "HL" }
+          { "op": "read_reg_pair_named",  "name": "HL", "out": "hl_pre" },
+          { "op": "sub",                   "in": ["hl_pre", { "const": 1 }], "out": "hl_new" },
+          { "op": "write_reg_pair_named",  "name": "HL", "value": "hl_new" }
         ]
       }]
     },
@@ -120,7 +124,9 @@
           { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
           { "op": "load_byte", "address": "addr", "out": "v" },
           { "op": "write_reg_named", "name": "A", "value": "v" },
-          { "op": "lr35902_inc_pair", "name": "HL" }
+          { "op": "read_reg_pair_named",  "name": "HL", "out": "hl_pre" },
+          { "op": "add",                   "in": ["hl_pre", { "const": 1 }], "out": "hl_new" },
+          { "op": "write_reg_pair_named",  "name": "HL", "value": "hl_new" }
         ]
       }]
     },
@@ -138,7 +144,9 @@
           { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
           { "op": "load_byte", "address": "addr", "out": "v" },
           { "op": "write_reg_named", "name": "A", "value": "v" },
-          { "op": "lr35902_dec_pair", "name": "HL" }
+          { "op": "read_reg_pair_named",  "name": "HL", "out": "hl_pre" },
+          { "op": "sub",                   "in": ["hl_pre", { "const": 1 }], "out": "hl_new" },
+          { "op": "write_reg_pair_named",  "name": "HL", "value": "hl_new" }
         ]
       }]
     }

@@ -66,6 +66,13 @@ public class CoverageTests
             // (toggle C). ARM has no direct equivalent so this stays
             // unused on the ARM7TDMI scan path.
             "toggle_flag",
+
+            // Step 5.7.B — generic increment / decrement flag updates
+            // and a `trunc` op for safe i32 → i8 narrowing. Used by
+            // LR35902 INC r / DEC r / INC (HL) / DEC (HL) (and by inc_pair
+            // / dec_pair indirectly through the 16-bit add chain).
+            // ARM has its own update_nz / update_c_* / update_v_* family.
+            "update_zero", "update_h_inc", "update_h_dec", "trunc",
         };
 
         var (registered, used) = CollectOps();
