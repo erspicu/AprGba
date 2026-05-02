@@ -417,8 +417,12 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
 
 #### B. IR-level inlining / 微指令融合（Gemini 建議 #1）
 
-- [ ] **OptLevel 調 O3** + 加入額外 LLVM passes (instcombine, gvn,
-  simplifycfg, mem2reg, reassociate)
+- [x] **OptLevel 調 O3** ~~+ 加入額外 LLVM passes (instcombine, gvn,
+  simplifycfg, mem2reg, reassociate)~~ — 2026-05-03 完成。perf-neutral
+  (±3%, see `MD/performance/202605030025-optlevel-0-to-3.md`)。原因：
+  per-instruction function 太小、LLVM 沒空間發揮，瓶頸在 dispatcher
+  overhead。保留 O3 給未來 block-JIT 用，後續策略應跳過 B.b/c/d 先攻
+  A (block-JIT) 或 E (mem-bus fast path)。
 - [ ] **同 register 的 GEP CSE**：目前每次 read_reg 都重新 GEP；同
   function 內多次 access 同 reg 應該 CSE 成一個 alloca
 - [ ] **多 micro-op step 融合**：`add` + `update_zero` + `update_h_add`

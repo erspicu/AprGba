@@ -131,7 +131,19 @@ public sealed unsafe class HostRuntime : IDisposable
         // touch the relevant code path get the safe default.
         BindUnboundExternsToTrap();
 
-        var options = new LLVMMCJITCompilerOptions { OptLevel = 0 };
+        // Phase 7 B.a (2026-05-03): bumped from O0 → O3.
+        // Pre-Phase-7 baseline used O0 because (a) we didn't trust the
+        // emitter IR enough to risk LLVM optimisations and (b) cold-start
+        // compile time mattered while iterating. Both concerns are no
+        // longer dominant: 345/345 unit tests + Blargg cpu_instrs all
+        // green proves the IR is sound, and one-shot compile time at O3
+        // is still under a second for both ARM7TDMI + LR35902 specs.
+        // OptLevel values per LLVMMCJITCompilerOptions.OptLevel docs:
+        //   0 = None / -O0 (skip optimisation)
+        //   1 = Less / -O1
+        //   2 = Default / -O2
+        //   3 = Aggressive / -O3 ← current
+        var options = new LLVMMCJITCompilerOptions { OptLevel = 3 };
         _engine = _module.CreateMCJITCompiler(ref options);
         _targetData = LLVM.GetExecutionEngineTargetData(_engine);
         StateSizeBytes = LLVM.SizeOfTypeInBits(_targetData, Layout.StructType) / 8;
