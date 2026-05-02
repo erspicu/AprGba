@@ -131,6 +131,20 @@ public sealed unsafe class HostRuntime : IDisposable
         // touch the relevant code path get the safe default.
         BindUnboundExternsToTrap();
 
+        // Phase 7 H.a (2026-05-03): explicit LLVM new-pass-manager pipeline
+        // BEFORE handing the module to MCJIT. MCJIT's OptLevel (set below)
+        // affects backend codegen (reg alloc, isel) but does NOT run the
+        // standard IR-level pass pipeline (mem2reg, GVN, DSE, instcombine,
+        // simplifycfg). Without these our alloca-shadow patterns (e.g.
+        // C.b lazy flag, B.f permanent pin) stay as memory ops instead of
+        // SSA registers, blocking deeper optimization opportunities.
+        //
+        // Run the curated pipeline below explicitly. "default<O3>" runs
+        // the full LLVM O3 set; we use a smaller curated list to keep
+        // compile time bounded — measured ~50ms extra one-shot per spec
+        // module, acceptable.
+        RunOptimizationPipeline();
+
         // Phase 7 B.a (2026-05-03): bumped from O0 → O3.
         // Pre-Phase-7 baseline used O0 because (a) we didn't trust the
         // emitter IR enough to risk LLVM optimisations and (b) cold-start
@@ -148,6 +162,57 @@ public sealed unsafe class HostRuntime : IDisposable
         _targetData = LLVM.GetExecutionEngineTargetData(_engine);
         StateSizeBytes = LLVM.SizeOfTypeInBits(_targetData, Layout.StructType) / 8;
         _finalized = true;
+    }
+
+    /// <summary>
+    /// Phase 7 H.a — run the explicit LLVM IR-level optimisation pipeline
+    /// on the module via the new pass manager API (LLVM.RunPasses).
+    ///
+    /// Pass list (curated, in order):
+    ///   mem2reg      — promote alloca → SSA registers + PHI nodes
+    ///   instcombine  — peephole-style instruction combining
+    ///   gvn          — global value numbering (CSE)
+    ///   dse          — dead store elimination
+    ///   simplifycfg  — basic block merging + branch simplification
+    ///
+    /// This unblocks alloca-based shadow patterns (e.g. future C lazy
+    /// flag) that emit alloca + load/store expecting mem2reg to lift
+    /// them to SSA. Without this pipeline the alloca stays in memory and
+    /// loses the optimisation opportunity.
+    /// </summary>
+    private void RunOptimizationPipeline()
+    {
+        // instcombine<no-verify-fixpoint> instead of plain instcombine —
+        // some emitter-generated IR (notably ARM Branch_Exchange BX with
+        // its select-chain alignment logic) doesn't reach instcombine's
+        // expected fixpoint in 1 iteration; the verify is a sanity check
+        // that's safe to skip for our use case.
+        const string passes = "mem2reg,instcombine<no-verify-fixpoint>,gvn,dse,simplifycfg";
+
+        var optionsHandle = LLVMPassBuilderOptionsRef.Create();
+        try
+        {
+            // RunPasses takes a UTF-8 sbyte* for the pass list; marshal
+            // C# string → ANSI (ASCII works since pass names are ASCII).
+            var passesBytes = System.Text.Encoding.ASCII.GetBytes(passes + "\0");
+            fixed (byte* passesPtr = passesBytes)
+            {
+                // null target machine — these passes don't need target info.
+                var err = LLVM.RunPasses(_module, (sbyte*)passesPtr, default(LLVMTargetMachineRef), optionsHandle);
+                if (err != null)
+                {
+                    var msgPtr = LLVM.GetErrorMessage(err);
+                    var msg = System.Runtime.InteropServices.Marshal.PtrToStringUTF8((IntPtr)msgPtr) ?? "(unknown)";
+                    LLVM.DisposeErrorMessage(msgPtr);
+                    throw new InvalidOperationException(
+                        $"HostRuntime: LLVM RunPasses('{passes}') failed: {msg}");
+                }
+            }
+        }
+        finally
+        {
+            optionsHandle.Dispose();
+        }
     }
 
     [System.Runtime.InteropServices.UnmanagedCallersOnly(

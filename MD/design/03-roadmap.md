@@ -397,20 +397,20 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
 
 #### 進度快照（2026-05-03）
 
-**已完成 10 步**（commit chronological order）：
+**已完成 11 步**（commit chronological order）：
 B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 → B.e cache state offsets → B.f permanent pin → B.g inline bus
 → E.a fetch fast path → E.b mem trampoline fast path
-→ C.a width-correct flag → B.h Tick/IRQ inline
+→ C.a width-correct flag → B.h Tick/IRQ inline → H.a LLVM pass pipeline
 
 **累計成果（vs Phase 5.8 starting baseline）**：
 
 | ROM / Backend | baseline | 現在 | 累計 | real-time |
 |---|---:|---:|---:|---:|
-| GBA arm json-llvm | 3.82 MIPS | 8.33 | **+118%** | 0.9× → **2.0×** |
-| GBA thumb json-llvm | 3.75 | 8.39 | **+124%** | 0.9× → **2.0×** |
-| GB json-llvm | 2.66 | 6.48 | **+144%** | 5.5× → **13×** |
-| GB legacy | 32.76 | 32.75 | unchanged | 67× |
+| GBA arm json-llvm | 3.82 MIPS | 8.45 | **+121%** | 0.9× → **2.0×** |
+| GBA thumb json-llvm | 3.75 | 8.46 | **+126%** | 0.9× → **2.0×** |
+| GB json-llvm | 2.66 | 6.50 | **+144%** | 5.5× → **13×** |
+| GB legacy | 32.76 | 32.24 | unchanged (noise) | 67× |
 
 **剩餘項目分類**（B-G 區內每個未打勾的都標了狀態）：
 - **[⏸ blocked]** = 需要 prerequisite 才能做（多半 blocked on A block-JIT
@@ -705,13 +705,13 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 
 A-G 之外，盤點實作 Phase 7 過程發現可以做的：
 
-- [ ] **H.a LLVM pass pipeline 調校** — MCJIT 預設 pass 跟 `opt -O3` 不
-  完全一樣。例如 C.b alloca-shadow 版本實作對了但 mem2reg 可能沒跑，
-  alloca 沒 lift to SSA。需要 LLVMSharp 的 `LLVMPassManagerRef` 顯式跑
-  ：`AddPromoteMemoryToRegisterPass` (mem2reg)、`AddGVNPass`、
-  `AddDeadStoreEliminationPass`、`AddInstructionCombiningPass`。
-  把這做了之後 C.b alloca-shadow 才會見效，可能其他 IR 改動也會跟
-  著加分。
+- [x] **H.a LLVM pass pipeline 調校**（2026-05-03，perf note
+  `MD/performance/202605030228-llvm-pass-pipeline.md`）— HostRuntime.Compile
+  在 module 移交 MCJIT 之前用 `LLVM.RunPasses` (新 pass manager API) 顯式
+  跑 `mem2reg,instcombine<no-verify-fixpoint>,gvn,dse,simplifycfg`。
+  **直接 GBA arm +1.4% (8.33 → 8.45 MIPS), GBA thumb +0.8%**, GB 兩條
+  path 持平。**間接價值更大** — unblock C.b alloca-shadow lazy flag 跟
+  任何未來用 alloca/SSA pattern 的優化。建議下一步 retry C.b。
 - [ ] **H.b Spec-time IR pre-processing** — SpecCompiler 階段先掃過所有
   指令的 step 序列做 dead-flag-elimination：如果一條 ALU 指令的 update_nz
   寫的 N 在「同 instruction 的後續 step / 任何 callable cond gate」都不會
