@@ -27,29 +27,14 @@ public class GbaMemoryBusTests
     }
 
     [Fact]
-    public void DispstatRead_TogglesVBlankFlagAcrossSuccessiveReads()
+    public void DispstatRead_ReturnsBackingArrayBytes()
     {
-        // jsmolka's m_vsync waits for VBlank to CLEAR then waits for it
-        // to SET — both polarities must be observable. The stub toggles
-        // on every read so both loops in m_vsync exit within 1-2 reads.
+        // Phase 5: the old "toggle VBLANK_FLG on every read" hack was
+        // removed — GbaScheduler now maintains the real flag bits as the
+        // emulated frame advances. A bare bus (no scheduler) just returns
+        // whatever's in the backing array (zeros at construction).
         var bus = new GbaMemoryBus();
-        var r1 = bus.ReadHalfword(0x04000004);
-        var r2 = bus.ReadHalfword(0x04000004);
-        var r3 = bus.ReadHalfword(0x04000004);
-        // r1 != r2 means flag toggled at least once in three reads.
-        Assert.NotEqual(r1 & GbaMemoryMap.STAT_VBLANK_FLG, r2 & GbaMemoryMap.STAT_VBLANK_FLG);
-        Assert.NotEqual(r2 & GbaMemoryMap.STAT_VBLANK_FLG, r3 & GbaMemoryMap.STAT_VBLANK_FLG);
-    }
-
-    [Fact]
-    public void DispstatRead_WordReadIncludesVcountInUpperHalf()
-    {
-        // Word read at 0x04000004 returns DISPSTAT + VCOUNT (16+16). The
-        // VCOUNT lie helps tests that read the line counter to make progress.
-        var bus = new GbaMemoryBus();
-        var word = bus.ReadWord(0x04000004);
-        Assert.NotEqual(0u, word & 0xFFFF0000u);  // VCOUNT non-zero
-        // Lower 16 bits hold DISPSTAT (which toggles); we just check it parses.
+        Assert.Equal((ushort)0, bus.ReadHalfword(0x04000004));
     }
 
     [Fact]
@@ -268,21 +253,19 @@ public class GbaMemoryBusTests
     public void DispstatWrite_PreservesReadOnlyFlagBits()
     {
         var bus = new GbaMemoryBus();
-        // Read first to set the toggle to "VBlank flag set" (read count odd).
-        var initial = bus.ReadHalfword(0x04000004);
-        Assert.Equal(GbaMemoryMap.STAT_VBLANK_FLG, initial);
+
+        // Pre-set bit 0 (VBlank flag) directly in the IO backing array
+        // so we can verify "read-only" semantics — only scheduler / hardware
+        // should be able to set this bit, but a write should NOT clear it.
+        bus.Io[(int)GbaMemoryMap.DISPSTAT_Off] = (byte)GbaMemoryMap.STAT_VBLANK_FLG;
 
         // Write a value that tries to clear bit 0 AND set the IRQ-enable bits.
         bus.WriteHalfword(0x04000004, 0x0038);   // VBlank IE | HBlank IE | VCount IE
 
-        // Next read: VBlank flag toggles to 0 (next read count even), but the
-        // IRQ-enable bits we wrote should be readable in the latched value
-        // when we read DISPSTAT byte-wise. Test the byte-level read for the
-        // upper bits which our toggle stub doesn't override.
-        var byteRead = bus.ReadByte(0x04000005);   // upper byte of DISPSTAT
-        // The upper byte got the high half of 0x0038 = 0x00 (since 0x38 fits
-        // in low byte). So this just checks the write went through to the
-        // backing IO array.
-        Assert.Equal(0x00, byteRead);
+        // Read back: bit 0 still set (read-only via WriteIoHalfword's mask),
+        // bits 3..5 (IRQ enables) now set from our write.
+        var post = bus.ReadHalfword(0x04000004);
+        Assert.Equal(GbaMemoryMap.STAT_VBLANK_FLG, (ushort)(post & GbaMemoryMap.STAT_VBLANK_FLG));
+        Assert.Equal((ushort)0x0038, (ushort)(post & 0x0038));
     }
 }

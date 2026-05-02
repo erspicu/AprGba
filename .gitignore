@@ -448,3 +448,6 @@ FodyWeavers.xsd
 # Big GB test-rom zips / source clones — only blargg-cpu/ is tracked
 /test-roms/game-boy-test-roms-v*/
 /test-roms/game-boy-test-roms/
+
+# GBA BIOS — Nintendo copyright; user-supplied locally, never committed
+/BIOS/
