@@ -461,11 +461,13 @@ public class SpecCompilerTests
         Assert.Contains("Main.Reti.RETI",    result.Functions.Keys);
         Assert.Contains("Main.Ret_Cc.RET_00",result.Functions.Keys);
 
-        // RST + PUSH/POP — PUSH/POP split into 4 selector variants per opcode
-        // (qq=00..11 → BC/DE/HL/AF) when migrated to the generic
-        // push_pair / pop_pair ops; spec compiler suffixes the function
-        // name with the selector value.
-        Assert.Contains("Main.Rst.RST",         result.Functions.Keys);
+        // RST + PUSH/POP — both split into selector variants per opcode
+        // when migrated to the generic emitters: PUSH/POP qq=00..11 →
+        // BC/DE/HL/AF; RST ttt=000..111 → 0x00/08/10/.../38. Spec
+        // compiler suffixes the function name with the selector value
+        // (with leading zeros sized to the field width).
+        Assert.Contains("Main.Rst.RST_000",     result.Functions.Keys);
+        Assert.Contains("Main.Rst.RST_111",     result.Functions.Keys);
         Assert.Contains("Main.Push_Rr.PUSH_00", result.Functions.Keys);
         Assert.Contains("Main.Push_Rr.PUSH_11", result.Functions.Keys);    // PUSH AF
         Assert.Contains("Main.Pop_Rr.POP_00",   result.Functions.Keys);
@@ -479,12 +481,15 @@ public class SpecCompilerTests
         var body = nextDef > 0 ? ir.Substring(jpIdx, nextDef - jpIdx) : ir.Substring(jpIdx);
         Assert.Contains("store i16", body);
 
-        // JR body should compute a new PC and store it back to PC.
+        // JR body composes target = PC + sext(off8) via generic ops
+        // (read_imm8 → sext → read_pc → add → branch). The generic
+        // read_pc op names its load "pc_cur" (matches "out" name); the
+        // final branch op stores i16 back to PC.
         var jrIdx = ir.IndexOf("@Execute_Main_Jr_E8_JR", StringComparison.Ordinal);
         Assert.True(jrIdx >= 0);
         var jrNext = ir.IndexOf("\ndefine ", jrIdx + 1, StringComparison.Ordinal);
         var jrBody = jrNext > 0 ? ir.Substring(jrIdx, jrNext - jrIdx) : ir.Substring(jrIdx);
-        Assert.Contains("pc_jr_cur", jrBody);
+        Assert.Contains("pc_cur", jrBody);
         Assert.Contains("store i16", jrBody);
     }
 

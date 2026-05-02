@@ -38,6 +38,8 @@ internal static class StackOps
         reg.Register(new PopPair());
         reg.Register(new Call());
         reg.Register(new Ret());
+        reg.Register(new CallCc());
+        reg.Register(new RetCc());
     }
 
     // ---------------- helpers (shared across the four ops) ----------------
@@ -263,18 +265,15 @@ internal static class StackOps
     }
 
     /// <summary>
-    /// call { target } — push current PC then branch.
-    /// Target is a previously-resolved value (typically from
-    /// read_imm16 or a label arithmetic step).
+    /// call { target | target_const } — push current PC then branch.
+    /// Target is either a previously-resolved varname (from read_imm16
+    /// or label arithmetic) or a numeric literal (RST vectors etc).
     /// </summary>
     private sealed class Call : IMicroOpEmitter
     {
         public string OpName => "call";
         public void Emit(EmitContext ctx, MicroOpStep step)
         {
-            var targetName = step.Raw.GetProperty("target").GetString()!;
-            var target = ctx.Resolve(targetName);
-
             // PC currently points at the next instruction (read_imm16 or
             // similar has already advanced it). Push it first.
             var (pcPtr, pcType) = LocateProgramCounter(ctx);
@@ -282,10 +281,23 @@ internal static class StackOps
             var curPc = ctx.Builder.BuildLoad2(pcType, pcPtr, "call_pc_cur");
             PushWord(ctx, curPc, wordBytes, "call");
 
-            // Target may be wider/narrower than PC type — coerce.
+            var target = ResolveCallTarget(ctx, step, pcType);
             var coerced = CoerceToType(ctx, target, pcType, "call_target");
             ctx.Builder.BuildStore(coerced, pcPtr);
         }
+    }
+
+    /// <summary>
+    /// Resolve target / target_const to an LLVM value. target_const is
+    /// emitted at the PC's native width directly so no coercion is
+    /// needed downstream; varname targets must come from a prior step.
+    /// </summary>
+    internal static LLVMValueRef ResolveCallTarget(EmitContext ctx, MicroOpStep step, LLVMTypeRef pcType)
+    {
+        if (step.Raw.TryGetProperty("target_const", out var tc))
+            return LLVMValueRef.CreateConstInt(pcType, tc.GetUInt64(), false);
+        var targetName = step.Raw.GetProperty("target").GetString()!;
+        return ctx.Resolve(targetName);
     }
 
     /// <summary>ret — pop word into PC.</summary>
@@ -299,6 +311,101 @@ internal static class StackOps
             var newPc = PopWord(ctx, wordBytes, "ret", pcType);
             ctx.Builder.BuildStore(newPc, pcPtr);
         }
+    }
+
+    /// <summary>
+    /// call_cc { target, cond: { reg, flag, value: 0|1 } } — conditional
+    /// CALL: push PC + branch only if cond holds. Side-effect-free when
+    /// cond fails (no SP modification). Uses two basic blocks rather
+    /// than the select trick because push-then-branch isn't a value op
+    /// that can be conditionally selected.
+    /// </summary>
+    private sealed class CallCc : IMicroOpEmitter
+    {
+        public string OpName => "call_cc";
+        public void Emit(EmitContext ctx, MicroOpStep step)
+        {
+            var pred = ResolveFlagCond(ctx, step.Raw.GetProperty("cond"));
+
+            var thenBB = ctx.Function.AppendBasicBlock("call_cc_taken");
+            var endBB  = ctx.Function.AppendBasicBlock("call_cc_end");
+            ctx.Builder.BuildCondBr(pred, thenBB, endBB);
+
+            ctx.Builder.PositionAtEnd(thenBB);
+            var (pcPtr, pcType) = LocateProgramCounter(ctx);
+            var (_, _, wordBytes) = LocateStackPointer(ctx);
+            var curPc = ctx.Builder.BuildLoad2(pcType, pcPtr, "call_cc_pc_cur");
+            PushWord(ctx, curPc, wordBytes, "call_cc");
+            var target = ResolveCallTarget(ctx, step, pcType);
+            var coerced = CoerceToType(ctx, target, pcType, "call_cc_target");
+            ctx.Builder.BuildStore(coerced, pcPtr);
+            // mark PC-written for the open-bus detector
+            var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
+            ctx.Builder.BuildBr(endBB);
+
+            ctx.Builder.PositionAtEnd(endBB);
+        }
+    }
+
+    /// <summary>
+    /// ret_cc { cond: { reg, flag, value: 0|1 } } — conditional RET:
+    /// pop into PC only if cond holds. SP unchanged when cond fails.
+    /// </summary>
+    private sealed class RetCc : IMicroOpEmitter
+    {
+        public string OpName => "ret_cc";
+        public void Emit(EmitContext ctx, MicroOpStep step)
+        {
+            var pred = ResolveFlagCond(ctx, step.Raw.GetProperty("cond"));
+
+            var thenBB = ctx.Function.AppendBasicBlock("ret_cc_taken");
+            var endBB  = ctx.Function.AppendBasicBlock("ret_cc_end");
+            ctx.Builder.BuildCondBr(pred, thenBB, endBB);
+
+            ctx.Builder.PositionAtEnd(thenBB);
+            var (pcPtr, pcType) = LocateProgramCounter(ctx);
+            var (_, _, wordBytes) = LocateStackPointer(ctx);
+            var newPc = PopWord(ctx, wordBytes, "ret_cc", pcType);
+            ctx.Builder.BuildStore(newPc, pcPtr);
+            var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
+            ctx.Builder.BuildBr(endBB);
+
+            ctx.Builder.PositionAtEnd(endBB);
+        }
+    }
+
+    /// <summary>
+    /// Resolve a `cond: { reg, flag, value }` JSON object to an i1
+    /// predicate by reading the named status-register flag bit and
+    /// comparing to the expected bit value (0 or 1). Shared by call_cc,
+    /// ret_cc, and the BranchCc op in Emitters.cs.
+    /// </summary>
+    internal static LLVMValueRef ResolveFlagCond(EmitContext ctx, System.Text.Json.JsonElement condEl)
+    {
+        var reg  = condEl.GetProperty("reg").GetString()!;
+        var flag = condEl.GetProperty("flag").GetString()!;
+        var expectedVal = condEl.GetProperty("value").GetInt32();
+
+        var bitIdx = ctx.Layout.GetStatusFlagBitIndex(reg, flag);
+        var statusPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, reg);
+        var statusDef = ctx.Layout.GetStatusRegisterDef(reg);
+        var statusType = statusDef.WidthBits switch
+        {
+            8  => LLVMTypeRef.Int8,
+            16 => LLVMTypeRef.Int16,
+            32 => LLVMTypeRef.Int32,
+            _  => throw new NotSupportedException($"status reg {reg} width {statusDef.WidthBits}-bit unsupported.")
+        };
+        var statusVal = ctx.Builder.BuildLoad2(statusType, statusPtr, $"{flag.ToLowerInvariant()}_load");
+        var bitShift  = LLVMValueRef.CreateConstInt(statusType, (uint)bitIdx, false);
+        var bit       = ctx.Builder.BuildAnd(
+                            ctx.Builder.BuildLShr(statusVal, bitShift, $"{flag.ToLowerInvariant()}_shr"),
+                            LLVMValueRef.CreateConstInt(statusType, 1, false),
+                            $"{flag.ToLowerInvariant()}_bit");
+        var expectedI = LLVMValueRef.CreateConstInt(statusType, (uint)(expectedVal & 1), false);
+        return ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, bit, expectedI, $"cond_{flag.ToLowerInvariant()}");
     }
 
     /// <summary>

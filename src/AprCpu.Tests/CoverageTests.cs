@@ -48,11 +48,12 @@ public class CoverageTests
             // usages are invisible.
             "set_flag", "update_h_add", "update_h_sub",
 
-            // Step 5.3 — generic conditional branch with inline cond.
-            // Will be exercised by LR35902 JP cc / JR cc / RET cc once
-            // those are migrated; for now the unconditional JP migration
-            // uses generic `branch` (already covered by ARM B).
-            "branch_cc",
+            // Step 5.3 — generic conditional branch + conditional
+            // call/ret with inline cond, plus PC-arithmetic helpers
+            // (read_pc / sext) for PC-relative jumps. All used by
+            // LR35902 JP cc / JR (cc) / CALL cc / RET cc / RST after
+            // the spec migration; invisible to this ARM7TDMI scan.
+            "branch_cc", "call_cc", "ret_cc", "read_pc", "sext",
         };
 
         var (registered, used) = CollectOps();

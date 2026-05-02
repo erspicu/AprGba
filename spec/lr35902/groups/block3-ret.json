@@ -1,6 +1,6 @@
 {
   "name": "Block3_Ret",
-  "comment": "Returns: RET (0xC9), RETI (0xD9, enables IME immediately), 4 conditional RET cc (0xC0/C8/D0/D8). 6 opcodes.",
+  "comment": "Returns: RET (0xC9), RETI (0xD9, enables IME immediately), 4 conditional RET cc (0xC0/C8/D0/D8). 6 opcodes. RET / RETI use generic `ret`; RET cc uses generic `ret_cc` with inline cond.",
   "formats": [
     {
       "name": "Ret",
@@ -35,7 +35,7 @@
     },
     {
       "name": "Ret_Cc",
-      "comment": "110cc000 — RET cc",
+      "comment": "110cc000 — RET cc. cc = bits 4:3 (00 NZ, 01 Z, 10 NC, 11 C). Each variant uses generic ret_cc with the appropriate (flag, value) pair.",
       "pattern": "110cc000",
       "fields": {
         "cc": "4:3"
@@ -43,10 +43,10 @@
       "mask": "0xE7",
       "match": "0xC0",
       "instructions": [
-        { "selector": { "field": "cc", "value": "00" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET NZ", "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "lr35902_ret_cc", "cond": "NZ" }] },
-        { "selector": { "field": "cc", "value": "01" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET Z",  "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "lr35902_ret_cc", "cond": "Z"  }] },
-        { "selector": { "field": "cc", "value": "10" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET NC", "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "lr35902_ret_cc", "cond": "NC" }] },
-        { "selector": { "field": "cc", "value": "11" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET C",  "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "lr35902_ret_cc", "cond": "C"  }] }
+        { "selector": { "field": "cc", "value": "00" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET NZ", "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "ret_cc", "cond": { "reg": "F", "flag": "Z", "value": 0 } }] },
+        { "selector": { "field": "cc", "value": "01" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET Z",  "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "ret_cc", "cond": { "reg": "F", "flag": "Z", "value": 1 } }] },
+        { "selector": { "field": "cc", "value": "10" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET NC", "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "ret_cc", "cond": { "reg": "F", "flag": "C", "value": 0 } }] },
+        { "selector": { "field": "cc", "value": "11" }, "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET C",  "writes_pc": "conditional", "cycles": { "form": "2m_or_5m" }, "steps": [{ "op": "ret_cc", "cond": { "reg": "F", "flag": "C", "value": 1 } }] }
       ]
     }
   ]

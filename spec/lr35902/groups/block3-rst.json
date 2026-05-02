@@ -1,6 +1,6 @@
 {
   "name": "Block3_Rst",
-  "comment": "11_ttt_111 — RST. Pushes PC, jumps to ttt × 8. 8 opcodes (0xC7, 0xCF, 0xD7, 0xDF, 0xE7, 0xEF, 0xF7, 0xFF).",
+  "comment": "11_ttt_111 — RST. Pushes PC, jumps to ttt × 8. 8 opcodes (0xC7, 0xCF, 0xD7, 0xDF, 0xE7, 0xEF, 0xF7, 0xFF). Each ttt value is encoded as a selector variant of the generic `call` op with target_const = ttt × 8. No LR35902-specific emitter needed.",
   "formats": [
     {
       "name": "Rst",
@@ -11,13 +11,16 @@
       },
       "mask": "0xC7",
       "match": "0xC7",
-      "instructions": [{
-        "mnemonic": "RST", "since": "LR35902", "manual_ref": "GB CPU §RST t",
-        "writes_pc": "always",
-        "writes_memory": ["return_pc_lo", "return_pc_hi"],
-        "cycles": { "form": "4m" },
-        "steps": [{ "op": "lr35902_rst", "field": "ttt" }]
-      }]
+      "instructions": [
+        { "selector": { "field": "ttt", "value": "000" }, "mnemonic": "RST", "since": "LR35902", "manual_ref": "GB CPU §RST 00H", "writes_pc": "always", "writes_memory": ["return_pc_lo", "return_pc_hi"], "cycles": { "form": "4m" }, "steps": [{ "op": "call", "target_const": 0 }] },
+        { "selector": { "field": "ttt", "value": "001" }, "mnemonic": "RST", "since": "LR35902", "manual_ref": "GB CPU §RST 08H", "writes_pc": "always", "writes_memory": ["return_pc_lo", "return_pc_hi"], "cycles": { "form": "4m" }, "steps": [{ "op": "call", "target_const": 8 }] },
+        { "selector": { "field": "ttt", "value": "010" }, "mnemonic": "RST", "since": "LR35902", "manual_ref": "GB CPU §RST 10H", "writes_pc": "always", "writes_memory": ["return_pc_lo", "return_pc_hi"], "cycles": { "form": "4m" }, "steps": [{ "op": "call", "target_const": 16 }] },
+        { "selector": { "field": "ttt", "value": "011" }, "mnemonic": "RST", "since": "LR35902", "manual_ref": "GB CPU §RST 18H", "writes_pc": "always", "writes_memory": ["return_pc_lo", "return_pc_hi"], "cycles": { "form": "4m" }, "steps": [{ "op": "call", "target_const": 24 }] },
+        { "selector": { "field": "ttt", "value": "100" }, "mnemonic": "RST", "since": "LR35902", "manual_ref": "GB CPU §RST 20H", "writes_pc": "always", "writes_memory": ["return_pc_lo", "return_pc_hi"], "cycles": { "form": "4m" }, "steps": [{ "op": "call", "target_const": 32 }] },
+        { "selector": { "field": "ttt", "value": "101" }, "mnemonic": "RST", "since": "LR35902", "manual_ref": "GB CPU §RST 28H", "writes_pc": "always", "writes_memory": ["return_pc_lo", "return_pc_hi"], "cycles": { "form": "4m" }, "steps": [{ "op": "call", "target_const": 40 }] },
+        { "selector": { "field": "ttt", "value": "110" }, "mnemonic": "RST", "since": "LR35902", "manual_ref": "GB CPU §RST 30H", "writes_pc": "always", "writes_memory": ["return_pc_lo", "return_pc_hi"], "cycles": { "form": "4m" }, "steps": [{ "op": "call", "target_const": 48 }] },
+        { "selector": { "field": "ttt", "value": "111" }, "mnemonic": "RST", "since": "LR35902", "manual_ref": "GB CPU §RST 38H", "writes_pc": "always", "writes_memory": ["return_pc_lo", "return_pc_hi"], "cycles": { "form": "4m" }, "steps": [{ "op": "call", "target_const": 56 }] }
+      ]
     }
   ]
 }

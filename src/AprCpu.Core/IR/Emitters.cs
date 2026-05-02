@@ -70,6 +70,8 @@ public static class StandardEmitters
         reg.Register(new Branch("branch",      BranchKind.Plain));
         reg.Register(new Branch("branch_link", BranchKind.Link));
         reg.Register(new BranchCc());
+        reg.Register(new ReadPc());
+        reg.Register(new SextEmitter());
     }
 
     // ---------------- helpers ----------------
@@ -623,30 +625,7 @@ internal sealed class BranchCc : IMicroOpEmitter
     {
         var targetName = step.Raw.GetProperty("target").GetString()!;
         var target = ctx.Resolve(targetName);
-        var condEl = step.Raw.GetProperty("cond");
-        var reg  = condEl.GetProperty("reg").GetString()!;
-        var flag = condEl.GetProperty("flag").GetString()!;
-        var expectedVal = condEl.GetProperty("value").GetInt32();
-
-        // Read the flag bit from the named status register.
-        var bitIdx = ctx.Layout.GetStatusFlagBitIndex(reg, flag);
-        var statusPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, reg);
-        var statusDef = ctx.Layout.GetStatusRegisterDef(reg);
-        var statusType = statusDef.WidthBits switch
-        {
-            8  => LLVMTypeRef.Int8,
-            16 => LLVMTypeRef.Int16,
-            32 => LLVMTypeRef.Int32,
-            _  => throw new NotSupportedException($"status reg {reg} width {statusDef.WidthBits}-bit unsupported.")
-        };
-        var statusVal = ctx.Builder.BuildLoad2(statusType, statusPtr, $"{flag.ToLowerInvariant()}_load");
-        var bitShift  = LLVMValueRef.CreateConstInt(statusType, (uint)bitIdx, false);
-        var bit       = ctx.Builder.BuildAnd(
-                            ctx.Builder.BuildLShr(statusVal, bitShift, $"{flag.ToLowerInvariant()}_shr"),
-                            LLVMValueRef.CreateConstInt(statusType, 1, false),
-                            $"{flag.ToLowerInvariant()}_bit");
-        var expectedI = LLVMValueRef.CreateConstInt(statusType, (uint)(expectedVal & 1), false);
-        var pred = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, bit, expectedI, $"branch_cc_{flag.ToLowerInvariant()}");
+        var pred   = StackOps.ResolveFlagCond(ctx, step.Raw.GetProperty("cond"));
 
         var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
         var curPc   = ctx.Builder.BuildLoad2(pcType, pcPtr, "branch_cc_pc_cur");
@@ -661,6 +640,52 @@ internal sealed class BranchCc : IMicroOpEmitter
         var taken     = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false);
         var pcWritten = ctx.Builder.BuildSelect(pred, taken, oldFlag, "pc_w_new");
         ctx.Builder.BuildStore(pcWritten, flagSlot);
+    }
+}
+
+/// <summary>
+/// read_pc { out } — load the current PC value (i16 or i32 depending
+/// on the spec). Used by PC-relative branches like LR35902 JR e8 to
+/// compose targets without an arch-specific op.
+/// </summary>
+internal sealed class ReadPc : IMicroOpEmitter
+{
+    public string OpName => "read_pc";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var outName = StandardEmitters.GetOut(step.Raw);
+        var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
+        ctx.Values[outName] = ctx.Builder.BuildLoad2(pcType, pcPtr, outName);
+    }
+}
+
+/// <summary>
+/// sext { in, width, out } — sign-extend (or truncate / passthrough)
+/// to the requested bit width. Width must be 8/16/32/64.
+/// </summary>
+internal sealed class SextEmitter : IMicroOpEmitter
+{
+    public string OpName => "sext";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var inName  = step.Raw.GetProperty("in").GetString()!;
+        var outName = StandardEmitters.GetOut(step.Raw);
+        var width   = step.Raw.GetProperty("width").GetInt32();
+        var v = ctx.Resolve(inName);
+        var t = width switch
+        {
+            8  => LLVMTypeRef.Int8,
+            16 => LLVMTypeRef.Int16,
+            32 => LLVMTypeRef.Int32,
+            64 => LLVMTypeRef.Int64,
+            _  => throw new NotSupportedException($"sext width {width} not supported")
+        };
+        var srcW = v.TypeOf.IntWidth;
+        LLVMValueRef result;
+        if (srcW == width)      result = v;
+        else if (srcW > width)  result = ctx.Builder.BuildTrunc(v, t, outName);
+        else                    result = ctx.Builder.BuildSExt(v, t, outName);
+        ctx.Values[outName] = result;
     }
 }
 

@@ -1,10 +1,10 @@
 {
   "name": "Block0_Jr",
-  "comment": "Relative jumps. Pattern: 0x18 = JR e8 (unconditional), 0x20/28/30/38 = JR cc,e8 with cc = NZ/Z/NC/C in bits 4:3.",
+  "comment": "Relative jumps. Pattern: 0x18 = JR e8 (unconditional), 0x20/28/30/38 = JR cc,e8 with cc = NZ/Z/NC/C in bits 4:3. Lowered to generic ops: read_imm8 (advances PC) → sext to PC width → read_pc → add → branch / branch_cc. No LR35902-specific emitter needed; PC arithmetic is the only state change.",
   "formats": [
     {
       "name": "Jr_E8",
-      "comment": "0x18 — JR e8 (unconditional)",
+      "comment": "0x18 — JR e8 (unconditional). Target = PC_after_imm + sext(off8).",
       "pattern": "00011000",
       "fields": {},
       "mask": "0xFF",
@@ -14,14 +14,17 @@
         "writes_pc": "always",
         "cycles": { "form": "3m" },
         "steps": [
-          { "op": "read_imm8", "out": "off" },
-          { "op": "lr35902_jr", "offset": "off" }
+          { "op": "read_imm8", "out": "off8" },
+          { "op": "sext",      "in": "off8",   "width": 16, "out": "off16" },
+          { "op": "read_pc",   "out": "pc_cur" },
+          { "op": "add",       "in": ["pc_cur", "off16"], "out": "target" },
+          { "op": "branch",    "target": "target" }
         ]
       }]
     },
     {
       "name": "Jr_Cc_E8",
-      "comment": "001cc000 — conditional JR. cc = bits 4:3 (00 NZ, 01 Z, 10 NC, 11 C).",
+      "comment": "001cc000 — conditional JR. cc = bits 4:3 (00 NZ, 01 Z, 10 NC, 11 C). Same arithmetic as JR e8 but final write is conditional via branch_cc.",
       "pattern": "001cc000",
       "fields": {
         "cc": "4:3"
@@ -29,10 +32,10 @@
       "mask": "0xE7",
       "match": "0x20",
       "instructions": [
-        { "selector": { "field": "cc", "value": "00" }, "mnemonic": "JR", "since": "LR35902", "manual_ref": "GB CPU §JR NZ,e8", "writes_pc": "conditional", "cycles": { "form": "2m_or_3m" }, "steps": [{ "op": "read_imm8", "out": "off" }, { "op": "lr35902_jr_cc", "cond": "NZ", "offset": "off" }] },
-        { "selector": { "field": "cc", "value": "01" }, "mnemonic": "JR", "since": "LR35902", "manual_ref": "GB CPU §JR Z,e8",  "writes_pc": "conditional", "cycles": { "form": "2m_or_3m" }, "steps": [{ "op": "read_imm8", "out": "off" }, { "op": "lr35902_jr_cc", "cond": "Z",  "offset": "off" }] },
-        { "selector": { "field": "cc", "value": "10" }, "mnemonic": "JR", "since": "LR35902", "manual_ref": "GB CPU §JR NC,e8", "writes_pc": "conditional", "cycles": { "form": "2m_or_3m" }, "steps": [{ "op": "read_imm8", "out": "off" }, { "op": "lr35902_jr_cc", "cond": "NC", "offset": "off" }] },
-        { "selector": { "field": "cc", "value": "11" }, "mnemonic": "JR", "since": "LR35902", "manual_ref": "GB CPU §JR C,e8",  "writes_pc": "conditional", "cycles": { "form": "2m_or_3m" }, "steps": [{ "op": "read_imm8", "out": "off" }, { "op": "lr35902_jr_cc", "cond": "C",  "offset": "off" }] }
+        { "selector": { "field": "cc", "value": "00" }, "mnemonic": "JR", "since": "LR35902", "manual_ref": "GB CPU §JR NZ,e8", "writes_pc": "conditional", "cycles": { "form": "2m_or_3m" }, "steps": [{ "op": "read_imm8", "out": "off8" }, { "op": "sext", "in": "off8", "width": 16, "out": "off16" }, { "op": "read_pc", "out": "pc_cur" }, { "op": "add", "in": ["pc_cur", "off16"], "out": "target" }, { "op": "branch_cc", "target": "target", "cond": { "reg": "F", "flag": "Z", "value": 0 } }] },
+        { "selector": { "field": "cc", "value": "01" }, "mnemonic": "JR", "since": "LR35902", "manual_ref": "GB CPU §JR Z,e8",  "writes_pc": "conditional", "cycles": { "form": "2m_or_3m" }, "steps": [{ "op": "read_imm8", "out": "off8" }, { "op": "sext", "in": "off8", "width": 16, "out": "off16" }, { "op": "read_pc", "out": "pc_cur" }, { "op": "add", "in": ["pc_cur", "off16"], "out": "target" }, { "op": "branch_cc", "target": "target", "cond": { "reg": "F", "flag": "Z", "value": 1 } }] },
+        { "selector": { "field": "cc", "value": "10" }, "mnemonic": "JR", "since": "LR35902", "manual_ref": "GB CPU §JR NC,e8", "writes_pc": "conditional", "cycles": { "form": "2m_or_3m" }, "steps": [{ "op": "read_imm8", "out": "off8" }, { "op": "sext", "in": "off8", "width": 16, "out": "off16" }, { "op": "read_pc", "out": "pc_cur" }, { "op": "add", "in": ["pc_cur", "off16"], "out": "target" }, { "op": "branch_cc", "target": "target", "cond": { "reg": "F", "flag": "C", "value": 0 } }] },
+        { "selector": { "field": "cc", "value": "11" }, "mnemonic": "JR", "since": "LR35902", "manual_ref": "GB CPU §JR C,e8",  "writes_pc": "conditional", "cycles": { "form": "2m_or_3m" }, "steps": [{ "op": "read_imm8", "out": "off8" }, { "op": "sext", "in": "off8", "width": 16, "out": "off16" }, { "op": "read_pc", "out": "pc_cur" }, { "op": "add", "in": ["pc_cur", "off16"], "out": "target" }, { "op": "branch_cc", "target": "target", "cond": { "reg": "F", "flag": "C", "value": 1 } }] }
       ]
     }
   ]

@@ -1,6 +1,6 @@
 {
   "name": "Block3_Call",
-  "comment": "Subroutine calls: CALL nn (0xCD) + 4 conditional CALL cc, nn variants. 5 opcodes total.",
+  "comment": "Subroutine calls: CALL nn (0xCD) + 4 conditional CALL cc, nn variants. 5 opcodes total. CALL nn uses generic `call`; CALL cc nn uses generic `call_cc` with inline cond { reg, flag, value } so the cc-field becomes 4 selector variants.",
   "formats": [
     {
       "name": "Call_Nn",
@@ -22,7 +22,7 @@
     },
     {
       "name": "Call_Cc_Nn",
-      "comment": "110cc100 — CALL cc, nn",
+      "comment": "110cc100 — CALL cc, nn. cc = bits 4:3 (00 NZ, 01 Z, 10 NC, 11 C). Each variant uses generic call_cc with the appropriate (flag, value) pair.",
       "pattern": "110cc100",
       "fields": {
         "cc": "4:3"
@@ -30,10 +30,10 @@
       "mask": "0xE7",
       "match": "0xC4",
       "instructions": [
-        { "selector": { "field": "cc", "value": "00" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL NZ,nn", "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "lr35902_call_cc", "cond": "NZ", "address": "target" }] },
-        { "selector": { "field": "cc", "value": "01" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL Z,nn",  "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "lr35902_call_cc", "cond": "Z",  "address": "target" }] },
-        { "selector": { "field": "cc", "value": "10" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL NC,nn", "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "lr35902_call_cc", "cond": "NC", "address": "target" }] },
-        { "selector": { "field": "cc", "value": "11" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL C,nn",  "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "lr35902_call_cc", "cond": "C",  "address": "target" }] }
+        { "selector": { "field": "cc", "value": "00" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL NZ,nn", "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "call_cc", "target": "target", "cond": { "reg": "F", "flag": "Z", "value": 0 } }] },
+        { "selector": { "field": "cc", "value": "01" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL Z,nn",  "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "call_cc", "target": "target", "cond": { "reg": "F", "flag": "Z", "value": 1 } }] },
+        { "selector": { "field": "cc", "value": "10" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL NC,nn", "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "call_cc", "target": "target", "cond": { "reg": "F", "flag": "C", "value": 0 } }] },
+        { "selector": { "field": "cc", "value": "11" }, "mnemonic": "CALL", "since": "LR35902", "manual_ref": "GB CPU §CALL C,nn",  "writes_pc": "conditional", "cycles": { "form": "3m_or_6m" }, "steps": [{ "op": "read_imm16", "out": "target" }, { "op": "call_cc", "target": "target", "cond": { "reg": "F", "flag": "C", "value": 1 } }] }
       ]
     }
   ]
