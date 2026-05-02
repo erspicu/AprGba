@@ -48,6 +48,44 @@ public static class GbaMemoryMap
     public const uint BG0VOFS_Off  = 0x012;       // 0x04000012  W    BG0 V scroll
     // ... BG1HOFS/VOFS through BG3HOFS/VOFS at +0x004 strides
 
+    // DMA channels — each channel has SAD/DAD/CNT_L/CNT_H starting at
+    // these bases, all 12 bytes wide:
+    //   SAD     uint32  source address
+    //   DAD     uint32  dest address
+    //   CNT_L   uint16  word count
+    //   CNT_H   uint16  control (enable=bit15)
+    public const uint DMA0_Base    = 0x0B0;       // 0x040000B0
+    public const uint DMA1_Base    = 0x0BC;       // 0x040000BC
+    public const uint DMA2_Base    = 0x0C8;       // 0x040000C8
+    public const uint DMA3_Base    = 0x0D4;       // 0x040000D4
+    public const uint DMA_ChannelStride = 0x0C;   // 12 bytes per channel
+
+    // Per-channel sub-offsets
+    public const uint DMA_SAD_Off    = 0x00;
+    public const uint DMA_DAD_Off    = 0x04;
+    public const uint DMA_CNT_L_Off  = 0x08;
+    public const uint DMA_CNT_H_Off  = 0x0A;
+
+    // DMA CNT_H bits
+    public const ushort DMA_DEST_INC      = 0x0000;   // bits 5..6
+    public const ushort DMA_DEST_DEC      = 0x0020;
+    public const ushort DMA_DEST_FIXED    = 0x0040;
+    public const ushort DMA_DEST_RELOAD   = 0x0060;
+    public const ushort DMA_DEST_MASK     = 0x0060;
+    public const ushort DMA_SRC_INC       = 0x0000;   // bits 7..8
+    public const ushort DMA_SRC_DEC       = 0x0080;
+    public const ushort DMA_SRC_FIXED     = 0x0100;
+    public const ushort DMA_SRC_MASK      = 0x0180;
+    public const ushort DMA_REPEAT        = 0x0200;   // bit 9
+    public const ushort DMA_WIDTH_32      = 0x0400;   // bit 10 (0=16-bit, 1=32-bit)
+    public const ushort DMA_TIMING_MASK   = 0x3000;   // bits 12..13
+    public const ushort DMA_TIMING_NOW    = 0x0000;   // immediate
+    public const ushort DMA_TIMING_VBLANK = 0x1000;
+    public const ushort DMA_TIMING_HBLANK = 0x2000;
+    public const ushort DMA_TIMING_SPECIAL= 0x3000;
+    public const ushort DMA_IRQ_ON_END    = 0x4000;   // bit 14
+    public const ushort DMA_ENABLE        = 0x8000;   // bit 15
+
     // Interrupt control
     public const uint IE_Off       = 0x200;       // 0x04000200  R/W  Interrupt Enable
     public const uint IF_Off       = 0x202;       // 0x04000202  R/W  Interrupt Flag (write 1 to clear)

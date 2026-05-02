@@ -36,6 +36,14 @@ public sealed class GbaMemoryBus : IMemoryBus
     // for it to SET. We toggle on every read; both loops exit after 1-2 reads.
     private int _dispstatReadCount;
 
+    /// <summary>Phase 5: 4-channel DMA controller. Lazy-initialised.</summary>
+    public GbaDmaController Dma { get; }
+
+    public GbaMemoryBus()
+    {
+        Dma = new GbaDmaController(this);
+    }
+
     /// <summary>
     /// Install a minimal "BIOS" that just returns from every exception
     /// vector via <c>MOVS PC, LR</c> (encoding 0xE1B0F00E).
@@ -312,6 +320,31 @@ public sealed class GbaMemoryBus : IMemoryBus
             BinaryPrimitives.WriteUInt16LittleEndian(Io.AsSpan((int)off, 2), combined);
             return;
         }
+
+        // DMA channel CNT_H writes — store new value, then notify controller
+        // so it can fire an immediate-mode transfer if enable just went 0→1.
+        var dmaChannel = MapToDmaCntH(off);
+        if (dmaChannel >= 0)
+        {
+            var prev = BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)off, 2));
+            BinaryPrimitives.WriteUInt16LittleEndian(Io.AsSpan((int)off, 2), value);
+            Dma.OnCntHWrite(dmaChannel, prev, value);
+            return;
+        }
+
         BinaryPrimitives.WriteUInt16LittleEndian(Io.AsSpan((int)off, 2), value);
+    }
+
+    /// <summary>
+    /// Returns 0..3 if <paramref name="off"/> is the CNT_H of a DMA channel,
+    /// else -1.
+    /// </summary>
+    private static int MapToDmaCntH(uint off)
+    {
+        if (off == GbaMemoryMap.DMA0_Base + GbaMemoryMap.DMA_CNT_H_Off) return 0;
+        if (off == GbaMemoryMap.DMA1_Base + GbaMemoryMap.DMA_CNT_H_Off) return 1;
+        if (off == GbaMemoryMap.DMA2_Base + GbaMemoryMap.DMA_CNT_H_Off) return 2;
+        if (off == GbaMemoryMap.DMA3_Base + GbaMemoryMap.DMA_CNT_H_Off) return 3;
+        return -1;
     }
 }
