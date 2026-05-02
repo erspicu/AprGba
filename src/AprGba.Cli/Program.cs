@@ -4,6 +4,7 @@ using AprCpu.Core.IR;
 using AprCpu.Core.JsonSpec;
 using AprCpu.Core.Runtime;
 using AprCpu.Core.Runtime.Gba;
+using AprGba.Cli;
 using AprGba.Cli.Video;
 
 // apr-gba — headless GBA test-ROM runner + screenshot
@@ -42,6 +43,14 @@ if (opts.BiosPath is not null)
 {
     var bios = File.ReadAllBytes(opts.BiosPath);
     bus.LoadBios(bios);
+
+    // Real BIOS verifies the cart's Nintendo logo at 0x004..0x09F and
+    // header checksum at 0x0BD. Without these matching the BIOS's
+    // built-in canonical sequence, BIOS halts forever instead of
+    // jumping to ROM @ 0x08000000. Patch the cart in-place using the
+    // logo bytes the BIOS itself contains.
+    if (RomPatcher.EnsureValidLogoAndChecksum(rom, bios))
+        Console.WriteLine($"  [logo-patch] applied Nintendo-logo + header-checksum fixup to cart in memory");
 }
 else
 {
