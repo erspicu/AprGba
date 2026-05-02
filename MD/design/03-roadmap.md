@@ -447,10 +447,16 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   `changes_mode` / undecodable / 64-instr cap。`conditional_via_rd`
   **不**算 boundary (太 pessimistic 會切爆每個 ALU op)。4 個新 unit
   test 全綠，349/349 全套測試。
-- [ ] **A.2 Block-level IR generation**：把連續 N 條 spec instruction 串接
-  成一個 LLVM function，LLVM optimizer 才有空間做 register caching、CSE、
-  constant folding、DCE。**為什麼還沒做**：要 A.1 先給 block 邊界；要重寫
-  InstructionFunctionBuilder 為 block-level builder。**估時**：3-5 天。
+- [x] **A.2 Block-level IR generation**（2026-05-03 完成）— 新檔
+  `src/AprCpu.Core/IR/BlockFunctionBuilder.cs`：每 instr 4 個內部 BB
+  (pre/exec/post/advance) — pre 預設 R15+offset/clear PcWritten/cond
+  gate；exec 跑 spec steps；post 檢查 PcWritten；advance 寫 PC=pc+size
+  跳到下個 instr 或 block_exit；block_exit drain shadows + ret void。
+  Instruction word 變 baked-in const。EmitContext 新加
+  `BeginInstruction(format, def, word)` 切換 per-instr state。SpecCompiler
+  CompileResult 暴露 EmitterRegistry/ResolverRegistry/Layout 給後續使用者
+  (block builder + future code cache)。2 新 unit test (3 MOVs straight-line +
+  cond gate fail/pass)，351/351 全綠。
 - [ ] **A.3 LLVM JIT execution engine 升級到 ORC LLJIT**：解掉 MCJIT 的
   Windows COFF section ordering 限制 + 解鎖 lazy compile / on-demand 編譯
   / module-level optimization。**為什麼還沒做**：MCJIT 目前能跑，沒急迫；

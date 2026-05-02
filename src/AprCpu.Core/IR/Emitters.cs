@@ -270,6 +270,14 @@ internal static class CpsrHelpers
     public static void SetStatusFlag(EmitContext ctx, string register, string flag, LLVMValueRef boolValue)
         => SetStatusFlagAt(ctx, register, ctx.Layout.GetStatusFlagBitIndex(register, flag), boolValue, flag.ToLowerInvariant());
 
+    /// <summary>
+    /// Phase 7 A.2 (recovery branch) — no-op stub. C.b retry adds real
+    /// alloca-shadow draining; until then there are no shadow allocas to
+    /// flush, so this is just a placeholder so BlockFunctionBuilder
+    /// compiles cleanly.
+    /// </summary>
+    public static void DrainAllShadows(EmitContext ctx) { /* no-op until C.b */ }
+
     public static void SetStatusFlagFromI32Lsb(EmitContext ctx, string register, string flag, LLVMValueRef i32Value)
         => SetStatusFlagAtFromI32Lsb(ctx, register, ctx.Layout.GetStatusFlagBitIndex(register, flag), i32Value, flag.ToLowerInvariant());
 
