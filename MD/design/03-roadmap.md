@@ -483,9 +483,19 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
 
 #### E. 減少 extern binding / mem-bus fast path（Gemini 建議 #5）
 
+- [x] **E.a Instruction-fetch fast path** (CpuExecutor side)（2026-05-03,
+  perf note `MD/performance/202605030120-instruction-fetch-fast-path.md`）
+  — CpuExecutor 端的 instruction fetch 加 typed-cache (`bus as GbaMemoryBus`)
+  + cart-ROM range check 直接 array index，跳過 bus 的 interface dispatch
+  + region switch。**GBA arm +2.5% (8.05 → 8.25 MIPS)**, GBA thumb 持平
+  (噪聲)。收益 modest 因 B.g 已把 bus.ReadWord inline 進 caller，剩下
+  switch 本身不大。
+- [ ] **E.b JIT-side data load/store fast path** (extern trampoline side)
+  — JIT'd code 對 LDR/STR 走 memory_read_8/write_8 extern；trampoline
+  內加 region check + 直接 array index，省 bus 整套 dispatch。
 - [ ] **Mem-bus region table inline check**：JIT'd code 自帶
   「addr ∈ ROM/RAM region 直接 GEP；else fallback to extern call」
-  fast path
+  fast path（IR 層改動，比 trampoline 更激進）
 - [ ] **Sub-page 粒度 fast-path**（GBA WRAM 0x02000000-0x0203FFFF、
   GB HRAM 0xFF80-0xFFFE、cart ROM 0x08000000-0x09FFFFFF 等熱區）
 - [ ] **Read-only ROM fast path**：cart ROM read 直接 byte-array

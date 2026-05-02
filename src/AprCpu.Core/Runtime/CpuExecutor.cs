@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using AprCpu.Core.Decoder;
 using AprCpu.Core.IR;
 using AprCpu.Core.JsonSpec;
+using AprCpu.Core.Runtime.Gba;
 
 namespace AprCpu.Core.Runtime;
 
@@ -26,6 +27,12 @@ public sealed unsafe class CpuExecutor
 {
     private readonly HostRuntime _rt;
     private readonly IMemoryBus  _bus;
+    // Phase 7 E.a: typed cache for the GBA bus so Step() can take a
+    // fast path on instruction fetch (skip bus.ReadWord's interface
+    // dispatch + region switch when PC is in cart ROM, the common case).
+    // Null when the bus isn't GbaMemoryBus (host tests, future GB CpuExecutor
+    // use, etc.) — fast path is gated by null check.
+    private readonly GbaMemoryBus? _gbaBus;
     private readonly byte[]      _state;
 
     // Phase 7 B.f: permanent pin of the state buffer.
@@ -93,6 +100,7 @@ public sealed unsafe class CpuExecutor
     {
         _rt = rt;
         _bus = bus;
+        _gbaBus = bus as GbaMemoryBus;
         _defaultMode = new ModeInfo(instructionSet, decoder);
         _pcRegIndex = ResolvePcIndex(rt);
         _state = new byte[(int)_rt.StateSizeBytes];
@@ -127,6 +135,7 @@ public sealed unsafe class CpuExecutor
     {
         _rt  = rt;
         _bus = bus;
+        _gbaBus = bus as GbaMemoryBus;
         _pcRegIndex = ResolvePcIndex(rt);
         _state = new byte[(int)_rt.StateSizeBytes];
         _stateHandle = System.Runtime.InteropServices.GCHandle.Alloc(
@@ -268,13 +277,38 @@ public sealed unsafe class CpuExecutor
         // would decode garbage at the vector address.
         _bus.NotifyExecutingPc(pc);
 
-        // Fetch.
-        uint instructionWord = mode.InstrSizeBytes switch
+        // Fetch. Phase 7 E.a: fast path when bus is GbaMemoryBus and PC is
+        // in cart ROM (0x08000000+). Bypasses interface dispatch + bus.Locate
+        // + region switch — direct array index. The vast majority of GBA
+        // execution lives in cart ROM, so this catches >99% of fetches.
+        // Falls through to the regular bus.ReadWord/ReadHalfword for BIOS
+        // (rare, but happens during boot) and any other region (unusual).
+        uint instructionWord;
+        var gbaBus = _gbaBus;
+        if (gbaBus is not null
+            && pc >= GbaMemoryMap.RomBase
+            && pc < GbaMemoryMap.RomBase + (uint)gbaBus.Rom.Length)
         {
-            4 => _bus.ReadWord(pc),
-            2 => _bus.ReadHalfword(pc),
-            _ => throw new NotSupportedException($"instruction size {mode.InstrSizeBytes} unsupported.")
-        };
+            int off = (int)(pc - GbaMemoryMap.RomBase);
+            var rom = gbaBus.Rom;
+            instructionWord = mode.InstrSizeBytes switch
+            {
+                4 when off + 3 < rom.Length =>
+                    BinaryPrimitives.ReadUInt32LittleEndian(rom.AsSpan(off, 4)),
+                2 when off + 1 < rom.Length =>
+                    BinaryPrimitives.ReadUInt16LittleEndian(rom.AsSpan(off, 2)),
+                _ => 0u  // address landed past rom end; bus would also return 0
+            };
+        }
+        else
+        {
+            instructionWord = mode.InstrSizeBytes switch
+            {
+                4 => _bus.ReadWord(pc),
+                2 => _bus.ReadHalfword(pc),
+                _ => throw new NotSupportedException($"instruction size {mode.InstrSizeBytes} unsupported.")
+            };
+        }
 
         // Tell the bus what we just fetched, so the BIOS sticky value
         // can be updated when this fetch came from BIOS.
