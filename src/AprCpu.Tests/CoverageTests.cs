@@ -34,8 +34,13 @@ public class CoverageTests
         // ARM/Thumb instruction. Add new entries with a justification comment.
         var allowedUnused = new HashSet<string>(StringComparer.Ordinal)
         {
-            // (none currently — every registered op is exercised by at least
-            // one ARM or Thumb instruction in arm7tdmi.)
+            // Generic L1 stack ops introduced by the Phase 5.8 emitter
+            // refactor. They ARE used by the LR35902 spec (push_pair /
+            // pop_pair via Block3_PushPop; call / ret via Block3_Call /
+            // Block3_Ret) but CollectOps below only scans the ARM7TDMI
+            // spec, so those usages aren't visible here. Drop these
+            // entries once the scanner walks every CPU spec.
+            "push_pair", "pop_pair", "call", "ret",
         };
 
         var (registered, used) = CollectOps();

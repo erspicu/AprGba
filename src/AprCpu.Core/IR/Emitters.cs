@@ -61,6 +61,7 @@ public static class StandardEmitters
         // Memory access (architecture-agnostic; lowers to host-bound externs)
         MemoryEmitters.RegisterAll(reg);
         BlockTransferEmitters.RegisterAll(reg);
+        StackOps.RegisterAll(reg);
 
         // Control flow (generic — branch_indirect is in ArmEmitters)
         reg.Register(new IfStep());

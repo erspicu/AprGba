@@ -13,7 +13,7 @@
         "mnemonic": "RET", "since": "LR35902", "manual_ref": "GB CPU §RET",
         "writes_pc": "always",
         "cycles": { "form": "4m" },
-        "steps": [{ "op": "lr35902_ret" }]
+        "steps": [{ "op": "ret" }]
       }]
     },
     {
@@ -28,7 +28,7 @@
         "writes_pc": "always",
         "cycles": { "form": "4m" },
         "steps": [
-          { "op": "lr35902_ret" },
+          { "op": "ret" },
           { "op": "lr35902_ime", "value": 1 }
         ]
       }]

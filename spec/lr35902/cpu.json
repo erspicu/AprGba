@@ -35,6 +35,8 @@
       { "name": "HL", "high": "H", "low": "L" }
     ],
 
+    "stack_pointer": "SP",
+
     "status": [
       {
         "name":       "F",

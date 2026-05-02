@@ -161,7 +161,22 @@ public static class SpecLoader
             }
         }
 
-        return new RegisterFile(generalPurpose, status, pairs);
+        // Optional stack pointer reference. Two forms:
+        //   "stack_pointer": "SP"                            (status reg by name)
+        //   "stack_pointer": { "gpr_index": 13 }              (GPR by index)
+        // Used by generic push/pop/call/ret emitters.
+        StackPointerRef? sp = null;
+        if (el.TryGetProperty("stack_pointer", out var spEl))
+        {
+            if (spEl.ValueKind == JsonValueKind.String)
+                sp = new StackPointerRef(GprIndex: null, StatusName: spEl.GetString());
+            else if (spEl.ValueKind == JsonValueKind.Object && spEl.TryGetProperty("gpr_index", out var gi))
+                sp = new StackPointerRef(GprIndex: gi.GetInt32(), StatusName: null);
+            else if (spEl.ValueKind == JsonValueKind.Object && spEl.TryGetProperty("status_name", out var sn))
+                sp = new StackPointerRef(GprIndex: null, StatusName: sn.GetString());
+        }
+
+        return new RegisterFile(generalPurpose, status, pairs, sp);
     }
 
     private static StatusRegister ParseStatusRegister(JsonElement el, string filePath, string jsonPath)
