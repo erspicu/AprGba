@@ -40,7 +40,13 @@ public sealed class DecoderTable
                 pattern = BitPatternCompiler.Compile(format.Pattern, width);
                 BitPatternCompiler.Validate(pattern, format.Fields, format.Mask, format.Match, format.Name);
             }
-            _entries.Add(new Entry(format, pattern));
+            // Phase 7 F.y: pre-build a DecodedInstruction for each
+            // InstructionDef in the format. Decode now returns the cached
+            // instance instead of allocating one per call.
+            var decodedByDef = new DecodedInstruction[format.Instructions.Count];
+            for (int i = 0; i < format.Instructions.Count; i++)
+                decodedByDef[i] = new DecodedInstruction(format, format.Instructions[i], pattern!);
+            _entries.Add(new Entry(format, pattern, decodedByDef));
         }
     }
 
@@ -58,16 +64,21 @@ public sealed class DecoderTable
     /// </summary>
     public DecodedInstruction? Decode(uint instruction)
     {
-        foreach (var entry in _entries)
+        // Phase 7 F.y: returns cached DecodedInstruction (one per
+        // (format, insdef)) instead of allocating per call.
+        // Loop intentionally uses indexed access on List<Entry> so the
+        // tier-1 JIT can avoid allocating the foreach IEnumerator.
+        for (int e = 0; e < _entries.Count; e++)
         {
+            var entry = _entries[e];
             if ((instruction & entry.Format.Mask) != entry.Format.Match) continue;
 
-            // Walk instructions inside this format and find the first whose
-            // selector matches. If no selector, the (sole) instruction wins.
-            foreach (var insDef in entry.Format.Instructions)
+            var insDefs = entry.Format.Instructions;
+            for (int i = 0; i < insDefs.Count; i++)
             {
+                var insDef = insDefs[i];
                 if (insDef.Selector is null)
-                    return new DecodedInstruction(entry.Format, insDef, entry.Pattern!);
+                    return entry.DecodedByDef[i];
 
                 if (!entry.Format.Fields.TryGetValue(insDef.Selector.Field, out var selRange))
                 {
@@ -76,7 +87,7 @@ public sealed class DecoderTable
                 }
                 var actual = BitPatternCompiler.ExtractField(instruction, selRange);
                 if (actual == insDef.Selector.NumericValue)
-                    return new DecodedInstruction(entry.Format, insDef, entry.Pattern!);
+                    return entry.DecodedByDef[i];
             }
             // Format matched mask/match but no instruction selector matched.
             // Continue searching subsequent formats (priority).
@@ -84,5 +95,8 @@ public sealed class DecoderTable
         return null;
     }
 
-    private sealed record Entry(EncodingFormat Format, CompiledPattern? Pattern);
+    private sealed record Entry(
+        EncodingFormat Format,
+        CompiledPattern? Pattern,
+        DecodedInstruction[] DecodedByDef);
 }
