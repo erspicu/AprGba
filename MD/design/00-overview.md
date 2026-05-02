@@ -19,34 +19,55 @@
 
 ### 第一目標 (MVP)
 
-- ARM7TDMI (ARMv4T) — ARM 32-bit 與 Thumb 16-bit 雙模式
-- 跑得動 GBA homebrew 與部分商業 ROM
-- Framebuffer 等級的 PPU（VRAM Mode 3/4）— 僅用於驗證 CPU 正確性
+- ARM7TDMI (ARMv4T) — ARM 32-bit 與 Thumb 16-bit 雙模式 ✅ 完成
+- 跑通 jsmolka GBA test ROM（arm.gba / thumb.gba）並能用 PNG 截圖
+  做視覺驗證
+- **真的帶 BIOS file 啟動**（LLE，跑完官方 BIOS intro → ROM entry），
+  讓驗證更有公信力（不是 HLE shortcut）
+- 最小 PPU（Mode 3 framebuffer + Mode 0 tile-based BG）— **hand-written
+  host code，不走 JSON spec**（理由見下方「明確排除」）
+- **headless CLI 模式**（學 apr-gb 設計）：`apr-gba --rom=X --cycles=N
+  --screenshot=Y.png`，**不做 GUI / 60fps loop / 即時播放**
 - Windows 平台優先
 
-### 第一目標的延伸：framework 通用性驗證
+### 第一目標的延伸：framework 通用性驗證 ✅ 完成 (2026-05-02)
 
-- **GB LR35902 移植**（Phase 4.5）— 用 `erspicu/AprGBemu`（既有 GB
-  emulator）當 reference，把 GB CPU 寫成 JSON spec、跑通同樣的 host
-  runtime，驗證「換 CPU 只要換 JSON」這個核心承諾。詳見
-  `MD/design/09-gb-lr35902-validation-plan.md`。
+- **GB LR35902 移植**（Phase 4.5）已完工 — 用 `erspicu/AprGBemu`（既有
+  GB emulator）的 hand-written CPU 當 reference，把 GB CPU 寫成 JSON
+  spec、跑通同一套 host runtime，**通過 Blargg cpu_instrs 11/11 + master
+  "Passed all tests"**，跟 LegacyCpu 截圖完全一致。「換 CPU 只要換 JSON」
+  這個核心承諾驗證完成。詳見
+  `MD/design/09-gb-lr35902-validation-plan.md`、
+  `MD/design/10-lr35902-bit-pattern-groups.md`、
+  `MD/note/framework-emitter-architecture.md`。
 
-### 明確排除（第一版不做）
+### 明確排除（第一版不做，2026-05 scope decisions）
 
-- Master Clock cycle-accurate 模型（採 instruction-level catch-up）
-- 完整 PPU 渲染（Tile mode 0/1/2、Sprite、Window、Mosaic、Affine）
-- 第三顆 CPU（MIPS、RISC-V、6502 等）— Phase 4.5 GB 驗證已涵蓋
-  framework 通用性的關鍵未驗證面（變動寬度、prefix opcode、paired
-  register、8-bit GPR），再加更多 CPU 的邊際效益遞減
-- 音訊 (APU)
-- 連線、紅外線、震動等周邊
-- 跨平台 host（Linux/Mac、ARM64 host CPU）
+- **音訊 (APU)** — 不做
+- **Gamepad / KEYINPUT polling** — 不做（test ROM 不按按鍵）
+- **GUI / 即時 60fps 視窗** — 純 headless CLI，跑完輸出 PNG
+- **商業遊戲相容性 / 更多 homebrew** — 目標就是 jsmolka test ROM 視覺
+  驗證，跑通即可，不追求其他 ROM
+- **Master Clock cycle-accurate 模型**（採 instruction-level catch-up）
+- **第三顆 CPU**（MIPS、RISC-V、6502 等）— Phase 4.5 GB 驗證已涵蓋
+  framework 通用性的關鍵未驗證面（variable-width 解碼、prefix opcode、
+  paired register、8-bit GPR、特殊 flag layout），再加更多 CPU 邊際
+  效益遞減
+- **連線、紅外線、震動等周邊**
+- **跨平台 host**（Linux/Mac、ARM64 host CPU）
+- **PPU / APU / DMA 寫成 JSON spec** — framework 的「資料 vs 動詞」
+  拆分只對 instruction stream 有意義；fixed-function units（PPU
+  pipeline、APU 4-channel、DMA controller）沒有跨設備的 reusability，
+  硬 JSON 化只是把 if-else 改成資料表，**沒有 framework 槓桿效益**。
+  這些直接 host code 寫，學 GB 那邊的 `GbPpu` 寫法
+- **Block-JIT 效能優化** — 從必要降為可選；test ROM 跑慢一點沒差
+  （current GBA bench ~40% real-time，截圖夠用）
 
 ### 後期延伸（pending，明確不在第一版）
 
-- 完整 PPU + Sprite + 特效
+- 完整 PPU 進階特效（Window、Mosaic、Affine BG mode 1/2、Blend）
 - DMA / Timer / Interrupt 完整模擬
-- AOT 預編譯快取（`.bc` 檔）
+- AOT 預編譯快取（`.bc` 檔，避開 cold-start LLVM 編譯成本）
 
 ## 命名
 

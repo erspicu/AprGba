@@ -76,18 +76,23 @@
 - 預留 SMC write barrier hook
 - 預留 IO 寫入觸發同步點 hook（給 PPU 追趕用）
 
-### 7. PPU（`AprGba.Ppu`，第一版簡化）
+### 7. PPU（`AprGba.Ppu`，hand-written，不走 JSON spec）
 - LCD 暫存器：DISPCNT、DISPSTAT、VCOUNT
 - VBlank / HBlank 中斷觸發
-- Mode 3（240×160 RGB555 framebuffer）
-- Mode 4（256-color palette + framebuffer）
-- 不做 Tile mode、Sprite、Window
+- Mode 3（240×160 RGB555 framebuffer）— 最簡單，部分 homebrew 用
+- Mode 0（4 個 tile-based BG layer）— jsmolka test ROM 印結果用
+- Sprite / Window / Mosaic / Affine BG / Blend：jsmolka 用不到就不做
+- **不走 JSON spec**（2026-05 scope decision）：PPU 不是 instruction
+  stream，是 fixed-function pipeline，硬 JSON 化沒有 framework 槓桿；
+  學 GB 端 `GbPpu` 寫法直接 host code 即可
 
-### 8. GUI / Host（`AprGba.Host`）
-- 暫定 **Avalonia**（跨平台 + .NET 友善）
-- 主畫布 = `WriteableBitmap`，VBlank 時從 VRAM 拷貝
-- 60 FPS timer 驅動主迴圈
-- 後備：純 WinForms（若 Avalonia 整合複雜）
+### 8. CLI / Host（`AprGba.Cli`，純 headless）
+- **不做 GUI、不做 60fps loop、不做即時播放**（2026-05 scope decision）
+- 學 `apr-gb` 的設計：`apr-gba --rom=X.gba --bios=Y.bin --cycles=N
+  --screenshot=Z.png`
+- 跑完 N cycles 後呼叫 `GbaPpu.RenderFrame(bus)` → PNG 寫檔
+- 可選 `--info` 印 ROM header / cartridge type，跟 mGBA dump 對拍
+  PRAM/VRAM 用
 
 ---
 
@@ -261,8 +266,11 @@ AprGba/
 |---|---|---|
 | 描述語言 | JSON | 親切、工具齊全；後期可考慮 YAML 或自訂 DSL |
 | JIT 後端 | LLVM (via LLVMSharp) | 工業級優化；後備 = .NET DynamicMethod |
-| 主機 GUI | Avalonia | .NET-native + 跨平台 |
+| Host 形式 | **純 headless CLI**（不做 GUI） | scope = test ROM 截圖驗證，不需要即時播放 |
 | 同步模型 | Instruction-level catch-up | 平衡精度與效能；強制同步 IO 寫入 |
 | Memory bus | callback + fast/slow path | 解耦、可攔截 |
-| CPU State | `unsafe struct` + 直接指標 | 避免 marshal 開銷 |
-| 第一版 PPU | Mode 3/4 framebuffer only | 範圍可控，能驗證 CPU 即可 |
+| CPU State | byte buffer + 直接指標 | 避免 marshal 開銷；可被 host runtime 動態 layout |
+| BIOS 載入 | **LLE（自備 BIOS file）** | 跑完官方 BIOS intro → ROM entry，比 HLE 更有公信力 |
+| PPU 範圍 | Mode 3 + Mode 0，hand-written | jsmolka 印結果用得到的最小 mode 集 |
+| PPU 不走 JSON spec | hand-written `GbaPpu` | fixed-function pipeline 沒有跨設備 reusability |
+| Block-JIT (Phase 7) | 可選優化 | test ROM 不需要 real-time，慢一點沒差 |
