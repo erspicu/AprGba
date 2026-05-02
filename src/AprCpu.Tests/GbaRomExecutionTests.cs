@@ -82,6 +82,30 @@ public class GbaRomExecutionTests
         return new Setup(exec, bus, rt, busBinding, swapBinding, userBinding);
     }
 
+    /// <summary>
+    /// Phase 5: jsmolka tests need a scheduler tick (DISPSTAT.VBLANK_FLG)
+    /// for m_vsync to progress now that the old "toggle on read" hack is
+    /// gone. Wraps RunUntilHalt with an inline scheduler.Tick so existing
+    /// test bodies don't have to change shape.
+    /// </summary>
+    private static (int Executed, bool Halted) RunWithScheduler(
+        Setup setup, int maxSteps, int cyclesPerInstr = 4)
+    {
+        var scheduler = new GbaScheduler(setup.Bus);
+        uint lastPc = uint.MaxValue;
+        int n = 0;
+        while (n < maxSteps)
+        {
+            var pc = setup.Exec.Pc;
+            if (pc == lastPc) return (n, true);
+            setup.Exec.Step();
+            scheduler.Tick(cyclesPerInstr);
+            lastPc = pc;
+            n++;
+        }
+        return (n, false);
+    }
+
     [Fact]
     public void RunUntilHalt_StopsAtSelfBranch()
     {
@@ -120,7 +144,7 @@ public class GbaRomExecutionTests
         bus.LoadRom(File.ReadAllBytes(romPath));
         using var setup = BootGba(bus);
 
-        var (executed, halted) = setup.Exec.RunUntilHalt(maxSteps: 200_000);
+        var (executed, halted) = RunWithScheduler(setup, maxSteps: 200_000);
 
         var r12 = setup.Exec.ReadGpr(12);
         _output.WriteLine($"executed={executed} halted={halted} r12=0x{r12:X8} pc=0x{setup.Exec.Pc:X8}");
@@ -185,7 +209,7 @@ public class GbaRomExecutionTests
         bus.LoadRom(File.ReadAllBytes(romPath));
         using var setup = BootGba(bus);
 
-        var (executed, halted) = setup.Exec.RunUntilHalt(maxSteps: 200_000);
+        var (executed, halted) = RunWithScheduler(setup, maxSteps: 200_000);
 
         Assert.True(halted);
         Assert.Equal(0u, setup.Exec.ReadGpr(12));
@@ -341,7 +365,7 @@ public class GbaRomExecutionTests
         bus.LoadRom(File.ReadAllBytes(romPath));
         using var setup = BootGba(bus);
 
-        var (executed, halted) = setup.Exec.RunUntilHalt(maxSteps: 200_000);
+        var (executed, halted) = RunWithScheduler(setup, maxSteps: 200_000);
 
         var r7 = setup.Exec.ReadGpr(7);
         var cpsr = setup.Exec.ReadStatus("CPSR");

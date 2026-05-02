@@ -48,12 +48,37 @@ public sealed unsafe class GbaSystemRunner
         long consumed = 0;
         while (consumed < cycleBudget)
         {
+            if (Bus.CpuHalted)
+            {
+                // CPU paused on HALTCNT write — only tick scheduler so VBlank/
+                // HBlank/Timer can fire and raise an IRQ that wakes us.
+                // Wake on ANY IE & IF transition (regardless of IME, per GBATEK).
+                Scheduler.Tick(cyclesPerInstr);
+                consumed += cyclesPerInstr;
+                if (BusHasAnyPendingIrq()) Bus.CpuHalted = false;
+                DeliverIrqIfPending();
+                continue;
+            }
+
             Cpu.Step();
             Scheduler.Tick(cyclesPerInstr);
             consumed += cyclesPerInstr;
             DeliverIrqIfPending();
         }
         return consumed;
+    }
+
+    /// <summary>
+    /// HALT wake-up condition is IE &amp; IF != 0, regardless of IME (the
+    /// CPU resumes; whether the IRQ then dispatches depends on IME).
+    /// </summary>
+    private bool BusHasAnyPendingIrq()
+    {
+        var ie = Bus.Io[(int)GbaMemoryMap.IE_Off]
+               | (Bus.Io[(int)GbaMemoryMap.IE_Off + 1] << 8);
+        var iff = Bus.Io[(int)GbaMemoryMap.IF_Off]
+                | (Bus.Io[(int)GbaMemoryMap.IF_Off + 1] << 8);
+        return (ie & iff & 0x3FFF) != 0;
     }
 
     /// <summary>Run exactly <paramref name="frames"/> full GBA frames.</summary>

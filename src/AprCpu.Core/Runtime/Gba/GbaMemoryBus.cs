@@ -31,10 +31,15 @@ public sealed class GbaMemoryBus : IMemoryBus
     public byte[] Oam      { get; } = new byte[GbaMemoryMap.OamSize];
     public byte[] Rom      { get; private set; } = Array.Empty<byte>();
 
-    // DISPSTAT.VBLANK_FLG must oscillate, not stay set, otherwise jsmolka's
-    // m_vsync macro deadlocks. The macro waits for the flag to CLEAR, then
-    // for it to SET. We toggle on every read; both loops exit after 1-2 reads.
-    private int _dispstatReadCount;
+    // Phase 4.x had a DISPSTAT VBLANK toggle hack here so jsmolka's m_vsync
+    // (wait-for-clear, then wait-for-set) wouldn't deadlock on a backed array
+    // that never actually toggled. Now that GbaScheduler maintains real
+    // VBLANK_FLG / HBLANK_FLG / VCOUNT_FLG bits, the toggle is removed —
+    // it was harmful because reads overrode the IRQ-enable bits the BIOS
+    // wrote, leading to no VBlank IRQ ever being delivered to LLE-booted
+    // ROMs. jsmolka's m_vsync now works because scheduler.Tick (called
+    // from GbaSystemRunner.RunCycles) flips the flag on real scanline
+    // boundaries.
 
     /// <summary>Phase 5: 4-channel DMA controller. Lazy-initialised.</summary>
     public GbaDmaController Dma { get; }
@@ -94,6 +99,13 @@ public sealed class GbaMemoryBus : IMemoryBus
         var current = BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)GbaMemoryMap.IF_Off, 2));
         BinaryPrimitives.WriteUInt16LittleEndian(Io.AsSpan((int)GbaMemoryMap.IF_Off, 2), (ushort)(current | bit));
     }
+
+    /// <summary>
+    /// True when the CPU has executed a HALT (HALTCNT write) and is
+    /// waiting for any IE&amp;IF != 0 to wake it up. Cleared automatically
+    /// by GbaSystemRunner once a pending IRQ appears.
+    /// </summary>
+    public bool CpuHalted { get; set; }
 
     /// <summary>True iff IME is set AND any IE&amp;IF bit is pending.</summary>
     public bool HasPendingInterrupt()
@@ -254,39 +266,13 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     // ---------------- IO stub ----------------
 
-    private byte ReadIoByte(uint off)
-    {
-        if (off == GbaMemoryMap.DISPSTAT_Off)     return (byte)(NextDispstat() & 0xFF);
-        if (off == GbaMemoryMap.DISPSTAT_Off + 1) return (byte)((NextDispstat() >> 8) & 0xFF);
-        return Io[off];
-    }
+    private byte ReadIoByte(uint off)   => Io[off];
 
     private ushort ReadIoHalfword(uint off)
-    {
-        if (off == GbaMemoryMap.DISPSTAT_Off) return NextDispstat();
-        return BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)off, 2));
-    }
+        => BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)off, 2));
 
     private uint ReadIoWord(uint off)
-    {
-        if (off == GbaMemoryMap.DISPSTAT_Off)
-        {
-            // VCOUNT in upper 16 bits — arbitrary line number kept stable.
-            return ((uint)0x9F << 16) | NextDispstat();
-        }
-        return BinaryPrimitives.ReadUInt32LittleEndian(Io.AsSpan((int)off, 4));
-    }
-
-    /// <summary>
-    /// Pseudo-VBlank toggle: alternates VBLANK_FLG between 1 and 0 on
-    /// successive reads, so m_vsync (wait-for-clear, then wait-for-set)
-    /// completes in 1-2 reads per loop instead of deadlocking.
-    /// </summary>
-    private ushort NextDispstat()
-    {
-        _dispstatReadCount++;
-        return (_dispstatReadCount & 1) == 1 ? GbaMemoryMap.STAT_VBLANK_FLG : (ushort)0;
-    }
+        => BinaryPrimitives.ReadUInt32LittleEndian(Io.AsSpan((int)off, 4));
 
     // ---------------- IO write helpers ----------------
 
@@ -298,8 +284,21 @@ public sealed class GbaMemoryBus : IMemoryBus
             Io[off] = (byte)(Io[off] & ~value);
             return;
         }
+        // HALTCNT (0x04000301): bit 7 = 0 → HALT (wait for any IE&IF), bit 7 = 1 → STOP.
+        // We treat both as HALT (STOP would also need PPU+APU shutdown which we
+        // don't model). The CpuHalted flag is consumed by GbaSystemRunner.
+        if (off == GbaMemoryMap.HALTCNT_Off)
+        {
+            CpuHalted = true;
+            HaltCntWriteCount++;
+            Io[off] = value;
+            return;
+        }
         Io[off] = value;
     }
+
+    /// <summary>Diagnostic: how many times HALTCNT was written. 0 = never halted.</summary>
+    public long HaltCntWriteCount { get; private set; }
 
     private void WriteIoHalfword(uint off, ushort value)
     {

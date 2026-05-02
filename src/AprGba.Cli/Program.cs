@@ -55,11 +55,24 @@ var runner = new GbaSystemRunner(cpu, bus, swap);
 setupSw.Stop();
 Console.WriteLine($"  setup time: {setupSw.Elapsed.TotalMilliseconds:F0} ms (incl. spec compile + MCJIT)");
 
-// If a real BIOS was loaded, start at 0x00000000 (BIOS entry).
-// Otherwise jump straight to ROM entry. CPSR = System mode, IRQs enabled.
-cpu.WriteStatus("CPSR", 0x1Fu);
-cpu.WriteGpr(13, 0x03007F00u);
-cpu.Pc = opts.BiosPath is not null ? 0x00000000u : 0x08000000u;
+// LLE boot (real BIOS file loaded): start in Supervisor mode with IRQs +
+// FIQs disabled (CPSR=0xD3) and PC at 0x00000000. The BIOS does its own
+// startup, sets up SP for each mode, eventually switches to System mode
+// and enables IRQs before jumping to ROM @ 0x08000000.
+//
+// HLE boot (no BIOS file): jump straight to ROM with the post-BIOS state
+// the BIOS would have left — System mode, IRQs enabled, SP at IWRAM top.
+if (opts.BiosPath is not null)
+{
+    cpu.WriteStatus("CPSR", 0xD3u);              // SVC mode + I=1 + F=1
+    cpu.Pc = 0x00000000u;
+}
+else
+{
+    cpu.WriteStatus("CPSR", 0x1Fu);              // System mode, IRQs enabled
+    cpu.WriteGpr(13, 0x03007F00u);               // User/System SP at IWRAM top
+    cpu.Pc = 0x08000000u;                        // ROM entry
+}
 
 var runSw = System.Diagnostics.Stopwatch.StartNew();
 runner.RunCycles(opts.Cycles);
@@ -67,6 +80,10 @@ runSw.Stop();
 Console.WriteLine($"  ran {opts.Cycles:N0} cycles in {runSw.Elapsed.TotalSeconds:F3} s");
 Console.WriteLine($"  final PC = 0x{cpu.Pc:X8}, R0..R15 = {DumpRegs(cpu)}");
 Console.WriteLine($"  IRQs delivered: {runner.IrqsDelivered}, frames: {runner.Scheduler.FrameCount}");
+Console.WriteLine($"  CPSR=0x{cpu.ReadStatus("CPSR"):X8}");
+Console.WriteLine($"  DISPCNT=0x{bus.ReadHalfword(0x04000000):X4} DISPSTAT=0x{bus.ReadHalfword(0x04000004):X4} VCOUNT=0x{bus.ReadHalfword(0x04000006):X4}");
+Console.WriteLine($"  IE=0x{bus.ReadHalfword(0x04000200):X4} IF=0x{bus.ReadHalfword(0x04000202):X4} IME=0x{bus.ReadWord(0x04000208):X8}");
+Console.WriteLine($"  HALTCNT writes: {bus.HaltCntWriteCount}, currently halted: {bus.CpuHalted}");
 
 if (opts.ScreenshotPath is not null)
 {
