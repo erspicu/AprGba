@@ -438,6 +438,12 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
   AggressiveInlining + 私有 ReadPc/WritePc fast path。**GBA arm +21%
   vs F.y (5.94 → 7.19 MIPS, 個別 run 1.9× real-time)**, GBA thumb 持平
   (噪聲), GB json-llvm +1.7% (JsonCpu 已自帶 cache, 沒受惠)。
+- [x] **B.f Permanent pin of state buffer**（2026-05-03，perf note
+  `MD/performance/202605030102-permanent-pin-state-buffer.md`）— 把
+  `fixed (byte* p = _state) fn(p, ...)` 從 hot path 拿掉，改在 ctor
+  GCHandle.Alloc(_state, Pinned) 一次、cache byte* 給 JIT 用。
+  **GBA thumb +27% (6.26 → 7.97 MIPS, stable 1.9× real-time)**, GBA arm
+  持平 (plateau), GB 兩條 path 持平 (噪聲)。
 - [ ] **scheduler.Tick / NotifyExecutingPc / NotifyInstructionFetch
   inlining**：目前 per-instruction 多 2-3 次 virtual call；改 inline
   C# method + `[MethodImpl(AggressiveInlining)]` 或乾脆把這些 hook

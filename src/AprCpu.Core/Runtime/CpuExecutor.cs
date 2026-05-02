@@ -28,6 +28,14 @@ public sealed unsafe class CpuExecutor
     private readonly IMemoryBus  _bus;
     private readonly byte[]      _state;
 
+    // Phase 7 B.f: permanent pin of the state buffer.
+    // Pre-Phase-7 every Step did `fixed (byte* p = _state) fn(p, ...)`,
+    // which pins/unpins the array each call (~50 ns × 84M instr/test).
+    // Since the buffer is small (a few hundred bytes), a small fixed
+    // sized GC root is acceptable. Pin once in ctor, free in finaliser.
+    private readonly System.Runtime.InteropServices.GCHandle _stateHandle;
+    private readonly byte* _statePtr;
+
     // Phase 7 F.x: keyed by InstructionDef reference (object identity)
     // rather than by formatted string name — skips the per-instruction
     // string interpolation (`$"Execute_{setName}_{format.Name}_{disambig}"`)
@@ -88,8 +96,21 @@ public sealed unsafe class CpuExecutor
         _defaultMode = new ModeInfo(instructionSet, decoder);
         _pcRegIndex = ResolvePcIndex(rt);
         _state = new byte[(int)_rt.StateSizeBytes];
+        _stateHandle = System.Runtime.InteropServices.GCHandle.Alloc(
+            _state, System.Runtime.InteropServices.GCHandleType.Pinned);
+        _statePtr = (byte*)_stateHandle.AddrOfPinnedObject();
         _pcGprOffset = (int)_rt.GprOffset(_pcRegIndex);
         _pcWrittenOffset = (int)_rt.PcWrittenOffset;
+    }
+
+    /// <summary>
+    /// Free the pinned GC handle on destruction. The state buffer is
+    /// pinned for the lifetime of the executor (Phase 7 B.f); a small
+    /// fixed-size GC root is acceptable for a long-lived runtime object.
+    /// </summary>
+    ~CpuExecutor()
+    {
+        if (_stateHandle.IsAllocated) _stateHandle.Free();
     }
 
     /// <summary>
@@ -108,6 +129,9 @@ public sealed unsafe class CpuExecutor
         _bus = bus;
         _pcRegIndex = ResolvePcIndex(rt);
         _state = new byte[(int)_rt.StateSizeBytes];
+        _stateHandle = System.Runtime.InteropServices.GCHandle.Alloc(
+            _state, System.Runtime.InteropServices.GCHandleType.Pinned);
+        _statePtr = (byte*)_stateHandle.AddrOfPinnedObject();
         _pcGprOffset = (int)_rt.GprOffset(_pcRegIndex);
         _pcWrittenOffset = (int)_rt.PcWrittenOffset;
 
@@ -262,8 +286,8 @@ public sealed unsafe class CpuExecutor
 
         var fnPtr = ResolveFunctionPointer(decoded, mode.Set.Name);
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
-        fixed (byte* p = _state)
-            fn(p, instructionWord);
+        // Phase 7 B.f: use cached pinned pointer instead of per-step fixed.
+        fn(_statePtr, instructionWord);
 
         // Did the instruction write PC or switch modes?
         var postR15 = ReadPc();   // Phase 7 B.e: fast cached-offset accessor
