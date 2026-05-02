@@ -58,6 +58,9 @@ public sealed unsafe class JsonCpu : ICpuBackend
     private readonly int _fOff, _spOff, _pcOff;
 
     private bool _halted;
+    private static bool _ime;             // shared with extern shims
+    private static int  _eiDelay;         // counts down to IME=1 after EI
+    private static bool _haltSignal;      // set by host_lr35902_halt extern
 
     public JsonCpu()
     {
@@ -95,6 +98,16 @@ public sealed unsafe class JsonCpu : ICpuBackend
             (IntPtr)(delegate* unmanaged[Cdecl]<uint, byte, void>)&MemWrite8);
         _rt.BindExtern(MemoryEmitters.ExternFunctionNames.Write16,
             (IntPtr)(delegate* unmanaged[Cdecl]<uint, ushort, void>)&MemWrite16);
+
+        // HALT / IME externs (declared by Lr35902HostHelpers; bound only
+        // when the spec actually contains those ops). BindExtern throws
+        // if the global isn't declared, so guard each one.
+        TryBindNoArg(Lr35902HostHelpers.HaltExtern,
+            (IntPtr)(delegate* unmanaged[Cdecl]<void>)&HostHalt);
+        TryBindNoArg(Lr35902HostHelpers.ArmImeDelayedExtern,
+            (IntPtr)(delegate* unmanaged[Cdecl]<void>)&HostArmImeDelayed);
+        TryBindI8(Lr35902HostHelpers.SetImeExtern,
+            (IntPtr)(delegate* unmanaged[Cdecl]<byte, void>)&HostSetIme);
 
         _rt.Compile();
 
@@ -137,6 +150,9 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _activeBus = bus;
         _state = new byte[(int)_rt.StateSizeBytes];
         _halted = false;
+        _ime = false;
+        _eiDelay = 0;
+        _haltSignal = false;
 
         // Post-BIOS DMG state per Pan Docs.
         WriteI8(_aOff, 0x01); WriteI8(_bOff, 0x00); WriteI8(_cOff, 0x13);
@@ -145,6 +161,18 @@ public sealed unsafe class JsonCpu : ICpuBackend
         WriteI8(_fOff, 0xB0);                // Z=1 N=0 H=1 C=1
         WriteI16(_spOff, 0xFFFE);
         WriteI16(_pcOff, 0x0100);
+    }
+
+    private void TryBindNoArg(string name, IntPtr fn)
+    {
+        try { _rt.BindExtern(name, fn); }
+        catch (InvalidOperationException) { /* spec didn't declare it; skip */ }
+    }
+
+    private void TryBindI8(string name, IntPtr fn)
+    {
+        try { _rt.BindExtern(name, fn); }
+        catch (InvalidOperationException) { }
     }
 
     public ushort ReadReg16(GbReg16 reg) => reg switch
@@ -173,12 +201,72 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _activeBus = _bus;     // ensure shims see the right bus
         while (consumed < targetCycles)
         {
-            if (_halted) { consumed += 4; continue; }
-            consumed += StepOne();
+            // Wake from HALT if any enabled IRQ is pending (whether or
+            // not IME is set — HALT exits on IE & IF != 0).
+            if (_halted)
+            {
+                var pending = (byte)(_bus.InterruptEnable & _bus.InterruptFlag & 0x1F);
+                if (pending != 0) _halted = false;
+                else { _bus.Tick(4); consumed += 4; CheckInterrupts(out var srvHalt); consumed += srvHalt; continue; }
+            }
+
+            var stepCycles = StepOne();
+            _bus.Tick((int)stepCycles);
+            consumed += stepCycles;
+
+            // Pick up "halt signalled by emitter this step".
+            if (_haltSignal) { _halted = true; _haltSignal = false; }
+
+            // Tick the EI delay and apply IME scheduling.
+            if (_eiDelay > 0 && --_eiDelay == 0) _ime = true;
+
+            CheckInterrupts(out var serviceCycles);
+            consumed += serviceCycles;
         }
         return consumed;
     }
 
+    /// <summary>
+    /// Mirrors LegacyCpu.CheckInterrupts: priority-ordered IRQ vectoring
+    /// with auto-clear of the IF bit and IME=0 on entry. Wakes from HALT
+    /// regardless of IME. Reports the cycles charged for the IRQ entry.
+    /// </summary>
+    private void CheckInterrupts(out long serviceCycles)
+    {
+        serviceCycles = 0;
+        var pending = (byte)(_bus.InterruptEnable & _bus.InterruptFlag & 0x1F);
+        if (pending == 0) return;
+        if (_halted) _halted = false;
+        if (!_ime) return;
+
+        ushort vector;
+        byte mask;
+        if      ((pending & 0x01) != 0) { vector = 0x40; mask = 0x01; }   // VBlank
+        else if ((pending & 0x02) != 0) { vector = 0x48; mask = 0x02; }   // STAT
+        else if ((pending & 0x04) != 0) { vector = 0x50; mask = 0x04; }   // Timer
+        else if ((pending & 0x08) != 0) { vector = 0x58; mask = 0x08; }   // Serial
+        else                            { vector = 0x60; mask = 0x10; }   // Joypad
+
+        _ime = false;
+        _bus.InterruptFlag &= (byte)~mask;
+
+        // Push current PC: SP -= 2; mem[SP] = pc_lo; mem[SP+1] = pc_hi.
+        var pc = ReadI16(_pcOff);
+        var sp = (ushort)(ReadI16(_spOff) - 2);
+        WriteI16(_spOff, sp);
+        _bus.WriteByte(sp,                (byte)(pc & 0xFF));
+        _bus.WriteByte((ushort)(sp + 1),  (byte)(pc >> 8));
+        WriteI16(_pcOff, vector);
+
+        _bus.Tick(20);
+        serviceCycles = 20;
+    }
+
+    /// <summary>
+    /// Mirrors LegacyCpu.CheckInterrupts: priority-ordered IRQ vectoring
+    /// with auto-clear of the IF bit and IME=0 on entry. Wakes from HALT
+    /// regardless of IME.
+    /// </summary>
     /// <summary>Execute exactly one instruction. Returns the t-cycles charged.</summary>
     private long StepOne()
     {
@@ -302,4 +390,20 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _activeBus.WriteByte((ushort)addr,        (byte)(value & 0xFF));
         _activeBus.WriteByte((ushort)(addr + 1),  (byte)(value >> 8));
     }
+
+    // ---------------- HALT / IME shims (called from JIT'd IR) ----------------
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void HostHalt() => _haltSignal = true;
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void HostSetIme(byte v) => _ime = v != 0;
+
+    /// <summary>
+    /// EI sets _eiDelay = 2 so RunCycles' --_eiDelay applies one
+    /// instruction later (matching LegacyCpu's EI semantics — IME
+    /// becomes effective AFTER the instruction following EI completes).
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void HostArmImeDelayed() => _eiDelay = 2;
 }

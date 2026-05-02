@@ -34,26 +34,24 @@ public static class Lr35902Emitters
         reg.Register(new CcfEmitter());
         reg.Register(new CplEmitter());
 
-        // Halt / stop are placeholders for now: they emit a flag toggle
-        // on a future "Internal" status register. Until that register
-        // lands in cpu.json, the emitter just no-ops so the function
-        // body still verifies. JsonCpu will handle real halt detection.
-        reg.Register(new SimpleNoOpEmitter("halt"));
-        reg.Register(new SimpleNoOpEmitter("stop"));
+        // HALT / IME / EI-delayed lower to extern host calls; JsonCpu
+        // tracks the actual flags in C# state. Names of the externs
+        // are in HostHelpers below.
+        reg.Register(new HostFlagOpEmitter("halt",                 Lr35902HostHelpers.HaltExtern));
+        reg.Register(new HostFlagOpEmitter("lr35902_ime_delayed",  Lr35902HostHelpers.ArmImeDelayedExtern));
+        reg.Register(new HostImeEmitter());
 
-        // IME control is also placeholder until the Internal status
-        // register lands; JsonCpu will track these in host state.
-        reg.Register(new SimpleNoOpEmitter("lr35902_ime"));
-        reg.Register(new SimpleNoOpEmitter("lr35902_ime_delayed"));
+        // STOP is treated like HALT (waits for IRQ). Real DMG also
+        // disables LCD; we don't model that here.
+        reg.Register(new HostFlagOpEmitter("stop", Lr35902HostHelpers.HaltExtern));
 
         // CB-prefix dispatch is host-runtime concern — the compiled
         // function for opcode 0xCB just signals via a no-op; the
         // executor intercepts and pivots to the CB instruction set.
         reg.Register(new SimpleNoOpEmitter("lr35902_cb_dispatch"));
 
-        // DAA — complex BCD adjust. Stubbed for now (modifies nothing);
-        // a real emitter is a follow-up since it needs N/H/C-driven flow.
-        reg.Register(new SimpleNoOpEmitter("lr35902_daa"));
+        // DAA — full BCD adjust per LR35902 spec.
+        reg.Register(new Lr35902DaaEmitter());
 
         // Immediate-byte reads: fetch from PC, advance PC by N. Lower
         // to memory_read_8 calls (read_imm16 issues two of them, low
@@ -1351,7 +1349,14 @@ internal sealed class Lr35902RstEmitter : IMicroOpEmitter
         var field32 = ctx.Resolve(fieldName);
         var field16 = ctx.Builder.BuildTrunc(field32, LLVMTypeRef.Int16, $"{fieldName}_t16");
         var addr = ctx.Builder.BuildShl(field16, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int16, 3, false), "rst_addr");
+
+        // Push current PC then jump.
         var (pcPtr, _) = Lr35902Emitters.PcPointer(ctx);
+        var curPc = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "pc_rst_cur");
+        var sp = Lr35902RetEmitter.LoadSp(ctx, "rst_sp");
+        Lr35902RetEmitter.WriteWordAtSpMinus2(ctx, sp, curPc, "rst_push");
+        Lr35902CallEmitter.DecrementSp(ctx, 2);
+
         ctx.Builder.BuildStore(addr, pcPtr);
     }
 }
@@ -1369,11 +1374,14 @@ internal sealed class Lr35902CallEmitter : IMicroOpEmitter
         var addrName = step.Raw.GetProperty("address").GetString()!;
         var addr = Lr35902JpEmitter.NormaliseToI16(ctx, ctx.Resolve(addrName), $"{addrName}_call");
 
-        // Decrement SP by 2 (the push side; the actual byte writes are
-        // placeholder until store_byte is wired to the bus).
-        DecrementSp(ctx, 2);
-        // PC ← addr.
+        // Push current PC (which is the return address — read_imm16 has
+        // already advanced PC past the operand bytes).
         var (pcPtr, _) = Lr35902Emitters.PcPointer(ctx);
+        var curPc = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "pc_call_cur");
+        var sp = Lr35902RetEmitter.LoadSp(ctx, "call_sp");
+        Lr35902RetEmitter.WriteWordAtSpMinus2(ctx, sp, curPc, "call_push");
+        DecrementSp(ctx, 2);
+
         ctx.Builder.BuildStore(addr, pcPtr);
     }
 
@@ -1405,19 +1413,20 @@ internal sealed class Lr35902CallCcEmitter : IMicroOpEmitter
         var addr = Lr35902JpEmitter.NormaliseToI16(ctx, ctx.Resolve(addrName), $"{addrName}_callcc");
         var pred = Lr35902Emitters.EvalCondition(ctx, cond);
 
-        // Select-based PC update (real CALL ALSO adjusts SP and writes
-        // memory; that's placeholder until bus lands).
+        // Push current PC unconditionally to the stack location SP-2..SP-1
+        // (only effective when SP is also decremented). On condition-false
+        // we leave SP alone, so the bytes we wrote sit harmlessly above SP.
         var (pcPtr, _) = Lr35902Emitters.PcPointer(ctx);
         var curPc = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "pc_callcc_cur");
+        var sp = Lr35902RetEmitter.LoadSp(ctx, "callcc_sp");
+        Lr35902RetEmitter.WriteWordAtSpMinus2(ctx, sp, curPc, "callcc_push");
+
         var chosen = ctx.Builder.BuildSelect(pred, addr, curPc, $"pc_callcc_{cond.ToLowerInvariant()}");
         ctx.Builder.BuildStore(chosen, pcPtr);
 
-        // Conditionally adjust SP. Compute (SP-2) and select between it
-        // and SP based on the condition; store result.
-        var spPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SP");
-        var sp = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, spPtr, "sp_callcc_cur");
         var newSp = ctx.Builder.BuildSub(sp, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int16, 2, false), "sp_callcc_dec");
         var spChosen = ctx.Builder.BuildSelect(pred, newSp, sp, "sp_callcc_chosen");
+        var spPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SP");
         ctx.Builder.BuildStore(spChosen, spPtr);
     }
 }
@@ -1435,13 +1444,62 @@ internal sealed class Lr35902RetEmitter : IMicroOpEmitter
 
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        // SP += 2 (pop side; memory load placeholder).
+        var (pcPtr, _) = Lr35902Emitters.PcPointer(ctx);
+        var sp = LoadSp(ctx, "ret_sp");
+        var newPc = ReadWordAtSp(ctx, sp, "ret_target");
+        ctx.Builder.BuildStore(newPc, pcPtr);
         Lr35902CallEmitter.IncrementSp(ctx, 2);
-        // PC update placeholder — real impl loads PC from memory[SP-2..SP-1].
+    }
+
+    internal static LLVMValueRef LoadSp(EmitContext ctx, string label)
+    {
+        var spPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SP");
+        return ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, spPtr, label);
+    }
+
+    /// <summary>Compose i16 from memory[sp..sp+1] little-endian.</summary>
+    internal static LLVMValueRef ReadWordAtSp(EmitContext ctx, LLVMValueRef sp16, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var sp32Lo = ctx.Builder.BuildZExt(sp16, i32, $"{label}_sp32lo");
+        var lo = Lr35902MemoryHelpers.CallRead8(ctx, sp32Lo, $"{label}_lo");
+        var spPlus1 = ctx.Builder.BuildAdd(sp16,
+            LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_sp_p1");
+        var sp32Hi = ctx.Builder.BuildZExt(spPlus1, i32, $"{label}_sp32hi");
+        var hi = Lr35902MemoryHelpers.CallRead8(ctx, sp32Hi, $"{label}_hi");
+
+        var loZ = ctx.Builder.BuildZExt(lo, i16, $"{label}_loz");
+        var hiZ = ctx.Builder.BuildZExt(hi, i16, $"{label}_hiz");
+        var hiSh = ctx.Builder.BuildShl(hiZ,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi_shl");
+        return ctx.Builder.BuildOr(hiSh, loZ, label);
+    }
+
+    /// <summary>Push i16 to memory[sp-2..sp-1] little-endian.</summary>
+    internal static void WriteWordAtSpMinus2(EmitContext ctx, LLVMValueRef sp16, LLVMValueRef value16, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var spM2 = ctx.Builder.BuildSub(sp16,
+            LLVMValueRef.CreateConstInt(i16, 2, false), $"{label}_sp_m2");
+        var spM1 = ctx.Builder.BuildSub(sp16,
+            LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_sp_m1");
+
+        var loByte = ctx.Builder.BuildTrunc(value16, LLVMTypeRef.Int8, $"{label}_lo");
+        var hiByte = ctx.Builder.BuildTrunc(
+            ctx.Builder.BuildLShr(value16,
+                LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi_shr"),
+            LLVMTypeRef.Int8, $"{label}_hi");
+
+        Lr35902MemoryHelpers.CallWrite8(ctx,
+            ctx.Builder.BuildZExt(spM2, i32, $"{label}_addrlo"), loByte);
+        Lr35902MemoryHelpers.CallWrite8(ctx,
+            ctx.Builder.BuildZExt(spM1, i32, $"{label}_addrhi"), hiByte);
     }
 }
 
-/// <summary>lr35902_ret_cc — conditional RET via select on SP adjustment.</summary>
+/// <summary>lr35902_ret_cc — conditional RET. PC ← pop only when cond holds.</summary>
 internal sealed class Lr35902RetCcEmitter : IMicroOpEmitter
 {
     public string OpName => "lr35902_ret_cc";
@@ -1450,11 +1508,21 @@ internal sealed class Lr35902RetCcEmitter : IMicroOpEmitter
         var cond = step.Raw.GetProperty("cond").GetString()!;
         var pred = Lr35902Emitters.EvalCondition(ctx, cond);
 
+        // Always read the would-be popped PC (the load is harmless when
+        // we don't actually return); select between it and the current
+        // PC based on the condition.
+        var (pcPtr, _) = Lr35902Emitters.PcPointer(ctx);
+        var curPc = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "pc_retcc_cur");
+        var sp = Lr35902RetEmitter.LoadSp(ctx, "retcc_sp");
+        var poppedPc = Lr35902RetEmitter.ReadWordAtSp(ctx, sp, "retcc_target");
+        var newPc = ctx.Builder.BuildSelect(pred, poppedPc, curPc, $"pc_retcc_{cond.ToLowerInvariant()}");
+        ctx.Builder.BuildStore(newPc, pcPtr);
+
+        // SP += 2 only when the return is taken.
+        var spPlus2 = ctx.Builder.BuildAdd(sp, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int16, 2, false), "sp_retcc_inc");
+        var chosenSp = ctx.Builder.BuildSelect(pred, spPlus2, sp, $"sp_retcc_{cond.ToLowerInvariant()}");
         var spPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SP");
-        var sp = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, spPtr, "sp_retcc_cur");
-        var newSp = ctx.Builder.BuildAdd(sp, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int16, 2, false), "sp_retcc_inc");
-        var chosen = ctx.Builder.BuildSelect(pred, newSp, sp, $"sp_retcc_{cond.ToLowerInvariant()}");
-        ctx.Builder.BuildStore(chosen, spPtr);
+        ctx.Builder.BuildStore(chosenSp, spPtr);
     }
 }
 
@@ -1468,13 +1536,12 @@ internal sealed class Lr35902PushQqEmitter : IMicroOpEmitter
     public string OpName => "lr35902_push_qq";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        // Compose the pair value via a select chain so the IR references
-        // each pair (LLVM will DCE the unused loads at use-sites).
         var fieldName = step.Raw.GetProperty("field").GetString()!;
         var field32 = ctx.Resolve(fieldName);
         var i32 = LLVMTypeRef.Int32;
         var i16 = LLVMTypeRef.Int16;
 
+        // Compose all four pair values, select on qq, then push.
         var values = new LLVMValueRef[4];
         var qqNames = new[] { "BC", "DE", "HL", "AF" };
         for (int qq = 0; qq < 4; qq++)
@@ -1491,11 +1558,10 @@ internal sealed class Lr35902PushQqEmitter : IMicroOpEmitter
                 LLVMValueRef.CreateConstInt(i32, (uint)qq, false), $"push_is_qq{qq}");
             picked = ctx.Builder.BuildSelect(cmp, values[qq], picked, $"push_pick_qq{qq}");
         }
-        // (picked is the value that would be stored to memory.)
-        // Mark it as live by storing to a discard slot — actually no, just
-        // leave it; LLVM won't complain about an unused select result.
-        _ = picked;
 
+        // Write picked to memory[SP-2..SP-1] then SP -= 2.
+        var sp = Lr35902RetEmitter.LoadSp(ctx, "push_sp");
+        Lr35902RetEmitter.WriteWordAtSpMinus2(ctx, sp, picked, "push");
         Lr35902CallEmitter.DecrementSp(ctx, 2);
     }
 }
@@ -1510,14 +1576,13 @@ internal sealed class Lr35902PopQqEmitter : IMicroOpEmitter
     public string OpName => "lr35902_pop_qq";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        // Memory load is placeholder (constant 0). For each qq value,
-        // conditionally write 0 into the pair via decompose. (Once the
-        // bus lands, replace the i16 zero with a load_word call.)
         var fieldName = step.Raw.GetProperty("field").GetString()!;
         var field32 = ctx.Resolve(fieldName);
         var i32 = LLVMTypeRef.Int32;
-        var i16 = LLVMTypeRef.Int16;
-        var loadedPlaceholder = LLVMValueRef.CreateConstInt(i16, 0, false);
+
+        // Read the popped value once.
+        var sp = Lr35902RetEmitter.LoadSp(ctx, "pop_sp");
+        var popped = Lr35902RetEmitter.ReadWordAtSp(ctx, sp, "pop_value");
 
         var qqNames = new[] { "BC", "DE", "HL", "AF" };
         for (int qq = 0; qq < 4; qq++)
@@ -1528,7 +1593,7 @@ internal sealed class Lr35902PopQqEmitter : IMicroOpEmitter
             var current = Lr35902Emitters.ComposePairValue(ctx, pair, $"pop_{qqNames[qq]}_cur");
             var cmp = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, field32,
                 LLVMValueRef.CreateConstInt(i32, (uint)qq, false), $"pop_is_qq{qq}");
-            var chosen = ctx.Builder.BuildSelect(cmp, loadedPlaceholder, current, $"pop_pick_qq{qq}");
+            var chosen = ctx.Builder.BuildSelect(cmp, popped, current, $"pop_pick_qq{qq}");
             Lr35902Emitters.DecomposePairValue(ctx, pair, chosen);
         }
 
@@ -2050,5 +2115,146 @@ internal sealed class Lr35902LdhIoStoreEmitter : IMicroOpEmitter
                 ? ctx.Builder.BuildZExt(raw, LLVMTypeRef.Int8, $"{valueName}_z8")
                 : ctx.Builder.BuildTrunc(raw, LLVMTypeRef.Int8, $"{valueName}_t8");
         Lr35902MemoryHelpers.CallWrite8(ctx, addr, v8);
+    }
+}
+
+// ---------------- host-side flag/IME externs ----------------
+
+/// <summary>
+/// Names of the LR35902-specific externs JsonCpu must bind. These
+/// signal CPU-level flag changes (HALT, IME) that the host runtime
+/// tracks outside the LLVM struct, since they affect dispatch decisions
+/// (skip step on HALT, gate IRQ servicing on IME).
+/// </summary>
+public static class Lr35902HostHelpers
+{
+    public const string HaltExtern           = "host_lr35902_halt";
+    public const string SetImeExtern         = "host_lr35902_set_ime";
+    public const string ArmImeDelayedExtern  = "host_lr35902_arm_ime_delayed";
+
+    public static (LLVMValueRef Slot, LLVMTypeRef FnType, LLVMTypeRef PtrType)
+        GetVoidNoArgSlot(LLVMModuleRef module, string name)
+    {
+        var fnType  = LLVMTypeRef.CreateFunction(module.Context.VoidType, Array.Empty<LLVMTypeRef>());
+        var ptrType = LLVMTypeRef.CreatePointer(fnType, 0);
+        var existing = module.GetNamedGlobal(name);
+        if (existing.Handle != IntPtr.Zero) return (existing, fnType, ptrType);
+        var slot = module.AddGlobal(ptrType, name);
+        slot.Linkage = LLVMLinkage.LLVMExternalLinkage;
+        return (slot, fnType, ptrType);
+    }
+
+    public static (LLVMValueRef Slot, LLVMTypeRef FnType, LLVMTypeRef PtrType)
+        GetVoidI8Slot(LLVMModuleRef module, string name)
+    {
+        var fnType  = LLVMTypeRef.CreateFunction(module.Context.VoidType, new[] { LLVMTypeRef.Int8 });
+        var ptrType = LLVMTypeRef.CreatePointer(fnType, 0);
+        var existing = module.GetNamedGlobal(name);
+        if (existing.Handle != IntPtr.Zero) return (existing, fnType, ptrType);
+        var slot = module.AddGlobal(ptrType, name);
+        slot.Linkage = LLVMLinkage.LLVMExternalLinkage;
+        return (slot, fnType, ptrType);
+    }
+}
+
+internal sealed class HostFlagOpEmitter : IMicroOpEmitter
+{
+    public string OpName { get; }
+    private readonly string _externName;
+
+    public HostFlagOpEmitter(string opName, string externName)
+    {
+        OpName = opName;
+        _externName = externName;
+    }
+
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var (slot, fnType, ptrType) = Lr35902HostHelpers.GetVoidNoArgSlot(ctx.Module, _externName);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, _externName + "_fn");
+        ctx.Builder.BuildCall2(fnType, fn, Array.Empty<LLVMValueRef>(), "");
+    }
+}
+
+internal sealed class HostImeEmitter : IMicroOpEmitter
+{
+    public string OpName => "lr35902_ime";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var v = (byte)step.Raw.GetProperty("value").GetInt32();
+        var (slot, fnType, ptrType) = Lr35902HostHelpers.GetVoidI8Slot(ctx.Module, Lr35902HostHelpers.SetImeExtern);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, "set_ime_fn");
+        var arg = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, v, false);
+        ctx.Builder.BuildCall2(fnType, fn, new[] { arg }, "");
+    }
+}
+
+// ---------------- DAA (BCD adjust) ----------------
+
+internal sealed class Lr35902DaaEmitter : IMicroOpEmitter
+{
+    public string OpName => "lr35902_daa";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i8 = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+
+        var (aPtr, _) = Lr35902Emitters.LocateRegister(ctx, "A");
+        var aOld = ctx.Builder.BuildLoad2(i8, aPtr, "a_pre_daa");
+
+        var fPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "F");
+        var f = ctx.Builder.BuildLoad2(i8, fPtr, "f_pre_daa");
+        var nBit = ctx.Builder.BuildAnd(
+                       ctx.Builder.BuildLShr(f, LLVMValueRef.CreateConstInt(i8, 6, false), "f_n_sh"),
+                       LLVMValueRef.CreateConstInt(i8, 1, false), "n_in");
+        var hBit = ctx.Builder.BuildAnd(
+                       ctx.Builder.BuildLShr(f, LLVMValueRef.CreateConstInt(i8, 5, false), "f_h_sh"),
+                       LLVMValueRef.CreateConstInt(i8, 1, false), "h_in");
+        var cBit = ctx.Builder.BuildAnd(
+                       ctx.Builder.BuildLShr(f, LLVMValueRef.CreateConstInt(i8, 4, false), "f_c_sh"),
+                       LLVMValueRef.CreateConstInt(i8, 1, false), "c_in");
+
+        var aZ = ctx.Builder.BuildZExt(aOld, i32, "a_z");
+
+        var nIsZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, nBit,
+            LLVMValueRef.CreateConstInt(i8, 0, false), "n_eq_0");
+        var cIsSet  = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, cBit,
+            LLVMValueRef.CreateConstInt(i8, 1, false), "c_eq_1");
+        var hIsSet  = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, hBit,
+            LLVMValueRef.CreateConstInt(i8, 1, false), "h_eq_1");
+
+        var aGt99 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, aZ, ctx.ConstU32(0x99), "a_gt_99");
+        var aLoGt9 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT,
+            ctx.Builder.BuildAnd(aZ, ctx.ConstU32(0xF), "a_lo"),
+            ctx.ConstU32(0x9), "alo_gt_9");
+
+        var addNeed60 = ctx.Builder.BuildOr(cIsSet, aGt99,  "add_need60");
+        var addNeed06 = ctx.Builder.BuildOr(hIsSet, aLoGt9, "add_need06");
+
+        var add60 = ctx.Builder.BuildSelect(addNeed60, ctx.ConstU32(0x60), ctx.ConstU32(0), "add60");
+        var add06 = ctx.Builder.BuildSelect(addNeed06, ctx.ConstU32(0x06), ctx.ConstU32(0), "add06");
+        var sub60 = ctx.Builder.BuildSelect(cIsSet,    ctx.ConstU32(0x60), ctx.ConstU32(0), "sub60");
+        var sub06 = ctx.Builder.BuildSelect(hIsSet,    ctx.ConstU32(0x06), ctx.ConstU32(0), "sub06");
+
+        var addAddend = ctx.Builder.BuildOr(add60, add06, "add_addend");
+        var subAddend = ctx.Builder.BuildOr(sub60, sub06, "sub_addend");
+
+        var aAdded = ctx.Builder.BuildAdd(aZ, addAddend, "a_after_add");
+        var aSubed = ctx.Builder.BuildSub(aZ, subAddend, "a_after_sub");
+
+        var newA32 = ctx.Builder.BuildSelect(nIsZero, aAdded, aSubed, "a_after_daa32");
+        var newA   = ctx.Builder.BuildTrunc(newA32, i8, "a_after_daa");
+        ctx.Builder.BuildStore(newA, aPtr);
+
+        var cAdd = ctx.Builder.BuildZExt(addNeed60, i8, "c_add_i8");
+        var cKeep = cBit;
+        var cOut = ctx.Builder.BuildSelect(nIsZero, cAdd, cKeep, "c_after_daa");
+
+        var z = ctx.Builder.BuildZExt(
+                    ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, newA,
+                        LLVMValueRef.CreateConstInt(i8, 0, false), "daa_z_cmp"),
+                    i8, "daa_z");
+        var h = LLVMValueRef.CreateConstInt(i8, 0, false);
+        Lr35902Emitters.StoreFlags(ctx, z, nBit, h, cOut);
     }
 }
