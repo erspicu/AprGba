@@ -55,14 +55,28 @@ public sealed partial class LegacyCpu : ICpuBackend
     public void Reset(GbMemoryBus bus)
     {
         _bus = bus;
-        // Post-BIOS DMG state per Pan Docs.
-        _a = 0x01; _b = 0x00; _c = 0x13;
-        _d = 0x00; _e = 0xD8;
-        _h = 0x01; _l = 0x4D;
-        _sp = 0xFFFE;
-        _pc = 0x0100;
-        // F = 0xB0 = Z=1 N=0 H=1 C=1
-        _flagZ = FlagSet; _flagN = FlagClear; _flagH = FlagSet; _flagC = FlagSet;
+        if (bus.BiosEnabled)
+        {
+            // Cold start with boot ROM: real DMG powers up with all
+            // registers zero; the BIOS sets up the post-init state itself.
+            _a = 0; _b = 0; _c = 0;
+            _d = 0; _e = 0;
+            _h = 0; _l = 0;
+            _sp = 0;
+            _pc = 0;
+            _flagZ = FlagClear; _flagN = FlagClear; _flagH = FlagClear; _flagC = FlagClear;
+        }
+        else
+        {
+            // Post-BIOS DMG state per Pan Docs.
+            _a = 0x01; _b = 0x00; _c = 0x13;
+            _d = 0x00; _e = 0xD8;
+            _h = 0x01; _l = 0x4D;
+            _sp = 0xFFFE;
+            _pc = 0x0100;
+            // F = 0xB0 = Z=1 N=0 H=1 C=1
+            _flagZ = FlagSet; _flagN = FlagClear; _flagH = FlagSet; _flagC = FlagSet;
+        }
         flagIME = false;
         flagHalt = false;
         halt_cycle = 0;
