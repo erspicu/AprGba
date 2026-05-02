@@ -301,10 +301,15 @@ internal static class StackOps
         }
     }
 
-    private static LLVMValueRef CoerceToType(EmitContext ctx, LLVMValueRef value, LLVMTypeRef targetType, string label)
+    /// <summary>
+    /// Best-effort int-int type coercion: wider→narrower trunc,
+    /// narrower→wider zext, same-width passthrough. Used wherever a
+    /// generic op writes to a typed slot (PC, SP, register pair) but
+    /// the source value comes from a different-width compute step.
+    /// </summary>
+    internal static LLVMValueRef CoerceToType(EmitContext ctx, LLVMValueRef value, LLVMTypeRef targetType, string label)
     {
         if (value.TypeOf == targetType) return value;
-        // Best-effort int-int conversion. Wider→narrower trunc, narrower→wider zext.
         var vBits = value.TypeOf.IntWidth;
         var tBits = targetType.IntWidth;
         if (vBits > tBits) return ctx.Builder.BuildTrunc(value, targetType, $"{label}_tr");

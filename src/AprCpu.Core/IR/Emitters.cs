@@ -69,6 +69,7 @@ public static class StandardEmitters
         reg.Register(new SelectStep());
         reg.Register(new Branch("branch",      BranchKind.Plain));
         reg.Register(new Branch("branch_link", BranchKind.Link));
+        reg.Register(new BranchCc());
     }
 
     // ---------------- helpers ----------------
@@ -565,11 +566,15 @@ internal sealed class Branch : IMicroOpEmitter
         var targetName = step.Raw.GetProperty("target").GetString()!;
         var target = ctx.Resolve(targetName);
 
+        // Locate PC via spec metadata so this op works for any CPU
+        // (ARM R15 GPR, LR35902 PC status reg, future RISC-V x0+pc, ...).
+        var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
+
         if (_kind == BranchKind.Link)
         {
-            // LR <- PC (next instruction); PC <- target. Uses GPR-15 as PC
-            // and GPR-14 as LR by ARM convention; non-ARM specs that want
-            // a different "link register" should provide their own emitter.
+            // ARM-style link: read R15 (= pc + offset), write back-adjusted
+            // to R14. Other CPUs that want a "link register" semantics
+            // (none we currently support) need a different op.
             var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
             var r15    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "r15");
             var width  = ctx.InstructionSet.WidthBits.Fixed!.Value / 8;
@@ -579,15 +584,83 @@ internal sealed class Branch : IMicroOpEmitter
             ctx.Builder.BuildStore(nextPc, lrPtr);
         }
 
-        // Store target as new PC (R15)
-        var pcSlot = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
-        ctx.Builder.BuildStore(target, pcSlot);
+        // Coerce target to PC type (i32 for ARM, i16 for LR35902, etc.).
+        var coerced = StackOps.CoerceToType(ctx, target, pcType, "branch_target");
+        ctx.Builder.BuildStore(coerced, pcPtr);
 
         // Mark "branch taken" so the executor's post-step PC-advance logic
         // can distinguish "branch to target == pre-set R15" (e.g. Thumb
         // BCond +0) from "no branch happened". See PcWrittenFieldIndex.
+        // Harmless for non-ARM CPUs (the byte slot exists but the executor
+        // for those CPUs doesn't gate on it).
         var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
         ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
+    }
+}
+
+/// <summary>
+/// branch_cc — conditional branch. Reads a flag bit from a status
+/// register, compares to expected value, and writes target to PC iff
+/// condition holds. Uses LLVM <c>select</c> so the IR stays a single
+/// basic block (matches existing LR35902 jp_cc / jr_cc shape).
+///
+/// Step shape:
+/// <code>
+/// {
+///   "op": "branch_cc",
+///   "target": "&lt;varname&gt;",
+///   "cond": { "reg": "F", "flag": "Z", "value": 1 }
+/// }
+/// </code>
+///
+/// The cond <c>value</c> is the bit value that triggers the branch:
+/// 1 = branch when flag set, 0 = branch when flag clear.
+/// </summary>
+internal sealed class BranchCc : IMicroOpEmitter
+{
+    public string OpName => "branch_cc";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var targetName = step.Raw.GetProperty("target").GetString()!;
+        var target = ctx.Resolve(targetName);
+        var condEl = step.Raw.GetProperty("cond");
+        var reg  = condEl.GetProperty("reg").GetString()!;
+        var flag = condEl.GetProperty("flag").GetString()!;
+        var expectedVal = condEl.GetProperty("value").GetInt32();
+
+        // Read the flag bit from the named status register.
+        var bitIdx = ctx.Layout.GetStatusFlagBitIndex(reg, flag);
+        var statusPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, reg);
+        var statusDef = ctx.Layout.GetStatusRegisterDef(reg);
+        var statusType = statusDef.WidthBits switch
+        {
+            8  => LLVMTypeRef.Int8,
+            16 => LLVMTypeRef.Int16,
+            32 => LLVMTypeRef.Int32,
+            _  => throw new NotSupportedException($"status reg {reg} width {statusDef.WidthBits}-bit unsupported.")
+        };
+        var statusVal = ctx.Builder.BuildLoad2(statusType, statusPtr, $"{flag.ToLowerInvariant()}_load");
+        var bitShift  = LLVMValueRef.CreateConstInt(statusType, (uint)bitIdx, false);
+        var bit       = ctx.Builder.BuildAnd(
+                            ctx.Builder.BuildLShr(statusVal, bitShift, $"{flag.ToLowerInvariant()}_shr"),
+                            LLVMValueRef.CreateConstInt(statusType, 1, false),
+                            $"{flag.ToLowerInvariant()}_bit");
+        var expectedI = LLVMValueRef.CreateConstInt(statusType, (uint)(expectedVal & 1), false);
+        var pred = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, bit, expectedI, $"branch_cc_{flag.ToLowerInvariant()}");
+
+        var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
+        var curPc   = ctx.Builder.BuildLoad2(pcType, pcPtr, "branch_cc_pc_cur");
+        var coerced = StackOps.CoerceToType(ctx, target, pcType, "branch_cc_target");
+        var chosen  = ctx.Builder.BuildSelect(pred, coerced, curPc, "branch_cc_chosen");
+        ctx.Builder.BuildStore(chosen, pcPtr);
+
+        // Mark PC-written when condition holds. Use select to choose
+        // between "1 (taken)" and "0 (not taken)" for the flag.
+        var flagSlot  = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        var oldFlag   = ctx.Builder.BuildLoad2(LLVMTypeRef.Int8, flagSlot, "pc_w_old");
+        var taken     = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false);
+        var pcWritten = ctx.Builder.BuildSelect(pred, taken, oldFlag, "pc_w_new");
+        ctx.Builder.BuildStore(pcWritten, flagSlot);
     }
 }
 
