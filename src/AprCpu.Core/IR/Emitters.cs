@@ -259,64 +259,143 @@ internal sealed class Binary : IMicroOpEmitter
 
 // ---------------- flag updates ----------------
 
-/// <summary>Common helpers for writing CPSR bits.</summary>
+/// <summary>
+/// Common helpers for writing CPSR / F / SPSR / status-register bits.
+///
+/// Phase 7 C.b (retried after H.a) — alloca-based shadow per status
+/// register. On first <see cref="SetStatusFlag"/> for a register, an
+/// alloca is created in the entry block + initialised from the real
+/// status reg; all subsequent flag reads/writes go through the shadow.
+/// <see cref="DrainAllShadows"/> writes the final shadow value back to
+/// the real status reg in a single store at end-of-function.
+///
+/// LLVM mem2reg pass (in HostRuntime's RunOptimizationPipeline since
+/// H.a) lifts the alloca into SSA registers; multiple consecutive
+/// bit-mask-store sequences collapse into a single value chain + final
+/// store. PHI nodes for cond-branched flag writes are inserted automatically.
+///
+/// Raw status reg writers (<see cref="ArmEmitters"/> write_psr /
+/// raise_exception / restore_cpsr_from_spsr) call
+/// <see cref="InvalidateShadow"/> after writing — subsequent
+/// SetStatusFlag will re-init the shadow from the new real value.
+/// </summary>
 internal static class CpsrHelpers
 {
     /// <summary>
     /// Set a single bit by spec-defined flag name (e.g. ("CPSR","N")).
-    /// Looks up the bit position via <see cref="CpuStateLayout.GetStatusFlagBitIndex"/>
-    /// so no ARM-specific constants are baked in.
+    /// Phase 7 C.b: writes go to the shadow alloca, drained at end-of-fn.
     /// </summary>
     public static void SetStatusFlag(EmitContext ctx, string register, string flag, LLVMValueRef boolValue)
         => SetStatusFlagAt(ctx, register, ctx.Layout.GetStatusFlagBitIndex(register, flag), boolValue, flag.ToLowerInvariant());
 
     public static void SetStatusFlagFromI32Lsb(EmitContext ctx, string register, string flag, LLVMValueRef i32Value)
-        => SetStatusFlagAtFromI32Lsb(ctx, register, ctx.Layout.GetStatusFlagBitIndex(register, flag), i32Value, flag.ToLowerInvariant());
+    {
+        var bitIndex = ctx.Layout.GetStatusFlagBitIndex(register, flag);
+        var lowBit = ctx.Builder.BuildAnd(i32Value, ctx.ConstU32(1), $"{flag.ToLowerInvariant()}_lsb");
+        var asBool = ctx.Builder.BuildTrunc(lowBit, LLVMTypeRef.Int1, $"{flag.ToLowerInvariant()}_b");
+        SetStatusFlagAt(ctx, register, bitIndex, asBool, flag.ToLowerInvariant());
+    }
 
-    /// <summary>Convenience: read CPSR (or any status reg) bit as i32 0/1.</summary>
+    /// <summary>
+    /// Read a status reg bit as i32 0/1. Phase 7 C.b: reads from the
+    /// shadow alloca if it exists; otherwise reads the real status reg
+    /// directly (no shadow created on read alone — keeps non-S
+    /// instructions overhead-free).
+    /// </summary>
     public static LLVMValueRef ReadStatusFlag(EmitContext ctx, string register, string flag)
     {
         var bitIndex = ctx.Layout.GetStatusFlagBitIndex(register, flag);
-        var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
-        // Phase 7 C.a: load at the status register's actual width.
-        // Pre-7.C.a always loaded i32; for LR35902 F (i8) that read 4 bytes
-        // spanning F + adjacent SP/PC fields. Width-correct loads/stores
-        // let LLVM combine consecutive flag updates into a single store
-        // (no aliasing-to-other-fields concerns).
         var (statusType, _) = StatusTypeAndAllOnes(ctx, register);
+        var ptr = ctx.StatusShadowAllocas.TryGetValue(register, out var shadow)
+            ? shadow
+            : ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
         var v   = ctx.Builder.BuildLoad2(statusType, ptr, $"{register.ToLowerInvariant()}_for_{flag.ToLowerInvariant()}");
         var sh  = ctx.Builder.BuildLShr(v, LLVMValueRef.CreateConstInt(statusType, (uint)bitIndex, false), $"{flag.ToLowerInvariant()}_shr");
         var bit = ctx.Builder.BuildAnd(sh, LLVMValueRef.CreateConstInt(statusType, 1, false), $"{flag.ToLowerInvariant()}_bit");
-        // Callers expect i32 (existing emitters do arithmetic with these
-        // as i32). Widen if needed.
         return statusType == LLVMTypeRef.Int32
             ? bit
             : ctx.Builder.BuildZExt(bit, LLVMTypeRef.Int32, $"{flag.ToLowerInvariant()}_z32");
     }
 
+    /// <summary>
+    /// Phase 7 C.b — get-or-create the shadow alloca for a status reg.
+    /// Allocates in the entry block (so dominance is guaranteed) +
+    /// initialises with a load from the real status reg. Insertion is
+    /// anchored BEFORE the entry block's terminator (the cond gate may
+    /// have already placed a condbr there).
+    /// </summary>
+    private static LLVMValueRef GetOrCreateShadow(EmitContext ctx, string register)
+    {
+        if (ctx.StatusShadowAllocas.TryGetValue(register, out var existing))
+            return existing;
+
+        var (statusType, _) = StatusTypeAndAllOnes(ctx, register);
+
+        var savedBlock = ctx.Builder.InsertBlock;
+
+        var entryTerminator = ctx.EntryBlock.Terminator;
+        if (entryTerminator.Handle != IntPtr.Zero)
+            ctx.Builder.PositionBefore(entryTerminator);
+        else
+            ctx.Builder.PositionAtEnd(ctx.EntryBlock);
+
+        var alloca = ctx.Builder.BuildAlloca(statusType, $"{register.ToLowerInvariant()}_shadow");
+        var realPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
+        var initVal = ctx.Builder.BuildLoad2(statusType, realPtr, $"{register.ToLowerInvariant()}_init");
+        ctx.Builder.BuildStore(initVal, alloca);
+
+        ctx.Builder.PositionAtEnd(savedBlock);
+
+        ctx.StatusShadowAllocas[register] = alloca;
+        return alloca;
+    }
+
     private static void SetStatusFlagAt(EmitContext ctx, string register, int bitIndex, LLVMValueRef boolValue, string label)
     {
-        var ptr  = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
-        // Phase 7 C.a: width-correct load+store (was always i32).
+        // Phase 7 C.b: write to shadow alloca instead of real status reg.
+        var shadow = GetOrCreateShadow(ctx, register);
         var (statusType, allOnes) = StatusTypeAndAllOnes(ctx, register);
-        var prev = ctx.Builder.BuildLoad2(statusType, ptr, $"{register.ToLowerInvariant()}_old");
+        var prev = ctx.Builder.BuildLoad2(statusType, shadow, $"{register.ToLowerInvariant()}_old");
 
         var asI    = ctx.Builder.BuildZExt(boolValue, statusType, $"{label}_asi");
         var shifted = ctx.Builder.BuildShl(asI, LLVMValueRef.CreateConstInt(statusType, (uint)bitIndex, false), $"{label}_shifted");
 
-        // ~(1 << bitIndex) at the right width so LLVM sees the constant
-        // as the real mask, not an i32 with extra high bits set.
         var clearMask = LLVMValueRef.CreateConstInt(statusType, allOnes ^ (1UL << bitIndex), false);
         var cleared   = ctx.Builder.BuildAnd(prev, clearMask, $"{register.ToLowerInvariant()}_clear_{label}");
         var newV      = ctx.Builder.BuildOr (cleared, shifted, $"{register.ToLowerInvariant()}_set_{label}");
-        ctx.Builder.BuildStore(newV, ptr);
+        ctx.Builder.BuildStore(newV, shadow);
     }
 
-    private static void SetStatusFlagAtFromI32Lsb(EmitContext ctx, string register, int bitIndex, LLVMValueRef i32Value, string label)
+    /// <summary>
+    /// Phase 7 C.b — drain the shadow alloca for one register back to
+    /// the real status reg slot. No-op if no shadow exists.
+    /// </summary>
+    public static void DrainShadow(EmitContext ctx, string register)
     {
-        var lowBit = ctx.Builder.BuildAnd(i32Value, ctx.ConstU32(1), $"{label}_lsb");
-        var asBool = ctx.Builder.BuildTrunc(lowBit, LLVMTypeRef.Int1, $"{label}_b");
-        SetStatusFlagAt(ctx, register, bitIndex, asBool, label);
+        if (!ctx.StatusShadowAllocas.TryGetValue(register, out var alloca)) return;
+        var (statusType, _) = StatusTypeAndAllOnes(ctx, register);
+        var realPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
+        var v = ctx.Builder.BuildLoad2(statusType, alloca, $"{register.ToLowerInvariant()}_drain");
+        ctx.Builder.BuildStore(v, realPtr);
+    }
+
+    /// <summary>
+    /// Drain the shadow + remove the cache entry — for use by raw-status
+    /// writers (write_psr, raise_exception, etc.) that bypass SetStatusFlag.
+    /// Subsequent ReadStatusFlag will re-init shadow from the new real value.
+    /// </summary>
+    public static void InvalidateShadow(EmitContext ctx, string register)
+    {
+        DrainShadow(ctx, register);
+        ctx.StatusShadowAllocas.Remove(register);
+    }
+
+    /// <summary>Drain all shadows back to real status regs (called at end-of-function).</summary>
+    public static void DrainAllShadows(EmitContext ctx)
+    {
+        if (ctx.StatusShadowAllocas.Count == 0) return;
+        foreach (var register in ctx.StatusShadowAllocas.Keys.ToList())
+            DrainShadow(ctx, register);
     }
 
     /// <summary>
@@ -335,8 +414,6 @@ internal static class CpsrHelpers
             _  => throw new NotSupportedException($"status register '{register}' width {def.WidthBits}-bit unsupported")
         };
     }
-
-
 }
 
 // (UpdateNz / UpdateC*/UpdateV*/Update*Carry / Adc/Sbc/Rsc / ReadPsr /

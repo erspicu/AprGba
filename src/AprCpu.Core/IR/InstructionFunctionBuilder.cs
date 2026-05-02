@@ -85,8 +85,14 @@ public sealed unsafe class InstructionFunctionBuilder
             }
         }
 
+        // Phase 7 C.b: drain shadow status regs (CPSR, F, ...) back to
+        // their real state slots before returning. CpsrHelpers shadows
+        // are alloca-based; H.a's mem2reg pass lifts the alloca to SSA
+        // so the multiple bit-write store sequences inside the body
+        // collapse into one value chain + this drain's single store.
         if (!IsCurrentBlockTerminated(ctx.Builder))
         {
+            CpsrHelpers.DrainAllShadows(ctx);
             if (endBlock.HasValue) ctx.Builder.BuildBr(endBlock.Value);
             else                   ctx.Builder.BuildRetVoid();
         }

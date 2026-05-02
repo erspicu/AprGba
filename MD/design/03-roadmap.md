@@ -397,20 +397,21 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
 
 #### 進度快照（2026-05-03）
 
-**已完成 11 步**（commit chronological order）：
+**已完成 12 步**（commit chronological order）：
 B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 → B.e cache state offsets → B.f permanent pin → B.g inline bus
 → E.a fetch fast path → E.b mem trampoline fast path
-→ C.a width-correct flag → B.h Tick/IRQ inline → H.a LLVM pass pipeline
+→ C.a width-correct flag → B.h Tick/IRQ inline
+→ H.a LLVM pass pipeline → C.b alloca-shadow retry
 
 **累計成果（vs Phase 5.8 starting baseline）**：
 
 | ROM / Backend | baseline | 現在 | 累計 | real-time |
 |---|---:|---:|---:|---:|
-| GBA arm json-llvm | 3.82 MIPS | 8.45 | **+121%** | 0.9× → **2.0×** |
-| GBA thumb json-llvm | 3.75 | 8.46 | **+126%** | 0.9× → **2.0×** |
-| GB json-llvm | 2.66 | 6.50 | **+144%** | 5.5× → **13×** |
-| GB legacy | 32.76 | 32.24 | unchanged (noise) | 67× |
+| GBA arm json-llvm | 3.82 MIPS | 8.49 | **+122%** | 0.9× → **2.0×** |
+| GBA thumb json-llvm | 3.75 | 8.51 | **+127%** | 0.9× → **2.0×** |
+| GB json-llvm | 2.66 | 6.52 | **+145%** | 5.5× → **13×** |
+| GB legacy | 32.76 | 31.66 | unchanged (noise) | 67× |
 
 **剩餘項目分類**（B-G 區內每個未打勾的都標了狀態）：
 - **[⏸ blocked]** = 需要 prerequisite 才能做（多半 blocked on A block-JIT
@@ -557,15 +558,23 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   連續 flag updates。改成依 WidthBits 用 i8/i16/i32。**GB json-llvm +2.7%
   (6.31 → 6.48 MIPS)**, GBA 不受影響 (CPSR 已 i32)。順便修了潛在的
   unaligned i32 access 問題。
-- [⚠] **C.b Alloca-based shadow lazy flag**（2026-05-03 嘗試 + revert，
-  post-mortem `MD/performance/202605030148-lazy-flag-attempt-postmortem.md`）—
-  做了兩版：(1) deferred-batch (`PendingFlagWrites` Dictionary) — 因 SSA
-  dominance 問題（cond gate / nested branches 跨 BB capture i1 value）
-  失敗。(2) alloca-shadow (entry block alloca + load/store) — 通過 345
-  unit + 9 Blargg，但 perf 沒贏（loop100 GBA 微跌 ~3-5% 噪聲）。可能
-  MCJIT pass pipeline 沒跑 mem2reg 所以 alloca 沒被 lift to SSA。
-  **建議重做時先做 H.a (LLVM pass pipeline 調校)**，加上 mem2reg /
-  GVN / DSE 顯式 pass，再 retry C.b alloca-shadow。
+- [x] **C.b Alloca-based shadow lazy flag**（2026-05-03 retry after H.a，
+  perf note `MD/performance/202605030241-cb-alloca-shadow-retry.md`）—
+  EmitContext 加 `StatusShadowAllocas` + `EntryBlock`；CpsrHelpers 重寫
+  走 alloca shadow (lazy create on first SetStatusFlag, drained at
+  end-of-fn)；ArmEmitters 的 raw CPSR writers (write_psr /
+  raise_exception / restore_cpsr_from_spsr) 加 `InvalidateShadow`。
+  **GBA arm +0.5% (8.45 → 8.49 MIPS), GBA thumb +0.6%**, GB JIT 持平
+  (噪聲)。比預期 +5-15% 小，因為 LLVM GVN/DSE 對原 raw-memory
+  pattern 已能優化好；alloca shadow 主要 unlock 的「合併連續 store」
+  原本就大致在做。**真正 unlock 是 abstraction**：未來「真 lazy flag」
+  (defer 計算非只 batch)、PcWritten LLVM register hint 等 alloca-pattern
+  優化都能直接套用。
+- [⚠ revised hypothesis] **真 ARM CPSR NZCV lazy** — defer 計算（非
+  C.b 的 defer-store）：原預期 lazy 的主要收益是「跳過不需要的計算」
+  而非「合併連續 write」(C.b 已試)。需要新 state slots (last_alu_kind/
+  a/b/result) + 新 ops + cond eval 從 cache derive。預期收益修正：原本
+  +10-30%，C.b retry 後修正為 +5-10% (因為 batch 那塊 GVN/DSE 已撈)。
 - [⏸ blocked — 需 H.a 先做] **ARM CPSR NZCV lazy**（**真**lazy flag —
   不只 batch，是延後計算）：目前每條 ALU 指令都計算 N/Z/C/V 寫進
   CPSR；改成「只記錄 last-ALU-result + ALU-kind」，conditional

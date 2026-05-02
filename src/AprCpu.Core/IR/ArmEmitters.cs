@@ -457,6 +457,15 @@ internal sealed class WritePsr : IMicroOpEmitter
         var which = step.Raw.TryGetProperty("which", out var wEl) ? wEl.GetString() : "CPSR";
         var isCpsr = which == "CPSR" || which is null;
 
+        // Phase 7 C.b: this op writes raw CPSR/SPSR bypassing CpsrHelpers.
+        // Drain + remove the shadow first — pending flag writes from
+        // SetStatusFlag earlier in this function get persisted to real
+        // CPSR before write_psr's mask-and-or runs (so we don't lose them);
+        // shadow is removed so subsequent ReadStatusFlag re-inits from
+        // the new real CPSR value.
+        var target = which == "SPSR" ? "CPSR" : (which ?? "CPSR");
+        CpsrHelpers.InvalidateShadow(ctx, target);
+
         // Capture old CPSR mode bits BEFORE write so we can detect mode
         // change after the masked store completes.
         var cpsrPtrEarly = isCpsr ? ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR") : default;
@@ -517,7 +526,6 @@ internal sealed class WritePsr : IMicroOpEmitter
             runtimeMask = accum;
         }
 
-        var target = which == "SPSR" ? "CPSR" : (which ?? "CPSR");
         var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, target);
 
         if (runtimeMask is { } rm)
@@ -657,6 +665,9 @@ internal sealed class RestoreCpsrFromSpsr : IMicroOpEmitter
             throw new InvalidOperationException(
                 "restore_cpsr_from_spsr requires SPSR to be declared as banked_per_mode.");
 
+        // Phase 7 C.b: invalidate shadow before raw CPSR write.
+        CpsrHelpers.InvalidateShadow(ctx, "CPSR");
+
         var cpsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR");
         var oldCpsr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "old_cpsr_for_restore");
         const uint modeMask = 0x1F;
@@ -756,6 +767,9 @@ internal sealed class RaiseExceptionEmitter : IMicroOpEmitter
             throw new InvalidOperationException(
                 $"Mode '{enterMode}' has no encoding declared in spec.");
         uint newModeEnc = Convert.ToUInt32(modeEntry.Encoding, 2);
+
+        // Phase 7 C.b: invalidate shadow before raw CPSR write below.
+        CpsrHelpers.InvalidateShadow(ctx, "CPSR");
 
         // 1. Read current CPSR.
         var cpsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR");

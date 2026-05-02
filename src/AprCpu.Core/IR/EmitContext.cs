@@ -25,6 +25,37 @@ public sealed unsafe class EmitContext
     /// <summary>Named values: field extractions, operand outputs, step `out`s.</summary>
     public Dictionary<string, LLVMValueRef> Values { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Phase 7 C.b — alloca-based shadow per status register (CPSR, F, ...).
+    /// On first <see cref="CpsrHelpers.SetStatusFlag"/> for a register,
+    /// CpsrHelpers creates a stack alloca in the entry block (initialised
+    /// from the real status reg) and from then on all flag read/write
+    /// goes through the shadow. End-of-function drains the shadow back
+    /// to the real status reg in a single store.
+    ///
+    /// LLVM mem2reg pass (run by H.a's explicit pipeline) lifts the
+    /// alloca to SSA registers; multiple consecutive bit-mask-store
+    /// sequences collapse into a single value chain + final store.
+    /// PHI nodes for cond-branched flag writes are inserted automatically.
+    ///
+    /// Why alloca rather than deferred-batch: a deferred batch keeps
+    /// raw <c>LLVMValueRef</c>s captured at SetStatusFlag time, then
+    /// emits them at flush time. If SetStatusFlag was inside a nested
+    /// basic block (cond gate, if-then-else) and flush happens in the
+    /// outer block, the captured value doesn't dominate the flush site —
+    /// LLVM Verify rejects. Alloca sidesteps this entirely.
+    /// </summary>
+    public Dictionary<string, LLVMValueRef> StatusShadowAllocas { get; }
+        = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The function's entry basic block. CpsrHelpers needs this to insert
+    /// the alloca + init for shadow status registers — alloca must be in
+    /// the entry block so it dominates all subsequent loads/stores.
+    /// Captured at construction (the builder's current block).
+    /// </summary>
+    public LLVMBasicBlockRef EntryBlock { get; }
+
     public EmitContext(
         LLVMModuleRef module,
         LLVMBuilderRef builder,
@@ -46,6 +77,7 @@ public sealed unsafe class EmitContext
         InstructionSet = set;
         Format      = format;
         Def         = def;
+        EntryBlock  = builder.InsertBlock;   // builder is positioned at entry on construction
     }
 
     /// <summary>
