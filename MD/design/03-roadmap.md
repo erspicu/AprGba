@@ -395,6 +395,34 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
 
 順序大致從低風險高回報 → 高風險未驗證。
 
+#### 進度快照（2026-05-03）
+
+**已完成 9 步**（commit chronological order）：
+B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
+→ B.e cache state offsets → B.f permanent pin → B.g inline bus
+→ E.a fetch fast path → E.b mem trampoline fast path → C.a width-correct flag
+
+**累計成果（vs Phase 5.8 starting baseline）**：
+
+| ROM / Backend | baseline | 現在 | 累計 | real-time |
+|---|---:|---:|---:|---:|
+| GBA arm json-llvm | 3.82 MIPS | 8.26 | **+116%** | 0.9× → **2.0×** |
+| GBA thumb json-llvm | 3.75 | 8.24 | **+120%** | 0.9× → **2.0×** |
+| GB json-llvm | 2.66 | 6.48 | **+144%** | 5.5× → **13×** |
+| GB legacy | 32.76 | 32.75 | unchanged | 67× |
+
+**已嘗試但未 ship**：
+- **C.b alloca-based shadow lazy flag** — 設計兩版（deferred-batch 跟
+  alloca-shadow）都實作完成，alloca 版 unit + Blargg 全綠但 perf 未明顯
+  改善（loop100 GBA 跌 ~3-5% noise）。MCJIT 可能沒跑 mem2reg，alloca
+  沒被 lift to SSA 所以 load/store 沒被 DSE 掉。詳細見
+  `MD/performance/202605030148-lazy-flag-attempt-postmortem.md`。後續
+  要重做需 (1) 顯式跑 mem2reg pass (2) 處理 raw CPSR writers 的
+  drain/invalidate plumbing。
+
+**dispatcher / mem-bus / bus inline 端 quick win 全 saturated**。Phase 7
+繼續下去要嘛 architectural 改動 (block-JIT) 要嘛碰 LLVM passes pipeline。
+
 #### A. Block-level JIT（核心，textbook 路徑）
 
 - [ ] **Block detector**：從 PC 掃到 branch / return / IO 寫入為止
@@ -466,9 +494,20 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
   連續 flag updates。改成依 WidthBits 用 i8/i16/i32。**GB json-llvm +2.7%
   (6.31 → 6.48 MIPS)**, GBA 不受影響 (CPSR 已 i32)。順便修了潛在的
   unaligned i32 access 問題。
-- [ ] **ARM CPSR NZCV lazy**：目前每條 ALU 指令都計算 N/Z/C/V 寫進
-  CPSR；改成「只記錄 last-ALU-result + ALU-kind」，conditional
-  execution 真要讀 flag 時再 derive
+- [⚠] **C.b Alloca-based shadow lazy flag**（2026-05-03 嘗試 + revert，
+  post-mortem `MD/performance/202605030148-lazy-flag-attempt-postmortem.md`）—
+  做了兩版：(1) deferred-batch (`PendingFlagWrites` Dictionary) — 因 SSA
+  dominance 問題（cond gate / nested branches 跨 BB capture i1 value）
+  失敗。(2) alloca-shadow (entry block alloca + load/store) — 通過 345
+  unit + 9 Blargg，但 perf 沒贏（loop100 GBA 微跌 ~3-5% 噪聲）。可能
+  MCJIT pass pipeline 沒跑 mem2reg 所以 alloca 沒被 lift to SSA。
+  **建議重做時先做 H.a (LLVM pass pipeline 調校)**，加上 mem2reg /
+  GVN / DSE 顯式 pass，再 retry C.b alloca-shadow。
+- [ ] **ARM CPSR NZCV lazy**（**真**lazy flag — 不只 batch，是延後計算）：
+  目前每條 ALU 指令都計算 N/Z/C/V 寫進 CPSR；改成「只記錄
+  last-ALU-result + ALU-kind」，conditional execution 真要讀 flag 時
+  再 derive。比 C.b 大很多 — 需要新 state slots + 新 ops + invalidation
+  protocol。
 - [ ] **LR35902 F register lazy**：INC r 的 Z/N/H 不要每次都寫，後續
   指令若是 BIT/CP/JR cc 才 derive
 - [ ] **Flag dependency tracking**：emitter 標 "this op produces
@@ -540,6 +579,46 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
   也可能改善)
 - [ ] **UnmanagedCallersOnly trampolines 走 IL emit**：直接 patch
   entry，避免 .NET wrapper 的 prologue overhead
+
+#### H. 漏掉的優化方向（2026-05-03 補充）
+
+A-G 之外，盤點實作 Phase 7 過程發現可以做的：
+
+- [ ] **H.a LLVM pass pipeline 調校** — MCJIT 預設 pass 跟 `opt -O3` 不
+  完全一樣。例如 C.b alloca-shadow 版本實作對了但 mem2reg 可能沒跑，
+  alloca 沒 lift to SSA。需要 LLVMSharp 的 `LLVMPassManagerRef` 顯式跑
+  ：`AddPromoteMemoryToRegisterPass` (mem2reg)、`AddGVNPass`、
+  `AddDeadStoreEliminationPass`、`AddInstructionCombiningPass`。
+  把這做了之後 C.b alloca-shadow 才會見效，可能其他 IR 改動也會跟
+  著加分。
+- [ ] **H.b Spec-time IR pre-processing** — SpecCompiler 階段先掃過所有
+  指令的 step 序列做 dead-flag-elimination：如果一條 ALU 指令的 update_nz
+  寫的 N 在「同 instruction 的後續 step / 任何 callable cond gate」都不會
+  被讀，就 emit nothing。需要 def-use analysis on flag bits.
+- [ ] **H.c Hot-opcode 內聯到 dispatcher** — 不走 fn pointer call，
+  dispatcher 內把 top-N 個最頻繁 opcode (e.g. ARM MOV/ADD/LDR/STR/B)
+  直接 inline 進 switch case，省掉 per-call indirect-call cost。
+  Top-N 從 PGO 統計來。
+- [ ] **H.d LR35902 dispatcher 跟 GBA path 等價優化** — F.x/F.y 已套用
+  到 JsonCpu，但 B.e (cache state offsets) / B.f (permanent pin) /
+  B.g (AggressiveInlining bus) 各有 GBA path 跟 GB path 兩邊。需要 audit
+  JsonCpu / GbMemoryBus 比照辦理 — 雖然 GB JIT 已 plateau 6.4 MIPS，
+  但可能還有空間。
+- [ ] **H.e Cycle accounting 真 batch** — F 群裡的「Cycle accounting
+  trailing add」沒做。GbaSystemRunner 每條指令都 += 4，可改成 block 結束
+  一次 += N*4。風險：IRQ delivery 時機可能延遲。
+- [ ] **H.f Per-process opcode profiling persistence** — 在 disk cache
+  opcode 使用統計，啟動時 prefer hot path 載入順序、JIT 編譯順序、code
+  cache 預熱。
+- [ ] **H.g LLVM IR 自定 calling convention** — 目前 JIT'd fn 標準 cdecl
+  傳 `(state*, ins)`。可改用自定 cc 把 `state*` 跟 hot regs (e.g. PC/SP)
+  傳 register 而非 stack，跨函式呼叫更便宜。需要 LLVM tablegen 級改動，
+  風險高。
+- [ ] **H.h SIMD batch state operations** — 如果有 batch 模式跑同一條
+  指令 N 次（現在沒這 use case），可以 SIMD。不適用單指令 dispatch。
+- [ ] **H.i AOT bitcode cache** — 把 spec→IR 的結果 serialize 到 disk
+  (`.bc` file)，下次啟動直接 load 跳過 SpecCompiler。對 startup time
+  有幫助，runtime perf 不變。已在後備 #4 列。
 
 ### 後備（萬一上面某項實作不順）
 
