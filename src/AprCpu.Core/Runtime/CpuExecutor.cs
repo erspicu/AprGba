@@ -45,6 +45,15 @@ public sealed unsafe class CpuExecutor
         = new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
 
     private readonly int   _pcRegIndex;
+    // Phase 7 B.e: state-buffer field offsets cached at construction.
+    // Pre-cache, every Step() called _rt.PcWrittenOffset and _rt.GprOffset(_pcRegIndex)
+    // — both cascade into LLVM.OffsetOfElement P/Invoke. Per-instruction
+    // overhead from those PInvokes was ~5× per Step (one for PcWritten,
+    // one for pre-set R15, one for post-read R15, one for fall-through PC
+    // update + the conditional path). Now the offsets are int fields,
+    // looked up once at construction.
+    private readonly int   _pcGprOffset;
+    private readonly int   _pcWrittenOffset;
     private readonly ModeInfo _defaultMode;
     private readonly Dictionary<uint, ModeInfo>? _modesBySelectorValue;
     private readonly Func<byte[], uint>?         _readSelector;
@@ -79,6 +88,8 @@ public sealed unsafe class CpuExecutor
         _defaultMode = new ModeInfo(instructionSet, decoder);
         _pcRegIndex = ResolvePcIndex(rt);
         _state = new byte[(int)_rt.StateSizeBytes];
+        _pcGprOffset = (int)_rt.GprOffset(_pcRegIndex);
+        _pcWrittenOffset = (int)_rt.PcWrittenOffset;
     }
 
     /// <summary>
@@ -97,6 +108,8 @@ public sealed unsafe class CpuExecutor
         _bus = bus;
         _pcRegIndex = ResolvePcIndex(rt);
         _state = new byte[(int)_rt.StateSizeBytes];
+        _pcGprOffset = (int)_rt.GprOffset(_pcRegIndex);
+        _pcWrittenOffset = (int)_rt.PcWrittenOffset;
 
         // Build value→ModeInfo map from selector_values.
         _modesBySelectorValue = new Dictionary<uint, ModeInfo>();
@@ -153,8 +166,12 @@ public sealed unsafe class CpuExecutor
 
     public uint Pc
     {
-        get => ReadGpr(_pcRegIndex);
-        set => WriteGpr(_pcRegIndex, value);
+        // Phase 7 B.e: PC accessor uses cached _pcGprOffset, skipping
+        // the per-call _rt.GprOffset → LLVM.OffsetOfElement P/Invoke.
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        get => BinaryPrimitives.ReadUInt32LittleEndian(_state.AsSpan(_pcGprOffset, 4));
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        set => BinaryPrimitives.WriteUInt32LittleEndian(_state.AsSpan(_pcGprOffset, 4), value);
     }
 
     public uint ReadGpr(int regIndex)
@@ -162,6 +179,16 @@ public sealed unsafe class CpuExecutor
 
     public void WriteGpr(int regIndex, uint value)
         => BinaryPrimitives.WriteUInt32LittleEndian(_state.AsSpan((int)_rt.GprOffset(regIndex), 4), value);
+
+    // Phase 7 B.e: PC-specific fast paths used by Step()'s hot loop —
+    // bypass the regIndex parameter entirely so we don't pay the
+    // _rt.GprOffset PInvoke per call.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private uint ReadPc()
+        => BinaryPrimitives.ReadUInt32LittleEndian(_state.AsSpan(_pcGprOffset, 4));
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private void WritePc(uint value)
+        => BinaryPrimitives.WriteUInt32LittleEndian(_state.AsSpan(_pcGprOffset, 4), value);
 
     public uint ReadStatus(string name, string? mode = null)
         => BinaryPrimitives.ReadUInt32LittleEndian(_state.AsSpan((int)_rt.StatusOffset(name, mode), 4));
@@ -187,12 +214,12 @@ public sealed unsafe class CpuExecutor
     {
         InstructionsExecuted++;
         var mode = CurrentMode();
-        var pc = Pc;
+        var pc = ReadPc();   // Phase 7 B.e: fast cached-offset accessor
 
         // Pre-set R15 to PC + pc_offset_bytes so the IR's "read R15"
         // returns the correct pipeline-offset value mid-execution.
         var pcReadValue = pc + mode.PcOffsetBytes;
-        WriteGpr(_pcRegIndex, pcReadValue);
+        WritePc(pcReadValue);
 
         // Clear the "PC was written" sticky flag. Branch / BX / LDM-PC /
         // ALU-with-Rd=PC emitters set this to 1; we read it back below.
@@ -202,7 +229,7 @@ public sealed unsafe class CpuExecutor
         // compiler idiom (skip-next-instruction). It's still kept as a
         // belt-and-suspenders fallback for any PC writer not yet
         // instrumented.
-        _state[(int)_rt.PcWrittenOffset] = 0;
+        _state[_pcWrittenOffset] = 0;   // Phase 7 B.e: cached offset
 
         // Snapshot the dispatch selector (e.g. CPSR.T) so we can detect
         // mode switches even when the new PC value happens to equal the
@@ -239,14 +266,14 @@ public sealed unsafe class CpuExecutor
             fn(p, instructionWord);
 
         // Did the instruction write PC or switch modes?
-        var postR15 = ReadGpr(_pcRegIndex);
+        var postR15 = ReadPc();   // Phase 7 B.e: fast cached-offset accessor
         uint postSelector = _readSelector?.Invoke(_state) ?? 0;
-        bool flagged   = _state[(int)_rt.PcWrittenOffset] != 0;
+        bool flagged   = _state[_pcWrittenOffset] != 0;
         bool branched  = flagged
                        || postR15 != pcReadValue
                        || postSelector != preSelector;
         if (!branched)
-            WriteGpr(_pcRegIndex, pc + mode.InstrSizeBytes);
+            WritePc(pc + mode.InstrSizeBytes);
         // Else: branch / exception / ALU-to-PC / mode switch wrote new PC.
 
         return decoded;

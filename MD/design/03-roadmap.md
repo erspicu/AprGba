@@ -430,6 +430,14 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
   emit 成單一 inlined IR sequence
 - [ ] **加 `nuw` / `nsw` hint**：常見的 PC+4 / SP-2 加減確定不溢位，
   加 hint 給 LLVM 更多 optimisation 餘地
+- [x] **B.e Cache state-buffer offsets in CpuExecutor**（2026-05-03，perf
+  note `MD/performance/202605030054-cache-state-offsets-cpuexecutor.md`）
+  — Step() 之前每條指令呼叫 `_rt.PcWrittenOffset` / `_rt.GprOffset(_pcRegIndex)`
+  都 cascade 進 LLVM.OffsetOfElement P/Invoke (4-5 次/指令)；cache 在
+  ctor 後改用 cached `int _pcGprOffset` / `_pcWrittenOffset` + 加
+  AggressiveInlining + 私有 ReadPc/WritePc fast path。**GBA arm +21%
+  vs F.y (5.94 → 7.19 MIPS, 個別 run 1.9× real-time)**, GBA thumb 持平
+  (噪聲), GB json-llvm +1.7% (JsonCpu 已自帶 cache, 沒受惠)。
 - [ ] **scheduler.Tick / NotifyExecutingPc / NotifyInstructionFetch
   inlining**：目前 per-instruction 多 2-3 次 virtual call；改 inline
   C# method + `[MethodImpl(AggressiveInlining)]` 或乾脆把這些 hook
