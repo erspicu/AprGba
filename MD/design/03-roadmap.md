@@ -388,25 +388,120 @@ Phase 7 完成後重跑這 4 個 case 看加速幅度（預期 json-llvm 拉到
 
 ### 真做的時候要做的事
 
-- [ ] Block detector：從 PC 掃到 branch / return / IO 寫入為止
-- [ ] Block-level IR generation（多條指令串接成一個 Function）
-- [ ] LLVM JIT execution engine 升級到 ORC LLJIT（解掉 MCJIT 的
-  Windows COFF section 限制 + 解鎖 lazy compile）
-- [ ] Code cache（hashmap + LRU）
-- [ ] **SMC 偵測**：寫入「已編譯區域」時 invalidate
-- [ ] **Indirect branch dispatch**
-- [ ] **Block linking**：直接 patch native call，不退出 JIT
-- [ ] State→register caching：block entry 把常用 reg load 進 LLVM
-  virtual register，exit 才 store 回 state buffer
-- [ ] Performance profiling、OptLevel 調整
+完整清單。前面 Phase 5.8 emitter refactor 把結構整理乾淨後，這裡列
+所有「真要把 JIT 推到極致」會碰到的優化面向。逐項做、每項做完跑
+canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-point.md`)
+記錄 before/after。
 
-### 後備
+順序大致從低風險高回報 → 高風險未驗證。
+
+#### A. Block-level JIT（核心，textbook 路徑）
+
+- [ ] **Block detector**：從 PC 掃到 branch / return / IO 寫入為止
+- [ ] **Block-level IR generation**（多條指令串接成一個 LLVM Function，
+  讓 LLVM optimizer 在大 basic block 內做 register caching、CSE、
+  constant folding、DCE）
+- [ ] **LLVM JIT execution engine 升級到 ORC LLJIT**（解掉 MCJIT 的
+  Windows COFF section 限制 + 解鎖 lazy compile / on-demand 編譯）
+- [ ] **Code cache**（hashmap PC → fn pointer + LRU eviction）
+- [ ] **SMC 偵測 + invalidation**：寫入「已編譯區域」時 invalidate
+  (memory bus write 攔截 + page-level dirty bit table)
+- [ ] **Indirect branch dispatch**：BX / JP HL / RET → cache lookup +
+  fall-through to dispatcher
+- [ ] **Block linking**：直接 patch native call site，後續 branch 不
+  退出 JIT
+- [ ] **State→register caching**：block entry 把常用 reg load 進
+  LLVM virtual register，exit 才 store 回 state buffer
+- [ ] Performance profiling 工具（在 host 端記錄 block 編譯次數 /
+  執行次數 / 佔總執行時間比例）
+
+#### B. IR-level inlining / 微指令融合（Gemini 建議 #1）
+
+- [ ] **OptLevel 調 O3** + 加入額外 LLVM passes (instcombine, gvn,
+  simplifycfg, mem2reg, reassociate)
+- [ ] **同 register 的 GEP CSE**：目前每次 read_reg 都重新 GEP；同
+  function 內多次 access 同 reg 應該 CSE 成一個 alloca
+- [ ] **多 micro-op step 融合**：`add` + `update_zero` + `update_h_add`
+  + `set_flag(N)` 經常一起出現，spec compiler 端可以辨識常見 pattern
+  emit 成單一 inlined IR sequence
+- [ ] **加 `nuw` / `nsw` hint**：常見的 PC+4 / SP-2 加減確定不溢位，
+  加 hint 給 LLVM 更多 optimisation 餘地
+- [ ] **scheduler.Tick / NotifyExecutingPc / NotifyInstructionFetch
+  inlining**：目前 per-instruction 多 2-3 次 virtual call；改 inline
+  C# method + `[MethodImpl(AggressiveInlining)]` 或乾脆把這些 hook
+  emit 進 IR
+
+#### C. Lazy flag computation（Gemini 建議 #2）
+
+- [ ] **ARM CPSR NZCV lazy**：目前每條 ALU 指令都計算 N/Z/C/V 寫進
+  CPSR；改成「只記錄 last-ALU-result + ALU-kind」，conditional
+  execution 真要讀 flag 時再 derive
+- [ ] **LR35902 F register lazy**：INC r 的 Z/N/H 不要每次都寫，後續
+  指令若是 BIT/CP/JR cc 才 derive
+- [ ] **Flag dependency tracking**：emitter 標 "this op produces
+  flag X / consumes flag Y"，spec compiler 在 block 內做 def-use
+  analysis 省略不必要的 flag 寫入
+- [ ] **PcWritten flag 改 LLVM register hint**（5.8 已標 candidate）—
+  避免每條指令 byte slot load/store；只在 branch 指令後檢查
+
+#### D. Hot path / Tier compilation（Gemini 建議 #4 增補）
+
+- [ ] **Block 執行次數 counter**：每次進 block 加 1，超過 threshold
+  (e.g. 1000) 才升 tier
+- [ ] **Cold block O0 編譯**：第一次見到 block 時用 O0 快編好（< 1ms），
+  先讓 ROM 跑起來
+- [ ] **Hot block O2/O3 重編 + register caching aggressive**：背景
+  thread 重編 hot block，編好後 patch caller fall-through
+- [ ] **Tier degradation**：SMC invalidate 後降回 cold tier
+- [ ] **Profile-guided optimisation**：counter + branch-direction 統計，
+  hot 的 cond branch flip 成 fallthrough
+
+#### E. 減少 extern binding / mem-bus fast path（Gemini 建議 #5）
+
+- [ ] **Mem-bus region table inline check**：JIT'd code 自帶
+  「addr ∈ ROM/RAM region 直接 GEP；else fallback to extern call」
+  fast path
+- [ ] **Sub-page 粒度 fast-path**（GBA WRAM 0x02000000-0x0203FFFF、
+  GB HRAM 0xFF80-0xFFFE、cart ROM 0x08000000-0x09FFFFFF 等熱區）
+- [ ] **Read-only ROM fast path**：cart ROM read 直接 byte-array
+  index，省 extern call 完全
+- [ ] **Aligned word access**：4-byte / 2-byte aligned read/write 走
+  i32/i16 直接 access，不拆成 byte sequence
+
+#### F. Dispatcher / cycle-accounting 簡化
+
+- [ ] **Dispatcher 從 hash-lookup 改 direct table**（decoded opcode
+  → fn pointer 陣列；ARM 12-bit table、Thumb 10-bit table、LR35902
+  8-bit table）
+- [ ] **Cycle accounting trailing add**：block 結束時一次累加 cycle
+  總數，不每條指令 inc
+- [ ] **IRQ check 集中在 block exit**，不是每條指令
+
+#### G. .NET host runtime 優化
+
+- [ ] **Native AOT** — 把整個 host runtime AOT 編譯，避開 .NET
+  tiered JIT 的 cold-start cost (對 GB legacy 那 −15% 量測 noise
+  也可能改善)
+- [ ] **UnmanagedCallersOnly trampolines 走 IL emit**：直接 patch
+  entry，避免 .NET wrapper 的 prologue overhead
+
+### 後備（萬一上面某項實作不順）
 
 若 LLVM 編譯太慢造成不可接受 stutter：
-- 後備 1：降 OptLevel 至 O0
-- 後備 2：tiered compilation（冷 block 用 O0，熱 block 升 O2）
+- 後備 1：降 OptLevel 至 O0（或部分 block O0）
+- 後備 2：tiered compilation（冷 block 用 O0，熱 block 升 O2 — 已在 D）
 - 後備 3：改用 .NET `DynamicMethod` / `System.Reflection.Emit` 自寫
-  輕量 IL JIT
+  輕量 IL JIT，整批跳過 LLVM
+- 後備 4：對少數 hot-loop ROM 做 ahead-of-time `.bc` cache（spec
+  → IR → bitcode 寫進 disk，下次直接 load）
+
+### 怎麼跑這個 phase
+
+每實作一項就跑 canonical loop100 bench，新檔寫進 `MD/performance/`，
+檔名 `YYYYMMDDHHMM-<策略名>.md`，引用起始基準
+`MD/performance/202605030002-jit-optimisation-starting-point.md`，
+記錄 before/after delta + 該策略 hypothesis。**不要批一次做完幾項
+混在一起跑**，會搞不清楚哪個帶來收益。
 
 ---
 
