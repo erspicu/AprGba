@@ -125,7 +125,8 @@ Console.WriteLine($"  HALTCNT writes: {bus.HaltCntWriteCount}, currently halted:
     short bg3pc = (short)bus.ReadHalfword(0x04000034), bg3pd = (short)bus.ReadHalfword(0x04000036);
     uint bg3x = bus.ReadWord(0x04000038), bg3y = bus.ReadWord(0x0400003C);
     ushort pal0 = (ushort)(bus.Palette[0] | (bus.Palette[1] << 8));
-    Console.WriteLine($"  BG2CNT=0x{bg2cnt:X4} BG3CNT=0x{bg3cnt:X4}");
+    ushort bg2cntFix = bus.ReadHalfword(0x0400000C), bg3cntFix = bus.ReadHalfword(0x0400000E);
+    Console.WriteLine($"  BG0CNT=0x{bg2cnt:X4} BG1CNT=0x{bg3cnt:X4} BG2CNT=0x{bg2cntFix:X4} BG3CNT=0x{bg3cntFix:X4}");
     Console.WriteLine($"  BG3 PA={bg3pa} PB={bg3pb} PC={bg3pc} PD={bg3pd} X=0x{bg3x:X8} Y=0x{bg3y:X8}");
     Console.WriteLine($"  BG3 char-base={(bg3cnt>>2)&3}*0x4000  screen-base={(bg3cnt>>8)&0x1F}*0x800  size={(bg3cnt>>14)&3}");
     Console.WriteLine($"  Palette[0]=0x{pal0:X4}  BLDCNT=0x{bus.ReadHalfword(0x04000050):X4} BLDALPHA=0x{bus.ReadHalfword(0x04000052):X4} BLDY=0x{bus.ReadHalfword(0x04000054):X4}");
@@ -142,11 +143,46 @@ Console.WriteLine($"  HALTCNT writes: {bus.HaltCntWriteCount}, currently halted:
         if (objMode == 2) mode2Objs++;
     }
     Console.WriteLine($"  active sprites: {activeObjs} (semi-trans/mode1={mode1Objs}, obj-window/mode2={mode2Objs})");
+
+    // Dump first 16 active sprites with non-trivial details for diagnosis
+    Console.WriteLine("  sprite details (first 30 active w/ tile):");
+    int dumped = 0;
+    for (int i = 0; i < 128 && dumped < 30; i++) {
+        ushort a0 = (ushort)(bus.Oam[i*8] | (bus.Oam[i*8+1] << 8));
+        ushort a1 = (ushort)(bus.Oam[i*8+2] | (bus.Oam[i*8+3] << 8));
+        ushort a2 = (ushort)(bus.Oam[i*8+4] | (bus.Oam[i*8+5] << 8));
+        bool affine = (a0 & 0x100) != 0;
+        if (!affine && (a0 & 0x200) != 0) continue;
+        int objMode = (a0 >> 10) & 3;
+        if (objMode == 2) continue;
+        int tileBase = a2 & 0x3FF;
+        // (no tile filter — show all)
+        int yOrigin = a0 & 0xFF;
+        int xOrigin = a1 & 0x1FF;
+        int sxO = xOrigin >= 256 ? xOrigin - 512 : xOrigin;
+        int syO = yOrigin >= 160 ? yOrigin - 256 : yOrigin;
+        int affineIdx = affine ? (a1 >> 9) & 0x1F : 0;
+        int pa = 0, pb = 0, pc = 0, pd = 0;
+        if (affine) {
+            int matBase = affineIdx * 32;
+            pa = (short)(bus.Oam[matBase + 0x06] | (bus.Oam[matBase + 0x07] << 8));
+            pb = (short)(bus.Oam[matBase + 0x0E] | (bus.Oam[matBase + 0x0F] << 8));
+            pc = (short)(bus.Oam[matBase + 0x16] | (bus.Oam[matBase + 0x17] << 8));
+            pd = (short)(bus.Oam[matBase + 0x1E] | (bus.Oam[matBase + 0x1F] << 8));
+        }
+        int shp = (a0 >> 14) & 3;
+        int sz  = (a1 >> 14) & 3;
+        Console.WriteLine($"    OBJ[{i,3}]: x={sxO,4} y={syO,4} tile={tileBase,4} sh={shp} sz={sz} aff={(affine?"Y":"N")} mode={objMode} mat[{affineIdx,2}]={pa,4},{pb,4},{pc,4},{pd,4}");
+        dumped++;
+    }
 }
 
 if (opts.ScreenshotPath is not null)
 {
     var ppu = new GbaPpu();
+    if (opts.DisableObj) ppu.DisableObj = true;
+    if (opts.DisableBg)  ppu.DisableBg  = true;
+    if (opts.OnlyObjIndex >= 0) ppu.OnlyObjIndex = opts.OnlyObjIndex;
     ppu.RenderFrame(bus);
     Directory.CreateDirectory(Path.GetDirectoryName(opts.ScreenshotPath) ?? ".");
     PngWriter.SaveRgbPng(ppu.Framebuffer, GbaPpu.Width, GbaPpu.Height, opts.ScreenshotPath);
@@ -287,6 +323,9 @@ static Options? ParseArgs(string[] args)
         else if (arg.StartsWith("--trace-bios=")) opts.TraceBiosPath = arg.Substring("--trace-bios=".Length);
         else if (arg == "--info")                 opts.InfoOnly = true;
         else if (arg == "--no-bios-openbus")      opts.DisableBiosOpenBus = true;
+        else if (arg == "--no-obj")               opts.DisableObj = true;
+        else if (arg == "--no-bg")                opts.DisableBg  = true;
+        else if (arg.StartsWith("--only-obj="))   opts.OnlyObjIndex = int.Parse(arg.Substring("--only-obj=".Length));
         else                                      return null;
     }
     return opts.RomPath is null ? null : opts;
@@ -329,4 +368,7 @@ internal sealed class Options
     public string?  TraceBiosPath;
     public bool     InfoOnly;
     public bool     DisableBiosOpenBus;
+    public bool     DisableObj;
+    public bool     DisableBg;
+    public int      OnlyObjIndex = -1;
 }
