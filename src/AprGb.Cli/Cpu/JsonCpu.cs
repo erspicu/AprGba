@@ -56,6 +56,11 @@ public sealed unsafe class JsonCpu : ICpuBackend
         = new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
 
     private byte[]    _state = Array.Empty<byte>();
+    // Phase 7 B.f: permanent pin of the state buffer. Reset() re-allocates
+    // _state across runs so we re-pin and free the previous handle. Pre-pin
+    // every StepOne re-pinned via `fixed` (~50 ns × millions of instr).
+    private System.Runtime.InteropServices.GCHandle _stateHandle;
+    private byte* _statePtr;
     private GbMemoryBus _bus = null!;
 
     // Pre-cached field offsets for fast register access.
@@ -156,7 +161,12 @@ public sealed unsafe class JsonCpu : ICpuBackend
     {
         _bus = bus;
         _activeBus = bus;
+        // Free previous pin (Reset can be called multiple times).
+        if (_stateHandle.IsAllocated) _stateHandle.Free();
         _state = new byte[(int)_rt.StateSizeBytes];
+        _stateHandle = System.Runtime.InteropServices.GCHandle.Alloc(
+            _state, System.Runtime.InteropServices.GCHandleType.Pinned);
+        _statePtr = (byte*)_stateHandle.AddrOfPinnedObject();
         _halted = false;
         _totalInstructions = 0;
         _ime = false;
@@ -334,8 +344,8 @@ public sealed unsafe class JsonCpu : ICpuBackend
         // extra cycles LegacyCpu adds in its switch (see Step.cs).
         ushort fallThroughPc = ComputeFallThroughPc(opcode, pc);
 
-        fixed (byte* p = _state)
-            fn(p, instructionWord);
+        // Phase 7 B.f: cached pinned pointer instead of per-step `fixed`.
+        fn(_statePtr, instructionWord);
 
         long cycles = CyclesFor(decoded.Instruction);
         cycles += ConditionalBranchExtraCycles(opcode, fallThroughPc, ReadI16(_pcOff));
