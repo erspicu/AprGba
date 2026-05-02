@@ -158,13 +158,26 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _eiDelay = 0;
         _haltSignal = false;
 
-        // Post-BIOS DMG state per Pan Docs.
-        WriteI8(_aOff, 0x01); WriteI8(_bOff, 0x00); WriteI8(_cOff, 0x13);
-        WriteI8(_dOff, 0x00); WriteI8(_eOff, 0xD8);
-        WriteI8(_hOff, 0x01); WriteI8(_lOff, 0x4D);
-        WriteI8(_fOff, 0xB0);                // Z=1 N=0 H=1 C=1
-        WriteI16(_spOff, 0xFFFE);
-        WriteI16(_pcOff, 0x0100);
+        if (bus.BiosEnabled)
+        {
+            // Cold start with boot ROM — all registers zero, PC at 0.
+            WriteI8(_aOff, 0); WriteI8(_bOff, 0); WriteI8(_cOff, 0);
+            WriteI8(_dOff, 0); WriteI8(_eOff, 0);
+            WriteI8(_hOff, 0); WriteI8(_lOff, 0);
+            WriteI8(_fOff, 0);
+            WriteI16(_spOff, 0);
+            WriteI16(_pcOff, 0);
+        }
+        else
+        {
+            // Post-BIOS DMG state per Pan Docs.
+            WriteI8(_aOff, 0x01); WriteI8(_bOff, 0x00); WriteI8(_cOff, 0x13);
+            WriteI8(_dOff, 0x00); WriteI8(_eOff, 0xD8);
+            WriteI8(_hOff, 0x01); WriteI8(_lOff, 0x4D);
+            WriteI8(_fOff, 0xB0);                // Z=1 N=0 H=1 C=1
+            WriteI16(_spOff, 0xFFFE);
+            WriteI16(_pcOff, 0x0100);
+        }
     }
 
     private void TryBindNoArg(string name, IntPtr fn)

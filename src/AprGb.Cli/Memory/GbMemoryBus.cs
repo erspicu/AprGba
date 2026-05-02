@@ -24,6 +24,25 @@ public sealed class GbMemoryBus
     public byte[] Hram   { get; }              = new byte[0x7F];       // 127 B (FF80-FFFE)
     public byte[] Io     { get; }              = new byte[0x80];       // FF00-FF7F
 
+    /// <summary>
+    /// DMG / DMG-0 boot ROM (256 bytes). When <see cref="BiosEnabled"/>
+    /// is true the bus shadows reads at 0x0000..0x00FF with these bytes
+    /// instead of the cart. Real hardware exposes the boot ROM at power-on
+    /// and remaps it out via a one-shot write to 0xFF50 once the BIOS
+    /// finishes (typically ~256 t-cycles after the Nintendo logo scroll).
+    /// </summary>
+    public byte[] Bios { get; private set; } = Array.Empty<byte>();
+    public bool   BiosEnabled { get; private set; }
+
+    /// <summary>Load a boot ROM image (256 bytes for DMG; 2304 for CGB).</summary>
+    public void LoadBios(byte[] biosBytes)
+    {
+        if (biosBytes is null || biosBytes.Length == 0)
+            throw new ArgumentException("BIOS bytes cannot be null/empty.", nameof(biosBytes));
+        Bios = biosBytes;
+        BiosEnabled = true;
+    }
+
     public byte InterruptEnable;     // 0xFFFF
     public byte InterruptFlag;       // 0xFF0F shadowed in Io but exposed for clarity
 
@@ -84,6 +103,11 @@ public sealed class GbMemoryBus
 
     public byte ReadByte(ushort addr)
     {
+        // Boot-ROM shadow: when BIOS is mapped, reads in 0x0000..0x00FF go
+        // to the boot ROM. The cart's own 0x100 (entry point) and beyond
+        // are visible normally — that lets the BIOS verify the cart's
+        // Nintendo logo at 0x104..0x133 by reading the cart, not itself.
+        if (BiosEnabled && addr < 0x100)         return Bios[addr];
         if (addr < 0x4000)                       return SafeRom(addr);
         if (addr < 0x8000)                       return SafeRom((addr - 0x4000) + _romBank * 0x4000);
         if (addr < 0xA000)                       return Vram[addr - 0x8000];
@@ -190,6 +214,11 @@ public sealed class GbMemoryBus
 
             case 0x0F:                       // IF
                 InterruptFlag = (byte)(v & 0x1F);
+                break;
+
+            case 0x50:                       // BOOT — write any non-zero bit to remap BIOS out
+                Io[0x50] = v;
+                if ((v & 1) != 0) BiosEnabled = false;
                 break;
 
             default:
