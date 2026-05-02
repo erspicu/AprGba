@@ -47,6 +47,12 @@ public class CoverageTests
             // CollectOps only scans ARM7TDMI spec so these LR35902-side
             // usages are invisible.
             "set_flag", "update_h_add", "update_h_sub",
+
+            // Step 5.3 — generic conditional branch with inline cond.
+            // Will be exercised by LR35902 JP cc / JR cc / RET cc once
+            // those are migrated; for now the unconditional JP migration
+            // uses generic `branch` (already covered by ARM B).
+            "branch_cc",
         };
 
         var (registered, used) = CollectOps();
