@@ -4,5 +4,6 @@
     <Project Path="src/AprCpu.Core/AprCpu.Core.csproj" />
     <Project Path="src/AprCpu.Tests/AprCpu.Tests.csproj" />
     <Project Path="src/AprGb.Cli/AprGb.Cli.csproj" />
+    <Project Path="src/AprGba.Cli/AprGba.Cli.csproj" />
   </Folder>
 </Solution>
