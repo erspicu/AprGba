@@ -1,5 +1,6 @@
 using AprGb.Cli;
 using AprGb.Cli.Cpu;
+using AprGb.Cli.Diff;
 using AprGb.Cli.Memory;
 using AprGb.Cli.Video;
 
@@ -8,6 +9,21 @@ using AprGb.Cli.Video;
 
 var opts = ParseArgs(args);
 if (opts is null) { PrintUsage(); return 1; }
+
+if (opts.DiffMaxSteps > 0 && opts.RomPath is not null)
+{
+    Console.WriteLine($"apr-gb — diff mode: legacy vs json-llvm");
+    Console.WriteLine($"  ROM:        {opts.RomPath}");
+    Console.WriteLine($"  max steps:  {opts.DiffMaxSteps}");
+    var report = CpuDiff.Run(opts.RomPath, opts.DiffMaxSteps);
+    if (report is null)
+    {
+        Console.WriteLine($"  no divergence in {opts.DiffMaxSteps} steps. Backends agree.");
+        return 0;
+    }
+    Console.WriteLine(CpuDiff.Format(report));
+    return 1;
+}
 
 Console.WriteLine($"apr-gb — Game Boy harness (DMG only; legacy + json-llvm backends)");
 Console.WriteLine($"  ROM:        {opts.RomPath}");
@@ -67,6 +83,7 @@ static Options? ParseArgs(string[] args)
         else if (arg.StartsWith("--frames="))     opts.Cycles  = long.Parse(arg.Substring("--frames=".Length)) * 70224;
         else if (arg.StartsWith("--screenshot=")) opts.ScreenshotPath = arg.Substring("--screenshot=".Length);
         else if (arg == "--info")                 opts.InfoOnly = true;
+        else if (arg.StartsWith("--diff="))       opts.DiffMaxSteps = long.Parse(arg.Substring("--diff=".Length));
         else                                      return null;
     }
     return opts.RomPath is null ? null : opts;
@@ -88,4 +105,5 @@ internal sealed class Options
     public long     Cycles  = 70224;     // one DMG frame = 70224 machine cycles
     public string?  ScreenshotPath;
     public bool     InfoOnly;
+    public long     DiffMaxSteps;        // when > 0, run lockstep diff harness instead
 }
