@@ -1,10 +1,32 @@
 {
   "name": "Block0_LdR8Imm8",
-  "comment": "LD r, n — 00_ddd_110. 8 opcodes (one per dest reg incl. (HL) which costs an extra m-cycle).",
+  "comment": "LD r, n — 00_ddd_110. The (HL) variant (0x36) is split into its own format since lr35902_write_r8 doesn't currently store to memory[HL]; priority shadows it ahead of the general r-form.",
   "formats": [
     {
+      "name": "Ld_Hl_Imm8",
+      "comment": "0x36 — LD (HL), n: store immediate byte at memory[HL].",
+      "pattern": "00110110",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x36",
+      "instructions": [
+        {
+          "mnemonic": "LD",
+          "since": "LR35902",
+          "writes_memory": ["mem_hl"],
+          "manual_ref": "GB CPU §LD (HL),n",
+          "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "read_imm8", "out": "imm" },
+            { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
+            { "op": "store_byte", "address": "addr", "value": "imm" }
+          ]
+        }
+      ]
+    },
+    {
       "name": "LdR8_Imm8",
-      "comment": "00_ddd_110",
+      "comment": "00_ddd_110. ddd=110 ((HL)) shadowed by Ld_Hl_Imm8 above.",
       "pattern": "00ddd110",
       "fields": {
         "ddd": "5:3"
@@ -15,8 +37,8 @@
         {
           "mnemonic": "LD",
           "since": "LR35902",
-          "manual_ref": "GB CPU §LD r,n / LD (HL),n",
-          "cycles": { "form": "2m", "extra_when_dest_pc": "+1m if (HL)" },
+          "manual_ref": "GB CPU §LD r,n",
+          "cycles": { "form": "2m" },
           "steps": [
             { "op": "read_imm8", "out": "imm" },
             { "op": "lr35902_write_r8", "field": "ddd", "value": "imm" }
