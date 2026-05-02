@@ -1,10 +1,25 @@
 {
   "name": "CbPrefix_Res",
-  "comment": "RES b, r — 10_bbb_sss. r ← r & ~(1 << b); flags unchanged. 64 entries.",
+  "comment": "RES b, r — 10_bbb_sss. r ← r &amp; ~(1&lt;&lt;b). (HL)-target variant split into its own format.",
   "formats": [
     {
+      "name": "Cb_Res_Hl",
+      "comment": "10_bbb_110 — RES b, (HL).",
+      "pattern": "10bbb110",
+      "fields": {
+        "bbb": "5:3"
+      },
+      "mask": "0xC7",
+      "match": "0x86",
+      "instructions": [{
+        "mnemonic": "RES", "since": "LR35902", "manual_ref": "GB CPU §RES b,(HL)",
+        "writes_memory": ["mem_hl"], "cycles": { "form": "4m" },
+        "steps": [{ "op": "lr35902_cb_resset_hl_mem", "bit_field": "bbb", "is_set": false }]
+      }]
+    },
+    {
       "name": "Cb_Res",
-      "comment": "10_bbb_sss",
+      "comment": "10_bbb_sss general r-form. sss=110 ((HL)) shadowed by Cb_Res_Hl above.",
       "pattern": "10bbbsss",
       "fields": {
         "bbb": "5:3",
@@ -14,7 +29,7 @@
       "match": "0x80",
       "instructions": [{
         "mnemonic": "RES", "since": "LR35902", "manual_ref": "GB CPU §RES b,r",
-        "cycles": { "form": "2m_or_4m" },
+        "cycles": { "form": "2m" },
         "steps": [{ "op": "lr35902_cb_res", "bit_field": "bbb", "src_field": "sss" }]
       }]
     }

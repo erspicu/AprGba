@@ -109,6 +109,13 @@ public static class Lr35902Emitters
         reg.Register(new Lr35902IncDecHlMemEmitter("lr35902_inc_hl_mem", isInc: true));
         reg.Register(new Lr35902IncDecHlMemEmitter("lr35902_dec_hl_mem", isInc: false));
 
+        // CB-prefix (HL) variants — memory R-M-W siblings of cb_shift /
+        // cb_bit / cb_res / cb_set. Spec splits the sss=110 case out of
+        // the field-driven r-form so the memory ops only emit when needed.
+        reg.Register(new Lr35902CbShiftHlMemEmitter());
+        reg.Register(new Lr35902CbBitHlMemEmitter());
+        reg.Register(new Lr35902CbResSetHlMemEmitter());
+
         // Wave 3: 16-bit register-pair operations selected by 2-bit dd field.
         // dd: 00=BC, 01=DE, 10=HL, 11=SP per LR35902 encoding.
         reg.Register(new Lr35902WriteRrDdEmitter());
@@ -2343,5 +2350,161 @@ internal sealed class Lr35902IncDecHlMemEmitter : IMicroOpEmitter
         var n = LLVMValueRef.CreateConstInt(i8, _isInc ? 0u : 1u, false);
         var c = Lr35902Emitters.ReadCarry(ctx);
         Lr35902Emitters.StoreFlags(ctx, z, n, h, c);
+    }
+}
+
+// ---------------- CB-prefix (HL) memory variants ----------------
+
+/// <summary>
+/// CB shift/rotate on memory[HL]. Reads byte, shifts per shift_op,
+/// writes back, sets Z/N/H/C the same way as the reg variant.
+/// </summary>
+internal sealed class Lr35902CbShiftHlMemEmitter : IMicroOpEmitter
+{
+    public string OpName => "lr35902_cb_shift_hl_mem";
+
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var shiftOp = step.Raw.GetProperty("shift_op").GetString()!;
+        var i8 = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+
+        var hlPair = Lr35902Emitters.LocateRegisterPair(ctx, "HL")!;
+        var hl16 = Lr35902Emitters.ComposePairValue(ctx, hlPair, "cbhl");
+        var hl32 = ctx.Builder.BuildZExt(hl16, i32, "cbhl32");
+
+        var mem = Lr35902MemoryHelpers.CallRead8(ctx, hl32, "cb_mem_old");
+        var cIn = Lr35902Emitters.ReadCarry(ctx);
+
+        var (result, cOut) = ComputeShift(ctx, shiftOp, mem, cIn);
+        Lr35902MemoryHelpers.CallWrite8(ctx, hl32, result);
+
+        var z = ctx.Builder.BuildZExt(
+                    ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, result,
+                        LLVMValueRef.CreateConstInt(i8, 0, false), "cbhl_z_cmp"),
+                    i8, "cbhl_z");
+        var n = LLVMValueRef.CreateConstInt(i8, 0, false);
+        var h = LLVMValueRef.CreateConstInt(i8, 0, false);
+        Lr35902Emitters.StoreFlags(ctx, z, n, h, cOut);
+    }
+
+    /// <summary>Reuses the same arithmetic as the reg variant.</summary>
+    private static (LLVMValueRef result, LLVMValueRef cOut) ComputeShift(
+        EmitContext ctx, string op, LLVMValueRef src, LLVMValueRef cIn)
+    {
+        var i8 = LLVMTypeRef.Int8;
+        var one = LLVMValueRef.CreateConstInt(i8, 1, false);
+        var seven = LLVMValueRef.CreateConstInt(i8, 7, false);
+        var top = ctx.Builder.BuildAnd(
+                    ctx.Builder.BuildLShr(src, seven, "top_sh"),
+                    one, "top");
+        var bot = ctx.Builder.BuildAnd(src, one, "bot");
+
+        return op switch
+        {
+            "rlc" => (
+                ctx.Builder.BuildOr(ctx.Builder.BuildShl(src, one, "rlc_shl"), top, "rlc_or"),
+                top),
+            "rrc" => (
+                ctx.Builder.BuildOr(
+                    ctx.Builder.BuildLShr(src, one, "rrc_shr"),
+                    ctx.Builder.BuildShl(bot, seven, "rrc_top"),
+                    "rrc_or"),
+                bot),
+            "rl"  => (
+                ctx.Builder.BuildOr(ctx.Builder.BuildShl(src, one, "rl_shl"), cIn, "rl_or"),
+                top),
+            "rr"  => (
+                ctx.Builder.BuildOr(
+                    ctx.Builder.BuildLShr(src, one, "rr_shr"),
+                    ctx.Builder.BuildShl(cIn, seven, "rr_cin_top"),
+                    "rr_or"),
+                bot),
+            "sla" => (ctx.Builder.BuildShl (src, one, "sla_shl"), top),
+            "sra" => (ctx.Builder.BuildAShr(src, one, "sra_ashr"), bot),
+            "srl" => (ctx.Builder.BuildLShr(src, one, "srl_shr"), bot),
+            "swap" => (
+                ctx.Builder.BuildOr(
+                    ctx.Builder.BuildShl (src, LLVMValueRef.CreateConstInt(i8, 4, false), "swap_hi"),
+                    ctx.Builder.BuildLShr(src, LLVMValueRef.CreateConstInt(i8, 4, false), "swap_lo"),
+                    "swap_or"),
+                LLVMValueRef.CreateConstInt(i8, 0, false)),
+            _ => throw new InvalidOperationException($"cb_shift_hl_mem: unknown shift_op '{op}'.")
+        };
+    }
+}
+
+/// <summary>
+/// BIT b, (HL) — Z = !(memory[HL] >> b & 1), N=0, H=1, C unchanged.
+/// </summary>
+internal sealed class Lr35902CbBitHlMemEmitter : IMicroOpEmitter
+{
+    public string OpName => "lr35902_cb_bit_hl_mem";
+
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var bitFieldName = step.Raw.GetProperty("bit_field").GetString()!;
+        var i8 = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+
+        var hlPair = Lr35902Emitters.LocateRegisterPair(ctx, "HL")!;
+        var hl16 = Lr35902Emitters.ComposePairValue(ctx, hlPair, "bithl");
+        var hl32 = ctx.Builder.BuildZExt(hl16, i32, "bithl32");
+        var mem = Lr35902MemoryHelpers.CallRead8(ctx, hl32, "bithl_mem");
+
+        var bitField = ctx.Resolve(bitFieldName);
+        var bbb8 = ctx.Builder.BuildTrunc(bitField, i8, "bbb_t8");
+        var bit = ctx.Builder.BuildAnd(
+            ctx.Builder.BuildLShr(mem, bbb8, "bithl_shr"),
+            LLVMValueRef.CreateConstInt(i8, 1, false), "bithl_pick");
+
+        var z = ctx.Builder.BuildZExt(
+                    ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, bit,
+                        LLVMValueRef.CreateConstInt(i8, 0, false), "bithl_z_cmp"),
+                    i8, "bithl_z");
+
+        var n = LLVMValueRef.CreateConstInt(i8, 0, false);
+        var h = LLVMValueRef.CreateConstInt(i8, 1, false);
+        var c = Lr35902Emitters.ReadCarry(ctx);
+        Lr35902Emitters.StoreFlags(ctx, z, n, h, c);
+    }
+}
+
+/// <summary>
+/// RES/SET b, (HL) — memory[HL] R-M-W setting / clearing bit b.
+/// is_set distinguishes RES (false) from SET (true). Flags unchanged.
+/// </summary>
+internal sealed class Lr35902CbResSetHlMemEmitter : IMicroOpEmitter
+{
+    public string OpName => "lr35902_cb_resset_hl_mem";
+
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var bitFieldName = step.Raw.GetProperty("bit_field").GetString()!;
+        var isSet = step.Raw.GetProperty("is_set").GetBoolean();
+        var i8 = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+
+        var hlPair = Lr35902Emitters.LocateRegisterPair(ctx, "HL")!;
+        var hl16 = Lr35902Emitters.ComposePairValue(ctx, hlPair, "rshl");
+        var hl32 = ctx.Builder.BuildZExt(hl16, i32, "rshl32");
+
+        var bitField = ctx.Resolve(bitFieldName);
+        var bbb8 = ctx.Builder.BuildTrunc(bitField, i8, "bbb_t8");
+        var mask = ctx.Builder.BuildShl(LLVMValueRef.CreateConstInt(i8, 1, false), bbb8, "rshl_mask");
+
+        var prev = Lr35902MemoryHelpers.CallRead8(ctx, hl32, "rshl_prev");
+        LLVMValueRef result;
+        if (isSet)
+        {
+            result = ctx.Builder.BuildOr(prev, mask, "rshl_set");
+        }
+        else
+        {
+            var notMask = ctx.Builder.BuildXor(mask,
+                LLVMValueRef.CreateConstInt(i8, 0xFF, false), "rshl_notmask");
+            result = ctx.Builder.BuildAnd(prev, notMask, "rshl_res");
+        }
+        Lr35902MemoryHelpers.CallWrite8(ctx, hl32, result);
     }
 }

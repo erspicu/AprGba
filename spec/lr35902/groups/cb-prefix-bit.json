@@ -1,10 +1,25 @@
 {
   "name": "CbPrefix_Bit",
-  "comment": "BIT b, r — 01_bbb_sss. Z ← !(r >> b & 1); N=0, H=1, C unchanged. 64 entries (8 bit positions × 8 source regs). (HL) source costs 3 m-cycles instead of 2.",
+  "comment": "BIT b, r — 01_bbb_sss. Z ← !(r >> b & 1); N=0, H=1, C unchanged. (HL)-source variant split into its own format.",
   "formats": [
     {
+      "name": "Cb_Bit_Hl",
+      "comment": "01_bbb_110 — BIT b, (HL).",
+      "pattern": "01bbb110",
+      "fields": {
+        "bbb": "5:3"
+      },
+      "mask": "0xC7",
+      "match": "0x46",
+      "instructions": [{
+        "mnemonic": "BIT", "since": "LR35902", "manual_ref": "GB CPU §BIT b,(HL)",
+        "cycles": { "form": "3m" },
+        "steps": [{ "op": "lr35902_cb_bit_hl_mem", "bit_field": "bbb" }]
+      }]
+    },
+    {
       "name": "Cb_Bit",
-      "comment": "01_bbb_sss",
+      "comment": "01_bbb_sss general r-form. sss=110 ((HL)) shadowed by Cb_Bit_Hl above.",
       "pattern": "01bbbsss",
       "fields": {
         "bbb": "5:3",
@@ -14,7 +29,7 @@
       "match": "0x40",
       "instructions": [{
         "mnemonic": "BIT", "since": "LR35902", "manual_ref": "GB CPU §BIT b,r",
-        "cycles": { "form": "2m_or_3m" },
+        "cycles": { "form": "2m" },
         "steps": [{ "op": "lr35902_cb_bit", "bit_field": "bbb", "src_field": "sss" }]
       }]
     }
