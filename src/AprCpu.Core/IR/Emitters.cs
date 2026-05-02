@@ -62,6 +62,7 @@ public static class StandardEmitters
         MemoryEmitters.RegisterAll(reg);
         BlockTransferEmitters.RegisterAll(reg);
         StackOps.RegisterAll(reg);
+        FlagOps.RegisterAll(reg);
 
         // Control flow (generic — branch_indirect is in ArmEmitters)
         reg.Register(new IfStep());

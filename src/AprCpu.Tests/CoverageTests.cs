@@ -41,6 +41,12 @@ public class CoverageTests
             // spec, so those usages aren't visible here. Drop these
             // entries once the scanner walks every CPU spec.
             "push_pair", "pop_pair", "call", "ret",
+
+            // Step 5.2 — generic flag setters used by LR35902 SCF (set_flag)
+            // and to-be-migrated GB ALU half-carry computations.
+            // CollectOps only scans ARM7TDMI spec so these LR35902-side
+            // usages are invisible.
+            "set_flag", "update_h_add", "update_h_sub",
         };
 
         var (registered, used) = CollectOps();

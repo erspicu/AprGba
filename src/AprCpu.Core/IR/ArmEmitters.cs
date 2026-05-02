@@ -59,6 +59,13 @@ public static class ArmEmitters
 
 // ---------------- ARM-only flag updaters ----------------
 
+/// <summary>
+/// Sets the "negative" and "zero" flags in a status register based on
+/// a value. Generic across CPUs that share the N+Z pair convention
+/// (ARM CPSR.N+CPSR.Z, M68k CCR.N+CCR.Z, x86 EFLAGS.SF+EFLAGS.ZF).
+/// Spec specifies which status register and which flag names; defaults
+/// keep ARM7TDMI working unchanged ("CPSR" / "N" / "Z").
+/// </summary>
 internal sealed class UpdateNz : IMicroOpEmitter
 {
     public string OpName => "update_nz";
@@ -66,12 +73,15 @@ internal sealed class UpdateNz : IMicroOpEmitter
     {
         var valueName = step.Raw.GetProperty("value").GetString()!;
         var value = ctx.Resolve(valueName);
+        var reg   = step.Raw.TryGetProperty("reg",   out var r) ? r.GetString()! : "CPSR";
+        var nFlag = step.Raw.TryGetProperty("n_flag", out var n) ? n.GetString()! : "N";
+        var zFlag = step.Raw.TryGetProperty("z_flag", out var z) ? z.GetString()! : "Z";
 
         var nBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntSLT, value, ctx.ConstU32(0), "n_test");
         var zBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,  value, ctx.ConstU32(0), "z_test");
 
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "N", nBool);
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "Z", zBool);
+        CpsrHelpers.SetStatusFlag(ctx, reg, nFlag, nBool);
+        CpsrHelpers.SetStatusFlag(ctx, reg, zFlag, zBool);
     }
 }
 
@@ -88,13 +98,16 @@ internal sealed class UpdateNz64 : IMicroOpEmitter
     {
         var valueName = step.Raw.GetProperty("value").GetString()!;
         var value = ctx.Resolve(valueName);
+        var reg   = step.Raw.TryGetProperty("reg",   out var r) ? r.GetString()! : "CPSR";
+        var nFlag = step.Raw.TryGetProperty("n_flag", out var n) ? n.GetString()! : "N";
+        var zFlag = step.Raw.TryGetProperty("z_flag", out var z) ? z.GetString()! : "Z";
 
         var i64Zero = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 0, false);
         var nBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntSLT, value, i64Zero, "n64_test");
         var zBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,  value, i64Zero, "z64_test");
 
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "N", nBool);
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "Z", zBool);
+        CpsrHelpers.SetStatusFlag(ctx, reg, nFlag, nBool);
+        CpsrHelpers.SetStatusFlag(ctx, reg, zFlag, zBool);
     }
 }
 
@@ -105,9 +118,11 @@ internal sealed class UpdateCAdd : IMicroOpEmitter
     {
         var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
         var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var reg  = step.Raw.TryGetProperty("reg",  out var r) ? r.GetString()! : "CPSR";
+        var flag = step.Raw.TryGetProperty("flag", out var f) ? f.GetString()! : "C";
         var sum = ctx.Builder.BuildAdd(a, b, "c_add_sum");
         var cBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntULT, sum, a, "c_add_test");
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "C", cBool);
+        CpsrHelpers.SetStatusFlag(ctx, reg, flag, cBool);
     }
 }
 
@@ -118,8 +133,10 @@ internal sealed class UpdateCSub : IMicroOpEmitter
     {
         var a = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
         var b = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
+        var reg  = step.Raw.TryGetProperty("reg",  out var r) ? r.GetString()! : "CPSR";
+        var flag = step.Raw.TryGetProperty("flag", out var f) ? f.GetString()! : "C";
         var cBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, a, b, "c_sub_test");
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "C", cBool);
+        CpsrHelpers.SetStatusFlag(ctx, reg, flag, cBool);
     }
 }
 
@@ -131,11 +148,13 @@ internal sealed class UpdateVAdd : IMicroOpEmitter
         var a   = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
         var b   = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
         var res = StandardEmitters.ResolveInput(ctx, step.Raw, 2);
+        var reg  = step.Raw.TryGetProperty("reg",  out var r) ? r.GetString()! : "CPSR";
+        var flag = step.Raw.TryGetProperty("flag", out var f) ? f.GetString()! : "V";
         var aXor = ctx.Builder.BuildXor(a, res, "v_add_axor");
         var bXor = ctx.Builder.BuildXor(b, res, "v_add_bxor");
         var both = ctx.Builder.BuildAnd(aXor, bXor, "v_add_and");
         var top  = ctx.Builder.BuildLShr(both, ctx.ConstU32(31), "v_add_top");
-        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "V", top);
+        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, reg, flag, top);
     }
 }
 
@@ -147,11 +166,13 @@ internal sealed class UpdateVSub : IMicroOpEmitter
         var a   = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
         var b   = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
         var res = StandardEmitters.ResolveInput(ctx, step.Raw, 2);
+        var reg  = step.Raw.TryGetProperty("reg",  out var r) ? r.GetString()! : "CPSR";
+        var flag = step.Raw.TryGetProperty("flag", out var f) ? f.GetString()! : "V";
         var ab   = ctx.Builder.BuildXor(a, b,   "v_sub_ab");
         var ares = ctx.Builder.BuildXor(a, res, "v_sub_ares");
         var both = ctx.Builder.BuildAnd(ab, ares, "v_sub_and");
         var top  = ctx.Builder.BuildLShr(both, ctx.ConstU32(31), "v_sub_top");
-        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "V", top);
+        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, reg, flag, top);
     }
 }
 
@@ -314,7 +335,9 @@ internal sealed class UpdateCShifter : IMicroOpEmitter
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
         var v = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "C", v);
+        var reg  = step.Raw.TryGetProperty("reg",  out var r) ? r.GetString()! : "CPSR";
+        var flag = step.Raw.TryGetProperty("flag", out var f) ? f.GetString()! : "C";
+        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, reg, flag, v);
     }
 }
 
@@ -326,6 +349,8 @@ internal sealed class UpdateCAddCarry : IMicroOpEmitter
         var a   = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
         var b   = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
         var cin = StandardEmitters.ResolveInput(ctx, step.Raw, 2);
+        var reg  = step.Raw.TryGetProperty("reg",  out var r) ? r.GetString()! : "CPSR";
+        var flag = step.Raw.TryGetProperty("flag", out var f) ? f.GetString()! : "C";
 
         var i64 = LLVMTypeRef.Int64;
         var aL = ctx.Builder.BuildZExt(a,   i64, "a_l");
@@ -334,7 +359,7 @@ internal sealed class UpdateCAddCarry : IMicroOpEmitter
         var sum = ctx.Builder.BuildAdd(ctx.Builder.BuildAdd(aL, bL, "ab_l"), cL, "abc_l");
         var hi  = ctx.Builder.BuildLShr(sum, LLVMValueRef.CreateConstInt(i64, 32, false), "carry_hi");
         var hi32 = ctx.Builder.BuildTrunc(hi, LLVMTypeRef.Int32, "carry_hi_i32");
-        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, "CPSR", "C", hi32);
+        CpsrHelpers.SetStatusFlagFromI32Lsb(ctx, reg, flag, hi32);
     }
 }
 
@@ -346,10 +371,12 @@ internal sealed class UpdateCSubCarry : IMicroOpEmitter
         var a   = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
         var b   = StandardEmitters.ResolveInput(ctx, step.Raw, 1);
         var cin = StandardEmitters.ResolveInput(ctx, step.Raw, 2);
+        var reg  = step.Raw.TryGetProperty("reg",  out var r) ? r.GetString()! : "CPSR";
+        var flag = step.Raw.TryGetProperty("flag", out var f) ? f.GetString()! : "C";
         var notCin = ctx.Builder.BuildXor(cin, ctx.ConstU32(1), "not_cin");
         var bPlus  = ctx.Builder.BuildAdd(b, notCin, "b_plus");
         var cBool  = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE, a, bPlus, "c_subc_test");
-        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "C", cBool);
+        CpsrHelpers.SetStatusFlag(ctx, reg, flag, cBool);
     }
 }
 
