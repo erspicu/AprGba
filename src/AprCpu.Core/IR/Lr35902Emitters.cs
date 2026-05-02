@@ -1451,21 +1451,25 @@ internal sealed class Lr35902CallCcEmitter : IMicroOpEmitter
         var addr = Lr35902JpEmitter.NormaliseToI16(ctx, ctx.Resolve(addrName), $"{addrName}_callcc");
         var pred = Lr35902Emitters.EvalCondition(ctx, cond);
 
-        // Push current PC unconditionally to the stack location SP-2..SP-1
-        // (only effective when SP is also decremented). On condition-false
-        // we leave SP alone, so the bytes we wrote sit harmlessly above SP.
+        // Real conditional path: only push + adjust SP + jump when the
+        // condition holds. The previous "push unconditionally to SP-2..SP-1"
+        // trick was wrong because those bytes corrupt live data above SP
+        // (Blargg 07 caught this — diverged at WRAM[SP-2] mid-stack).
+        var thenBlock = ctx.Function.AppendBasicBlock("callcc_taken");
+        var endBlock  = ctx.Function.AppendBasicBlock("callcc_end");
+
+        ctx.Builder.BuildCondBr(pred, thenBlock, endBlock);
+
+        ctx.Builder.PositionAtEnd(thenBlock);
         var (pcPtr, _) = Lr35902Emitters.PcPointer(ctx);
         var curPc = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "pc_callcc_cur");
         var sp = Lr35902RetEmitter.LoadSp(ctx, "callcc_sp");
         Lr35902RetEmitter.WriteWordAtSpMinus2(ctx, sp, curPc, "callcc_push");
+        Lr35902CallEmitter.DecrementSp(ctx, 2);
+        ctx.Builder.BuildStore(addr, pcPtr);
+        ctx.Builder.BuildBr(endBlock);
 
-        var chosen = ctx.Builder.BuildSelect(pred, addr, curPc, $"pc_callcc_{cond.ToLowerInvariant()}");
-        ctx.Builder.BuildStore(chosen, pcPtr);
-
-        var newSp = ctx.Builder.BuildSub(sp, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int16, 2, false), "sp_callcc_dec");
-        var spChosen = ctx.Builder.BuildSelect(pred, newSp, sp, "sp_callcc_chosen");
-        var spPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SP");
-        ctx.Builder.BuildStore(spChosen, spPtr);
+        ctx.Builder.PositionAtEnd(endBlock);
     }
 }
 

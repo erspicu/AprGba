@@ -17,7 +17,7 @@
     },
     {
       "name": "Stop",
-      "comment": "0x10 0x00 — STOP. Two bytes; second byte is normally 0x00 and ignored.",
+      "comment": "0x10 — STOP. Officially a 2-byte instruction (0x10 0x00) but DMG ignores the trailing byte and PC advances by 1, matching LegacyCpu / AprGBemu reference behaviour. Treating STOP as halting until IRQ is the conservative correct semantic for non-CGB.",
       "pattern": "00010000",
       "fields": {},
       "mask": "0xFF",
@@ -25,10 +25,7 @@
       "instructions": [{
         "mnemonic": "STOP", "since": "LR35902", "manual_ref": "GB CPU §STOP",
         "cycles": { "form": "1m" },
-        "steps": [
-          { "op": "read_imm8", "out": "_unused" },
-          { "op": "stop" }
-        ]
+        "steps": []
       }]
     },
     {

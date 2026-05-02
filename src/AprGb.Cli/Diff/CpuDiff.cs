@@ -40,6 +40,11 @@ public static class CpuDiff
         var legacy = new LegacyCpu(); legacy.Reset(busL);
         var json   = new JsonCpu();   json.Reset(busJ);
 
+        // Periodic WRAM check — catches stores that silently diverge
+        // long before any register difference shows up. Cheap memcmp of
+        // the 8 KB WRAM range. Reports the FIRST byte that differs.
+        int wramCheckInterval = 1;     // every step — costly but precise
+
         for (long i = 0; i < maxSteps; i++)
         {
             // Snapshot the about-to-execute opcode at each side's current PC.
@@ -59,6 +64,7 @@ public static class CpuDiff
             var diff = FirstDifference(postL, postJ);
             if (diff is not null)
             {
+                var memDiff = FindFirstWramDiff(busL, busJ);
                 return new DivergenceReport(
                     Step: i,
                     Legacy: postL,
@@ -67,6 +73,41 @@ public static class CpuDiff
                     PreStepPc: preL.PC,
                     PreStepOpcode: preL.Opcode);
             }
+
+            if (i % wramCheckInterval == 0)
+            {
+                var memDiff = FindFirstWramDiff(busL, busJ);
+                if (memDiff is not null)
+                {
+                    return new DivergenceReport(
+                        Step: i,
+                        Legacy: postL,
+                        Json:   postJ,
+                        FirstDifferingField: $"WRAM[0x{memDiff.Value.Addr:X4}] (legacy={memDiff.Value.LegacyByte:X2}, json={memDiff.Value.JsonByte:X2})",
+                        PreStepPc: preL.PC,
+                        PreStepOpcode: preL.Opcode);
+                }
+            }
+        }
+        return null;
+    }
+
+    private static (ushort Addr, byte LegacyByte, byte JsonByte)? FindFirstWramDiff(GbMemoryBus a, GbMemoryBus b)
+    {
+        // WRAM lives at 0xC000-0xDFFF (Wram[0..0x2000)). Stack also lives
+        // here typically (high WRAM around 0xDFxx). Hardware regs are
+        // separate so this targets exactly the bytes a CPU bug would
+        // corrupt.
+        for (int i = 0; i < a.Wram.Length; i++)
+        {
+            if (a.Wram[i] != b.Wram[i])
+                return ((ushort)(0xC000 + i), a.Wram[i], b.Wram[i]);
+        }
+        // Also check HRAM (FF80-FFFE) since stack often spills there.
+        for (int i = 0; i < a.Hram.Length; i++)
+        {
+            if (a.Hram[i] != b.Hram[i])
+                return ((ushort)(0xFF80 + i), a.Hram[i], b.Hram[i]);
         }
         return null;
     }
