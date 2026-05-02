@@ -25,6 +25,11 @@ if (opts.DiffMaxSteps > 0 && opts.RomPath is not null)
     return 1;
 }
 
+if (opts.Bench && opts.RomPath is not null)
+{
+    return RunBench(opts);
+}
+
 Console.WriteLine($"apr-gb — Game Boy harness (DMG only; legacy + json-llvm backends)");
 Console.WriteLine($"  ROM:        {opts.RomPath}");
 Console.WriteLine($"  backend:    {opts.Backend}");
@@ -84,6 +89,7 @@ static Options? ParseArgs(string[] args)
         else if (arg.StartsWith("--screenshot=")) opts.ScreenshotPath = arg.Substring("--screenshot=".Length);
         else if (arg == "--info")                 opts.InfoOnly = true;
         else if (arg.StartsWith("--diff="))       opts.DiffMaxSteps = long.Parse(arg.Substring("--diff=".Length));
+        else if (arg == "--bench")                opts.Bench = true;
         else                                      return null;
     }
     return opts.RomPath is null ? null : opts;
@@ -98,6 +104,58 @@ static void PrintUsage()
     Console.Error.WriteLine("Defaults: --cpu=legacy --cycles=70224 (one frame).");
 }
 
+static int RunBench(Options opts)
+{
+    Console.WriteLine($"apr-gb — bench mode: legacy vs json-llvm");
+    Console.WriteLine($"  ROM:        {opts.RomPath}");
+    Console.WriteLine($"  cycles:     {opts.Cycles:N0}");
+    Console.WriteLine();
+
+    var rom = RomLoader.Load(opts.RomPath!);
+
+    // Construct + Reset + warm-up step for each, then time the timed
+    // window separately. Construction cost (LLVM module compile + JIT
+    // engine creation for JsonCpu) is reported but excluded from MIPS.
+    var (legSetupMs, legacy, busL) = SetupBackend(rom, () => new LegacyCpu());
+    var (jitSetupMs, json,   busJ) = SetupBackend(rom, () => new JsonCpu());
+
+    Console.WriteLine($"  setup time: legacy={legSetupMs:F0} ms, json-llvm={jitSetupMs:F0} ms (incl. spec compile + MCJIT)");
+    Console.WriteLine();
+
+    var legResult = TimeRun("legacy",    legacy, opts.Cycles);
+    var jitResult = TimeRun("json-llvm", json,   opts.Cycles);
+
+    Console.WriteLine();
+    var ratio = jitResult.Mips / legResult.Mips;
+    var label = ratio >= 1.0 ? $"{ratio:F2}x faster" : $"{1.0 / ratio:F2}x slower";
+    Console.WriteLine($"  json-llvm vs legacy: {label} ({jitResult.Mips:F2} / {legResult.Mips:F2})");
+    return 0;
+}
+
+static (double SetupMs, ICpuBackend Cpu, GbMemoryBus Bus) SetupBackend(byte[] rom, Func<ICpuBackend> ctor)
+{
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var bus = new GbMemoryBus(); bus.LoadRom(rom);
+    var cpu = ctor();
+    cpu.Reset(bus);
+    sw.Stop();
+    return (sw.Elapsed.TotalMilliseconds, cpu, bus);
+}
+
+static BenchResult TimeRun(string label, ICpuBackend cpu, long targetCycles)
+{
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    cpu.RunCycles(targetCycles);
+    sw.Stop();
+    var seconds = sw.Elapsed.TotalSeconds;
+    var instr = cpu.InstructionsExecuted;
+    var mips = (instr / 1_000_000.0) / seconds;
+    Console.WriteLine($"  {label,-9}: {seconds,7:F3} s, {instr,15:N0} instr → {mips,8:F2} MIPS");
+    return new BenchResult(seconds, instr, mips);
+}
+
+internal readonly record struct BenchResult(double WallSeconds, long Instructions, double Mips);
+
 internal sealed class Options
 {
     public string?  RomPath;
@@ -106,4 +164,5 @@ internal sealed class Options
     public string?  ScreenshotPath;
     public bool     InfoOnly;
     public long     DiffMaxSteps;        // when > 0, run lockstep diff harness instead
+    public bool     Bench;               // when true, run both backends and report MIPS
 }

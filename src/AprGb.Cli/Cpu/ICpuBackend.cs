@@ -41,6 +41,14 @@ public interface ICpuBackend
 
     /// <summary>True iff the program is in HALT/STOP (no further progress without IRQ).</summary>
     bool IsHalted { get; }
+
+    /// <summary>
+    /// Total number of CPU instructions executed since Reset. Used by the
+    /// CLI's --bench mode to compute MIPS (instructions / wall-clock seconds).
+    /// HALT no-op spins do NOT count as instructions; only real opcode
+    /// dispatches do.
+    /// </summary>
+    long InstructionsExecuted { get; }
 }
 
 public enum GbReg8  { A, F, B, C, D, E, H, L }
