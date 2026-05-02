@@ -30,6 +30,7 @@ internal static class FlagOps
     public static void RegisterAll(EmitterRegistry reg)
     {
         reg.Register(new SetFlag());
+        reg.Register(new ToggleFlag());
         reg.Register(new UpdateHAdd());
         reg.Register(new UpdateHSub());
     }
@@ -44,6 +45,29 @@ internal static class FlagOps
             var v    = step.Raw.GetProperty("value").GetInt32();
             var b    = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, (uint)(v & 1), false);
             CpsrHelpers.SetStatusFlag(ctx, reg, flag, b);
+        }
+    }
+
+    /// <summary>
+    /// toggle_flag { reg, flag } — read the named flag bit, XOR with 1,
+    /// write it back. Used by LR35902 CCF (toggle carry); maps to
+    /// x86 CMC and any "flip flag" instruction in other ISAs.
+    /// </summary>
+    private sealed class ToggleFlag : IMicroOpEmitter
+    {
+        public string OpName => "toggle_flag";
+        public void Emit(EmitContext ctx, MicroOpStep step)
+        {
+            var reg  = step.Raw.GetProperty("reg").GetString()!;
+            var flag = step.Raw.GetProperty("flag").GetString()!;
+            // Read flag as i32 0/1, XOR with 1, write back as i1.
+            var oldBit = CpsrHelpers.ReadStatusFlag(ctx, reg, flag);
+            var newBit = ctx.Builder.BuildXor(oldBit,
+                            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 1, false),
+                            $"toggle_{flag.ToLowerInvariant()}");
+            // Truncate to i1 for SetStatusFlag.
+            var newI1 = ctx.Builder.BuildTrunc(newBit, LLVMTypeRef.Int1, $"toggle_{flag.ToLowerInvariant()}_b");
+            CpsrHelpers.SetStatusFlag(ctx, reg, flag, newI1);
         }
     }
 

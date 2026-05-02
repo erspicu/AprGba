@@ -115,7 +115,7 @@
     },
     {
       "name": "Cpl",
-      "comment": "0x2F — CPL. A ← ~A; sets N=H=1, Z/C unchanged.",
+      "comment": "0x2F — CPL. A ← ~A; sets N=H=1, Z/C unchanged. Lowered to generic ops: read A → mvn → write A → 2× set_flag.",
       "pattern": "00101111",
       "fields": {},
       "mask": "0xFF",
@@ -123,7 +123,13 @@
       "instructions": [{
         "mnemonic": "CPL", "since": "LR35902", "manual_ref": "GB CPU §CPL",
         "cycles": { "form": "1m" },
-        "steps": [{ "op": "lr35902_cpl" }]
+        "steps": [
+          { "op": "read_reg_named",  "name": "A", "out": "a" },
+          { "op": "mvn",             "in": ["a"], "out": "a_inv" },
+          { "op": "write_reg_named", "name": "A", "value": "a_inv" },
+          { "op": "set_flag",        "reg": "F", "flag": "N", "value": 1 },
+          { "op": "set_flag",        "reg": "F", "flag": "H", "value": 1 }
+        ]
       }]
     },
     {
@@ -145,7 +151,7 @@
     },
     {
       "name": "Ccf",
-      "comment": "0x3F — CCF. C←!C, N=H=0, Z unchanged.",
+      "comment": "0x3F — CCF. C←!C, N=H=0, Z unchanged. Lowered to generic ops: toggle_flag(C) + 2× set_flag.",
       "pattern": "00111111",
       "fields": {},
       "mask": "0xFF",
@@ -153,7 +159,11 @@
       "instructions": [{
         "mnemonic": "CCF", "since": "LR35902", "manual_ref": "GB CPU §CCF",
         "cycles": { "form": "1m" },
-        "steps": [{ "op": "lr35902_ccf" }]
+        "steps": [
+          { "op": "toggle_flag", "reg": "F", "flag": "C" },
+          { "op": "set_flag",    "reg": "F", "flag": "N", "value": 0 },
+          { "op": "set_flag",    "reg": "F", "flag": "H", "value": 0 }
+        ]
       }]
     }
   ]

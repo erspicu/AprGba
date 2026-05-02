@@ -61,6 +61,11 @@ public class CoverageTests
             // remaining 64 CB-prefix opcodes plus the four
             // non-CB A-rotates (RLCA/RRCA/RLA/RRA).
             "bit_test", "bit_set", "bit_clear", "shift",
+
+            // Step 5.7.A — generic flag-twiddle for LR35902 CCF
+            // (toggle C). ARM has no direct equivalent so this stays
+            // unused on the ARM7TDMI scan path.
+            "toggle_flag",
         };
 
         var (registered, used) = CollectOps();

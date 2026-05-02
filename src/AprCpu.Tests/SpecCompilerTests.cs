@@ -178,15 +178,18 @@ public class SpecCompilerTests
         Assert.Contains("define void @Execute_Main_Ccf_CCF", ir);
         Assert.Contains("define void @Execute_Main_Cpl_CPL", ir);
 
-        // CPL must read A, invert it, and write it back. The bit pattern
-        // 0xFF appears as the XOR mask for the inversion.
+        // CPL must read A, invert it, and write it back. After Step 5.7.A
+        // migration this is a generic chain: read_reg_named(A) → mvn (i8
+        // XOR with all-ones) → write_reg_named(A) → 2× set_flag(N=1, H=1).
+        // We assert structurally rather than by label to keep the test
+        // robust against future label-name changes inside the emitters.
         var cplFnIdx = ir.IndexOf("@Execute_Main_Cpl_CPL", StringComparison.Ordinal);
         Assert.True(cplFnIdx >= 0);
         var nextDefine = ir.IndexOf("\ndefine ", cplFnIdx + 1, StringComparison.Ordinal);
         var cplBody = nextDefine > 0 ? ir.Substring(cplFnIdx, nextDefine - cplFnIdx) : ir.Substring(cplFnIdx);
-        Assert.Contains("xor i8", cplBody);     // A = ~A
-        Assert.Contains("a_old",  cplBody);     // load A first
-        Assert.Contains("f_new",  cplBody);     // F write
+        Assert.Contains("xor i8", cplBody);     // A = ~A (i8 XOR with -1 / all-ones)
+        Assert.Contains("load i8", cplBody);    // A and F both get loaded as i8
+        Assert.Contains("store i8", cplBody);   // A and F both get stored as i8
     }
 
     /// <summary>
