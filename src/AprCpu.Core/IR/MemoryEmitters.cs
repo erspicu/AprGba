@@ -49,6 +49,25 @@ public static class MemoryEmitters
         public const string Write32 = "memory_write_32";
     }
 
+    // ---------------- Public byte-level helpers (used by StackOps etc) ----------------
+
+    public static LLVMValueRef CallRead8(EmitContext ctx, LLVMValueRef addrI32, string outLabel)
+    {
+        var (slot, fnType, ptrType) = GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, ExternFunctionNames.Read8, LLVMTypeRef.Int8, LLVMTypeRef.Int32);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, $"{outLabel}_fn");
+        return ctx.Builder.BuildCall2(fnType, fn, new[] { addrI32 }, outLabel);
+    }
+
+    public static void CallWrite8(EmitContext ctx, LLVMValueRef addrI32, LLVMValueRef valueI8)
+    {
+        var (slot, fnType, ptrType) = GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, ExternFunctionNames.Write8,
+            ctx.Module.Context.VoidType, LLVMTypeRef.Int32, LLVMTypeRef.Int8);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, "w8_fn");
+        ctx.Builder.BuildCall2(fnType, fn, new[] { addrI32, valueI8 }, "");
+    }
+
     /// <summary>
     /// Look up (or declare on first use) the global pointer slot holding
     /// the address of an external memory-bus function. The host binds

@@ -59,7 +59,18 @@ public sealed record CpuVariant(
 public sealed record RegisterFile(
     GeneralPurposeRegisters GeneralPurpose,
     IReadOnlyList<StatusRegister> Status,
-    IReadOnlyList<RegisterPair> RegisterPairs);
+    IReadOnlyList<RegisterPair> RegisterPairs,
+    StackPointerRef? StackPointer = null);
+
+/// <summary>
+/// Where the stack pointer lives. <see cref="GprIndex"/> for arches
+/// where SP is one of the GPRs (ARM R13, MIPS $sp); <see cref="StatusName"/>
+/// for arches where SP is a separate addressable register (LR35902 SP,
+/// 6502 S, M68k USP/SSP). Width comes from the underlying register.
+/// Used by generic <c>push</c>/<c>pop</c>/<c>call</c>/<c>ret</c>
+/// emitters so they don't need a per-arch C# implementation.
+/// </summary>
+public sealed record StackPointerRef(int? GprIndex, string? StatusName);
 
 public sealed record GeneralPurposeRegisters(
     int Count,

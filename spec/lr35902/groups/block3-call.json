@@ -16,7 +16,7 @@
         "cycles": { "form": "6m" },
         "steps": [
           { "op": "read_imm16", "out": "target" },
-          { "op": "lr35902_call", "address": "target" }
+          { "op": "call",       "target":  "target" }
         ]
       }]
     },

@@ -28,6 +28,9 @@
       "aliases":    { "SP": "R13", "LR": "R14", "PC": "R15" },
       "pc_index":   15
     },
+
+    "stack_pointer": { "gpr_index": 13 },
+
     "status": [
       {
         "name":       "CPSR",

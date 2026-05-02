@@ -1,6 +1,6 @@
 {
   "name": "Block3_PushPop",
-  "comment": "Stack ops on register pairs: PUSH rr (0xC5/D5/E5/F5) and POP rr (0xC1/D1/E1/F1). qq selects BC/DE/HL/AF. POP AF must mask the low nibble of F to 0 since those bits are unused/zero on LR35902.",
+  "comment": "Stack ops on register pairs: PUSH rr (0xC5/D5/E5/F5) and POP rr (0xC1/D1/E1/F1). qq selects BC/DE/HL/AF. POP AF must mask the low nibble of F to 0 since those bits are unused/zero on LR35902. Each opcode is split into a selector variant so the generic push_pair / pop_pair ops can be used with a literal pair name (no runtime register-pair lookup needed).",
   "formats": [
     {
       "name": "Push_Rr",
@@ -11,12 +11,32 @@
       },
       "mask": "0xCF",
       "match": "0xC5",
-      "instructions": [{
-        "mnemonic": "PUSH", "since": "LR35902", "manual_ref": "GB CPU §PUSH rr",
-        "writes_memory": ["pair_lo", "pair_hi"],
-        "cycles": { "form": "4m" },
-        "steps": [{ "op": "lr35902_push_qq", "field": "qq" }]
-      }]
+      "instructions": [
+        {
+          "selector": { "field": "qq", "value": "00" },
+          "mnemonic": "PUSH", "since": "LR35902", "manual_ref": "GB CPU §PUSH rr",
+          "cycles": { "form": "4m" },
+          "steps": [{ "op": "push_pair", "name": "BC" }]
+        },
+        {
+          "selector": { "field": "qq", "value": "01" },
+          "mnemonic": "PUSH", "since": "LR35902", "manual_ref": "GB CPU §PUSH rr",
+          "cycles": { "form": "4m" },
+          "steps": [{ "op": "push_pair", "name": "DE" }]
+        },
+        {
+          "selector": { "field": "qq", "value": "10" },
+          "mnemonic": "PUSH", "since": "LR35902", "manual_ref": "GB CPU §PUSH rr",
+          "cycles": { "form": "4m" },
+          "steps": [{ "op": "push_pair", "name": "HL" }]
+        },
+        {
+          "selector": { "field": "qq", "value": "11" },
+          "mnemonic": "PUSH", "since": "LR35902", "manual_ref": "GB CPU §PUSH rr",
+          "cycles": { "form": "4m" },
+          "steps": [{ "op": "push_pair", "name": "AF" }]
+        }
+      ]
     },
     {
       "name": "Pop_Rr",
@@ -27,11 +47,32 @@
       },
       "mask": "0xCF",
       "match": "0xC1",
-      "instructions": [{
-        "mnemonic": "POP", "since": "LR35902", "manual_ref": "GB CPU §POP rr",
-        "cycles": { "form": "3m" },
-        "steps": [{ "op": "lr35902_pop_qq", "field": "qq" }]
-      }]
+      "instructions": [
+        {
+          "selector": { "field": "qq", "value": "00" },
+          "mnemonic": "POP", "since": "LR35902", "manual_ref": "GB CPU §POP rr",
+          "cycles": { "form": "3m" },
+          "steps": [{ "op": "pop_pair", "name": "BC" }]
+        },
+        {
+          "selector": { "field": "qq", "value": "01" },
+          "mnemonic": "POP", "since": "LR35902", "manual_ref": "GB CPU §POP rr",
+          "cycles": { "form": "3m" },
+          "steps": [{ "op": "pop_pair", "name": "DE" }]
+        },
+        {
+          "selector": { "field": "qq", "value": "10" },
+          "mnemonic": "POP", "since": "LR35902", "manual_ref": "GB CPU §POP rr",
+          "cycles": { "form": "3m" },
+          "steps": [{ "op": "pop_pair", "name": "HL" }]
+        },
+        {
+          "selector": { "field": "qq", "value": "11" },
+          "mnemonic": "POP", "since": "LR35902", "manual_ref": "GB CPU §POP rr (AF: low nibble of F forced 0)",
+          "cycles": { "form": "3m" },
+          "steps": [{ "op": "pop_pair", "name": "AF", "low_clear_mask": 65520 }]
+        }
+      ]
     }
   ]
 }
