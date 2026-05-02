@@ -44,9 +44,59 @@ public sealed class GbaMemoryBus : IMemoryBus
     /// <summary>Phase 5: 4-channel DMA controller. Lazy-initialised.</summary>
     public GbaDmaController Dma { get; }
 
+    /// <summary>
+    /// PC of the currently executing instruction (set by the executor via
+    /// <see cref="NotifyInstructionFetch"/>). Used by BIOS-region reads
+    /// to decide whether to return real BIOS bytes (PC inside BIOS) or
+    /// the open-bus sticky value (PC outside BIOS).
+    /// </summary>
+    public uint ExecutingPc { get; private set; }
+
+    /// <summary>
+    /// GBATEK "BIOS read protection": the GBA returns this 32-bit value
+    /// whenever a non-BIOS-resident program reads from the BIOS region.
+    /// Updated on every instruction fetch from the BIOS region. Real
+    /// hardware initialises this to whatever the BIOS last fetched
+    /// before jumping to ROM (typically <c>0xE129F000</c> — the
+    /// <c>MSR CPSR_fc, R0</c> right before the BIOS hand-off).
+    /// </summary>
+    public uint LastBiosFetchWord { get; private set; }
+
     public GbaMemoryBus()
     {
         Dma = new GbaDmaController(this);
+    }
+
+    /// <summary>
+    /// CpuExecutor calls this after every successful fetch. Updates the
+    /// "currently executing PC" so subsequent data reads in this Step
+    /// know where the instruction lives, and snapshots the BIOS opcode
+    /// at <c>PC + 2×instrSize</c> as the open-bus sticky — matching
+    /// real ARM7TDMI's 3-stage pipeline (by the time PC executes, the
+    /// fetch stage is already 2 instructions ahead). GBATEK confirms
+    /// the sticky value is the opcode at <c>[LR-4+8]</c> for SWIs and
+    /// <c>[0DCh+8]</c> after startup, i.e. PC of last EXECUTE plus the
+    /// pipeline depth in bytes.
+    /// </summary>
+    public void NotifyInstructionFetch(uint pc, uint instructionWord, uint instrSizeBytes)
+    {
+        ExecutingPc = pc;
+        if (pc >= GbaMemoryMap.BiosBase + GbaMemoryMap.BiosSize) return;
+
+        // Sticky = BIOS[pc + 2 × instrSize]. ARM = +8, Thumb = +4.
+        uint prefetchAddr = pc + 2 * instrSizeBytes;
+        if (prefetchAddr + 4 <= GbaMemoryMap.BiosSize)
+        {
+            LastBiosFetchWord = BinaryPrimitives.ReadUInt32LittleEndian(
+                Bios.AsSpan((int)prefetchAddr, 4));
+        }
+        else
+        {
+            // Fall back to the actual fetched word if prefetch goes off
+            // the end of the BIOS region (shouldn't happen for a real
+            // BIOS image, but be defensive).
+            LastBiosFetchWord = instructionWord;
+        }
     }
 
     /// <summary>
@@ -135,7 +185,7 @@ public sealed class GbaMemoryBus : IMemoryBus
         var (region, off) = Locate(addr);
         return region switch
         {
-            Region.Bios    => Bios[off],
+            Region.Bios    => ReadBiosByte(addr, off),
             Region.Ewram   => Ewram[off],
             Region.Iwram   => Iwram[off],
             Region.Io      => ReadIoByte((uint)off),
@@ -152,7 +202,7 @@ public sealed class GbaMemoryBus : IMemoryBus
         var (region, off) = Locate(addr);
         return region switch
         {
-            Region.Bios    => BinaryPrimitives.ReadUInt16LittleEndian(Bios.AsSpan(off, 2)),
+            Region.Bios    => ReadBiosHalfword(addr, off),
             Region.Ewram   => BinaryPrimitives.ReadUInt16LittleEndian(Ewram.AsSpan(off, 2)),
             Region.Iwram   => BinaryPrimitives.ReadUInt16LittleEndian(Iwram.AsSpan(off, 2)),
             Region.Io      => ReadIoHalfword((uint)off),
@@ -171,7 +221,7 @@ public sealed class GbaMemoryBus : IMemoryBus
         var (region, off) = Locate(addr);
         return region switch
         {
-            Region.Bios    => BinaryPrimitives.ReadUInt32LittleEndian(Bios.AsSpan(off, 4)),
+            Region.Bios    => ReadBiosWord(addr, off),
             Region.Ewram   => BinaryPrimitives.ReadUInt32LittleEndian(Ewram.AsSpan(off, 4)),
             Region.Iwram   => BinaryPrimitives.ReadUInt32LittleEndian(Iwram.AsSpan(off, 4)),
             Region.Io      => ReadIoWord((uint)off),
@@ -183,6 +233,40 @@ public sealed class GbaMemoryBus : IMemoryBus
                                   : 0u,
             _              => 0u,
         };
+    }
+
+    // ---------------- BIOS open-bus protection ----------------
+    //
+    // GBATEK "BIOS Memory" section: reads from 0x00000000..0x00003FFF
+    // succeed only when the CPU's PC is also inside that range — i.e.
+    // when the program currently running is the BIOS itself. From any
+    // other PC, reads return the most recently fetched BIOS opcode (a
+    // sticky 32-bit value). Slicing for byte / halfword reads is at
+    // the address's byte alignment within the 32-bit sticky value.
+    //
+    // Tests that rely on this (jsmolka's bios.gba t001 et seq) check
+    // [0]=0xE129F000 right after BIOS hand-off — the MSR opcode at the
+    // tail of the BIOS startup path. Without the sticky we'd return the
+    // raw byte at BIOS[0] (= the first BIOS instruction byte) and fail.
+
+    private bool PcInBios => ExecutingPc < GbaMemoryMap.BiosBase + GbaMemoryMap.BiosSize;
+
+    private byte ReadBiosByte(uint addr, int off)
+    {
+        if (PcInBios) return Bios[off];
+        return (byte)((LastBiosFetchWord >> ((int)(addr & 3) * 8)) & 0xFF);
+    }
+
+    private ushort ReadBiosHalfword(uint addr, int off)
+    {
+        if (PcInBios) return BinaryPrimitives.ReadUInt16LittleEndian(Bios.AsSpan(off, 2));
+        return (ushort)((LastBiosFetchWord >> ((int)(addr & 2) * 8)) & 0xFFFF);
+    }
+
+    private uint ReadBiosWord(uint addr, int off)
+    {
+        if (PcInBios) return BinaryPrimitives.ReadUInt32LittleEndian(Bios.AsSpan(off, 4));
+        return LastBiosFetchWord;
     }
 
     public void WriteByte(uint addr, byte value)

@@ -198,6 +198,12 @@ public sealed unsafe class CpuExecutor
             _ => throw new NotSupportedException($"instruction size {mode.InstrSizeBytes} unsupported.")
         };
 
+        // Tell the bus what we just fetched. GBA bus uses this to update
+        // the BIOS open-bus sticky value and to know where the CPU is
+        // currently executing (so BIOS-region data reads from outside
+        // BIOS can return the sticky instead of the real bytes).
+        _bus.NotifyInstructionFetch(pc, instructionWord, mode.InstrSizeBytes);
+
         var decoded = mode.Decoder.Decode(instructionWord)
             ?? throw new InvalidOperationException(
                 $"Undecodable instruction 0x{instructionWord:X8} at PC=0x{pc:X8} ({mode.Set.Name}).");
