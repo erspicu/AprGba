@@ -1,6 +1,6 @@
 {
   "name": "CbPrefix_Bit",
-  "comment": "BIT b, r — 01_bbb_sss. Z ← !(r >> b & 1); N=0, H=1, C unchanged. (HL)-source variant split into its own format.",
+  "comment": "BIT b, r — 01_bbb_sss. Z ← !(r >> b & 1); N=0, H=1, C unchanged. Lowered to generic ops: read source via lr35902_read_r8 (or HL→load_byte for the (HL) variant) → bit_test (writes Z) → set_flag for N=0 + H=1.",
   "formats": [
     {
       "name": "Cb_Bit_Hl",
@@ -14,7 +14,13 @@
       "instructions": [{
         "mnemonic": "BIT", "since": "LR35902", "manual_ref": "GB CPU §BIT b,(HL)",
         "cycles": { "form": "3m" },
-        "steps": [{ "op": "lr35902_cb_bit_hl_mem", "bit_field": "bbb" }]
+        "steps": [
+          { "op": "read_reg_pair_named", "name": "HL",   "out": "addr" },
+          { "op": "load_byte",           "address": "addr", "out": "v" },
+          { "op": "bit_test",            "in": "v", "bit_field": "bbb", "reg": "F", "flag": "Z" },
+          { "op": "set_flag",            "reg": "F", "flag": "N", "value": 0 },
+          { "op": "set_flag",            "reg": "F", "flag": "H", "value": 1 }
+        ]
       }]
     },
     {
@@ -30,7 +36,12 @@
       "instructions": [{
         "mnemonic": "BIT", "since": "LR35902", "manual_ref": "GB CPU §BIT b,r",
         "cycles": { "form": "2m" },
-        "steps": [{ "op": "lr35902_cb_bit", "bit_field": "bbb", "src_field": "sss" }]
+        "steps": [
+          { "op": "lr35902_read_r8", "field": "sss", "out": "v" },
+          { "op": "bit_test",        "in": "v", "bit_field": "bbb", "reg": "F", "flag": "Z" },
+          { "op": "set_flag",        "reg": "F", "flag": "N", "value": 0 },
+          { "op": "set_flag",        "reg": "F", "flag": "H", "value": 1 }
+        ]
       }]
     }
   ]
