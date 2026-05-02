@@ -27,7 +27,22 @@ public sealed unsafe class CpuExecutor
     private readonly HostRuntime _rt;
     private readonly IMemoryBus  _bus;
     private readonly byte[]      _state;
-    private readonly Dictionary<string, IntPtr> _fnPtrCache = new(StringComparer.Ordinal);
+
+    // Phase 7 F.x: keyed by InstructionDef reference (object identity)
+    // rather than by formatted string name — skips the per-instruction
+    // string interpolation (`$"Execute_{setName}_{format.Name}_{disambig}"`)
+    // and dictionary string-hash on the hot dispatch path. The string is
+    // only built on cache miss, which happens once per (opcode × selector)
+    // combo at first encounter.
+    //
+    // ReferenceEqualityComparer ensures the key compares by identity,
+    // not by (potentially overridden) Equals — InstructionDef is a record
+    // with structural Equals, so without this we'd be doing a deep field
+    // compare per lookup. Identity is correct because the spec loader
+    // hands out the SAME InstructionDef instance for each opcode and the
+    // decoder returns it via `decoded.Instruction`.
+    private readonly Dictionary<JsonSpec.InstructionDef, IntPtr> _fnPtrByDef
+        = new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
 
     private readonly int   _pcRegIndex;
     private readonly ModeInfo _defaultMode;
@@ -261,6 +276,18 @@ public sealed unsafe class CpuExecutor
 
     private IntPtr ResolveFunctionPointer(DecodedInstruction decoded, string setName)
     {
+        // Hot path: identity-keyed cache hit, zero allocation.
+        if (_fnPtrByDef.TryGetValue(decoded.Instruction, out var cached)) return cached;
+
+        // Cold path (first call per opcode×selector): resolve the IR
+        // function name via spec metadata + disambiguation, then cache.
+        var p = ResolveFunctionPointerSlow(decoded, setName);
+        _fnPtrByDef[decoded.Instruction] = p;
+        return p;
+    }
+
+    private IntPtr ResolveFunctionPointerSlow(DecodedInstruction decoded, string setName)
+    {
         var format = decoded.Format;
         var def    = decoded.Instruction;
 
@@ -273,10 +300,6 @@ public sealed unsafe class CpuExecutor
             ? $"{def.Mnemonic}_{def.Selector.Value}"
             : def.Mnemonic;
         var fnName = $"Execute_{setName}_{format.Name}_{disambig}";
-
-        if (_fnPtrCache.TryGetValue(fnName, out var p)) return p;
-        p = _rt.GetFunctionPointer(fnName);
-        _fnPtrCache[fnName] = p;
-        return p;
+        return _rt.GetFunctionPointer(fnName);
     }
 }
