@@ -306,10 +306,51 @@ public sealed unsafe class JsonCpu : ICpuBackend
         var key = BuildFunctionKey(decoder.Name, decoded);
         var fnPtr = ResolveFunctionPointer(key);
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
+
+        // For conditional control-flow ops, snapshot the "would-be
+        // fall-through PC" so we can detect taken-branch and charge the
+        // extra cycles LegacyCpu adds in its switch (see Step.cs).
+        ushort fallThroughPc = ComputeFallThroughPc(opcode, pc);
+
         fixed (byte* p = _state)
             fn(p, instructionWord);
 
-        return CyclesFor(decoded.Instruction);
+        long cycles = CyclesFor(decoded.Instruction);
+        cycles += ConditionalBranchExtraCycles(opcode, fallThroughPc, ReadI16(_pcOff));
+        return cycles;
+    }
+
+    /// <summary>
+    /// For conditional control-flow opcodes, return the PC the CPU would
+    /// have if the branch were NOT taken (i.e. fall-through). Returns
+    /// 0xFFFF for non-conditional opcodes (a sentinel never produced by
+    /// fall-through which lives in 0x0000-0xFFFE).
+    /// </summary>
+    private static ushort ComputeFallThroughPc(byte opcode, ushort prePc) => opcode switch
+    {
+        0x20 or 0x28 or 0x30 or 0x38 => (ushort)(prePc + 2),                  // JR cc, e8
+        0xC0 or 0xC8 or 0xD0 or 0xD8 => (ushort)(prePc + 1),                  // RET cc
+        0xC2 or 0xCA or 0xD2 or 0xDA => (ushort)(prePc + 3),                  // JP cc, nn
+        0xC4 or 0xCC or 0xD4 or 0xDC => (ushort)(prePc + 3),                  // CALL cc, nn
+        _ => (ushort)0xFFFF
+    };
+
+    /// <summary>
+    /// Mirrors LegacyCpu's <c>_cycles += N</c> in conditional branch handlers:
+    /// add the taken-branch overhead when PC after execution does NOT match
+    /// the fall-through value. Returns 0 for non-conditional opcodes.
+    /// </summary>
+    private static long ConditionalBranchExtraCycles(byte opcode, ushort fallThroughPc, ushort actualPc)
+    {
+        if (fallThroughPc == 0xFFFF || actualPc == fallThroughPc) return 0;
+        return opcode switch
+        {
+            0x20 or 0x28 or 0x30 or 0x38 => 4,    // JR cc taken: +1 m-cycle
+            0xC0 or 0xC8 or 0xD0 or 0xD8 => 12,   // RET cc taken: +3 m-cycles
+            0xC2 or 0xCA or 0xD2 or 0xDA => 4,    // JP cc taken: +1 m-cycle
+            0xC4 or 0xCC or 0xD4 or 0xDC => 12,   // CALL cc taken: +3 m-cycles
+            _ => 0
+        };
     }
 
     private string BuildFunctionKey(string setName, DecodedInstruction decoded)
