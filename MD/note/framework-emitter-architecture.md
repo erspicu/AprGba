@@ -10,8 +10,8 @@
 
 > **「換 CPU 等於換 JSON。」**
 
-這是 AprCpu 想證明的事。傳統 emulator 是手刻指令直譯器（switch-case
-+ 一堆 case），每顆 CPU 都重寫一遍。AprCpu 把 CPU 拆成兩部分：
+這是 AprCpu 想證明的事。傳統 emulator 是手刻指令直譯器（一個大 switch-case
+撐起所有 opcode），每顆 CPU 都重寫一遍。AprCpu 把 CPU 拆成兩部分：
 
 - **資料**：JSON spec — register file、encoding、step list
 - **動詞**：emitter — 每個 step 怎麼變成 LLVM IR
