@@ -1127,7 +1127,9 @@ public sealed partial class LegacyCpu
                     flagHalt = true;
                     break;
                 case 0x10://STOP
-                    Console.WriteLine("stop: 0x" + _pc.ToString("x2"));
+                    // (intentionally no-op; matches AprGBemu reference behaviour
+                    //  of advancing PC by 1 and continuing. Removed Console.WriteLine
+                    //  that fired in hot path during Blargg master cpu_instrs.)
                     break;
                 case 0xF3://DI
                     flagIME = false;
