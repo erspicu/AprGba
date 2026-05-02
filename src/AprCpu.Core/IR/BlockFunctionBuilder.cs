@@ -1,0 +1,247 @@
+using AprCpu.Core.JsonSpec;
+using AprCpu.Core.Runtime;
+using LLVMSharp.Interop;
+
+namespace AprCpu.Core.IR;
+
+/// <summary>
+/// Phase 7 A.2 — compiles a <see cref="Block"/> (multiple consecutive
+/// instructions) into a single LLVM function. Per-instruction cond
+/// gates become internal basic blocks instead of separate functions;
+/// instruction words are baked-in i32 constants instead of function
+/// parameters; LLVM's optimizer (mem2reg / GVN / DSE) gets to see the
+/// whole block at once and can eliminate redundant flag updates,
+/// dead PC writes, etc.
+///
+/// Function signature: <c>void ExecuteBlock_&lt;set&gt;_pc&lt;startPc&gt;(CpuState* state)</c>
+///
+/// Per-instruction internal layout:
+/// <code>
+/// instr_K_pre:
+///   ; Pre-set R15 = const(pc_K + pc_offset) so IR's "read R15" sees pipeline value
+///   ; Clear PcWritten flag
+///   ; Cond gate (if applicable + instr is not unconditional):
+///   br cond, instr_K_exec, instr_K_post
+/// instr_K_exec:
+///   ; Run all spec steps for this instruction (Instruction const = pc_K's word)
+///   br instr_K_post
+/// instr_K_post:
+///   ; Read PcWritten flag — if set, PC was written, exit block
+///   br pc_written, block_exit, instr_K_advance
+/// instr_K_advance:
+///   ; PC := const(pc_K + instrSize) so next instr's R15 read is correct
+///   br instr_K+1_pre   (or block_exit if last)
+/// </code>
+///
+/// At <c>block_exit</c>: <see cref="CpsrHelpers.DrainAllShadows"/> + ret void.
+/// </summary>
+public sealed unsafe class BlockFunctionBuilder
+{
+    public LLVMModuleRef        Module    { get; }
+    public CpuStateLayout       Layout    { get; }
+    public EmitterRegistry      Registry  { get; }
+    public OperandResolverRegistry ResolverRegistry { get; }
+
+    public BlockFunctionBuilder(
+        LLVMModuleRef module,
+        CpuStateLayout layout,
+        EmitterRegistry registry,
+        OperandResolverRegistry resolverRegistry)
+    {
+        Module = module;
+        Layout = layout;
+        Registry = registry;
+        ResolverRegistry = resolverRegistry;
+    }
+
+    /// <summary>
+    /// Build one block-level LLVM function. Returns the function value
+    /// — caller can <see cref="HostRuntime.GetFunctionPointer"/> by name
+    /// after Compile().
+    /// </summary>
+    public LLVMValueRef Build(InstructionSetSpec set, Block block)
+    {
+        if (block.Instructions.Count == 0)
+            throw new ArgumentException("Cannot build a block with zero instructions.", nameof(block));
+
+        var name = BlockFunctionName(set.Name, block.StartPc);
+        var paramTypes = new[] { Layout.PointerType };
+        var fnType = LLVMTypeRef.CreateFunction(Module.Context.VoidType, paramTypes);
+        var fn = Module.AddFunction(name, fnType);
+
+        // Same Windows/MCJIT-friendly attributes as InstructionFunctionBuilder.
+        fn.AddAttributeAtIndex(LLVMAttributeIndex.LLVMAttributeFunctionIndex,
+            CreateStringAttribute(Module.Context, "no-jump-tables", "true"));
+        fn.AddAttributeAtIndex(LLVMAttributeIndex.LLVMAttributeFunctionIndex,
+            CreateEnumAttribute(Module.Context, "nounwind"));
+
+        var entry = fn.AppendBasicBlock("entry");
+        var builder = Module.Context.CreateBuilder();
+        builder.PositionAtEnd(entry);
+
+        var statePtr = fn.GetParam(0);
+        statePtr.Name = "state";
+
+        // Block-wide EmitContext. Format/Def/Instruction get swapped per
+        // instruction via BeginInstruction; StatusShadowAllocas + Values
+        // dictionary are reset per instr (Values via BeginInstruction).
+        // Instruction starts as undef i32; will be overwritten before
+        // any step uses it.
+        var firstInsDef = block.Instructions[0].Decoded;
+        var ctx = new EmitContext(
+            Module, builder, fn, statePtr,
+            instructionWord: ConstU32(0),  // placeholder, BeginInstruction overrides
+            Layout, set,
+            firstInsDef.Format, firstInsDef.Instruction);
+
+        // The block-exit BB is the only "ret void" point. Pre-create it
+        // so per-instr post-blocks can branch to it.
+        var blockExit = fn.AppendBasicBlock("block_exit");
+
+        // Walk instructions, emitting per-instruction sub-graph.
+        var pcOffsetBytes = (uint)set.PcOffsetBytes;
+        var pcWrittenSlotInEntry = Layout.GepPcWritten(builder, statePtr);
+
+        // For each instruction we'll create up to 4 BBs: pre, exec,
+        // post, advance. Pre-create them all so we can branch forward.
+        var preBBs     = new LLVMBasicBlockRef[block.Instructions.Count];
+        var execBBs    = new LLVMBasicBlockRef[block.Instructions.Count];
+        var postBBs    = new LLVMBasicBlockRef[block.Instructions.Count];
+        var advanceBBs = new LLVMBasicBlockRef[block.Instructions.Count];
+        for (int i = 0; i < block.Instructions.Count; i++)
+        {
+            preBBs[i]     = fn.AppendBasicBlock($"i{i}_pre");
+            execBBs[i]    = fn.AppendBasicBlock($"i{i}_exec");
+            postBBs[i]    = fn.AppendBasicBlock($"i{i}_post");
+            advanceBBs[i] = fn.AppendBasicBlock($"i{i}_advance");
+        }
+
+        // Branch from entry to first instruction's pre block.
+        builder.PositionAtEnd(entry);
+        builder.BuildBr(preBBs[0]);
+
+        for (int i = 0; i < block.Instructions.Count; i++)
+        {
+            var bi = block.Instructions[i];
+            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord));
+
+            // 1. Pre block: pre-set PC and clear PcWritten, then cond gate.
+            builder.PositionAtEnd(preBBs[i]);
+            // PC = const(bi.Pc + pcOffsetBytes). The original CpuExecutor
+            // does this so emitter "read R15" sees the pipeline-offset
+            // value mid-execution. In block mode each instr does the same.
+            WritePcConst(builder, statePtr, bi.Pc + pcOffsetBytes);
+            // Clear PcWritten flag.
+            builder.BuildStore(
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false),
+                Layout.GepPcWritten(builder, statePtr));
+
+            // Cond gate: only if instr-set has global cond AND instr is
+            // not marked unconditional. If no gate, fall straight to exec.
+            if (set.GlobalCondition is not null && !bi.Decoded.Instruction.Unconditional)
+            {
+                var shouldExecute = ConditionEvaluator.EmitCheck(ctx, set.GlobalCondition);
+                builder.BuildCondBr(shouldExecute, execBBs[i], postBBs[i]);
+            }
+            else
+            {
+                builder.BuildBr(execBBs[i]);
+            }
+
+            // 2. Exec block: run all spec steps. Operand resolvers apply
+            //    inside (resolverRegistry can produce values like the
+            //    SetUp barrel-shifter ops do for ARM).
+            builder.PositionAtEnd(execBBs[i]);
+            ResolverRegistry.Apply(ctx);
+            using (EmitterContextHolder.Push(Registry))
+            {
+                foreach (var step in bi.Decoded.Instruction.Steps)
+                    Registry.EmitStep(ctx, step);
+            }
+            if (!IsTerminated(builder)) builder.BuildBr(postBBs[i]);
+
+            // 3. Post block: did this instruction write PC? If so, exit
+            //    block (control transferred). Otherwise advance.
+            builder.PositionAtEnd(postBBs[i]);
+            var pcWrittenSlot = Layout.GepPcWritten(builder, statePtr);
+            var pcWritten = builder.BuildLoad2(LLVMTypeRef.Int8, pcWrittenSlot, $"i{i}_pcw");
+            var pcNotWritten = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+                pcWritten, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false), $"i{i}_pcw_eq0");
+            builder.BuildCondBr(pcNotWritten, advanceBBs[i], blockExit);
+
+            // 4. Advance block: PC = const(bi.Pc + instrSize), branch to
+            //    next instr's pre (or block_exit if last instr).
+            builder.PositionAtEnd(advanceBBs[i]);
+            WritePcConst(builder, statePtr, bi.Pc + block.InstrSizeBytes);
+            var next = (i + 1 < block.Instructions.Count) ? preBBs[i + 1] : blockExit;
+            builder.BuildBr(next);
+        }
+
+        // 5. Block exit: drain shadow status registers, ret void.
+        builder.PositionAtEnd(blockExit);
+        CpsrHelpers.DrainAllShadows(ctx);
+        builder.BuildRetVoid();
+
+        return fn;
+    }
+
+    /// <summary>
+    /// Canonical name for a block function, used for both
+    /// <c>AddFunction</c> and post-Compile <c>GetFunctionPointer</c>.
+    /// </summary>
+    public static string BlockFunctionName(string setName, uint startPc)
+        => $"ExecuteBlock_{setName}_pc{startPc:X8}";
+
+    private LLVMValueRef ConstU32(uint v) =>
+        LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, v, SignExtend: false);
+
+    private void WritePcConst(LLVMBuilderRef builder, LLVMValueRef statePtr, uint pcValue)
+    {
+        // PC location is spec-driven (see StackOps.LocateProgramCounter).
+        // For ARM PC is GPR[15] (i32); for LR35902 it's status reg "PC" (i16).
+        var pcIdx = Layout.RegisterFile.GeneralPurpose.PcIndex;
+        if (pcIdx is int idx)
+        {
+            // GPR-resident PC (ARM)
+            var ptr = Layout.GepGpr(builder, statePtr, idx);
+            builder.BuildStore(LLVMValueRef.CreateConstInt(Layout.GprType, pcValue, false), ptr);
+        }
+        else
+        {
+            // Status-reg PC (LR35902)
+            var ptr = Layout.GepStatusRegister(builder, statePtr, "PC");
+            var def = Layout.GetStatusRegisterDef("PC");
+            var t = def.WidthBits switch
+            {
+                16 => LLVMTypeRef.Int16,
+                32 => LLVMTypeRef.Int32,
+                _ => throw new NotSupportedException($"PC width {def.WidthBits} unsupported")
+            };
+            builder.BuildStore(LLVMValueRef.CreateConstInt(t, pcValue, false), ptr);
+        }
+    }
+
+    private static bool IsTerminated(LLVMBuilderRef builder)
+        => builder.InsertBlock.Terminator.Handle != IntPtr.Zero;
+
+    private static unsafe LLVMAttributeRef CreateEnumAttribute(LLVMContextRef ctx, string name)
+    {
+        var kind = LLVM.GetEnumAttributeKindForName(
+            (sbyte*)System.Runtime.InteropServices.Marshal.StringToHGlobalAnsi(name),
+            (UIntPtr)name.Length);
+        return ctx.CreateEnumAttribute(kind, 0);
+    }
+
+    private static unsafe LLVMAttributeRef CreateStringAttribute(LLVMContextRef ctx, string key, string value)
+    {
+        var keyBytes   = System.Text.Encoding.ASCII.GetBytes(key);
+        var valueBytes = System.Text.Encoding.ASCII.GetBytes(value);
+        fixed (byte* kp = keyBytes)
+        fixed (byte* vp = valueBytes)
+        {
+            return LLVM.CreateStringAttribute(ctx,
+                (sbyte*)kp, (uint)keyBytes.Length,
+                (sbyte*)vp, (uint)valueBytes.Length);
+        }
+    }
+}

@@ -16,7 +16,13 @@ public sealed unsafe class SpecCompiler
         LLVMModuleRef                            Module,
         IReadOnlyDictionary<string, DecoderTable> DecoderTables,
         IReadOnlyDictionary<string, LLVMValueRef> Functions,
-        IReadOnlyList<string>                    Diagnostics);
+        IReadOnlyList<string>                    Diagnostics,
+        // Phase 7 A.2: expose registries so callers (CpuExecutor's
+        // future block-JIT path, BlockFunctionBuilder tests) can
+        // construct additional functions targeting the same module.
+        EmitterRegistry                          EmitterRegistry,
+        OperandResolverRegistry                  ResolverRegistry,
+        CpuStateLayout                           Layout);
 
     /// <summary>
     /// Compile a CPU spec from its <c>cpu.json</c> path. Loads referenced
@@ -127,7 +133,8 @@ public sealed unsafe class SpecCompiler
             diagnostics.Add($"[verify] {verifyErr}");
         }
 
-        return new CompileResult(module, decoderTables, functions, diagnostics);
+        return new CompileResult(module, decoderTables, functions, diagnostics,
+            registry, resolverRegistry, layout);
     }
 
     /// <summary>Convenience: compile and write IR text to a file.</summary>

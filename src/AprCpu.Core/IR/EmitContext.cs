@@ -16,11 +16,15 @@ public sealed unsafe class EmitContext
     public LLVMBuilderRef   Builder     { get; }
     public LLVMValueRef     Function    { get; }
     public LLVMValueRef     StatePtr    { get; }
-    public LLVMValueRef     Instruction { get; }
     public CpuStateLayout   Layout      { get; }
     public InstructionSetSpec  InstructionSet { get; }
-    public EncodingFormat   Format      { get; }
-    public InstructionDef   Def         { get; }
+    // Phase 7 A.2 — Format/Def/Instruction are per-instruction. In
+    // single-instruction mode they're set once by the constructor; in
+    // block mode BlockFunctionBuilder calls BeginInstruction() between
+    // each instruction's emission to swap them out + reset Values.
+    public LLVMValueRef     Instruction { get; private set; }
+    public EncodingFormat   Format      { get; private set; }
+    public InstructionDef   Def         { get; private set; }
 
     /// <summary>Named values: field extractions, operand outputs, step `out`s.</summary>
     public Dictionary<string, LLVMValueRef> Values { get; } = new(StringComparer.Ordinal);
@@ -89,6 +93,20 @@ public sealed unsafe class EmitContext
 
     /// <summary>Append a fresh basic block to the current function.</summary>
     public LLVMBasicBlockRef AppendBlock(string name) => Function.AppendBasicBlock(name);
+
+    /// <summary>
+    /// Phase 7 A.2 — switch the per-instruction state for the next
+    /// instruction in a block. Resets <see cref="Values"/> (per-instr
+    /// local cache) but preserves <see cref="StatusShadowAllocas"/> +
+    /// <see cref="EntryBlock"/> (block-wide).
+    /// </summary>
+    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord)
+    {
+        Format = format;
+        Def = def;
+        Instruction = instructionWord;
+        Values.Clear();
+    }
 }
 
 /// <summary>
