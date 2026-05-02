@@ -87,11 +87,23 @@ public sealed class GbaPpu
         {
             switch (mode)
             {
+                case 0:
+                    // Mode 0: all four BGs are text-mode (tile-based, scrollable).
+                    if ((dispcnt & (1 << 8))  != 0) RenderTextBgToLayer(bus, 0, _bg0Layer);
+                    if ((dispcnt & (1 << 9))  != 0) RenderTextBgToLayer(bus, 1, _bg1Layer);
+                    if ((dispcnt & (1 << 10)) != 0) RenderTextBgToLayer(bus, 2, _bg2Layer);
+                    if ((dispcnt & (1 << 11)) != 0) RenderTextBgToLayer(bus, 3, _bg3Layer);
+                    break;
+                case 1:
+                    // Mode 1: BG0/BG1 text-mode, BG2 affine, BG3 unused.
+                    if ((dispcnt & (1 << 8))  != 0) RenderTextBgToLayer(bus, 0, _bg0Layer);
+                    if ((dispcnt & (1 << 9))  != 0) RenderTextBgToLayer(bus, 1, _bg1Layer);
+                    if ((dispcnt & (1 << 10)) != 0) RenderAffineBgToLayer(bus, 2, _bg2Layer);
+                    break;
                 case 2:
                     if ((dispcnt & (1 << 10)) != 0) RenderAffineBgToLayer(bus, 2, _bg2Layer);
                     if ((dispcnt & (1 << 11)) != 0) RenderAffineBgToLayer(bus, 3, _bg3Layer);
                     break;
-                // Modes 0/1 (text-mode BGs) — TODO. Fall through to backdrop only.
             }
         }
 
@@ -268,6 +280,105 @@ public sealed class GbaPpu
                 if (palIdx == 0) continue;
 
                 int palOff = palIdx * 2;
+                ushort px = (ushort)(bus.Palette[palOff] | (bus.Palette[palOff + 1] << 8));
+                layer[rowBase + sx] = (ushort)(px | ValidBit);
+            }
+        }
+    }
+
+    // ---------------- Text-mode BG (mode 0/1) ----------------
+
+    /// <summary>
+    /// Tile-based scrollable BG used by mode 0 (all four BGs) and
+    /// mode 1 (BG0/BG1). Per GBATEK:
+    /// <list type="bullet">
+    ///   <item>BGxCNT: bit 7 = 8bpp/4bpp, bits 14-15 = size
+    ///         (0=256×256, 1=512×256, 2=256×512, 3=512×512).</item>
+    ///   <item>BGxHOFS / BGxVOFS: 9-bit scroll offsets.</item>
+    ///   <item>Map data: 16-bit entries, packed as
+    ///         <c>tile_id (10) | hflip (1) | vflip (1) | palette# (4)</c>.
+    ///         For sizes &gt; 256 the BG is split into 1-4 screen blocks
+    ///         (SCs) of 32×32 tiles each, laid out as
+    ///         <code>[SC0] [SC1]
+    ///         [SC2] [SC3]</code> in linear screenBase memory.</item>
+    ///   <item>Tile pixel data: 4bpp = 32 B/tile, 8bpp = 64 B/tile,
+    ///         in row-major order. 4bpp uses palette# from the map
+    ///         entry (16 colours per palette × 16 palettes).</item>
+    /// </list>
+    /// jsmolka's "All tests passed" text and most commercial GBA games
+    /// use mode 0 BG layers for their UI / level rendering.
+    /// </summary>
+    private void RenderTextBgToLayer(GbaMemoryBus bus, int bgIndex, ushort[] layer)
+    {
+        // BGxCNT @ 0x04000008 + bgIndex × 2;
+        // BGxHOFS @ 0x04000010 + bgIndex × 4;  BGxVOFS @ 0x04000012 + bgIndex × 4.
+        uint cntAddr  = 0x04000008u + (uint)bgIndex * 2;
+        uint hofsAddr = 0x04000010u + (uint)bgIndex * 4;
+        uint vofsAddr = 0x04000012u + (uint)bgIndex * 4;
+
+        ushort cnt = bus.ReadHalfword(cntAddr);
+        int hofs   = bus.ReadHalfword(hofsAddr) & 0x1FF;
+        int vofs   = bus.ReadHalfword(vofsAddr) & 0x1FF;
+
+        int charBase   = ((cnt >> 2) & 0x3) * 0x4000;
+        int screenBase = ((cnt >> 8) & 0x1F) * 0x800;
+        bool color8    = (cnt & (1 << 7)) != 0;
+        int sizeIdx    = (cnt >> 14) & 0x3;
+        int bgWidth    = (sizeIdx & 1) != 0 ? 512 : 256;
+        int bgHeight   = (sizeIdx & 2) != 0 ? 512 : 256;
+        int layerBit   = bgIndex;        // for window gating (handled in Composite)
+
+        for (int sy = 0; sy < Height; sy++)
+        {
+            int bgY = (sy + vofs) & (bgHeight - 1);
+            int rowBase = sy * Width;
+            int mapTileY = (bgY & 0xFF) >> 3;
+            int pixInTileY = bgY & 7;
+
+            for (int sx = 0; sx < Width; sx++)
+            {
+                int bgX = (sx + hofs) & (bgWidth - 1);
+
+                // Pick screen block (SC) for sizes > 256:
+                //   size 1 (512×256): bgX≥256 → SC1
+                //   size 2 (256×512): bgY≥256 → SC1
+                //   size 3 (512×512): both bits → SC0/1/2/3
+                int sc = 0;
+                if ((sizeIdx & 1) != 0 && bgX >= 256) sc += 1;
+                if ((sizeIdx & 2) != 0 && bgY >= 256) sc += (sizeIdx == 3) ? 2 : 1;
+
+                int mapTileX = (bgX & 0xFF) >> 3;
+                int mapEntryOff = screenBase + sc * 0x800 + (mapTileY * 32 + mapTileX) * 2;
+                if ((uint)(mapEntryOff + 1) >= bus.Vram.Length) continue;
+                ushort mapEntry = (ushort)(bus.Vram[mapEntryOff] | (bus.Vram[mapEntryOff + 1] << 8));
+
+                int tileId    = mapEntry & 0x3FF;
+                bool hflip    = (mapEntry & (1 << 10)) != 0;
+                bool vflip    = (mapEntry & (1 << 11)) != 0;
+                int paletteN  = (mapEntry >> 12) & 0xF;
+
+                int pixInTileX = bgX & 7;
+                int tx = hflip ? 7 - pixInTileX : pixInTileX;
+                int ty = vflip ? 7 - pixInTileY : pixInTileY;
+
+                byte palIdx;
+                if (color8)
+                {
+                    int tileOff = charBase + tileId * 64 + ty * 8 + tx;
+                    if ((uint)tileOff >= bus.Vram.Length) continue;
+                    palIdx = bus.Vram[tileOff];
+                }
+                else
+                {
+                    int tileOff = charBase + tileId * 32 + ty * 4 + (tx >> 1);
+                    if ((uint)tileOff >= bus.Vram.Length) continue;
+                    byte twoPix = bus.Vram[tileOff];
+                    palIdx = (byte)((tx & 1) == 0 ? (twoPix & 0xF) : (twoPix >> 4));
+                }
+                if (palIdx == 0) continue;     // 4bpp palIdx 0 OR 8bpp idx 0 = transparent
+
+                int palOff = (color8 ? palIdx : (paletteN * 16 + palIdx)) * 2;
+                if ((uint)(palOff + 1) >= bus.Palette.Length) continue;
                 ushort px = (ushort)(bus.Palette[palOff] | (bus.Palette[palOff + 1] << 8));
                 layer[rowBase + sx] = (ushort)(px | ValidBit);
             }
