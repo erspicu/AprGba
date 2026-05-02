@@ -13,7 +13,7 @@
         "mnemonic": "CB_PREFIX", "since": "LR35902", "manual_ref": "GB CPU §CB prefix",
         "switches_instruction_set": true,
         "cycles": { "form": "1m_plus_cb" },
-        "steps": [{ "op": "lr35902_cb_dispatch" }]
+        "steps": []
       }]
     }
   ]

@@ -48,7 +48,10 @@ public static class Lr35902Emitters
         // CB-prefix dispatch is host-runtime concern — the compiled
         // function for opcode 0xCB just signals via a no-op; the
         // executor intercepts and pivots to the CB instruction set.
-        reg.Register(new SimpleNoOpEmitter("lr35902_cb_dispatch"));
+        // CB-prefix dispatch is now a spec-side empty-step instruction
+        // (Phase 5.8 Step 5.6). The runtime sees the 0xCB opcode, the
+        // entry function does nothing, then the next instruction is
+        // looked up via the CB decoder table. No emitter needed.
 
         // DAA — full BCD adjust per LR35902 spec.
         reg.Register(new Lr35902DaaEmitter());
@@ -450,17 +453,9 @@ internal sealed class CplEmitter : IMicroOpEmitter
 // ---------------- placeholder no-op emitters ----------------
 
 /// <summary>
-/// Emits an empty body for ops whose semantics depend on host runtime
-/// state we haven't introduced yet (HALT, STOP) — keeps the spec
-/// compilable end-to-end so we can grow coverage incrementally without
-/// breaking module verification.
-/// </summary>
-internal sealed class SimpleNoOpEmitter : IMicroOpEmitter
-{
-    public string OpName { get; }
-    public SimpleNoOpEmitter(string opName) { OpName = opName; }
-    public void Emit(EmitContext ctx, MicroOpStep step) { /* deliberately empty */ }
-}
+// SimpleNoOpEmitter deleted in Phase 5.8 Step 5.6 — its sole user
+// (lr35902_cb_dispatch) was removed in favour of an empty step list
+// in spec/lr35902/groups/block3-cb-prefix.json.
 
 /// <summary>
 /// Stub for read_imm8 / read_imm16 until the host-bus extern is wired.
@@ -1414,7 +1409,30 @@ internal sealed class Lr35902ReadImm16Emitter : IMicroOpEmitter
 
 // LDH IO emitters deleted in Phase 5.8 Step 5.5 — see RegisterAll comment.
 
-// ---------------- host-side flag/IME externs ----------------
+// ============================================================================
+// L3 ARCHITECTURAL INTRINSICS (LR35902-only hardware quirks)
+//
+// Everything below this line stays LR35902-specific by design. These ops
+// model behaviours that don't generalise across CPU families:
+//
+//   lr35902_ime / lr35902_ime_delayed  — IME master enable, with the
+//     EI quirk: writes IME=1 only AFTER the next instruction completes.
+//     Implemented via a host extern that maintains a per-CpuState delay
+//     counter; the counter is then drained by the dispatcher loop.
+//
+//   halt / stop  — pause CPU until next IRQ. The exact wakeup conditions
+//     differ per CPU (DMG halt-bug vs CGB; STOP+button on DMG). Modelled
+//     as a host extern that sets a flag the dispatcher checks each step.
+//
+//   lr35902_daa  — BCD adjust of A. The 4×2 lookup-table semantics
+//     (carry-in N/H/C bits → adjustment value + new C) are textbook
+//     LR35902 (and Z80 / 8080) and don't have an obvious generic shape.
+//
+// These are the kind of "L3" ops the Phase 5.8 refactor doc identified
+// as truly worth keeping arch-specific. Don't try to generalise them
+// further unless a third CPU shows up that genuinely shares the quirk.
+// ============================================================================
+
 
 /// <summary>
 /// Names of the LR35902-specific externs JsonCpu must bind. These
