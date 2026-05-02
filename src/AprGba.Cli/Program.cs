@@ -51,6 +51,7 @@ if (opts.InfoOnly)
 }
 
 var bus = new GbaMemoryBus();
+if (opts.DisableBiosOpenBus) bus.DisableBiosOpenBus = true;
 if (opts.BiosPath is not null)
 {
     var bios = File.ReadAllBytes(opts.BiosPath);
@@ -118,6 +119,17 @@ Console.WriteLine($"  CPSR=0x{cpu.ReadStatus("CPSR"):X8}");
 Console.WriteLine($"  DISPCNT=0x{bus.ReadHalfword(0x04000000):X4} DISPSTAT=0x{bus.ReadHalfword(0x04000004):X4} VCOUNT=0x{bus.ReadHalfword(0x04000006):X4}");
 Console.WriteLine($"  IE=0x{bus.ReadHalfword(0x04000200):X4} IF=0x{bus.ReadHalfword(0x04000202):X4} IME=0x{bus.ReadWord(0x04000208):X8}");
 Console.WriteLine($"  HALTCNT writes: {bus.HaltCntWriteCount}, currently halted: {bus.CpuHalted}");
+{
+    ushort bg2cnt = bus.ReadHalfword(0x04000008), bg3cnt = bus.ReadHalfword(0x0400000A);
+    short bg3pa = (short)bus.ReadHalfword(0x04000030), bg3pb = (short)bus.ReadHalfword(0x04000032);
+    short bg3pc = (short)bus.ReadHalfword(0x04000034), bg3pd = (short)bus.ReadHalfword(0x04000036);
+    uint bg3x = bus.ReadWord(0x04000038), bg3y = bus.ReadWord(0x0400003C);
+    ushort pal0 = (ushort)(bus.Palette[0] | (bus.Palette[1] << 8));
+    Console.WriteLine($"  BG2CNT=0x{bg2cnt:X4} BG3CNT=0x{bg3cnt:X4}");
+    Console.WriteLine($"  BG3 PA={bg3pa} PB={bg3pb} PC={bg3pc} PD={bg3pd} X=0x{bg3x:X8} Y=0x{bg3y:X8}");
+    Console.WriteLine($"  BG3 char-base={(bg3cnt>>2)&3}*0x4000  screen-base={(bg3cnt>>8)&0x1F}*0x800  size={(bg3cnt>>14)&3}");
+    Console.WriteLine($"  Palette[0]=0x{pal0:X4}  BLDCNT=0x{bus.ReadHalfword(0x04000050):X4} BLDALPHA=0x{bus.ReadHalfword(0x04000052):X4}");
+}
 
 if (opts.ScreenshotPath is not null)
 {
@@ -261,6 +273,7 @@ static Options? ParseArgs(string[] args)
         else if (arg.StartsWith("--screenshot=")) opts.ScreenshotPath = arg.Substring("--screenshot=".Length);
         else if (arg.StartsWith("--trace-bios=")) opts.TraceBiosPath = arg.Substring("--trace-bios=".Length);
         else if (arg == "--info")                 opts.InfoOnly = true;
+        else if (arg == "--no-bios-openbus")      opts.DisableBiosOpenBus = true;
         else                                      return null;
     }
     return opts.RomPath is null ? null : opts;
@@ -302,4 +315,5 @@ internal sealed class Options
     public string?  ScreenshotPath;
     public string?  TraceBiosPath;
     public bool     InfoOnly;
+    public bool     DisableBiosOpenBus;
 }

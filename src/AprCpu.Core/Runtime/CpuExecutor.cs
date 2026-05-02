@@ -190,6 +190,14 @@ public sealed unsafe class CpuExecutor
         // pre-set pcReadValue. (Real case: BX target == current+offset.)
         uint preSelector = _readSelector?.Invoke(_state) ?? 0;
 
+        // Tell the bus where the CPU is about to execute BEFORE we fetch
+        // — the fetch itself is a BIOS read when pc < 0x4000, and the
+        // bus's open-bus check needs to see the new pc, not the previous
+        // step's. Without this the very first fetch after a SWI / IRQ /
+        // BX into BIOS would return the stale sticky value and the CPU
+        // would decode garbage at the vector address.
+        _bus.NotifyExecutingPc(pc);
+
         // Fetch.
         uint instructionWord = mode.InstrSizeBytes switch
         {
@@ -198,10 +206,8 @@ public sealed unsafe class CpuExecutor
             _ => throw new NotSupportedException($"instruction size {mode.InstrSizeBytes} unsupported.")
         };
 
-        // Tell the bus what we just fetched. GBA bus uses this to update
-        // the BIOS open-bus sticky value and to know where the CPU is
-        // currently executing (so BIOS-region data reads from outside
-        // BIOS can return the sticky instead of the real bytes).
+        // Tell the bus what we just fetched, so the BIOS sticky value
+        // can be updated when this fetch came from BIOS.
         _bus.NotifyInstructionFetch(pc, instructionWord, mode.InstrSizeBytes);
 
         var decoded = mode.Decoder.Decode(instructionWord)
