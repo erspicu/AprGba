@@ -475,15 +475,17 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
 #### F. Dispatcher / cycle-accounting 簡化
 
 - [x] **F.x InstructionDef-keyed fn pointer cache**（2026-05-03，commit
-  跟 perf note `MD/performance/202605030036-fnptr-cache-by-instruction-def.md`）
-  — dispatcher 改用 reference identity 而非 string-keyed cache，省掉
-  per-instruction 的 string interpolation + Dictionary string-hash +
-  (JsonCpu 那邊) per-instruction Dictionary allocation。**GB json-llvm
-  +82% (2.66 → 4.83 MIPS), GBA Thumb +25% (3.75 → 4.69)**, GBA ARM
-  +2%（noisy），GB legacy 不變（路徑沒走到）。
+  `9fcf511` + perf note `MD/performance/202605030036-fnptr-cache-by-instruction-def.md`）
+  — dispatcher 改用 reference identity 而非 string-keyed cache。**GB
+  json-llvm +82% (2.66 → 4.83 MIPS), GBA Thumb +25%**, GBA ARM +2%（noisy）。
+- [x] **F.y Pre-built DecodedInstruction cache**（2026-05-03，perf
+  note `MD/performance/202605030047-prebuilt-decoded-instruction.md`）
+  — DecoderTable.Decode 改回傳預先建好的 instance，省掉 per-decode
+  `new DecodedInstruction(...)` heap alloc + foreach IEnumerator alloc。
+  **GBA arm +55% (3.82 → 5.94), GBA thumb +67% (3.75 → 6.27), GB
+  json-llvm +137% (2.66 → 6.30)**，GBA 兩條 path 首次跨過 1.0× real-time。
 - [ ] **Dispatcher 從 hash-lookup 改 direct table**（decoded opcode
-  → fn pointer 陣列；ARM 12-bit table、Thumb 10-bit table、LR35902
-  8-bit table）— F.x 已撈大頭，這個是進一步去掉 hash lookup 那一步
+  → fn pointer 陣列）— F.x/F.y 已撈大頭，這個是進一步壓榨
 - [ ] **Cycle accounting trailing add**：block 結束時一次累加 cycle
   總數，不每條指令 inc
 - [ ] **IRQ check 集中在 block exit**，不是每條指令
