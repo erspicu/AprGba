@@ -87,3 +87,32 @@ Target framework is `net10.0`. LLVM toolchain is wired via
 `LLVMSharp.Interop` 20.x plus the platform-specific
 `libLLVM.runtime.<rid>` package (currently only `win-x64` is referenced;
 add other RIDs when porting).
+
+## 踩過的坑 / 永遠不要
+
+歷史踩過、不要再犯的事。每條都附踩坑日期 + 後果，便於 future-Claude
+判斷規則是否仍適用。
+
+### Shell / 檔案搜尋
+
+- **永遠不要在 Windows 跑 `find /`**（2026-05-03 一個 background shell
+  跑了 4h+ 還在掃 C:）。`/` 在 Git Bash 對應整顆 C:，會掃進
+  `Program Files` / `AppData` / `node_modules` / `Windows\WinSxS` 等
+  幾十萬個目錄，正常情況跑不完。
+  - **首選 `Glob` tool**：`Glob({pattern: "**/01-special.gb"})` 從 cwd
+    開始，秒回。
+  - **次選限定範圍的 find**：`find test-roms -name '01-special.gb'`，
+    永遠不要從 `/` 起跳。
+- **複合命令 `A && B` 即使 A 已給答案也會繼續跑 B**（同上事件，
+  `ls /tmp/*.gb && find /` 的 `ls` 第一行就找到，但 `find` 還是照跑
+  4h+）。要嘛拆兩個 call、要嘛 `||` 改成只有 A 失敗才 fallback 到 B。
+- **長 command 一律加 `timeout`**：Bash tool default 2 min，但檔案搜尋 /
+  recursive 操作要明確設個合理上限，避免悶聲跑半天。
+
+### Background process
+
+- **`run_in_background: true` 一定要記得最終 stop**。如果 spawn 後忘了，
+  shell 會孤兒化，從 Claude UI 看得到但 session 結束後仍在跑。
+- 用 `TaskStop` (前身 KillShell) 殺 background task，需要 task ID（從
+  `/tasks` UI 拿）。寧可一開始就不用 background，foreground 跑完即
+  乾淨。
