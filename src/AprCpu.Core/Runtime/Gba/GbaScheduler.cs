@@ -62,7 +62,13 @@ public sealed class GbaScheduler
     /// Advance the scheduler by <paramref name="cycles"/> CPU cycles.
     /// Fires VBlank/HBlank/VCount-match events as boundaries are crossed.
     /// Caller is the CPU loop after each Step() (or batched).
+    /// Phase 7 B.h: AggressiveInlining hint — Tick is called every
+    /// instruction in GbaSystemRunner.RunCycles' hot loop. The fast
+    /// path (no scanline boundary crossed) is just 4-5 IR ops; inlining
+    /// avoids the per-call overhead.
     /// </summary>
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public void Tick(int cycles)
     {
         if (cycles <= 0) return;

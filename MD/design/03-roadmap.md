@@ -397,19 +397,27 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
 
 #### 進度快照（2026-05-03）
 
-**已完成 9 步**（commit chronological order）：
+**已完成 10 步**（commit chronological order）：
 B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 → B.e cache state offsets → B.f permanent pin → B.g inline bus
-→ E.a fetch fast path → E.b mem trampoline fast path → C.a width-correct flag
+→ E.a fetch fast path → E.b mem trampoline fast path
+→ C.a width-correct flag → B.h Tick/IRQ inline
 
 **累計成果（vs Phase 5.8 starting baseline）**：
 
 | ROM / Backend | baseline | 現在 | 累計 | real-time |
 |---|---:|---:|---:|---:|
-| GBA arm json-llvm | 3.82 MIPS | 8.26 | **+116%** | 0.9× → **2.0×** |
-| GBA thumb json-llvm | 3.75 | 8.24 | **+120%** | 0.9× → **2.0×** |
+| GBA arm json-llvm | 3.82 MIPS | 8.33 | **+118%** | 0.9× → **2.0×** |
+| GBA thumb json-llvm | 3.75 | 8.39 | **+124%** | 0.9× → **2.0×** |
 | GB json-llvm | 2.66 | 6.48 | **+144%** | 5.5× → **13×** |
 | GB legacy | 32.76 | 32.75 | unchanged | 67× |
+
+**剩餘項目分類**（B-G 區內每個未打勾的都標了狀態）：
+- **[⏸ blocked]** = 需要 prerequisite 才能做（多半 blocked on A block-JIT
+  或 H.a LLVM pass pipeline）
+- **[⊘ skipped]** = 經評估 ROI 太低 / 已被其他 step cover / LLVM 自己會做
+- **[ ]** = doable 但還沒做（剩 E.c IR-level region check + G.a/b host
+  runtime 優化）
 
 **已嘗試但未 ship**：
 - **C.b alloca-based shadow lazy flag** — 設計兩版（deferred-batch 跟
@@ -451,13 +459,15 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   per-instruction function 太小、LLVM 沒空間發揮，瓶頸在 dispatcher
   overhead。保留 O3 給未來 block-JIT 用，後續策略應跳過 B.b/c/d 先攻
   A (block-JIT) 或 E (mem-bus fast path)。
-- [ ] **同 register 的 GEP CSE**：目前每次 read_reg 都重新 GEP；同
-  function 內多次 access 同 reg 應該 CSE 成一個 alloca
-- [ ] **多 micro-op step 融合**：`add` + `update_zero` + `update_h_add`
-  + `set_flag(N)` 經常一起出現，spec compiler 端可以辨識常見 pattern
-  emit 成單一 inlined IR sequence
-- [ ] **加 `nuw` / `nsw` hint**：常見的 PC+4 / SP-2 加減確定不溢位，
-  加 hint 給 LLVM 更多 optimisation 餘地
+- [⊘ 跳過] **同 register 的 GEP CSE** — LLVM O3 pass 應該已經做 GEP
+  CSE，手寫 alloca 反而干擾 mem2reg。如果 H.a 顯式跑 mem2reg + GVN
+  確認沒做的話再評估。
+- [⊘ 跳過 — high effort low ROI] **多 micro-op step 融合**：spec compiler
+  端 pattern matching 是大工程；C.a/C.b 嘗試已說明 LLVM 對短 IR sequence
+  的優化有限，融合 IR 也不會明顯加速。Phase 7 整體已 saturated。
+- [⊘ 跳過 — low ROI] **加 `nuw` / `nsw` hint**：LLVM 對 hint 的反應有限；
+  per-instruction function 太小沒空間做 strength reduction / loop hoisting
+  等需要 wrap-flag 假設的優化。
 - [x] **B.e Cache state-buffer offsets in CpuExecutor**（2026-05-03，perf
   note `MD/performance/202605030054-cache-state-offsets-cpuexecutor.md`）
   — Step() 之前每條指令呼叫 `_rt.PcWrittenOffset` / `_rt.GprOffset(_pcRegIndex)`
@@ -479,10 +489,15 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   能 inline 整條 fetch path 進 CpuExecutor.Step。**GBA arm +13% (7.13 →
   8.05 MIPS, stable 2.0× real-time, run-to-run noise 從 ~30% 降到 ~5%)**,
   GBA thumb 持平 (8.10, plateau)。GB 路徑沒動。
-- [ ] **scheduler.Tick / NotifyExecutingPc / NotifyInstructionFetch
-  inlining**：目前 per-instruction 多 2-3 次 virtual call；改 inline
-  C# method + `[MethodImpl(AggressiveInlining)]` 或乾脆把這些 hook
-  emit 進 IR
+- [x] **B.h Scheduler.Tick + DeliverIrqIfPending AggressiveInlining**
+  （2026-05-03，perf note `MD/performance/202605030209-scheduler-irq-inline.md`）
+  — GbaSystemRunner.RunCycles 內 per-instruction call 兩個 method 都
+  加 inline hint。NotifyExecutingPc 在 B.g 已 inline。
+  **GBA arm +0.8% (8.26 → 8.33), GBA thumb +1.8% (8.24 → 8.39)**。
+  noisy 但持續推進。
+- [⊘ 部分跳過] **NotifyInstructionFetch inlining**：method body 較大
+  (BIOS open-bus 簿記)，inline hint 可能反而增加 cache pressure。讓 JIT
+  自己決定。其他兩個已 inline (B.g + B.h)。
 
 #### C. Lazy flag computation（Gemini 建議 #2）
 
@@ -503,29 +518,35 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   MCJIT pass pipeline 沒跑 mem2reg 所以 alloca 沒被 lift to SSA。
   **建議重做時先做 H.a (LLVM pass pipeline 調校)**，加上 mem2reg /
   GVN / DSE 顯式 pass，再 retry C.b alloca-shadow。
-- [ ] **ARM CPSR NZCV lazy**（**真**lazy flag — 不只 batch，是延後計算）：
-  目前每條 ALU 指令都計算 N/Z/C/V 寫進 CPSR；改成「只記錄
-  last-ALU-result + ALU-kind」，conditional execution 真要讀 flag 時
-  再 derive。比 C.b 大很多 — 需要新 state slots + 新 ops + invalidation
-  protocol。
-- [ ] **LR35902 F register lazy**：INC r 的 Z/N/H 不要每次都寫，後續
-  指令若是 BIT/CP/JR cc 才 derive
-- [ ] **Flag dependency tracking**：emitter 標 "this op produces
-  flag X / consumes flag Y"，spec compiler 在 block 內做 def-use
-  analysis 省略不必要的 flag 寫入
-- [ ] **PcWritten flag 改 LLVM register hint**（5.8 已標 candidate）—
-  避免每條指令 byte slot load/store；只在 branch 指令後檢查
+- [⏸ blocked — 需 H.a 先做] **ARM CPSR NZCV lazy**（**真**lazy flag —
+  不只 batch，是延後計算）：目前每條 ALU 指令都計算 N/Z/C/V 寫進
+  CPSR；改成「只記錄 last-ALU-result + ALU-kind」，conditional
+  execution 真要讀 flag 時再 derive。需要新 state slots + 新 ops +
+  invalidation protocol。**先決條件**：H.a (LLVM pass pipeline 顯式跑
+  mem2reg) — 不然 alloca-shadow 不會 lift to SSA，C.b 已證實。
+- [⏸ blocked — 同上] **LR35902 F register lazy**：INC r 的 Z/N/H 不要
+  每次都寫，後續指令若是 BIT/CP/JR cc 才 derive。
+- [⏸ blocked — 大架構改動] **Flag dependency tracking**：emitter 標
+  "this op produces flag X / consumes flag Y"，spec compiler 在 block
+  內做 def-use analysis 省略不必要的 flag 寫入。比 lazy flag 更激進，
+  需要 spec schema + emitter API 大改。
+- [⏸ blocked — 同 lazy flag] **PcWritten flag 改 LLVM register hint**：
+  跟 alloca-shadow 同 pattern；C.b 嘗試結果適用 — 需 H.a 先解。
 
 #### D. Hot path / Tier compilation（Gemini 建議 #4 增補）
 
-- [ ] **Block 執行次數 counter**：每次進 block 加 1，超過 threshold
+> **整段 blocked on Group A (block-level JIT)** — 這些都建立在「block
+> 是優化單位」這個前提上。沒有 block-JIT 就沒有 block 可以 counter /
+> tier-compile / patch / invalidate。Group A 是 group D 的先決條件。
+
+- [⏸ blocked on A] **Block 執行次數 counter**：每次進 block 加 1，超過 threshold
   (e.g. 1000) 才升 tier
-- [ ] **Cold block O0 編譯**：第一次見到 block 時用 O0 快編好（< 1ms），
+- [⏸ blocked on A] **Cold block O0 編譯**：第一次見到 block 時用 O0 快編好（< 1ms），
   先讓 ROM 跑起來
-- [ ] **Hot block O2/O3 重編 + register caching aggressive**：背景
+- [⏸ blocked on A] **Hot block O2/O3 重編 + register caching aggressive**：背景
   thread 重編 hot block，編好後 patch caller fall-through
-- [ ] **Tier degradation**：SMC invalidate 後降回 cold tier
-- [ ] **Profile-guided optimisation**：counter + branch-direction 統計，
+- [⏸ blocked on A] **Tier degradation**：SMC invalidate 後降回 cold tier
+- [⏸ blocked on A] **Profile-guided optimisation**：counter + branch-direction 統計，
   hot 的 cond branch flip 成 fallthrough
 
 #### E. 減少 extern binding / mem-bus fast path（Gemini 建議 #5）
@@ -544,15 +565,22 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   保留 slow path（IO/Palette/VRAM/OAM 寫入有 side effects）。
   **loop100 上 +0.6% noise** — 這 ROM ALU-heavy 不是 mem-heavy；改動正確
   但要 mem-heavy bench 才看得出實際收益。
-- [ ] **Mem-bus region table inline check**：JIT'd code 自帶
-  「addr ∈ ROM/RAM region 直接 GEP；else fallback to extern call」
-  fast path（IR 層改動，比 trampoline 更激進）
-- [ ] **Sub-page 粒度 fast-path**（GBA WRAM 0x02000000-0x0203FFFF、
-  GB HRAM 0xFF80-0xFFFE、cart ROM 0x08000000-0x09FFFFFF 等熱區）
-- [ ] **Read-only ROM fast path**：cart ROM read 直接 byte-array
-  index，省 extern call 完全
-- [ ] **Aligned word access**：4-byte / 2-byte aligned read/write 走
-  i32/i16 直接 access，不拆成 byte sequence
+- [ ] **E.c Mem-bus region table inline check (IR 層)**：比 E.b
+  trampoline-side 更激進 — JIT'd code 內 emit 「addr ∈ ROM/RAM
+  region 直接 GEP；else call extern」分支，省 extern call 完全。
+  **要動 MemoryEmitters.cs 改 IR 生成 + 暴露 region base 為 LLVM
+  global**。Mem-heavy workload 應該顯著加速。中複雜度，是 Group E
+  剩下唯一值得做的。
+- [⊘ 部分跳過 — 已被 E.b cover] **Sub-page 粒度 fast-path**：GBA
+  IWRAM/EWRAM/ROM 三個熱區已在 E.b trampoline 內 fast-path。GB
+  HRAM/WRAM 的 trampoline-side fast-path 沒做（H.d 有列）。如果做
+  E.c 自然 cover 所有 sub-page。
+- [⊘ 已 cover] **Read-only ROM fast path**：CpuExecutor instr fetch
+  (E.a) + JIT'd LDR via trampoline (E.b) 都有 ROM fast-path。完整
+  IR-level inline 在 E.c。
+- [⊘ 跳過 — JIT 已處理] **Aligned word access**：JIT'd code 對
+  aligned address 已直接 emit `BuildLoad2 i32` / `BuildLoad2 i16`；
+  LLVM backend 對齊好的話會 emit single instruction。沒額外可做。
 
 #### F. Dispatcher / cycle-accounting 簡化
 
@@ -566,19 +594,27 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   `new DecodedInstruction(...)` heap alloc + foreach IEnumerator alloc。
   **GBA arm +55% (3.82 → 5.94), GBA thumb +67% (3.75 → 6.27), GB
   json-llvm +137% (2.66 → 6.30)**，GBA 兩條 path 首次跨過 1.0× real-time。
-- [ ] **Dispatcher 從 hash-lookup 改 direct table**（decoded opcode
-  → fn pointer 陣列）— F.x/F.y 已撈大頭，這個是進一步壓榨
-- [ ] **Cycle accounting trailing add**：block 結束時一次累加 cycle
-  總數，不每條指令 inc
-- [ ] **IRQ check 集中在 block exit**，不是每條指令
+- [⊘ 跳過 — F.x/F.y 已撈大頭] **Dispatcher 從 hash-lookup 改 direct table**
+  （decoded opcode → fn pointer 陣列）：F.x identity-keyed cache 已把
+  Dictionary lookup 從 string-hash 變 ref-equality（≈ 5-10 ns），F.y
+  pre-built 省掉 alloc。再進一步用 array-index 大概再省 ~3-5 ns，但要
+  維護 opcode → array index 的 mapping 加複雜度。性價比低。
+- [⏸ blocked on A] **Cycle accounting trailing add**：要 block-JIT 才
+  有意義（block 結束時加總），單指令 dispatch 已是「每 instr 加 4」最簡
+  形式。
+- [⏸ blocked on A] **IRQ check 集中在 block exit**：同上 — 沒 block 沒地方
+  集中。當前 B.h 已把 per-instr IRQ check 的 fast path inline 掉。
 
 #### G. .NET host runtime 優化
 
-- [ ] **Native AOT** — 把整個 host runtime AOT 編譯，避開 .NET
+- [ ] **G.a Native AOT** — 把整個 host runtime AOT 編譯，避開 .NET
   tiered JIT 的 cold-start cost (對 GB legacy 那 −15% 量測 noise
-  也可能改善)
-- [ ] **UnmanagedCallersOnly trampolines 走 IL emit**：直接 patch
-  entry，避免 .NET wrapper 的 prologue overhead
+  也可能改善)。需要 `<PublishAot>true</PublishAot>` + 確認所有 dynamic
+  code (LLVMSharp interop) 都 AOT-compatible。中複雜度，純 build-time
+  改動。
+- [ ] **G.b UnmanagedCallersOnly trampolines 走 IL emit**：直接 patch
+  entry，避免 .NET wrapper 的 prologue overhead。微優化，需要熟 .NET
+  IL 內部。
 
 #### H. 漏掉的優化方向（2026-05-03 補充）
 
