@@ -444,6 +444,13 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
   GCHandle.Alloc(_state, Pinned) 一次、cache byte* 給 JIT 用。
   **GBA thumb +27% (6.26 → 7.97 MIPS, stable 1.9× real-time)**, GBA arm
   持平 (plateau), GB 兩條 path 持平 (噪聲)。
+- [x] **B.g AggressiveInlining for GBA bus methods**（2026-05-03，perf
+  note `MD/performance/202605030108-aggressive-inlining-bus-methods.md`）
+  — GbaMemoryBus 的 Locate / ReadWord / ReadHalfword / NotifyExecutingPc /
+  HasPendingInterrupt 加 `[MethodImpl(AggressiveInlining)]`，讓 .NET JIT
+  能 inline 整條 fetch path 進 CpuExecutor.Step。**GBA arm +13% (7.13 →
+  8.05 MIPS, stable 2.0× real-time, run-to-run noise 從 ~30% 降到 ~5%)**,
+  GBA thumb 持平 (8.10, plateau)。GB 路徑沒動。
 - [ ] **scheduler.Tick / NotifyExecutingPc / NotifyInstructionFetch
   inlining**：目前 per-instruction 多 2-3 次 virtual call；改 inline
   C# method + `[MethodImpl(AggressiveInlining)]` 或乾脆把這些 hook

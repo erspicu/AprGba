@@ -73,6 +73,8 @@ public sealed class GbaMemoryBus : IMemoryBus
     /// (otherwise the BIOS open-bus rule would mis-fire on the first
     /// fetch after any vector entry — SWI / IRQ / BX into BIOS).
     /// </summary>
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public void NotifyExecutingPc(uint pc) => ExecutingPc = pc;
 
     /// <summary>
@@ -163,6 +165,8 @@ public sealed class GbaMemoryBus : IMemoryBus
     public bool CpuHalted { get; set; }
 
     /// <summary>True iff IME is set AND any IE&amp;IF bit is pending.</summary>
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public bool HasPendingInterrupt()
     {
         var ime = BinaryPrimitives.ReadUInt32LittleEndian(Io.AsSpan((int)GbaMemoryMap.IME_Off, 4)) & 1u;
@@ -202,6 +206,8 @@ public sealed class GbaMemoryBus : IMemoryBus
         };
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public ushort ReadHalfword(uint addr)
     {
         var (region, off) = Locate(addr);
@@ -221,6 +227,8 @@ public sealed class GbaMemoryBus : IMemoryBus
         };
     }
 
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public uint ReadWord(uint addr)
     {
         var (region, off) = Locate(addr);
@@ -340,6 +348,14 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     private enum Region { Unmapped, Bios, Ewram, Iwram, Io, Palette, Vram, Oam, Rom }
 
+    // Phase 7 B.g: AggressiveInlining hints on the hot bus methods.
+    // GbaMemoryBus is sealed so JIT already devirtualises through the
+    // IMemoryBus interface; this just nudges the inliner to actually
+    // pull Locate / ReadWord / NotifyExecutingPc into CpuExecutor.Step's
+    // body. Each tag adds at most 2× the function body to the caller —
+    // these are short enough that it's a net win.
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     private static (Region region, int offset) Locate(uint addr)
     {
         var page = addr >> 24;
