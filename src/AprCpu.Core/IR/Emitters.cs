@@ -278,20 +278,35 @@ internal static class CpsrHelpers
     {
         var bitIndex = ctx.Layout.GetStatusFlagBitIndex(register, flag);
         var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
-        var v   = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, $"{register.ToLowerInvariant()}_for_{flag.ToLowerInvariant()}");
-        var sh  = ctx.Builder.BuildLShr(v, ctx.ConstU32((uint)bitIndex), $"{flag.ToLowerInvariant()}_shr");
-        return ctx.Builder.BuildAnd(sh, ctx.ConstU32(1), $"{flag.ToLowerInvariant()}_bit");
+        // Phase 7 C.a: load at the status register's actual width.
+        // Pre-7.C.a always loaded i32; for LR35902 F (i8) that read 4 bytes
+        // spanning F + adjacent SP/PC fields. Width-correct loads/stores
+        // let LLVM combine consecutive flag updates into a single store
+        // (no aliasing-to-other-fields concerns).
+        var (statusType, _) = StatusTypeAndAllOnes(ctx, register);
+        var v   = ctx.Builder.BuildLoad2(statusType, ptr, $"{register.ToLowerInvariant()}_for_{flag.ToLowerInvariant()}");
+        var sh  = ctx.Builder.BuildLShr(v, LLVMValueRef.CreateConstInt(statusType, (uint)bitIndex, false), $"{flag.ToLowerInvariant()}_shr");
+        var bit = ctx.Builder.BuildAnd(sh, LLVMValueRef.CreateConstInt(statusType, 1, false), $"{flag.ToLowerInvariant()}_bit");
+        // Callers expect i32 (existing emitters do arithmetic with these
+        // as i32). Widen if needed.
+        return statusType == LLVMTypeRef.Int32
+            ? bit
+            : ctx.Builder.BuildZExt(bit, LLVMTypeRef.Int32, $"{flag.ToLowerInvariant()}_z32");
     }
 
     private static void SetStatusFlagAt(EmitContext ctx, string register, int bitIndex, LLVMValueRef boolValue, string label)
     {
         var ptr  = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
-        var prev = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, $"{register.ToLowerInvariant()}_old");
+        // Phase 7 C.a: width-correct load+store (was always i32).
+        var (statusType, allOnes) = StatusTypeAndAllOnes(ctx, register);
+        var prev = ctx.Builder.BuildLoad2(statusType, ptr, $"{register.ToLowerInvariant()}_old");
 
-        var asI32   = ctx.Builder.BuildZExt(boolValue, LLVMTypeRef.Int32, $"{label}_asi32");
-        var shifted = ctx.Builder.BuildShl (asI32, ctx.ConstU32((uint)bitIndex), $"{label}_shifted");
+        var asI    = ctx.Builder.BuildZExt(boolValue, statusType, $"{label}_asi");
+        var shifted = ctx.Builder.BuildShl(asI, LLVMValueRef.CreateConstInt(statusType, (uint)bitIndex, false), $"{label}_shifted");
 
-        var clearMask = ctx.ConstU32(~(1u << bitIndex));
+        // ~(1 << bitIndex) at the right width so LLVM sees the constant
+        // as the real mask, not an i32 with extra high bits set.
+        var clearMask = LLVMValueRef.CreateConstInt(statusType, allOnes ^ (1UL << bitIndex), false);
         var cleared   = ctx.Builder.BuildAnd(prev, clearMask, $"{register.ToLowerInvariant()}_clear_{label}");
         var newV      = ctx.Builder.BuildOr (cleared, shifted, $"{register.ToLowerInvariant()}_set_{label}");
         ctx.Builder.BuildStore(newV, ptr);
@@ -302,6 +317,23 @@ internal static class CpsrHelpers
         var lowBit = ctx.Builder.BuildAnd(i32Value, ctx.ConstU32(1), $"{label}_lsb");
         var asBool = ctx.Builder.BuildTrunc(lowBit, LLVMTypeRef.Int1, $"{label}_b");
         SetStatusFlagAt(ctx, register, bitIndex, asBool, label);
+    }
+
+    /// <summary>
+    /// Phase 7 C.a — pick the LLVM int type matching the status register's
+    /// declared width plus an all-ones mask of that width (for inverted
+    /// bit-clear masks).
+    /// </summary>
+    private static (LLVMTypeRef Type, ulong AllOnes) StatusTypeAndAllOnes(EmitContext ctx, string register)
+    {
+        var def = ctx.Layout.GetStatusRegisterDef(register);
+        return def.WidthBits switch
+        {
+            8  => (LLVMTypeRef.Int8,  0xFFUL),
+            16 => (LLVMTypeRef.Int16, 0xFFFFUL),
+            32 => (LLVMTypeRef.Int32, 0xFFFFFFFFUL),
+            _  => throw new NotSupportedException($"status register '{register}' width {def.WidthBits}-bit unsupported")
+        };
     }
 
 
