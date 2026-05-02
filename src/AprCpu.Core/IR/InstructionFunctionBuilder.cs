@@ -34,6 +34,25 @@ public sealed unsafe class InstructionFunctionBuilder
         var fnType = LLVMTypeRef.CreateFunction(Module.Context.VoidType, paramTypes);
         var fn = Module.AddFunction(name, fnType);
 
+        // Suppress Windows MCJIT relocation crashes by stopping LLVM from
+        // emitting the COFF supplementary sections (.pdata SEH unwind +
+        // .rdata jump tables) that trigger
+        // "IMAGE_REL_AMD64_ADDR32NB requires an ordered section layout".
+        // Per Gemini analysis 2026-05-02:
+        //   - i8/i16 register pressure on x64 forces extra spills →
+        //     larger frames → SEH .pdata. nounwind suppresses it.
+        //   - Dense 8-bit opcode-dispatch switches become jump tables
+        //     in .rdata. no-jump-tables forces branch trees.
+        // The SAME pattern works for ARM today (uniform i32, no
+        // dispatch switches), so adding these attributes universally
+        // is safe — no behavioural change, smaller emitted code, and
+        // no SEH frames to walk through (we never throw across the
+        // JIT boundary anyway).
+        fn.AddAttributeAtIndex(LLVMAttributeIndex.LLVMAttributeFunctionIndex,
+            CreateStringAttribute(Module.Context, "no-jump-tables", "true"));
+        fn.AddAttributeAtIndex(LLVMAttributeIndex.LLVMAttributeFunctionIndex,
+            CreateEnumAttribute(Module.Context, "nounwind"));
+
         var entry = fn.AppendBasicBlock("entry");
         var builder = Module.Context.CreateBuilder();
         builder.PositionAtEnd(entry);
@@ -96,4 +115,25 @@ public sealed unsafe class InstructionFunctionBuilder
 
     private static bool IsCurrentBlockTerminated(LLVMBuilderRef builder)
         => builder.InsertBlock.Terminator.Handle != IntPtr.Zero;
+
+    private static unsafe LLVMAttributeRef CreateEnumAttribute(LLVMContextRef ctx, string name)
+    {
+        var kind = LLVM.GetEnumAttributeKindForName(
+            (sbyte*)System.Runtime.InteropServices.Marshal.StringToHGlobalAnsi(name),
+            (UIntPtr)name.Length);
+        return ctx.CreateEnumAttribute(kind, 0);
+    }
+
+    private static unsafe LLVMAttributeRef CreateStringAttribute(LLVMContextRef ctx, string key, string value)
+    {
+        var keyBytes   = System.Text.Encoding.ASCII.GetBytes(key);
+        var valueBytes = System.Text.Encoding.ASCII.GetBytes(value);
+        fixed (byte* kp = keyBytes)
+        fixed (byte* vp = valueBytes)
+        {
+            return LLVM.CreateStringAttribute(ctx,
+                (sbyte*)kp, (uint)keyBytes.Length,
+                (sbyte*)vp, (uint)valueBytes.Length);
+        }
+    }
 }
