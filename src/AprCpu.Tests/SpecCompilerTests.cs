@@ -371,6 +371,110 @@ public class SpecCompilerTests
     }
 
     /// <summary>
+    /// Wave 5: CB-prefix instructions compile — RLC/RRC/RL/RR/SLA/SRA/
+    /// SWAP/SRL + BIT/RES/SET. With these, the entire CB instruction
+    /// set produces IR.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_CbInstructionsCompile()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        // Shift family — 8 entries selected by ooo.
+        Assert.Contains("CB.Cb_Shift.RLC",  result.Functions.Keys);
+        Assert.Contains("CB.Cb_Shift.RRC",  result.Functions.Keys);
+        Assert.Contains("CB.Cb_Shift.RL",   result.Functions.Keys);
+        Assert.Contains("CB.Cb_Shift.RR",   result.Functions.Keys);
+        Assert.Contains("CB.Cb_Shift.SLA",  result.Functions.Keys);
+        Assert.Contains("CB.Cb_Shift.SRA",  result.Functions.Keys);
+        Assert.Contains("CB.Cb_Shift.SWAP", result.Functions.Keys);
+        Assert.Contains("CB.Cb_Shift.SRL",  result.Functions.Keys);
+
+        // BIT/RES/SET — single instruction each (with bbb/sss runtime).
+        Assert.Contains("CB.Cb_Bit.BIT", result.Functions.Keys);
+        Assert.Contains("CB.Cb_Res.RES", result.Functions.Keys);
+        Assert.Contains("CB.Cb_Set.SET", result.Functions.Keys);
+
+        var ir = result.Module.PrintToString();
+        // SWAP body should contain the high/low nibble swap.
+        var swapIdx = ir.IndexOf("@Execute_CB_Cb_Shift_SWAP", StringComparison.Ordinal);
+        Assert.True(swapIdx >= 0);
+        var nextDef = ir.IndexOf("\ndefine ", swapIdx + 1, StringComparison.Ordinal);
+        var swapBody = nextDef > 0 ? ir.Substring(swapIdx, nextDef - swapIdx) : ir.Substring(swapIdx);
+        Assert.Contains("swap_hi", swapBody);
+        Assert.Contains("swap_lo", swapBody);
+    }
+
+    /// <summary>
+    /// Wave 5: stack arithmetic — ADD SP,e8 and LD HL,SP+e8 share the
+    /// special H/C-from-low-byte rules. Plus LDH IO ops.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_StackArithAndLdhCompile()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        Assert.Contains("Main.Add_Sp_E8.ADD",   result.Functions.Keys);
+        Assert.Contains("Main.Ld_Hl_Sp_E8.LD",  result.Functions.Keys);
+        Assert.Contains("Main.Ldh_N_A.LDH",     result.Functions.Keys);
+        Assert.Contains("Main.Ldh_A_N.LDH",     result.Functions.Keys);
+        Assert.Contains("Main.Ld_C_A.LD",       result.Functions.Keys);
+        Assert.Contains("Main.Ld_A_C.LD",       result.Functions.Keys);
+    }
+
+    /// <summary>
+    /// Wave 4: control flow ops compile — JP / JR / CALL / RET / RST,
+    /// with conditional and unconditional variants. PUSH / POP also
+    /// land here even though their memory writes are still placeholder.
+    /// </summary>
+    [Fact]
+    public void Compile_Lr35902_ControlFlowCompiles()
+    {
+        var result = SpecCompiler.Compile(Lr35902CpuJson);
+
+        // JP family
+        Assert.Contains("Main.Jp_Nn.JP",        result.Functions.Keys);
+        Assert.Contains("Main.Jp_Hl.JP",        result.Functions.Keys);
+        Assert.Contains("Main.Jp_Cc_Nn.JP_00",  result.Functions.Keys);
+        Assert.Contains("Main.Jp_Cc_Nn.JP_11",  result.Functions.Keys);
+
+        // JR family
+        Assert.Contains("Main.Jr_E8.JR",        result.Functions.Keys);
+        Assert.Contains("Main.Jr_Cc_E8.JR_00",  result.Functions.Keys);
+        Assert.Contains("Main.Jr_Cc_E8.JR_11",  result.Functions.Keys);
+
+        // CALL family
+        Assert.Contains("Main.Call_Nn.CALL",       result.Functions.Keys);
+        Assert.Contains("Main.Call_Cc_Nn.CALL_00", result.Functions.Keys);
+
+        // RET family — incl. RETI
+        Assert.Contains("Main.Ret.RET",      result.Functions.Keys);
+        Assert.Contains("Main.Reti.RETI",    result.Functions.Keys);
+        Assert.Contains("Main.Ret_Cc.RET_00",result.Functions.Keys);
+
+        // RST + PUSH/POP
+        Assert.Contains("Main.Rst.RST",      result.Functions.Keys);
+        Assert.Contains("Main.Push_Rr.PUSH", result.Functions.Keys);
+        Assert.Contains("Main.Pop_Rr.POP",   result.Functions.Keys);
+
+        // JP body should write i16 to PC.
+        var ir = result.Module.PrintToString();
+        var jpIdx = ir.IndexOf("@Execute_Main_Jp_Nn_JP", StringComparison.Ordinal);
+        Assert.True(jpIdx >= 0);
+        var nextDef = ir.IndexOf("\ndefine ", jpIdx + 1, StringComparison.Ordinal);
+        var body = nextDef > 0 ? ir.Substring(jpIdx, nextDef - jpIdx) : ir.Substring(jpIdx);
+        Assert.Contains("store i16", body);
+
+        // JR body should compute a new PC and store it back to PC.
+        var jrIdx = ir.IndexOf("@Execute_Main_Jr_E8_JR", StringComparison.Ordinal);
+        Assert.True(jrIdx >= 0);
+        var jrNext = ir.IndexOf("\ndefine ", jrIdx + 1, StringComparison.Ordinal);
+        var jrBody = jrNext > 0 ? ir.Substring(jrIdx, jrNext - jrIdx) : ir.Substring(jrIdx);
+        Assert.Contains("pc_jr_cur", jrBody);
+        Assert.Contains("store i16", jrBody);
+    }
+
+    /// <summary>
     /// Track JsonCpu compilation coverage: how many of LR35902's instructions
     /// produce a function vs. how many surface as "no emitter" diagnostics.
     /// As more emitters land, the diagnostic count drops; this test merely
@@ -399,10 +503,11 @@ public class SpecCompilerTests
         var compiledMnemonics = string.Join(", ", byMnemonic.Select(g => $"{g.Key}×{g.Count()}"));
         var sampleFailures = string.Join(" || ", result.Diagnostics.Take(3));
 
-        Assert.True(compiled >= 60,
-            $"Coverage regression: expected ≥60 compiled instructions (got {compiled}). " +
+        Assert.True(compiled >= 102,
+            $"Coverage regression: expected ≥102 compiled instructions (got {compiled}). " +
             $"Compiled mnemonics: {compiledMnemonics}. " +
             $"Sample failures: {sampleFailures}");
+        Assert.Empty(result.Diagnostics);
         Assert.True(compiled + failed >= 100,
             $"Spec should account for ≥100 instructions total (compiled+failed got {compiled}+{failed} = {compiled + failed}).");
     }
