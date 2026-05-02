@@ -116,7 +116,11 @@
       "instructions": [{
         "mnemonic": "SCF", "since": "LR35902", "manual_ref": "GB CPU §SCF",
         "cycles": { "form": "1m" },
-        "steps": [{ "op": "lr35902_scf" }]
+        "steps": [
+          { "op": "set_flag", "reg": "F", "flag": "N", "value": 0 },
+          { "op": "set_flag", "reg": "F", "flag": "H", "value": 0 },
+          { "op": "set_flag", "reg": "F", "flag": "C", "value": 1 }
+        ]
       }]
     },
     {
