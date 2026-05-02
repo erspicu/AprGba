@@ -106,6 +106,8 @@ public static class Lr35902Emitters
         // Wave 3: 8-bit INC / DEC selected by 3-bit ddd field.
         reg.Register(new Lr35902IncDecR8Emitter("lr35902_inc_r8", isInc: true));
         reg.Register(new Lr35902IncDecR8Emitter("lr35902_dec_r8", isInc: false));
+        reg.Register(new Lr35902IncDecHlMemEmitter("lr35902_inc_hl_mem", isInc: true));
+        reg.Register(new Lr35902IncDecHlMemEmitter("lr35902_dec_hl_mem", isInc: false));
 
         // Wave 3: 16-bit register-pair operations selected by 2-bit dd field.
         // dd: 00=BC, 01=DE, 10=HL, 11=SP per LR35902 encoding.
@@ -851,8 +853,8 @@ internal sealed class Lr35902Alu8Emitter : IMicroOpEmitter
         LLVMValueRef src = _source switch
         {
             Lr35902Alu8Source.RegField  => ResolveR8FromField(ctx, step),
-            Lr35902Alu8Source.HlMemory  => LLVMValueRef.CreateConstInt(i8, 0, false),  // placeholder (memory bus not wired)
-            Lr35902Alu8Source.Immediate => LLVMValueRef.CreateConstInt(i8, 0, false),  // placeholder (read_imm8 stubbed)
+            Lr35902Alu8Source.HlMemory  => LoadHlIndirect(ctx),
+            Lr35902Alu8Source.Immediate => FetchImmediate(ctx),
             _ => throw new InvalidOperationException()
         };
 
@@ -965,6 +967,35 @@ internal sealed class Lr35902Alu8Emitter : IMicroOpEmitter
             current = ctx.Builder.BuildSelect(cmp, values[sss], current, $"alu_src_sel{sss}");
         }
         return current;
+    }
+
+    /// <summary>
+    /// Load i8 from memory[HL]. Used by ALU op A,(HL) variants.
+    /// </summary>
+    private static LLVMValueRef LoadHlIndirect(EmitContext ctx)
+    {
+        var hlPair = Lr35902Emitters.LocateRegisterPair(ctx, "HL")!;
+        var hl16 = Lr35902Emitters.ComposePairValue(ctx, hlPair, "alu_hl");
+        var hl32 = ctx.Builder.BuildZExt(hl16, LLVMTypeRef.Int32, "alu_hl32");
+        return Lr35902MemoryHelpers.CallRead8(ctx, hl32, "alu_hl_byte");
+    }
+
+    /// <summary>
+    /// Fetch immediate i8 at PC, advance PC by 1. Used by ALU op A,n.
+    /// (Equivalent to a synthesised read_imm8 inline — the spec's
+    /// alu-imm8 group has no separate read_imm8 step, so the source
+    /// fetch lives here.)
+    /// </summary>
+    private static LLVMValueRef FetchImmediate(EmitContext ctx)
+    {
+        var pcPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "PC");
+        var pc16 = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "alu_pc");
+        var pc32 = ctx.Builder.BuildZExt(pc16, LLVMTypeRef.Int32, "alu_pc32");
+        var imm = Lr35902MemoryHelpers.CallRead8(ctx, pc32, "alu_imm");
+        var newPc = ctx.Builder.BuildAdd(pc16,
+            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int16, 1, false), "alu_pc_after");
+        ctx.Builder.BuildStore(newPc, pcPtr);
+        return imm;
     }
 
     private static LLVMValueRef BoolToI8(EmitContext ctx, LLVMValueRef i1)
@@ -2256,5 +2287,61 @@ internal sealed class Lr35902DaaEmitter : IMicroOpEmitter
                     i8, "daa_z");
         var h = LLVMValueRef.CreateConstInt(i8, 0, false);
         Lr35902Emitters.StoreFlags(ctx, z, nBit, h, cOut);
+    }
+}
+
+/// <summary>
+/// INC/DEC (HL) memory R-M-W. Reads memory[HL], adjusts ±1, writes
+/// back, updates Z/N/H per LR35902 (C preserved).
+/// </summary>
+internal sealed class Lr35902IncDecHlMemEmitter : IMicroOpEmitter
+{
+    public string OpName { get; }
+    private readonly bool _isInc;
+
+    public Lr35902IncDecHlMemEmitter(string opName, bool isInc)
+    {
+        OpName = opName;
+        _isInc = isInc;
+    }
+
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i8 = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+
+        // Compute (HL) address.
+        var hlPair = Lr35902Emitters.LocateRegisterPair(ctx, "HL")!;
+        var hl16 = Lr35902Emitters.ComposePairValue(ctx, hlPair, "incdec_hl");
+        var hl32 = ctx.Builder.BuildZExt(hl16, i32, "incdec_hl32");
+
+        // Read, adjust, write back.
+        var mem = Lr35902MemoryHelpers.CallRead8(ctx, hl32, "incdec_mem_old");
+        var one = LLVMValueRef.CreateConstInt(i8, 1, false);
+        var newVal = _isInc
+            ? ctx.Builder.BuildAdd(mem, one, "incdec_mem_new")
+            : ctx.Builder.BuildSub(mem, one, "incdec_mem_new");
+        Lr35902MemoryHelpers.CallWrite8(ctx, hl32, newVal);
+
+        // Z = (newVal == 0).
+        var z = ctx.Builder.BuildZExt(
+                    ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, newVal,
+                        LLVMValueRef.CreateConstInt(i8, 0, false), "incdec_z_cmp"),
+                    i8, "incdec_z");
+
+        // H: INC → low nibble of newVal == 0 (carry from bit 3).
+        //    DEC → low nibble of newVal == 0xF (borrow from bit 4).
+        var lowNib = ctx.Builder.BuildAnd(newVal,
+            LLVMValueRef.CreateConstInt(i8, 0xF, false), "incdec_lowm");
+        var hCheck = _isInc
+            ? LLVMValueRef.CreateConstInt(i8, 0x0, false)
+            : LLVMValueRef.CreateConstInt(i8, 0xF, false);
+        var h = ctx.Builder.BuildZExt(
+                    ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, lowNib, hCheck, "incdec_h_cmp"),
+                    i8, "incdec_h");
+
+        var n = LLVMValueRef.CreateConstInt(i8, _isInc ? 0u : 1u, false);
+        var c = Lr35902Emitters.ReadCarry(ctx);
+        Lr35902Emitters.StoreFlags(ctx, z, n, h, c);
     }
 }
