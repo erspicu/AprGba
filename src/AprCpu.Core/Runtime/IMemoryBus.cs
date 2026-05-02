@@ -17,4 +17,15 @@ public interface IMemoryBus
     void   WriteByte    (uint addr, byte   value);
     void   WriteHalfword(uint addr, ushort value);
     void   WriteWord    (uint addr, uint   value);
+
+    /// <summary>
+    /// Called by <see cref="CpuExecutor"/> immediately after a successful
+    /// instruction fetch. Buses that model fetch-side state — GBA BIOS
+    /// open-bus protection, ARM prefetch buffer, etc. — implement this
+    /// to track (pc, last fetched word, instruction size). The size
+    /// lets the bus reproduce the 3-stage pipeline's prefetch offset
+    /// (PC+2×instrSize) where it matters. Default is a no-op so buses
+    /// without such behaviour need not opt in.
+    /// </summary>
+    void NotifyInstructionFetch(uint pc, uint instructionWord, uint instrSizeBytes) { }
 }
