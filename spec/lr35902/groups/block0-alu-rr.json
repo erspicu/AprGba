@@ -1,69 +1,47 @@
 {
   "name": "Block0_AluRr",
-  "comment": "16-bit operations on register pairs: INC rr (00_dd0_011), DEC rr (00_dd1_011), ADD HL,rr (00_dd1_001). 12 opcodes total. INC/DEC rr don't affect any flags; ADD HL,rr affects H/C/N (Z preserved).",
+  "comment": "16-bit operations on register pairs: INC rr (00_dd0_011), DEC rr (00_dd1_011), ADD HL,rr (00_dd1_001). 12 opcodes total. INC/DEC rr don't affect any flags (migrated to per-dd selector variants of the named-pair add/sub chain). ADD HL,rr stays on the LR35902-specific lr35902_add_hl_rr emitter — the H/C flags come off bits 11/15 of the 16-bit add and need arch-specific helpers.",
   "formats": [
     {
       "name": "Inc_Rr",
-      "comment": "00_dd0_011",
+      "comment": "00_dd0_011 — INC rr. dd: 00=BC, 01=DE, 10=HL, 11=SP. No flag effects.",
       "pattern": "00dd0011",
-      "fields": {
-        "dd": "5:4"
-      },
+      "fields": { "dd": "5:4" },
       "mask": "0xCF",
       "match": "0x03",
       "instructions": [
-        {
-          "mnemonic": "INC",
-          "since": "LR35902",
-          "manual_ref": "GB CPU §INC rr",
-          "cycles": { "form": "2m" },
-          "steps": [
-            { "op": "lr35902_inc_rr_dd", "field": "dd" }
-          ]
-        }
+        { "selector": { "field": "dd", "value": "00" }, "mnemonic": "INC", "since": "LR35902", "manual_ref": "GB CPU §INC BC", "cycles": { "form": "2m" }, "steps": [{ "op": "read_reg_pair_named", "name": "BC", "out": "v" }, { "op": "add", "in": ["v", { "const": 1 }], "out": "v_new" }, { "op": "write_reg_pair_named", "name": "BC", "value": "v_new" }] },
+        { "selector": { "field": "dd", "value": "01" }, "mnemonic": "INC", "since": "LR35902", "manual_ref": "GB CPU §INC DE", "cycles": { "form": "2m" }, "steps": [{ "op": "read_reg_pair_named", "name": "DE", "out": "v" }, { "op": "add", "in": ["v", { "const": 1 }], "out": "v_new" }, { "op": "write_reg_pair_named", "name": "DE", "value": "v_new" }] },
+        { "selector": { "field": "dd", "value": "10" }, "mnemonic": "INC", "since": "LR35902", "manual_ref": "GB CPU §INC HL", "cycles": { "form": "2m" }, "steps": [{ "op": "read_reg_pair_named", "name": "HL", "out": "v" }, { "op": "add", "in": ["v", { "const": 1 }], "out": "v_new" }, { "op": "write_reg_pair_named", "name": "HL", "value": "v_new" }] },
+        { "selector": { "field": "dd", "value": "11" }, "mnemonic": "INC", "since": "LR35902", "manual_ref": "GB CPU §INC SP", "cycles": { "form": "2m" }, "steps": [{ "op": "read_reg_pair_named", "name": "SP", "out": "v" }, { "op": "add", "in": ["v", { "const": 1 }], "out": "v_new" }, { "op": "write_reg_pair_named", "name": "SP", "value": "v_new" }] }
       ]
     },
     {
       "name": "Dec_Rr",
-      "comment": "00_dd1_011",
+      "comment": "00_dd1_011 — DEC rr. dd: 00=BC, 01=DE, 10=HL, 11=SP. No flag effects.",
       "pattern": "00dd1011",
-      "fields": {
-        "dd": "5:4"
-      },
+      "fields": { "dd": "5:4" },
       "mask": "0xCF",
       "match": "0x0B",
       "instructions": [
-        {
-          "mnemonic": "DEC",
-          "since": "LR35902",
-          "manual_ref": "GB CPU §DEC rr",
-          "cycles": { "form": "2m" },
-          "steps": [
-            { "op": "lr35902_dec_rr_dd", "field": "dd" }
-          ]
-        }
+        { "selector": { "field": "dd", "value": "00" }, "mnemonic": "DEC", "since": "LR35902", "manual_ref": "GB CPU §DEC BC", "cycles": { "form": "2m" }, "steps": [{ "op": "read_reg_pair_named", "name": "BC", "out": "v" }, { "op": "sub", "in": ["v", { "const": 1 }], "out": "v_new" }, { "op": "write_reg_pair_named", "name": "BC", "value": "v_new" }] },
+        { "selector": { "field": "dd", "value": "01" }, "mnemonic": "DEC", "since": "LR35902", "manual_ref": "GB CPU §DEC DE", "cycles": { "form": "2m" }, "steps": [{ "op": "read_reg_pair_named", "name": "DE", "out": "v" }, { "op": "sub", "in": ["v", { "const": 1 }], "out": "v_new" }, { "op": "write_reg_pair_named", "name": "DE", "value": "v_new" }] },
+        { "selector": { "field": "dd", "value": "10" }, "mnemonic": "DEC", "since": "LR35902", "manual_ref": "GB CPU §DEC HL", "cycles": { "form": "2m" }, "steps": [{ "op": "read_reg_pair_named", "name": "HL", "out": "v" }, { "op": "sub", "in": ["v", { "const": 1 }], "out": "v_new" }, { "op": "write_reg_pair_named", "name": "HL", "value": "v_new" }] },
+        { "selector": { "field": "dd", "value": "11" }, "mnemonic": "DEC", "since": "LR35902", "manual_ref": "GB CPU §DEC SP", "cycles": { "form": "2m" }, "steps": [{ "op": "read_reg_pair_named", "name": "SP", "out": "v" }, { "op": "sub", "in": ["v", { "const": 1 }], "out": "v_new" }, { "op": "write_reg_pair_named", "name": "SP", "value": "v_new" }] }
       ]
     },
     {
       "name": "AddHl_Rr",
-      "comment": "00_dd1_001",
+      "comment": "00_dd1_001 — ADD HL,rr. Stays on lr35902_add_hl_rr (L3 — H from bit 11, C from bit 15 of the 16-bit add).",
       "pattern": "00dd1001",
-      "fields": {
-        "dd": "5:4"
-      },
+      "fields": { "dd": "5:4" },
       "mask": "0xCF",
       "match": "0x09",
-      "instructions": [
-        {
-          "mnemonic": "ADD",
-          "since": "LR35902",
-          "manual_ref": "GB CPU §ADD HL,rr",
-          "cycles": { "form": "2m" },
-          "steps": [
-            { "op": "lr35902_add_hl_rr", "field": "dd" }
-          ]
-        }
-      ]
+      "instructions": [{
+        "mnemonic": "ADD", "since": "LR35902", "manual_ref": "GB CPU §ADD HL,rr",
+        "cycles": { "form": "2m" },
+        "steps": [{ "op": "lr35902_add_hl_rr", "field": "dd" }]
+      }]
     }
   ]
 }

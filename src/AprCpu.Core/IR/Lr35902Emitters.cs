@@ -124,8 +124,9 @@ public static class Lr35902Emitters
         // Wave 3: 16-bit register-pair operations selected by 2-bit dd field.
         // dd: 00=BC, 01=DE, 10=HL, 11=SP per LR35902 encoding.
         reg.Register(new Lr35902WriteRrDdEmitter());
-        reg.Register(new Lr35902IncDecRrDdEmitter("lr35902_inc_rr_dd", isInc: true));
-        reg.Register(new Lr35902IncDecRrDdEmitter("lr35902_dec_rr_dd", isInc: false));
+        // INC rr / DEC rr (dd field-dispatched 16-bit) migrated to spec-side
+        // selector variants — each dd value gets its own named-pair add/sub
+        // chain. (Phase 5.8 Step 5.7.B/C cleanup.)
         reg.Register(new Lr35902AddHlRrEmitter());
 
         // Wave 4: control flow. Direct PC writes (JP / JP cc / JR / JR cc /
@@ -468,7 +469,41 @@ internal sealed class WriteRegPairNamedEmitter : IMicroOpEmitter
     }
 }
 
-// ---------------- field-driven r8 access ----------------
+// ============================================================================
+// L3 ARCHITECTURAL INTRINSICS — operand resolvers + ALU compound ops
+//
+// Everything from here through Lr35902LdHlSpE8Emitter is LR35902-specific
+// because it encodes one of two arch-bound things:
+//
+//   (1) Operand resolvers: the sss / ddd / dd field → register table
+//       mappings. LR35902's table (B=0, C=1, D=2, E=3, H=4, L=5, (HL)=6,
+//       A=7) is part of the ISA encoding and doesn't generalise to ARM
+//       (4-bit GPR field, 16 registers) or RISC-V (5-bit, 32 registers).
+//       Generalising would mean a "operand resolver registry" in the
+//       spec schema — left as future work pending a third CPU port.
+//
+//       Affects: lr35902_read_r8, lr35902_write_r8, lr35902_write_rr_dd
+//
+//   (2) Compound ALU + flag rules: 8-bit and 16-bit arithmetic with
+//       LR35902-specific flag derivation (e.g., ADD HL,rr's H flag from
+//       bit 11→12 carry, ADD SP,e8's H/C from low-byte unsigned add).
+//       The math is generic but the flag-bit positions and rules are
+//       arch-specific. Splitting into 10+ generic ops per ALU op would
+//       inflate the spec significantly without obvious payoff before a
+//       third CPU validates the abstraction.
+//
+//       Affects: lr35902_alu_a (the 3 source-mode emitters share the
+//       same Lr35902Alu8Emitter class), lr35902_add_hl_rr,
+//       lr35902_add_sp_e8, lr35902_ld_hl_sp_e8.
+//
+// Plus the bus-level helpers further down (load_byte / store_byte /
+// store_word / read_imm8 / read_imm16) which use a generic-looking name
+// but currently live in the LR35902 file because they wrap the LR35902
+// memory-bus extern. After Step 5.8 these should move to a shared
+// MemoryEmitters file.
+// ============================================================================
+
+// ---------------- field-driven r8 access (L3 — operand resolver) ----------------
 
 /// <summary>
 /// lr35902_read_r8 — produce an i8 value selected by a 3-bit sss/ddd
@@ -809,58 +844,9 @@ internal sealed class Lr35902WriteRrDdEmitter : IMicroOpEmitter
     }
 }
 
-/// <summary>
-/// lr35902_inc_rr_dd / lr35902_dec_rr_dd — 16-bit INC/DEC selected by
-/// 2-bit dd field. Affects no flags (per LR35902 spec).
-/// </summary>
-internal sealed class Lr35902IncDecRrDdEmitter : IMicroOpEmitter
-{
-    public string OpName { get; }
-    private readonly bool _isInc;
-
-    public Lr35902IncDecRrDdEmitter(string opName, bool isInc)
-    {
-        OpName = opName;
-        _isInc = isInc;
-    }
-
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var fieldName = step.Raw.GetProperty("field").GetString()!;
-        var field32 = ctx.Resolve(fieldName);
-        var i16 = LLVMTypeRef.Int16;
-        var one = LLVMValueRef.CreateConstInt(i16, 1, false);
-
-        for (int dd = 0; dd < 4; dd++)
-        {
-            var name = Lr35902Emitters.Dd2BitToRrName(dd);
-            var pair = Lr35902Emitters.LocateRegisterPair(ctx, name);
-
-            var cmp = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, field32,
-                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (uint)dd, false), $"is_dd{dd}");
-
-            LLVMValueRef cur;
-            if (pair is not null) cur = Lr35902Emitters.ComposePairValue(ctx, pair, $"{name}_cur");
-            else
-            {
-                var (ptr, _) = Lr35902Emitters.LocateRegister(ctx, name);
-                cur = ctx.Builder.BuildLoad2(i16, ptr, $"{name}_cur");
-            }
-
-            var next = _isInc
-                ? ctx.Builder.BuildAdd(cur, one, $"{name}_next")
-                : ctx.Builder.BuildSub(cur, one, $"{name}_next");
-            var chosen = ctx.Builder.BuildSelect(cmp, next, cur, $"{name}_chosen");
-
-            if (pair is not null) Lr35902Emitters.DecomposePairValue(ctx, pair, chosen);
-            else
-            {
-                var (ptr, _) = Lr35902Emitters.LocateRegister(ctx, name);
-                ctx.Builder.BuildStore(chosen, ptr);
-            }
-        }
-    }
-}
+// Lr35902IncDecRrDdEmitter deleted in Phase 5.8 Step 5.7.B/C cleanup —
+// migrated to per-dd selector variants in spec/lr35902/groups/block0-alu-rr.json
+// using the named-pair read+add/sub+write chain.
 
 /// <summary>
 /// lr35902_add_hl_rr — HL ← HL + rr_dd. N=0, H from bit 11→12 carry,
