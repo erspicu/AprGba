@@ -10,8 +10,16 @@ using AprGba.Cli.Video;
 // apr-gba — headless GBA test-ROM runner + screenshot
 //
 // Modes:
-//   apr-gba --rom=<path.gba> [--bios=<path.bin>] [--cycles=N | --frames=N]
+//   apr-gba --rom=<path.gba> [--bios=<path.bin>]
+//           [--cycles=N | --frames=N | --seconds=N]
 //           [--screenshot=out.png] [--info]
+//
+// Run-length units (pick one; later wins):
+//   --cycles=N    raw CPU cycles (one frame ≈ 280896 cycles)
+//   --frames=N    GBA scanline frames (228 lines × 1232 cycles each)
+//   --seconds=N   floating-point GBA wall-time seconds; converted via
+//                 the canonical 16,777,216 cycles/sec = 59.7275 fps.
+//                 e.g. --seconds=30 ≈ 1791.8 frames ≈ 503M cycles.
 //
 // Defaults:
 //   --cycles = 280896 (one GBA frame)
@@ -26,7 +34,11 @@ if (opts is null) { PrintUsage(); return 1; }
 Console.WriteLine("apr-gba — GBA harness (json-llvm CPU + headless screenshot)");
 Console.WriteLine($"  ROM:        {opts.RomPath}");
 Console.WriteLine($"  BIOS:       {opts.BiosPath ?? "(none — using minimal vector stubs)"}");
-Console.WriteLine($"  cycles:     {opts.Cycles:N0}");
+{
+    var emFrames = opts.Cycles / (double)GbaScheduler.CyclesPerFrame;
+    var emSecs   = opts.Cycles / (double)GbaTiming.CpuClockHz;
+    Console.WriteLine($"  budget:     {opts.Cycles:N0} cycles ≈ {emFrames:F1} frames ≈ {emSecs:F3} GBA seconds");
+}
 Console.WriteLine($"  screenshot: {opts.ScreenshotPath ?? "(none)"}");
 
 var rom = File.ReadAllBytes(opts.RomPath!);
@@ -93,7 +105,13 @@ else
     runner.RunCycles(opts.Cycles);
 }
 runSw.Stop();
-Console.WriteLine($"  ran {opts.Cycles:N0} cycles in {runSw.Elapsed.TotalSeconds:F3} s");
+{
+    var hostSecs   = runSw.Elapsed.TotalSeconds;
+    var emSecs     = opts.Cycles / (double)GbaTiming.CpuClockHz;
+    var realtimeX  = hostSecs > 0 ? emSecs / hostSecs : 0;
+    Console.WriteLine($"  ran {opts.Cycles:N0} cycles in {hostSecs:F3} s host time " +
+                      $"({emSecs:F3} GBA-emulated s, {realtimeX:F1}× real-time)");
+}
 Console.WriteLine($"  final PC = 0x{cpu.Pc:X8}, R0..R15 = {DumpRegs(cpu)}");
 Console.WriteLine($"  IRQs delivered: {runner.IrqsDelivered}, frames: {runner.Scheduler.FrameCount}");
 Console.WriteLine($"  CPSR=0x{cpu.ReadStatus("CPSR"):X8}");
@@ -239,6 +257,7 @@ static Options? ParseArgs(string[] args)
         else if (arg.StartsWith("--bios="))       opts.BiosPath = arg.Substring("--bios=".Length);
         else if (arg.StartsWith("--cycles="))     opts.Cycles = long.Parse(arg.Substring("--cycles=".Length));
         else if (arg.StartsWith("--frames="))     opts.Cycles = long.Parse(arg.Substring("--frames=".Length)) * GbaScheduler.CyclesPerFrame;
+        else if (arg.StartsWith("--seconds="))    opts.Cycles = (long)System.Math.Round(double.Parse(arg.Substring("--seconds=".Length), System.Globalization.CultureInfo.InvariantCulture) * GbaTiming.CpuClockHz);
         else if (arg.StartsWith("--screenshot=")) opts.ScreenshotPath = arg.Substring("--screenshot=".Length);
         else if (arg.StartsWith("--trace-bios=")) opts.TraceBiosPath = arg.Substring("--trace-bios=".Length);
         else if (arg == "--info")                 opts.InfoOnly = true;
@@ -251,11 +270,28 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("Usage:");
     Console.Error.WriteLine("  apr-gba --rom=<path.gba> [--bios=<path.bin>]");
-    Console.Error.WriteLine("          [--cycles=N | --frames=N]");
+    Console.Error.WriteLine("          [--cycles=N | --frames=N | --seconds=N]");
     Console.Error.WriteLine("          [--screenshot=out.png] [--info]");
     Console.Error.WriteLine();
-    Console.Error.WriteLine("Defaults: --cycles=280896 (one GBA frame).");
+    Console.Error.WriteLine("Run-length units (later wins; pick one):");
+    Console.Error.WriteLine("  --cycles=N    raw CPU cycles");
+    Console.Error.WriteLine("  --frames=N    GBA frames (1 frame = 280896 cycles)");
+    Console.Error.WriteLine("  --seconds=N   GBA-emulated wall-time seconds (16,777,216 cyc/s)");
+    Console.Error.WriteLine();
+    Console.Error.WriteLine("Defaults: --cycles=280896 (= 1 frame ≈ 0.0167 GBA seconds).");
     Console.Error.WriteLine("Without --bios: minimal vector stubs are installed (MOVS PC, LR).");
+}
+
+/// <summary>
+/// GBA timing constants. The CPU runs at 16.78 MHz (16,777,216 Hz),
+/// rendering one full frame (228 scanlines × 1232 cycles each) in
+/// 280,896 cycles = ~16.74 ms. That gives a real-hardware refresh of
+/// 16,777,216 / 280,896 ≈ 59.7275 frames per second.
+/// </summary>
+internal static class GbaTiming
+{
+    public const long CpuClockHz = 16_777_216L;
+    public const double FramesPerSecond = (double)CpuClockHz / GbaScheduler.CyclesPerFrame;
 }
 
 internal sealed class Options
