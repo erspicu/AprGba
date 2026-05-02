@@ -30,7 +30,7 @@
     },
     {
       "name": "Rlca",
-      "comment": "0x07 — RLCA. Like CB-prefix RLC A but always clears Z (rather than setting it on zero result).",
+      "comment": "0x07 — RLCA. Like CB-prefix RLC A but always clears Z (rather than setting it on zero result). Generic shift kind=rlc with N/H/C updates; Z forced to 0 by an explicit set_flag (we omit flag_z so the shift op leaves Z untouched).",
       "pattern": "00000111",
       "fields": {},
       "mask": "0xFF",
@@ -38,12 +38,17 @@
       "instructions": [{
         "mnemonic": "RLCA", "since": "LR35902", "manual_ref": "GB CPU §RLCA",
         "cycles": { "form": "1m" },
-        "steps": [{ "op": "lr35902_rlca" }]
+        "steps": [
+          { "op": "read_reg_named",  "name": "A", "out": "v" },
+          { "op": "shift",           "kind": "rlc", "in": "v", "out": "w", "reg": "F", "flag_n": "N", "flag_h": "H", "flag_c": "C" },
+          { "op": "set_flag",        "reg": "F", "flag": "Z", "value": 0 },
+          { "op": "write_reg_named", "name": "A", "value": "w" }
+        ]
       }]
     },
     {
       "name": "Rrca",
-      "comment": "0x0F — RRCA. Z always cleared.",
+      "comment": "0x0F — RRCA. Z always cleared. See Rlca comment for the kind=rrc / Z=0 split.",
       "pattern": "00001111",
       "fields": {},
       "mask": "0xFF",
@@ -51,12 +56,17 @@
       "instructions": [{
         "mnemonic": "RRCA", "since": "LR35902", "manual_ref": "GB CPU §RRCA",
         "cycles": { "form": "1m" },
-        "steps": [{ "op": "lr35902_rrca" }]
+        "steps": [
+          { "op": "read_reg_named",  "name": "A", "out": "v" },
+          { "op": "shift",           "kind": "rrc", "in": "v", "out": "w", "reg": "F", "flag_n": "N", "flag_h": "H", "flag_c": "C" },
+          { "op": "set_flag",        "reg": "F", "flag": "Z", "value": 0 },
+          { "op": "write_reg_named", "name": "A", "value": "w" }
+        ]
       }]
     },
     {
       "name": "Rla",
-      "comment": "0x17 — RLA. Z always cleared; rotates through C.",
+      "comment": "0x17 — RLA. Z always cleared; rotates through C. kind=rl reads C from F as the input bit then writes back the new C.",
       "pattern": "00010111",
       "fields": {},
       "mask": "0xFF",
@@ -64,7 +74,12 @@
       "instructions": [{
         "mnemonic": "RLA", "since": "LR35902", "manual_ref": "GB CPU §RLA",
         "cycles": { "form": "1m" },
-        "steps": [{ "op": "lr35902_rla" }]
+        "steps": [
+          { "op": "read_reg_named",  "name": "A", "out": "v" },
+          { "op": "shift",           "kind": "rl", "in": "v", "out": "w", "reg": "F", "flag_n": "N", "flag_h": "H", "flag_c": "C" },
+          { "op": "set_flag",        "reg": "F", "flag": "Z", "value": 0 },
+          { "op": "write_reg_named", "name": "A", "value": "w" }
+        ]
       }]
     },
     {
@@ -77,7 +92,12 @@
       "instructions": [{
         "mnemonic": "RRA", "since": "LR35902", "manual_ref": "GB CPU §RRA",
         "cycles": { "form": "1m" },
-        "steps": [{ "op": "lr35902_rra" }]
+        "steps": [
+          { "op": "read_reg_named",  "name": "A", "out": "v" },
+          { "op": "shift",           "kind": "rr", "in": "v", "out": "w", "reg": "F", "flag_n": "N", "flag_h": "H", "flag_c": "C" },
+          { "op": "set_flag",        "reg": "F", "flag": "Z", "value": 0 },
+          { "op": "write_reg_named", "name": "A", "value": "w" }
+        ]
       }]
     },
     {
