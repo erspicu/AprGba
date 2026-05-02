@@ -433,23 +433,50 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 
 #### A. Block-level JIT（核心，textbook 路徑）
 
-- [ ] **Block detector**：從 PC 掃到 branch / return / IO 寫入為止
-- [ ] **Block-level IR generation**（多條指令串接成一個 LLVM Function，
-  讓 LLVM optimizer 在大 basic block 內做 register caching、CSE、
-  constant folding、DCE）
-- [ ] **LLVM JIT execution engine 升級到 ORC LLJIT**（解掉 MCJIT 的
-  Windows COFF section 限制 + 解鎖 lazy compile / on-demand 編譯）
-- [ ] **Code cache**（hashmap PC → fn pointer + LRU eviction）
-- [ ] **SMC 偵測 + invalidation**：寫入「已編譯區域」時 invalidate
-  (memory bus write 攔截 + page-level dirty bit table)
-- [ ] **Indirect branch dispatch**：BX / JP HL / RET → cache lookup +
-  fall-through to dispatcher
-- [ ] **Block linking**：直接 patch native call site，後續 branch 不
-  退出 JIT
-- [ ] **State→register caching**：block entry 把常用 reg load 進
-  LLVM virtual register，exit 才 store 回 state buffer
-- [ ] Performance profiling 工具（在 host 端記錄 block 編譯次數 /
-  執行次數 / 佔總執行時間比例）
+> **整段為一個整體**：A 群所有項目互相依賴，不能單獨做某一項；
+> 是個 1-2 週的 architectural change project，會大幅重寫 dispatcher
+> + DecoderTable + JsonCpu/CpuExecutor。理論收益 8-13× over current
+> (per starting baseline note §4)。**目前 0/9，整個 group 待動工。**
+
+- [ ] **A.1 Block detector**：從 PC 掃前往 branch/return/IO 寫入為止組成
+  一個 basic block。**為什麼還沒做**：是 group A 起點，沒做這個其他全部
+  blocked。**估時**：1-2 天。
+- [ ] **A.2 Block-level IR generation**：把連續 N 條 spec instruction 串接
+  成一個 LLVM function，LLVM optimizer 才有空間做 register caching、CSE、
+  constant folding、DCE。**為什麼還沒做**：要 A.1 先給 block 邊界；要重寫
+  InstructionFunctionBuilder 為 block-level builder。**估時**：3-5 天。
+- [ ] **A.3 LLVM JIT execution engine 升級到 ORC LLJIT**：解掉 MCJIT 的
+  Windows COFF section ordering 限制 + 解鎖 lazy compile / on-demand 編譯
+  / module-level optimization。**為什麼還沒做**：MCJIT 目前能跑，沒急迫；
+  但 A.4 (code cache) 跟 A.7 (block linking) 需要 ORC 的 lazy + symbol
+  resolver。**估時**：2-3 天 + 驗證 Phase 5.7 改的 Windows MCJIT bug
+  workarounds (no-jump-tables / nounwind) 在 ORC 也適用。
+- [ ] **A.4 Code cache (hashmap PC → fn pointer + LRU eviction)**：blocks
+  快速查找 + 容量上限避免無限長大。**為什麼還沒做**：要 A.1/A.2 才有
+  block；ORC LLJIT (A.3) 提供更乾淨的 module add/remove API。**估時**：
+  1 天。
+- [ ] **A.5 SMC 偵測 + invalidation**：寫入「已編譯區域」時 invalidate
+  cached blocks。需要 memory bus write 攔截 + page-level dirty bit table，
+  跟 invalidate-on-write 的 cascade。**為什麼還沒做**：SMC 罕見但漏掉
+  會 silent corruption；要先有 A.4 code cache 才能 invalidate。**估時**：
+  2-3 天。
+- [ ] **A.6 Indirect branch dispatch**：BX / JP HL / RET 等 indirect
+  branch 不能 block-link，要 cache lookup → 找不到 fall-through 進
+  dispatcher。**為什麼還沒做**：block-JIT 必備功能；indirect branch 是
+  block 邊界之一。**估時**：1-2 天。
+- [ ] **A.7 Block linking**：直接 patch native call site (relocate)，後續
+  branch 不退出 JIT，省一次 dispatch。**為什麼還沒做**：高複雜度 native
+  code patching；ORC LLJIT 提供 stub-rewriting 機制。**估時**：3-4 天 +
+  Windows / Linux 各自 patching mechanism 都要驗。
+- [ ] **A.8 State→register caching**：block entry 把常用 reg load 進 LLVM
+  virtual register，exit 才 store 回 state buffer (mem2reg-friendly pattern)。
+  **為什麼還沒做**：要 A.2 block-level IR 才有「block entry/exit」邊界；
+  跟 SMC 互動 — 中途若有 mem write 觸發 SMC 必須先 spill。**估時**：2-3
+  天。
+- [ ] **A.9 Performance profiling 工具**：host 端記錄 block 編譯次數 /
+  執行次數 / 佔總執行時間比例，cli flag `--bench-blocks` dump 報表。
+  **為什麼還沒做**：profiling 是 nice-to-have，不影響功能；做完整 Group
+  A 後加上才有意義。**估時**：1 天。
 
 #### B. IR-level inlining / 微指令融合（Gemini 建議 #1）
 
@@ -459,15 +486,29 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   per-instruction function 太小、LLVM 沒空間發揮，瓶頸在 dispatcher
   overhead。保留 O3 給未來 block-JIT 用，後續策略應跳過 B.b/c/d 先攻
   A (block-JIT) 或 E (mem-bus fast path)。
-- [⊘ 跳過] **同 register 的 GEP CSE** — LLVM O3 pass 應該已經做 GEP
-  CSE，手寫 alloca 反而干擾 mem2reg。如果 H.a 顯式跑 mem2reg + GVN
-  確認沒做的話再評估。
+- [⊘ 跳過 — LLVM 自處理] **同 register 的 GEP CSE**：read_reg 對同 reg
+  index 算同一個 GEP，理論上每次重新算 GEP 是浪費。**為什麼跳過**：
+  LLVM O3 pipeline 內含的 GVN (global value numbering) pass 會自動 CSE
+  identical GEP instructions，手寫 alloca 反而會干擾 mem2reg（同 C.b
+  alloca-shadow 經驗）。**何時重評**：H.a 跑了 mem2reg + GVN 後 dump IR
+  確認 GEP 真的被 CSE 掉；若沒，再考慮自己做。
 - [⊘ 跳過 — high effort low ROI] **多 micro-op step 融合**：spec compiler
-  端 pattern matching 是大工程；C.a/C.b 嘗試已說明 LLVM 對短 IR sequence
-  的優化有限，融合 IR 也不會明顯加速。Phase 7 整體已 saturated。
-- [⊘ 跳過 — low ROI] **加 `nuw` / `nsw` hint**：LLVM 對 hint 的反應有限；
-  per-instruction function 太小沒空間做 strength reduction / loop hoisting
-  等需要 wrap-flag 假設的優化。
+  端做 pattern matching，把「`add` + `update_zero` + `update_h_add` +
+  `set_flag(N)`」這種常見序列 emit 成單一 inlined IR。**為什麼跳過**：
+  (1) pattern matching 本身要寫 ~300-500 行 spec analyzer；
+  (2) C.a/C.b 嘗試證實 LLVM 對短 IR sequence 的優化空間有限，融合後
+  emitted size 差不多；
+  (3) Phase 7 整體已 saturated 在 8.x MIPS plateau。**何時重評**：第三
+  CPU port 出現後若發現多 spec 共用同 step pattern，可能值得做為通用化
+  優化。
+- [⊘ 跳過 — low ROI] **加 `nuw` / `nsw` hint**：常見的 PC+4 / SP-2 加減
+  可標 `nuw` (no unsigned wrap) / `nsw` (no signed wrap) 給 LLVM 假設
+  簡化條件分支。**為什麼跳過**：(1) per-instruction function 太小，沒
+  loop hoist / strength reduction 等需要 wrap-flag 假設的優化空間；
+  (2) ARM7TDMI / LR35902 都有指令會故意 wrap (e.g. add with carry)，
+  錯標反而 UB；
+  (3) 收益估 < 1%，不值得審計風險。**何時重評**：block-JIT (A) 之後
+  block 內有 loop，nuw/nsw 才開始有意義。
 - [x] **B.e Cache state-buffer offsets in CpuExecutor**（2026-05-03，perf
   note `MD/performance/202605030054-cache-state-offsets-cpuexecutor.md`）
   — Step() 之前每條指令呼叫 `_rt.PcWrittenOffset` / `_rt.GprOffset(_pcRegIndex)`
@@ -495,9 +536,16 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   加 inline hint。NotifyExecutingPc 在 B.g 已 inline。
   **GBA arm +0.8% (8.26 → 8.33), GBA thumb +1.8% (8.24 → 8.39)**。
   noisy 但持續推進。
-- [⊘ 部分跳過] **NotifyInstructionFetch inlining**：method body 較大
-  (BIOS open-bus 簿記)，inline hint 可能反而增加 cache pressure。讓 JIT
-  自己決定。其他兩個已 inline (B.g + B.h)。
+- [⊘ 部分跳過 — risk vs payoff 不對] **NotifyInstructionFetch inlining**：
+  per-instruction call 處理 BIOS open-bus 簿記（pc+8 預取地址計算 + BIOS
+  range check + 條件 store sticky value）。**為什麼跳過**：(1) method
+  body 較大 (~30 行)，加 AggressiveInlining hint 強制 inline 會把每個
+  caller 的 generated code 撐大，可能增加 instruction cache pressure 反
+  而拖慢；(2) 寫過 PC < BIOS_END early-return 大多數時候會 take，.NET
+  JIT 在 PGO 之後自動 inline early-return path 即可；(3) GBA arm 已經穩定
+  在 8.3 MIPS，這個 method 的 cost 估 < 2 ns/instr，inline 收益難量到。
+  **何時重評**：若 BIOS LLE bench 出現 NotifyInstructionFetch 變 hot path
+  (profile 看才知道)。
 
 #### C. Lazy flag computation（Gemini 建議 #2）
 
@@ -539,15 +587,24 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 > 是優化單位」這個前提上。沒有 block-JIT 就沒有 block 可以 counter /
 > tier-compile / patch / invalidate。Group A 是 group D 的先決條件。
 
-- [⏸ blocked on A] **Block 執行次數 counter**：每次進 block 加 1，超過 threshold
-  (e.g. 1000) 才升 tier
-- [⏸ blocked on A] **Cold block O0 編譯**：第一次見到 block 時用 O0 快編好（< 1ms），
-  先讓 ROM 跑起來
-- [⏸ blocked on A] **Hot block O2/O3 重編 + register caching aggressive**：背景
-  thread 重編 hot block，編好後 patch caller fall-through
-- [⏸ blocked on A] **Tier degradation**：SMC invalidate 後降回 cold tier
-- [⏸ blocked on A] **Profile-guided optimisation**：counter + branch-direction 統計，
-  hot 的 cond branch flip 成 fallthrough
+- [⏸ blocked on A.4] **D.1 Block 執行次數 counter**：每次進 block 加 1，
+  超過 threshold (e.g. 1000) 才升 tier。**先決條件**：A.4 code cache —
+  沒有 block 物件就無處放 counter。
+- [⏸ blocked on A.2/A.3] **D.2 Cold block O0 編譯**：第一次見到 block
+  時用 O0 快編好（< 1ms），先讓 ROM 跑起來；hot 才升 O2/O3。**先決條件**：
+  A.2 (block-level IR gen) + A.3 (ORC LLJIT 支援 per-block opt level)。
+- [⏸ blocked on A.7 + A.4] **D.3 Hot block O2/O3 重編 + register
+  caching aggressive**：background thread 重編 hot block，編好後 patch
+  caller fall-through。**先決條件**：A.7 (block linking 才能 patch
+  call site) + A.4 (code cache 才有 block 概念)。
+- [⏸ blocked on A.5 + D.1] **D.4 Tier degradation**：SMC invalidate
+  後降回 cold tier 重編。**先決條件**：A.5 (SMC 偵測) + D.1 (counter
+  歸零的 protocol)。
+- [⏸ blocked on D.1] **D.5 Profile-guided optimisation**：counter +
+  branch-direction 統計，hot 的 cond branch flip 成 fallthrough (less
+  taken branch in steady state)。**先決條件**：D.1 (要 counter 才能
+  profile)；本身需要 LLVM module-level rewrite，是 group D 最複雜的
+  一項。
 
 #### E. 減少 extern binding / mem-bus fast path（Gemini 建議 #5）
 
@@ -567,20 +624,39 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   但要 mem-heavy bench 才看得出實際收益。
 - [ ] **E.c Mem-bus region table inline check (IR 層)**：比 E.b
   trampoline-side 更激進 — JIT'd code 內 emit 「addr ∈ ROM/RAM
-  region 直接 GEP；else call extern」分支，省 extern call 完全。
-  **要動 MemoryEmitters.cs 改 IR 生成 + 暴露 region base 為 LLVM
-  global**。Mem-heavy workload 應該顯著加速。中複雜度，是 Group E
-  剩下唯一值得做的。
-- [⊘ 部分跳過 — 已被 E.b cover] **Sub-page 粒度 fast-path**：GBA
-  IWRAM/EWRAM/ROM 三個熱區已在 E.b trampoline 內 fast-path。GB
-  HRAM/WRAM 的 trampoline-side fast-path 沒做（H.d 有列）。如果做
-  E.c 自然 cover 所有 sub-page。
-- [⊘ 已 cover] **Read-only ROM fast path**：CpuExecutor instr fetch
-  (E.a) + JIT'd LDR via trampoline (E.b) 都有 ROM fast-path。完整
-  IR-level inline 在 E.c。
-- [⊘ 跳過 — JIT 已處理] **Aligned word access**：JIT'd code 對
-  aligned address 已直接 emit `BuildLoad2 i32` / `BuildLoad2 i16`；
-  LLVM backend 對齊好的話會 emit single instruction。沒額外可做。
+  region 直接 GEP；else call extern」分支，**完全省掉 trampoline 進
+  C# 的 cost**。
+  - **要動什麼**：(1) MemoryEmitters.cs 改 IR 生成 — 把 `call
+    @memory_read_8(addr)` 改成 `if region check then load else call`；
+    (2) 暴露 region base address (e.g. cart ROM byte[] 的 pinned address)
+    為 LLVM module global；(3) 處理 GBA/GB region map 差異 (GBA 用
+    GbaMemoryMap，GB 用 mem map 0x0000-0xFFFF page table)。
+  - **預期收益**：Mem-heavy workload (LDR/STR-多的 ROM、BIOS LLE)
+    顯著加速；loop100 (ALU-heavy) 應該也有 +5-10% 因 instruction fetch
+    走這條 path。
+  - **複雜度**：中。比 E.a/E.b 大但可漸進 — 先只 inline cart ROM read，
+    驗證 OK 再加 IWRAM/EWRAM。
+  - **Group E 剩下唯一值得做的**。建議在 H.a (LLVM pass pipeline) 之前
+    優先攻 — IR-level fast path 不依賴 mem2reg，獨立可做。
+- [⊘ 部分跳過 — 已被 E.b cover] **E.d Sub-page 粒度 fast-path** (GBA
+  WRAM 0x02000000-0x0203FFFF, GB HRAM 0xFF80-0xFFFE, cart ROM 0x08000000-
+  0x09FFFFFF 等熱區): trampoline 內按 page 粒度 short-circuit。**狀態**：
+  GBA IWRAM (0x03000000+) / EWRAM (0x02000000+) / ROM (0x08000000+) 三個
+  熱區已在 E.b trampoline 內 fast-path。GB HRAM/WRAM 的 trampoline-side
+  fast-path 沒做 — H.d (LR35902 dispatcher / bus parity) 有列。**何時做**：
+  H.d；或做 E.c (IR 層) 後自然 cover 所有 sub-page。
+- [⊘ 已 cover by E.a + E.b] **E.e Read-only ROM fast path** (cart ROM
+  read 直接 byte-array index，省 extern call 完全): instr fetch 走
+  CpuExecutor.Step 的 cart-ROM fast lane (E.a)，data LDR/STR 走 trampoline
+  fast lane (E.b 已含 ROM)。**剩下要做的**：完整 IR-level inline 在 E.c
+  — 那才能完全省掉 trampoline call 進 C# 的 cost。
+- [⊘ 跳過 — JIT 已處理] **E.f Aligned word access** (4-byte / 2-byte
+  aligned read/write 走 i32/i16 直接 access 不拆 byte sequence): 跨架構
+  load/store 改成 i16/i32 而非 4 個 i8。**為什麼跳過**：(1) JIT'd code
+  對 aligned address 已直接 emit `BuildLoad2 i32` / `BuildLoad2 i16`，
+  emitter 沒在拆成 byte sequence；(2) LLVM backend 在 x86-64 上對齊好
+  的訪問會 emit single MOV/MOVZ instruction；(3) 不對齊訪問在 ARMv4T 是
+  rotation rule 不是錯誤，emitter 已正確處理。沒額外可做。
 
 #### F. Dispatcher / cycle-accounting 簡化
 
@@ -594,16 +670,25 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   `new DecodedInstruction(...)` heap alloc + foreach IEnumerator alloc。
   **GBA arm +55% (3.82 → 5.94), GBA thumb +67% (3.75 → 6.27), GB
   json-llvm +137% (2.66 → 6.30)**，GBA 兩條 path 首次跨過 1.0× real-time。
-- [⊘ 跳過 — F.x/F.y 已撈大頭] **Dispatcher 從 hash-lookup 改 direct table**
-  （decoded opcode → fn pointer 陣列）：F.x identity-keyed cache 已把
-  Dictionary lookup 從 string-hash 變 ref-equality（≈ 5-10 ns），F.y
-  pre-built 省掉 alloc。再進一步用 array-index 大概再省 ~3-5 ns，但要
-  維護 opcode → array index 的 mapping 加複雜度。性價比低。
-- [⏸ blocked on A] **Cycle accounting trailing add**：要 block-JIT 才
-  有意義（block 結束時加總），單指令 dispatch 已是「每 instr 加 4」最簡
-  形式。
-- [⏸ blocked on A] **IRQ check 集中在 block exit**：同上 — 沒 block 沒地方
-  集中。當前 B.h 已把 per-instr IRQ check 的 fast path inline 掉。
+- [⊘ 跳過 — F.x/F.y 已撈大頭] **F.b Dispatcher 從 hash-lookup 改 direct
+  table** (decoded opcode → fn pointer 陣列): 完全跳過 Dictionary，直接
+  array index by opcode bits。**為什麼跳過**：(1) F.x identity-keyed
+  cache 已把 Dictionary lookup 從 string-hash 變 ref-equality（≈ 5-10 ns
+  → ≈ 1-2 ns），F.y pre-built 省掉 per-decode alloc。剩餘 dispatch 開銷
+  幾乎全在 indirect call 本身，不是 lookup。(2) 真要做 array-index 還要
+  維護 opcode (12-bit ARM / 10-bit Thumb / 8-bit LR35902) → array index
+  的 mapping，加 spec compiler 複雜度。(3) 估約再省 ~2-3 ns/instr，<5%
+  收益。**何時重評**：Group A 後 dispatch 路徑大改，到時順便重做。
+- [⏸ blocked on A.2 + A.4] **F.c Cycle accounting trailing add**：block
+  結束時一次累加 cycle 總數，不每條指令 inc。**為什麼 blocked**：(1)
+  要有 block 概念才能「block exit 累加」；(2) 當前 GbaSystemRunner 每
+  instr += 4 已是最簡形式 (一條 add 指令，~1 ns)，跨 block 攤平能省的
+  不多 (~3-5 ns/block 假設 block 平均 16 instr → ~0.2 ns/instr)。
+- [⏸ blocked on A.2 + A.6] **F.d IRQ check 集中在 block exit**：block 結束
+  時才檢查 IRQ pending，省每 instr 的 fast-path call。**為什麼 blocked**：
+  同上 — 要 block 概念。**狀態**：B.h 已把 per-instr DeliverIrqIfPending
+  fast-path inline 進 RunCycles 的 hot loop，剩餘 cost ~1-2 ns/instr，
+  block-batch 後可降到 ~0 但前提是有 block。
 
 #### G. .NET host runtime 優化
 
