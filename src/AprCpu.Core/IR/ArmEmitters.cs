@@ -24,6 +24,7 @@ public static class ArmEmitters
 
         // Flag updates (target CPSR by name)
         reg.Register(new UpdateNz());
+        reg.Register(new UpdateNz64());
         reg.Register(new UpdateCAdd());
         reg.Register(new UpdateCSub());
         reg.Register(new UpdateVAdd());
@@ -68,6 +69,29 @@ internal sealed class UpdateNz : IMicroOpEmitter
 
         var nBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntSLT, value, ctx.ConstU32(0), "n_test");
         var zBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,  value, ctx.ConstU32(0), "z_test");
+
+        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "N", nBool);
+        CpsrHelpers.SetStatusFlag(ctx, "CPSR", "Z", zBool);
+    }
+}
+
+/// <summary>
+/// 64-bit variant for UMULLS / SMULLS / UMLALS / SMLALS. Per ARM ARM
+/// A4.1.124, the long-multiply S-bit form sets N to bit 63 of the
+/// 64-bit result and Z to (result == 0); C and V are UNPREDICTABLE
+/// on ARMv4 (we leave them untouched, which mGBA / no$gba both do).
+/// </summary>
+internal sealed class UpdateNz64 : IMicroOpEmitter
+{
+    public string OpName => "update_nz_64";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var valueName = step.Raw.GetProperty("value").GetString()!;
+        var value = ctx.Resolve(valueName);
+
+        var i64Zero = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int64, 0, false);
+        var nBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntSLT, value, i64Zero, "n64_test");
+        var zBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,  value, i64Zero, "z64_test");
 
         CpsrHelpers.SetStatusFlag(ctx, "CPSR", "N", nBool);
         CpsrHelpers.SetStatusFlag(ctx, "CPSR", "Z", zBool);
@@ -745,8 +769,22 @@ internal sealed class RaiseExceptionEmitter : IMicroOpEmitter
         }
 
         // 5. Compute new CPSR: clear M[4:0], OR in new mode + disable bits.
+        //    Per ARM ARM B1.8.5, every exception entry on ARMv4T also
+        //    clears the T-bit (forces ARM state) since the vector table
+        //    at 0x00..0x1C is ARM code. We mask T off as part of the
+        //    initial bit-clear pass.
         const uint modeMask = 0x1F;
-        var clearedMode = ctx.Builder.BuildAnd(oldCpsr, ctx.ConstU32(~modeMask), "cpsr_no_mode");
+        uint clearMask = modeMask;
+        bool hasTBit = false;
+        try
+        {
+            int tBitIdx = ctx.Layout.GetStatusFlagBitIndex("CPSR", "T");
+            clearMask |= 1u << tBitIdx;
+            hasTBit = true;
+        }
+        catch (InvalidOperationException) { /* CPU has no Thumb state — fine */ }
+        var clearedMode = ctx.Builder.BuildAnd(oldCpsr, ctx.ConstU32(~clearMask),
+            hasTBit ? "cpsr_no_mode_no_t" : "cpsr_no_mode");
         var withNewMode = ctx.Builder.BuildOr(clearedMode, ctx.ConstU32(newModeEnc), "cpsr_with_new_mode");
         var newCpsr = withNewMode;
         foreach (var disableFlag in vector.DisableFlags)

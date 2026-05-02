@@ -20,6 +20,7 @@ public static class StandardEmitters
         // Register access
         reg.Register(new ReadReg());
         reg.Register(new WriteReg());
+        reg.Register(new ReadRegShiftByReg());
 
         // Arithmetic / logical
         reg.Register(new Binary("add", (b, l, r, n) => b.BuildAdd(l, r, n)));
@@ -154,6 +155,61 @@ internal sealed class WriteReg : IMicroOpEmitter
 
         var ptr = ReadReg.ResolveRegPtr(ctx, indexExpr);
         ctx.Builder.BuildStore(value, ptr);
+    }
+
+    internal static void MarkPcWritten(EmitContext ctx)
+    {
+        var slot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), slot);
+    }
+}
+
+/// <summary>
+/// Variant of <c>read_reg</c> for the ARM data-processing shift-by-
+/// register form, where ARM ARM A5.1.5 specifies that PC reads as
+/// <c>address + 12</c> instead of the usual <c>+8</c> (the register
+/// shift takes one extra pipeline cycle). For non-PC indices behaves
+/// exactly like <c>read_reg</c>.
+/// </summary>
+internal sealed class ReadRegShiftByReg : IMicroOpEmitter
+{
+    public string OpName => "read_reg_shift_by_reg";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var indexExpr = step.Raw.GetProperty("index");
+        var outName   = StandardEmitters.GetOut(step.Raw);
+
+        // Resolve index (literal or runtime field).
+        var raw = ctx.Builder.BuildLoad2(ctx.Layout.GprType,
+                       ReadReg.ResolveRegPtr(ctx, indexExpr), $"{outName}_raw");
+
+        var pcIndex = ctx.Layout.RegisterFile.GeneralPurpose.PcIndex;
+        if (pcIndex is int pcIdx)
+        {
+            // Determine "is this PC?" — for literal index this is a
+            // compile-time constant, but the IRBuilder folds trivially.
+            LLVMValueRef isPc;
+            if (indexExpr.ValueKind == System.Text.Json.JsonValueKind.Number)
+            {
+                isPc = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1,
+                          indexExpr.GetInt32() == pcIdx ? 1u : 0u, false);
+            }
+            else
+            {
+                var idxName = indexExpr.GetString()!;
+                var idx     = ctx.Resolve(idxName);
+                // For ARM (16 GPRs), index is 4-bit so mask is 0xF.
+                var masked  = ctx.Builder.BuildAnd(idx, ctx.ConstU32(0xF), $"{idxName}_pc_chk");
+                isPc = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, masked,
+                          ctx.ConstU32((uint)pcIdx), "is_pc");
+            }
+            var plus4 = ctx.Builder.BuildAdd(raw, ctx.ConstU32(4), $"{outName}_plus4");
+            ctx.Values[outName] = ctx.Builder.BuildSelect(isPc, plus4, raw, outName);
+        }
+        else
+        {
+            ctx.Values[outName] = raw;
+        }
     }
 }
 
@@ -524,6 +580,12 @@ internal sealed class Branch : IMicroOpEmitter
         // Store target as new PC (R15)
         var pcSlot = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
         ctx.Builder.BuildStore(target, pcSlot);
+
+        // Mark "branch taken" so the executor's post-step PC-advance logic
+        // can distinguish "branch to target == pre-set R15" (e.g. Thumb
+        // BCond +0) from "no branch happened". See PcWrittenFieldIndex.
+        var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
     }
 }
 

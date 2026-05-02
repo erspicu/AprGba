@@ -23,6 +23,7 @@ namespace AprCpu.Core.Runtime.Gba;
 public sealed unsafe class GbaSystemRunner
 {
     private const uint CpsrModeMask = 0x1Fu;
+    private const uint CpsrTBit     = 0x20u;       // Thumb-state bit (bit 5)
     private const uint CpsrIBit     = 0x80u;
     private const uint IrqModeEnc   = 0x12u;
     private const uint IrqVector    = 0x00000018u;
@@ -109,9 +110,12 @@ public sealed unsafe class GbaSystemRunner
         // 1. Save SPSR_irq = old CPSR (write to banked SPSR slot directly).
         Cpu.WriteStatus("SPSR", cpsr, "IRQ");
 
-        // 2. Switch to IRQ mode + set I bit. SwapBank uses the OLD mode
-        //    field on entry, so we change CPSR first then call swap.
-        var newCpsr = (cpsr & ~CpsrModeMask) | IrqModeEnc | CpsrIBit;
+        // 2. Switch to IRQ mode + set I bit + force ARM state (T=0).
+        //    Per ARM ARM B1.8.5: all exception entries on ARMv4T clear
+        //    CPSR.T because the vector table at 0x00..0x1C is ARM code.
+        //    SwapBank uses the OLD mode field on entry, so we change
+        //    CPSR first then call swap.
+        var newCpsr = (cpsr & ~(CpsrModeMask | CpsrTBit)) | IrqModeEnc | CpsrIBit;
         Cpu.WriteStatus("CPSR", newCpsr);
 
         // 3. Move banked R13/R14 — visible R13/R14 now point at IRQ slots.

@@ -175,6 +175,16 @@ public sealed unsafe class CpuExecutor
         var pcReadValue = pc + mode.PcOffsetBytes;
         WriteGpr(_pcRegIndex, pcReadValue);
 
+        // Clear the "PC was written" sticky flag. Branch / BX / LDM-PC /
+        // ALU-with-Rd=PC emitters set this to 1; we read it back below.
+        // This is the authoritative branch-detect signal — the historical
+        // (postR15 != pcReadValue) check fails when the branch target
+        // equals pre-set R15, which is exactly the Thumb BCond +0
+        // compiler idiom (skip-next-instruction). It's still kept as a
+        // belt-and-suspenders fallback for any PC writer not yet
+        // instrumented.
+        _state[(int)_rt.PcWrittenOffset] = 0;
+
         // Snapshot the dispatch selector (e.g. CPSR.T) so we can detect
         // mode switches even when the new PC value happens to equal the
         // pre-set pcReadValue. (Real case: BX target == current+offset.)
@@ -200,7 +210,10 @@ public sealed unsafe class CpuExecutor
         // Did the instruction write PC or switch modes?
         var postR15 = ReadGpr(_pcRegIndex);
         uint postSelector = _readSelector?.Invoke(_state) ?? 0;
-        bool branched = postR15 != pcReadValue || postSelector != preSelector;
+        bool flagged   = _state[(int)_rt.PcWrittenOffset] != 0;
+        bool branched  = flagged
+                       || postR15 != pcReadValue
+                       || postSelector != preSelector;
         if (!branched)
             WriteGpr(_pcRegIndex, pc + mode.InstrSizeBytes);
         // Else: branch / exception / ALU-to-PC / mode switch wrote new PC.

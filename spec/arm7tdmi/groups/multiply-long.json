@@ -55,6 +55,19 @@
               "lo_index": "rd_lo",
               "hi_index": "rd_hi",
               "value": "product64"
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "s_bit",
+                "eq": 1
+              },
+              "then": [
+                {
+                  "op": "update_nz_64",
+                  "value": "product64"
+                }
+              ]
             }
           ]
         },
@@ -109,6 +122,19 @@
               "lo_index": "rd_lo",
               "hi_index": "rd_hi",
               "value": "result64"
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "s_bit",
+                "eq": 1
+              },
+              "then": [
+                {
+                  "op": "update_nz_64",
+                  "value": "result64"
+                }
+              ]
             }
           ]
         },
@@ -149,6 +175,19 @@
               "lo_index": "rd_lo",
               "hi_index": "rd_hi",
               "value": "product64"
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "s_bit",
+                "eq": 1
+              },
+              "then": [
+                {
+                  "op": "update_nz_64",
+                  "value": "product64"
+                }
+              ]
             }
           ]
         },
@@ -203,6 +242,19 @@
               "lo_index": "rd_lo",
               "hi_index": "rd_hi",
               "value": "result64"
+            },
+            {
+              "op": "if",
+              "cond": {
+                "field": "s_bit",
+                "eq": 1
+              },
+              "then": [
+                {
+                  "op": "update_nz_64",
+                  "value": "result64"
+                }
+              ]
             }
           ]
         }
