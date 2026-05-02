@@ -1,6 +1,6 @@
 {
   "name": "Block3_LdhMemHigh",
-  "comment": "High-RAM (0xFF00 + offset) and absolute-address LD A ↔ memory: LDH (n)/(C) and LD (nn)/A. 6 opcodes total.",
+  "comment": "High-RAM (0xFF00 + offset) and absolute-address LD A ↔ memory: LDH (n)/(C) and LD (nn)/A. 6 opcodes total. The high-page address is composed by `or` with the i32 base 0xFF00 — the new auto-coerce in Binary handles the i8→i32 zext.",
   "formats": [
     {
       "name": "Ldh_N_A",
@@ -13,9 +13,10 @@
         "mnemonic": "LDH", "since": "LR35902", "manual_ref": "GB CPU §LDH (n),A",
         "writes_memory": ["A"], "cycles": { "form": "3m" },
         "steps": [
-          { "op": "read_imm8", "out": "off" },
-          { "op": "read_reg_named", "name": "A", "out": "v" },
-          { "op": "lr35902_ldh_io_store", "offset": "off", "value": "v" }
+          { "op": "read_imm8",       "out": "off" },
+          { "op": "or",              "in": ["off", { "const": "0xFF00" }], "out": "addr" },
+          { "op": "read_reg_named",  "name": "A",   "out": "v" },
+          { "op": "store_byte",      "address": "addr", "value": "v" }
         ]
       }]
     },
@@ -30,9 +31,10 @@
         "mnemonic": "LDH", "since": "LR35902", "manual_ref": "GB CPU §LDH A,(n)",
         "cycles": { "form": "3m" },
         "steps": [
-          { "op": "read_imm8", "out": "off" },
-          { "op": "lr35902_ldh_io_load", "offset": "off", "out": "v" },
-          { "op": "write_reg_named", "name": "A", "value": "v" }
+          { "op": "read_imm8",       "out": "off" },
+          { "op": "or",              "in": ["off", { "const": "0xFF00" }], "out": "addr" },
+          { "op": "load_byte",       "address": "addr", "out": "v" },
+          { "op": "write_reg_named", "name": "A",   "value": "v" }
         ]
       }]
     },
@@ -47,9 +49,10 @@
         "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD (C),A",
         "writes_memory": ["A"], "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_named", "name": "C", "out": "off" },
-          { "op": "read_reg_named", "name": "A", "out": "v" },
-          { "op": "lr35902_ldh_io_store", "offset": "off", "value": "v" }
+          { "op": "read_reg_named",  "name": "C",   "out": "off" },
+          { "op": "or",              "in": ["off", { "const": "0xFF00" }], "out": "addr" },
+          { "op": "read_reg_named",  "name": "A",   "out": "v" },
+          { "op": "store_byte",      "address": "addr", "value": "v" }
         ]
       }]
     },
@@ -64,9 +67,10 @@
         "mnemonic": "LD", "since": "LR35902", "manual_ref": "GB CPU §LD A,(C)",
         "cycles": { "form": "2m" },
         "steps": [
-          { "op": "read_reg_named", "name": "C", "out": "off" },
-          { "op": "lr35902_ldh_io_load", "offset": "off", "out": "v" },
-          { "op": "write_reg_named", "name": "A", "value": "v" }
+          { "op": "read_reg_named",  "name": "C",   "out": "off" },
+          { "op": "or",              "in": ["off", { "const": "0xFF00" }], "out": "addr" },
+          { "op": "load_byte",       "address": "addr", "out": "v" },
+          { "op": "write_reg_named", "name": "A",   "value": "v" }
         ]
       }]
     },

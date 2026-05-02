@@ -148,8 +148,9 @@ public static class Lr35902Emitters
         // funky H/C-from-low-byte flag rules.
         reg.Register(new Lr35902AddSpE8Emitter());
         reg.Register(new Lr35902LdHlSpE8Emitter());
-        reg.Register(new Lr35902LdhIoLoadEmitter());
-        reg.Register(new Lr35902LdhIoStoreEmitter());
+        // LDH (n)/(C)/A IO ops migrated to generic chain (Phase 5.8 Step 5.5):
+        // read_imm8/read_reg_named + or with const 0xFF00 + load_byte/store_byte.
+        // Binary's auto-coerce (i8 → i32 zext) handles the page composition.
     }
 
     /// <summary>
@@ -1411,39 +1412,7 @@ internal sealed class Lr35902ReadImm16Emitter : IMicroOpEmitter
     }
 }
 
-internal sealed class Lr35902LdhIoLoadEmitter : IMicroOpEmitter
-{
-    public string OpName => "lr35902_ldh_io_load";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var offsetName = step.Raw.GetProperty("offset").GetString()!;
-        var outName = StandardEmitters.GetOut(step.Raw);
-        var off = ctx.Resolve(offsetName);
-        var off32 = Lr35902MemoryHelpers.AddrToI32(ctx, off, offsetName);
-        var addr = ctx.Builder.BuildOr(off32, ctx.ConstU32(0xFF00), $"{outName}_addr");
-        ctx.Values[outName] = Lr35902MemoryHelpers.CallRead8(ctx, addr, outName);
-    }
-}
-
-internal sealed class Lr35902LdhIoStoreEmitter : IMicroOpEmitter
-{
-    public string OpName => "lr35902_ldh_io_store";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var offsetName = step.Raw.GetProperty("offset").GetString()!;
-        var valueName  = step.Raw.GetProperty("value").GetString()!;
-        var off = ctx.Resolve(offsetName);
-        var off32 = Lr35902MemoryHelpers.AddrToI32(ctx, off, offsetName);
-        var addr = ctx.Builder.BuildOr(off32, ctx.ConstU32(0xFF00), "ldh_addr");
-
-        var raw = ctx.Resolve(valueName);
-        var v8 = raw.TypeOf.IntWidth == 8 ? raw
-            : raw.TypeOf.IntWidth < 8
-                ? ctx.Builder.BuildZExt(raw, LLVMTypeRef.Int8, $"{valueName}_z8")
-                : ctx.Builder.BuildTrunc(raw, LLVMTypeRef.Int8, $"{valueName}_t8");
-        Lr35902MemoryHelpers.CallWrite8(ctx, addr, v8);
-    }
-}
+// LDH IO emitters deleted in Phase 5.8 Step 5.5 — see RegisterAll comment.
 
 // ---------------- host-side flag/IME externs ----------------
 
