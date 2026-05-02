@@ -49,6 +49,14 @@ public sealed class GbMemoryBus
     /// <summary>Captured serial output — Blargg test ROMs use this for pass/fail text.</summary>
     public StringBuilder SerialLog { get; } = new();
 
+    /// <summary>
+    /// Optional PPU clock scheduler. When attached, <see cref="Tick"/>
+    /// advances scanline + LY + STAT mode bits + raises VBlank/STAT IRQs
+    /// at the right cycles. Detached (default) keeps the legacy fake-VBlank
+    /// behaviour for tests / harnesses that don't want a ticking PPU.
+    /// </summary>
+    public GbScheduler? Scheduler { get; set; }
+
     // MBC1 state
     private int  _romBank   = 1;
     private int  _ramBank   = 0;
@@ -64,9 +72,16 @@ public sealed class GbMemoryBus
     /// Called by the CPU after each instruction (and during HALT).
     /// Implements DIV (always-on, 16384 Hz) + TIMA (TAC-gated) per Pan Docs.
     /// On TIMA overflow, reloads from TMA and raises IF bit 2 (Timer IRQ).
+    /// Also forwards the tick to <see cref="Scheduler"/> if attached, so
+    /// LY / STAT / VBlank-IRQ timing tracks real hardware.
     /// </summary>
     public void Tick(int tCycles)
     {
+        // PPU first — gives BIOS-LLE timing the tightest coupling. Order
+        // doesn't really matter for the output, just for who raises IF
+        // first if both fire on the same call.
+        Scheduler?.Tick(tCycles);
+
         // DIV: always increments at 16384 Hz (every 256 t-cycles).
         _divAccum += tCycles;
         while (_divAccum >= 256) { _divAccum -= 256; Io[0x04]++; }
@@ -168,10 +183,14 @@ public sealed class GbMemoryBus
             0x07 => Io[0x07],                // TAC
             0x0F => InterruptFlag,           // IF
             0x40 => Io[0x40],                // LCDC
-            0x41 => Io[0x41],                // STAT
+            0x41 => Io[0x41],                // STAT (mode + LYC coincidence maintained by GbScheduler)
             0x42 => Io[0x42],                // SCY
             0x43 => Io[0x43],                // SCX
-            0x44 => 0x90,                    // LY — fake "in VBlank" (line 144) to satisfy ROMs that wait
+            // LY: when a Scheduler is attached it walks 0..153 like real
+            // hardware. Without one we fall back to the legacy fake
+            // VBlank line so headless test harnesses without a scheduler
+            // still see a non-stuck LY.
+            0x44 => Scheduler is not null ? Io[0x44] : (byte)0x90,
             0x45 => Io[0x45],                // LYC
             0x47 => Io[0x47],                // BGP
             0x48 => Io[0x48],                // OBP0

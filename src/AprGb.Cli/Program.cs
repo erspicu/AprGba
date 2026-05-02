@@ -59,6 +59,9 @@ if (opts.BiosPath is not null)
     var biosBytes = File.ReadAllBytes(opts.BiosPath);
     bus.LoadBios(biosBytes);
     Console.WriteLine($"  BIOS loaded:  {biosBytes.Length} bytes (mapped over 0x0000..0x00FF until cart writes 0xFF50)");
+    // Real DMG PPU clock — required for the BIOS animation to take its
+    // full ~2.5s instead of completing in zero LY-polling iterations.
+    bus.Scheduler = new GbScheduler(bus);
 }
 bus.LoadRom(rom);
 
@@ -82,6 +85,10 @@ runSw.Stop();
                       $"({emSecs:F3} DMG-emulated s, {ratio:F1}× real-time)");
 }
 Console.WriteLine($"  final PC=0x{cpu.ReadReg16(GbReg16.PC):X4} halted={cpu.IsHalted}");
+Console.WriteLine($"  LCDC=0x{bus.Io[0x40]:X2} STAT=0x{bus.Io[0x41]:X2} LY=0x{bus.Io[0x44]:X2} LYC=0x{bus.Io[0x45]:X2}");
+Console.WriteLine($"  SCY={bus.Io[0x42]} SCX={bus.Io[0x43]} BGP=0x{bus.Io[0x47]:X2}  IF=0x{bus.InterruptFlag:X2} IE=0x{bus.InterruptEnable:X2}");
+if (bus.Scheduler is not null)
+    Console.WriteLine($"  scheduler: scanline={bus.Scheduler.Scanline} mode={bus.Scheduler.Mode} frames={bus.Scheduler.FrameCount}");
 
 if (bus.SerialLog.Length > 0)
 {
