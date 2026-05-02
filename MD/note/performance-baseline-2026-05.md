@@ -1,5 +1,17 @@
 # Performance Baseline — Phase 4.5 完工後 (2026-05-02)
 
+> ⚠ **SUPERSEDED by `MD/note/loop100-bench-2026-05.md`** — 該檔是
+> Phase 5.7 完工後（含 GB scheduler、PPU 完整化、BIOS open-bus、
+> 5 個 ARM bug fix 等正確性改動之後）的正式 baseline，方法統一為
+> 「跑 1200 frames stress-test ROM (loop100)」可重現。
+>
+> 本檔保留作為 Phase 4.5 階段的歷史快照，**Phase 7 block-JIT 對照
+> 基準請以 `loop100-bench-2026-05.md` 的數字為準**。
+>
+> ---
+>
+> 原文（Phase 4.5 完工後 baseline）：
+>
 > 紀錄 Phase 4.5C 收完、還沒做任何效能優化（block-JIT / 跨指令 register
 > caching / spec-driven dispatch 都還沒）的 baseline 數字。之後做完 Phase 7
 > block-JIT 後可以拿這份對照看加速幅度。

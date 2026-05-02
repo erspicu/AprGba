@@ -37,6 +37,8 @@
 logo 截圖。完整收工筆記：
 - `MD/note/phase5-gba-mvp-complete-2026-05.md`（5.1–5.4）
 - `MD/note/phase5.7-bios-lle-and-ppu-2026-05.md`（5.5–5.7 + Phase 8）
+- `MD/note/loop100-bench-2026-05.md`（**canonical performance baseline**
+  — pre-Phase-7 對照基準，1200-frame loop100 ROM 量法）
 
 ### 第一目標的延伸：framework 通用性驗證 ✅ 完成 (2026-05-02)
 

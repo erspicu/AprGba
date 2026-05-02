@@ -308,11 +308,21 @@ jsmolka thumb.gba 通過，ARM↔Thumb BX 切換在實 ROM 中驗證過。
 - 想做後續其他 CPU 移植的時候，避免每顆 CPU 都被 dispatch overhead
   拖累
 
-當前 baseline（2026-05-02，instruction-level JIT，見
-`MD/note/performance-baseline-2026-05.md`）：
-- json-llvm GB ≈ 3.4 MIPS = ~7x real-time DMG ✅
-- json-llvm GBA ≈ 4.4 MIPS = ~40% real-time GBA（截圖夠用）
-- Legacy GB ≈ 56 MIPS（hand-written 上限參考）
+**當前 canonical baseline（2026-05-02，Phase 5.7 完工後，instruction-level
+JIT）見 `MD/note/loop100-bench-2026-05.md`**。1200 frames stress-test
+ROM (`*-loop100.gba` / `09-loop100.gb`) 統一量法的 4 個 reference 數字：
+
+| ROM                  | Backend     | Real-time × |  MIPS  |
+|----------------------|-------------|------------:|-------:|
+| GBA arm-loop100      | json-llvm   |   0.9×      |   3.68 |
+| GBA thumb-loop100    | json-llvm   |   0.9×      |   3.70 |
+| GB  09-loop100       | LEGACY      |  79.4×      |  38.36 |
+| GB  09-loop100       | json-llvm   |   5.6×      |   2.73 |
+
+Phase 7 完成後重跑這 4 個 case 看加速幅度（預期 json-llvm 拉到
+25-50 MIPS = 8-13× 加速）。Phase 4.5 階段的舊 baseline
+(`MD/note/performance-baseline-2026-05.md`) 已 superseded — 跑法
+不統一、ROM 不同，僅作歷史紀錄。
 
 ### 真做的時候要做的事
 
