@@ -75,7 +75,7 @@ var setupSw = System.Diagnostics.Stopwatch.StartNew();
 var (cpu, swap, rt, disposables) = BootCpu(bus);
 var runner = new GbaSystemRunner(cpu, bus, swap);
 setupSw.Stop();
-Console.WriteLine($"  setup time: {setupSw.Elapsed.TotalMilliseconds:F0} ms (incl. spec compile + MCJIT)");
+Console.WriteLine($"  setup time: {setupSw.Elapsed.TotalMilliseconds:F0} ms (incl. spec compile + ORC LLJIT)");
 
 // LLE boot (real BIOS file loaded): start in Supervisor mode with IRQs +
 // FIQs disabled (CPSR=0xD3) and PC at 0x00000000. The BIOS does its own

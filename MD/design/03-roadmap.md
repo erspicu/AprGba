@@ -457,12 +457,17 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   CompileResult 暴露 EmitterRegistry/ResolverRegistry/Layout 給後續使用者
   (block builder + future code cache)。2 新 unit test (3 MOVs straight-line +
   cond gate fail/pass)，351/351 全綠。
-- [ ] **A.3 LLVM JIT execution engine 升級到 ORC LLJIT**：解掉 MCJIT 的
-  Windows COFF section ordering 限制 + 解鎖 lazy compile / on-demand 編譯
-  / module-level optimization。**為什麼還沒做**：MCJIT 目前能跑，沒急迫；
-  但 A.4 (code cache) 跟 A.7 (block linking) 需要 ORC 的 lazy + symbol
-  resolver。**估時**：2-3 天 + 驗證 Phase 5.7 改的 Windows MCJIT bug
-  workarounds (no-jump-tables / nounwind) 在 ORC 也適用。
+- [x] **A.3 LLVM JIT execution engine 升級到 ORC LLJIT**（2026-05-02
+  完成）— `src/AprCpu.Core/Runtime/HostRuntime.cs` 把 MCJIT 換成 ORC
+  LLJIT (`OrcCreateLLJIT` / `OrcLLJITAddLLVMIRModule` / `OrcLLJITLookup`)。
+  Extern binding 維持原來的 inttoptr-globals pattern (engine-agnostic)，
+  no-jump-tables / nounwind attribute 也保留 — 兩者在 ORC 下繼續正確。
+  新加 `HostRuntime.AddModule(LLVMModuleRef)` 為 A.4 cache-miss path
+  鋪路：post-Compile 仍可把 fresh module 餵進 LLJIT。target data 改從
+  `OrcLLJITGetDataLayoutStr` 拿，state struct size 算法不變。
+  **驗證**：351/351 unit tests + Blargg cpu_instrs 11/11 全綠；perf
+  vs MCJIT 在 ±2% noise (GBA arm 8.49→8.55, thumb 8.51→8.55, GB JIT
+  6.52→6.64) — 純 infra swap，沒帶來 perf 倒退。
 - [ ] **A.4 Code cache (hashmap PC → fn pointer + LRU eviction)**：blocks
   快速查找 + 容量上限避免無限長大。**為什麼還沒做**：要 A.1/A.2 才有
   block；ORC LLJIT (A.3) 提供更乾淨的 module add/remove API。**估時**：

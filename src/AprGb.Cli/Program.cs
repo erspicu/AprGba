@@ -167,7 +167,7 @@ static int RunBench(Options opts)
     var (legSetupMs, legacy, busL) = SetupBackend(rom, () => new LegacyCpu());
     var (jitSetupMs, json,   busJ) = SetupBackend(rom, () => new JsonCpu());
 
-    Console.WriteLine($"  setup time: legacy={legSetupMs:F0} ms, json-llvm={jitSetupMs:F0} ms (incl. spec compile + MCJIT)");
+    Console.WriteLine($"  setup time: legacy={legSetupMs:F0} ms, json-llvm={jitSetupMs:F0} ms (incl. spec compile + ORC LLJIT)");
     Console.WriteLine();
 
     var legResult = TimeRun("legacy",    legacy, opts.Cycles);
