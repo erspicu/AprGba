@@ -474,9 +474,16 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
 
 #### F. Dispatcher / cycle-accounting 簡化
 
+- [x] **F.x InstructionDef-keyed fn pointer cache**（2026-05-03，commit
+  跟 perf note `MD/performance/202605030036-fnptr-cache-by-instruction-def.md`）
+  — dispatcher 改用 reference identity 而非 string-keyed cache，省掉
+  per-instruction 的 string interpolation + Dictionary string-hash +
+  (JsonCpu 那邊) per-instruction Dictionary allocation。**GB json-llvm
+  +82% (2.66 → 4.83 MIPS), GBA Thumb +25% (3.75 → 4.69)**, GBA ARM
+  +2%（noisy），GB legacy 不變（路徑沒走到）。
 - [ ] **Dispatcher 從 hash-lookup 改 direct table**（decoded opcode
   → fn pointer 陣列；ARM 12-bit table、Thumb 10-bit table、LR35902
-  8-bit table）
+  8-bit table）— F.x 已撈大頭，這個是進一步去掉 hash lookup 那一步
 - [ ] **Cycle accounting trailing add**：block 結束時一次累加 cycle
   總數，不每條指令 inc
 - [ ] **IRQ check 集中在 block exit**，不是每條指令

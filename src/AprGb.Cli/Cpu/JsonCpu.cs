@@ -48,7 +48,12 @@ public sealed unsafe class JsonCpu : ICpuBackend
     private readonly HostRuntime    _rt;
     private readonly DecoderTable   _mainDecoder;
     private readonly DecoderTable   _cbDecoder;
-    private readonly Dictionary<string, IntPtr> _fnPtrCache = new(StringComparer.Ordinal);
+    // Phase 7 F.x: identity-keyed cache (InstructionDef reference →
+    // fn pointer). The previous string-keyed cache forced
+    // BuildFunctionKey to allocate a Dictionary AND format a string
+    // PER INSTRUCTION — both gone on the hot path now.
+    private readonly Dictionary<InstructionDef, IntPtr> _fnPtrByDef
+        = new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
 
     private byte[]    _state = Array.Empty<byte>();
     private GbMemoryBus _bus = null!;
@@ -321,8 +326,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
             return 4;
         }
 
-        var key = BuildFunctionKey(decoder.Name, decoded);
-        var fnPtr = ResolveFunctionPointer(key);
+        var fnPtr = ResolveFunctionPointer(decoder.Name, decoded);
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
 
         // For conditional control-flow ops, snapshot the "would-be
@@ -371,31 +375,39 @@ public sealed unsafe class JsonCpu : ICpuBackend
         };
     }
 
-    private string BuildFunctionKey(string setName, DecodedInstruction decoded)
+    private IntPtr ResolveFunctionPointer(string setName, DecodedInstruction decoded)
     {
-        // Mirror SpecCompiler.Compile's key construction — disambiguates
-        // when a format declares multiple instructions sharing a mnemonic.
+        // Hot path: identity-keyed cache hit, zero allocation.
+        if (_fnPtrByDef.TryGetValue(decoded.Instruction, out var cached)) return cached;
+
+        // Cold path: rebuild the function key (matches SpecCompiler.Compile's
+        // key construction) once, look up the IR function, cache by
+        // InstructionDef reference. This was the per-instruction hot path
+        // before Phase 7 F.x — Dictionary allocation + string format every
+        // single instruction. Now amortised to once per opcode×selector.
+        var p = ResolveFunctionPointerSlow(setName, decoded);
+        _fnPtrByDef[decoded.Instruction] = p;
+        return p;
+    }
+
+    private IntPtr ResolveFunctionPointerSlow(string setName, DecodedInstruction decoded)
+    {
         var fmt = decoded.Format;
         var def = decoded.Instruction;
 
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var i in fmt.Instructions)
-            counts[i.Mnemonic] = counts.TryGetValue(i.Mnemonic, out var c) ? c + 1 : 1;
+        // Local ambiguity check (avoids allocating a Dictionary by counting
+        // up to 2 hits and stopping; cold path so it doesn't matter much).
+        var ambiguous = false;
+        for (int i = 0, hits = 0; i < fmt.Instructions.Count; i++)
+            if (fmt.Instructions[i].Mnemonic == def.Mnemonic && ++hits > 1)
+            { ambiguous = true; break; }
 
-        var ambiguous = counts.TryGetValue(def.Mnemonic, out var n) && n > 1;
         var suffix = ambiguous && def.Selector is not null
             ? $".{def.Mnemonic}_{def.Selector.Value}"
             : $".{def.Mnemonic}";
-        return $"{setName}.{fmt.Name}{suffix}";
-    }
-
-    private IntPtr ResolveFunctionPointer(string key)
-    {
-        if (_fnPtrCache.TryGetValue(key, out var p)) return p;
+        var key = $"{setName}.{fmt.Name}{suffix}";
         var name = "Execute_" + key.Replace('.', '_');
-        var ptr = _rt.GetFunctionPointer(name);
-        _fnPtrCache[key] = ptr;
-        return ptr;
+        return _rt.GetFunctionPointer(name);
     }
 
     private static long CyclesFor(InstructionDef def)
