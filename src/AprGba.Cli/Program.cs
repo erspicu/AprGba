@@ -128,7 +128,20 @@ Console.WriteLine($"  HALTCNT writes: {bus.HaltCntWriteCount}, currently halted:
     Console.WriteLine($"  BG2CNT=0x{bg2cnt:X4} BG3CNT=0x{bg3cnt:X4}");
     Console.WriteLine($"  BG3 PA={bg3pa} PB={bg3pb} PC={bg3pc} PD={bg3pd} X=0x{bg3x:X8} Y=0x{bg3y:X8}");
     Console.WriteLine($"  BG3 char-base={(bg3cnt>>2)&3}*0x4000  screen-base={(bg3cnt>>8)&0x1F}*0x800  size={(bg3cnt>>14)&3}");
-    Console.WriteLine($"  Palette[0]=0x{pal0:X4}  BLDCNT=0x{bus.ReadHalfword(0x04000050):X4} BLDALPHA=0x{bus.ReadHalfword(0x04000052):X4}");
+    Console.WriteLine($"  Palette[0]=0x{pal0:X4}  BLDCNT=0x{bus.ReadHalfword(0x04000050):X4} BLDALPHA=0x{bus.ReadHalfword(0x04000052):X4} BLDY=0x{bus.ReadHalfword(0x04000054):X4}");
+    Console.WriteLine($"  WIN0H=0x{bus.ReadHalfword(0x04000040):X4} WIN1H=0x{bus.ReadHalfword(0x04000042):X4} WIN0V=0x{bus.ReadHalfword(0x04000044):X4} WIN1V=0x{bus.ReadHalfword(0x04000046):X4}");
+    Console.WriteLine($"  WININ=0x{bus.ReadHalfword(0x04000048):X4} WINOUT=0x{bus.ReadHalfword(0x0400004A):X4}");
+    int activeObjs = 0, mode1Objs = 0, mode2Objs = 0;
+    for (int i = 0; i < 128; i++) {
+        ushort a0 = (ushort)(bus.Oam[i*8] | (bus.Oam[i*8+1] << 8));
+        bool affine = (a0 & 0x100) != 0;
+        if (!affine && (a0 & 0x200) != 0) continue;     // disabled
+        activeObjs++;
+        int objMode = (a0 >> 10) & 3;
+        if (objMode == 1) mode1Objs++;
+        if (objMode == 2) mode2Objs++;
+    }
+    Console.WriteLine($"  active sprites: {activeObjs} (semi-trans/mode1={mode1Objs}, obj-window/mode2={mode2Objs})");
 }
 
 if (opts.ScreenshotPath is not null)
