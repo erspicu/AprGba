@@ -58,9 +58,12 @@ public sealed unsafe class JsonCpu : ICpuBackend
     private readonly int _fOff, _spOff, _pcOff;
 
     private bool _halted;
+    private long _totalInstructions;
     private static bool _ime;             // shared with extern shims
     private static int  _eiDelay;         // counts down to IME=1 after EI
     private static bool _haltSignal;      // set by host_lr35902_halt extern
+
+    public long InstructionsExecuted => _totalInstructions;
 
     public JsonCpu()
     {
@@ -150,6 +153,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _activeBus = bus;
         _state = new byte[(int)_rt.StateSizeBytes];
         _halted = false;
+        _totalInstructions = 0;
         _ime = false;
         _eiDelay = 0;
         _haltSignal = false;
@@ -211,6 +215,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
             }
 
             var stepCycles = StepOne();
+            _totalInstructions++;
             _bus.Tick((int)stepCycles);
             consumed += stepCycles;
 

@@ -44,8 +44,10 @@ public sealed partial class LegacyCpu : ICpuBackend
     // Per-instruction cycle counter (m-cycles); flushed to total at end of Step.
     private int _cycles;
     private long _totalCycles;
+    private long _totalInstructions;
 
     public bool IsHalted => flagHalt;
+    public long InstructionsExecuted => _totalInstructions;
 
     private const int FlagClear = 0;
     private const int FlagSet   = 1;
@@ -67,6 +69,7 @@ public sealed partial class LegacyCpu : ICpuBackend
         DMA_CYCLE = false;
         _eiDelay = 0;
         _totalCycles = 0;
+        _totalInstructions = 0;
     }
 
     public long RunCycles(long targetCycles)
@@ -83,6 +86,7 @@ public sealed partial class LegacyCpu : ICpuBackend
             }
             _cycles = 0;
             Step();
+            _totalInstructions++;
             _bus.Tick(_cycles);          // advance hardware timers
             _totalCycles += _cycles;     // _cycles in t-cycles after `*= 4` in Step()
             TickEiDelay();
