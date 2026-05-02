@@ -170,6 +170,100 @@ public class GbaMemoryBusTests
         Assert.False(bus.HasPendingInterrupt());
     }
 
+    // ---------------- Phase 5: DMA channel tests ----------------
+
+    [Fact]
+    public void Dma_ImmediateMode_CopiesHalfwordsFromEwramToVram()
+    {
+        var bus = new GbaMemoryBus();
+        // Source: 8 halfwords in EWRAM @ 0x02000000 = 0x0001..0x0008
+        for (int i = 0; i < 8; i++)
+            bus.WriteHalfword((uint)(0x02000000 + i * 2), (ushort)(i + 1));
+
+        // Configure DMA0: SAD=0x02000000, DAD=0x06000000 (VRAM),
+        // CNT_L=8 halfwords, CNT_H=enable | timing=immediate | width=16-bit |
+        //                          src=inc | dst=inc.
+        bus.WriteWord(0x040000B0, 0x02000000);   // SAD
+        bus.WriteWord(0x040000B4, 0x06000000);   // DAD
+        bus.WriteHalfword(0x040000B8, 8);         // CNT_L
+        bus.WriteHalfword(0x040000BA, GbaMemoryMap.DMA_ENABLE);  // immediate, 16-bit, src+dst inc
+
+        // Verify VRAM now holds the 8 halfwords.
+        for (int i = 0; i < 8; i++)
+            Assert.Equal((ushort)(i + 1), bus.ReadHalfword((uint)(0x06000000 + i * 2)));
+
+        // Channel disabled itself after transfer.
+        Assert.Equal(0, bus.ReadHalfword(0x040000BA) & GbaMemoryMap.DMA_ENABLE);
+    }
+
+    [Fact]
+    public void Dma_32BitTransfer_CopiesWords()
+    {
+        var bus = new GbaMemoryBus();
+        bus.WriteWord(0x02000000, 0xCAFEF00D);
+        bus.WriteWord(0x02000004, 0xDEADBEEF);
+
+        bus.WriteWord(0x040000B0, 0x02000000);
+        bus.WriteWord(0x040000B4, 0x06000000);
+        bus.WriteHalfword(0x040000B8, 2);
+        bus.WriteHalfword(0x040000BA,
+            (ushort)(GbaMemoryMap.DMA_ENABLE | GbaMemoryMap.DMA_WIDTH_32));
+
+        Assert.Equal(0xCAFEF00Du, bus.ReadWord(0x06000000));
+        Assert.Equal(0xDEADBEEFu, bus.ReadWord(0x06000004));
+    }
+
+    [Fact]
+    public void Dma_FixedSource_RepeatsTheSameValue()
+    {
+        var bus = new GbaMemoryBus();
+        bus.WriteHalfword(0x02000000, 0xABCD);
+
+        bus.WriteWord(0x040000B0, 0x02000000);
+        bus.WriteWord(0x040000B4, 0x06000000);
+        bus.WriteHalfword(0x040000B8, 4);
+        bus.WriteHalfword(0x040000BA,
+            (ushort)(GbaMemoryMap.DMA_ENABLE | GbaMemoryMap.DMA_SRC_FIXED));
+
+        // All 4 destinations should hold the same value (source didn't advance).
+        for (int i = 0; i < 4; i++)
+            Assert.Equal((ushort)0xABCD, bus.ReadHalfword((uint)(0x06000000 + i * 2)));
+    }
+
+    [Fact]
+    public void Dma_IrqOnEnd_RaisesDma0Flag()
+    {
+        var bus = new GbaMemoryBus();
+        bus.WriteWord(0x040000B0, 0x02000000);
+        bus.WriteWord(0x040000B4, 0x06000000);
+        bus.WriteHalfword(0x040000B8, 1);
+        bus.WriteHalfword(0x040000BA,
+            (ushort)(GbaMemoryMap.DMA_ENABLE | GbaMemoryMap.DMA_IRQ_ON_END));
+
+        // IF bit 8 (Dma0) should be set.
+        Assert.Equal(0x0100, bus.ReadHalfword(0x04000202));
+    }
+
+    [Fact]
+    public void Dma_VBlankTiming_DoesNotFireImmediately()
+    {
+        var bus = new GbaMemoryBus();
+        bus.WriteHalfword(0x02000000, 0x1234);
+
+        bus.WriteWord(0x040000B0, 0x02000000);
+        bus.WriteWord(0x040000B4, 0x06000000);
+        bus.WriteHalfword(0x040000B8, 1);
+        bus.WriteHalfword(0x040000BA,
+            (ushort)(GbaMemoryMap.DMA_ENABLE | GbaMemoryMap.DMA_TIMING_VBLANK));
+
+        // Nothing copied yet — VRAM still 0.
+        Assert.Equal((ushort)0, bus.ReadHalfword(0x06000000));
+
+        // Trigger VBlank: DMA fires.
+        bus.Dma.TriggerOnVBlank();
+        Assert.Equal((ushort)0x1234, bus.ReadHalfword(0x06000000));
+    }
+
     [Fact]
     public void DispstatWrite_PreservesReadOnlyFlagBits()
     {
