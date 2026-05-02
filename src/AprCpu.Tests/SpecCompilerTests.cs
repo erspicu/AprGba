@@ -368,8 +368,13 @@ public class SpecCompilerTests
         var result = SpecCompiler.Compile(Lr35902CpuJson);
 
         Assert.Contains("Main.LdRr_Imm16.LD",  result.Functions.Keys);
-        Assert.Contains("Main.Inc_Rr.INC",     result.Functions.Keys);
-        Assert.Contains("Main.Dec_Rr.DEC",     result.Functions.Keys);
+        // INC rr / DEC rr are split into 4 selector variants per dd value
+        // after Step 5.7.B/C migration (each variant uses a named-pair
+        // read+add/sub+write chain). dd: 00=BC, 01=DE, 10=HL, 11=SP.
+        Assert.Contains("Main.Inc_Rr.INC_00",  result.Functions.Keys);
+        Assert.Contains("Main.Inc_Rr.INC_11",  result.Functions.Keys);   // INC SP
+        Assert.Contains("Main.Dec_Rr.DEC_00",  result.Functions.Keys);
+        Assert.Contains("Main.Dec_Rr.DEC_11",  result.Functions.Keys);   // DEC SP
         Assert.Contains("Main.AddHl_Rr.ADD",   result.Functions.Keys);
 
         // ADD HL,rr body must contain the 12-bit half-carry compute.
