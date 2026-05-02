@@ -164,9 +164,13 @@ public sealed unsafe class CpuExecutor
         return m;
     }
 
+    /// <summary>Total number of instructions executed since construction.</summary>
+    public long InstructionsExecuted { get; private set; }
+
     /// <summary>Run exactly one instruction.</summary>
     public DecodedInstruction Step()
     {
+        InstructionsExecuted++;
         var mode = CurrentMode();
         var pc = Pc;
 
