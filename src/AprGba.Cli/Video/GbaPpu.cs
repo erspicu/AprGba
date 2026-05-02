@@ -27,6 +27,16 @@ public sealed class GbaPpu
     /// <summary>RGB triples, row-major.</summary>
     public byte[] Framebuffer { get; } = new byte[Width * Height * 3];
 
+    /// <summary>
+    /// Per-pixel OBJ-Window mask. Set to 1 when at least one mode-2
+    /// (OBJ-window) sprite has a non-transparent pixel there. Used by
+    /// BG / OBJ rendering to apply the WININ/WINOUT layer-visibility
+    /// rules — without this mask, BIOS-startup BG3 (the logo backdrop)
+    /// shows everywhere instead of only inside the rotating sprite
+    /// area, drowning the screen in unwanted pixels.
+    /// </summary>
+    private readonly byte[] _objWindowMask = new byte[Width * Height];
+
     public void RenderFrame(GbaMemoryBus bus)
     {
         var dispcnt = bus.ReadHalfword(0x04000000);
@@ -34,6 +44,17 @@ public sealed class GbaPpu
         bool forcedBlank = (dispcnt & 0x80) != 0;
 
         if (forcedBlank) { FillBlack(); return; }
+
+        bool objEnable     = (dispcnt & (1 << 12)) != 0;
+        bool obj1D         = (dispcnt & (1 << 6))  != 0;
+        bool objWindowOn   = (dispcnt & (1 << 15)) != 0;
+
+        // OBJ Window is computed from mode-2 sprites BEFORE BG / normal
+        // OBJ rendering, so the BG path can consult the mask when the
+        // WININ/WINOUT registers say a layer is restricted to inside or
+        // outside the window.
+        Array.Clear(_objWindowMask, 0, _objWindowMask.Length);
+        if (objEnable && objWindowOn) BuildObjWindowMask(bus, obj1D);
 
         switch (mode)
         {
@@ -51,11 +72,7 @@ public sealed class GbaPpu
                 break;
         }
 
-        // Composite OBJ sprites on top — needed for the BIOS logo intro
-        // (the rotating Nintendo / dropping GBA-logo) as well as most
-        // commercial games. Only when OBJ enable bit is set in DISPCNT.
-        bool objEnable = (dispcnt & (1 << 12)) != 0;
-        bool obj1D     = (dispcnt & (1 << 6))  != 0;
+        // Composite normal + semi-transparent OBJ sprites on top.
         if (objEnable) RenderObjects(bus, obj1D);
     }
 
@@ -95,14 +112,177 @@ public sealed class GbaPpu
         // Stable insertion sort by priority desc (back-to-front).
         if (n == 2 && bgs[0].prio < bgs[1].prio) (bgs[0], bgs[1]) = (bgs[1], bgs[0]);
 
-        for (int i = 0; i < n; i++) RenderAffineBg(bus, bgs[i].idx);
+        for (int i = 0; i < n; i++) RenderAffineBg(bus, bgs[i].idx, dispcnt);
     }
 
-    private void RenderAffineBg(GbaMemoryBus bus, int bgIndex)
+    /// <summary>
+    /// True iff layer <paramref name="layerBit"/> (0..5: BG0..BG3, OBJ,
+    /// COLOR_EFFECT) is allowed at screen pixel (sx, sy) given the
+    /// current WININ / WINOUT settings and OBJ Window mask. When no
+    /// window is active for this pixel, all layers pass.
+    /// </summary>
+    private bool LayerVisibleAt(GbaMemoryBus bus, int layerBit, int sx, int sy, ushort dispcnt)
+    {
+        bool win0On = (dispcnt & (1 << 13)) != 0;
+        bool win1On = (dispcnt & (1 << 14)) != 0;
+        bool objWindowOn = (dispcnt & (1 << 15)) != 0;
+        if (!win0On && !win1On && !objWindowOn) return true;
+
+        ushort win0H = bus.ReadHalfword(0x04000040);   // X1<<8 | X2
+        ushort win1H = bus.ReadHalfword(0x04000042);
+        ushort win0V = bus.ReadHalfword(0x04000044);
+        ushort win1V = bus.ReadHalfword(0x04000046);
+        ushort winin  = bus.ReadHalfword(0x04000048);
+        ushort winout = bus.ReadHalfword(0x0400004A);
+
+        // Window 0 has highest priority, then Window 1, then OBJ Window.
+        if (win0On && InsideRect(sx, sy, win0H, win0V))
+            return (winin & (1 << layerBit)) != 0;
+        if (win1On && InsideRect(sx, sy, win1H, win1V))
+            return (winin & (1 << (layerBit + 8))) != 0;
+        if (objWindowOn && _objWindowMask[sy * Width + sx] != 0)
+            return (winout & (1 << (layerBit + 8))) != 0;
+        return (winout & (1 << layerBit)) != 0;
+    }
+
+    private static bool InsideRect(int sx, int sy, ushort h, ushort v)
+    {
+        int x1 = (h >> 8) & 0xFF, x2 = h & 0xFF;
+        int y1 = (v >> 8) & 0xFF, y2 = v & 0xFF;
+        // Per GBATEK: X2 == 0 / X2 > 240 → right edge clamped to 240; same for Y.
+        if (x2 == 0 || x2 > Width)  x2 = Width;
+        if (y2 == 0 || y2 > Height) y2 = Height;
+        bool xIn = x1 <= x2 ? (sx >= x1 && sx < x2) : (sx >= x1 || sx < x2);
+        bool yIn = y1 <= y2 ? (sy >= y1 && sy < y2) : (sy >= y1 || sy < y2);
+        return xIn && yIn;
+    }
+
+    /// <summary>
+    /// First-pass scan that walks all mode-2 sprites and stamps every
+    /// non-transparent pixel into <see cref="_objWindowMask"/>. Mode-2
+    /// sprites are themselves invisible — they only contribute to the
+    /// window mask. BIOS uses ~9 of these to define the rotating logo
+    /// region; without the mask, BG3 (logo backdrop) bleeds across the
+    /// entire screen and obscures the actual sprite content.
+    /// </summary>
+    private void BuildObjWindowMask(GbaMemoryBus bus, bool oneDimensional)
+    {
+        for (int i = 0; i < 128; i++)
+        {
+            int oamOff = i * 8;
+            ushort a0 = (ushort)(bus.Oam[oamOff    ] | (bus.Oam[oamOff + 1] << 8));
+            ushort a1 = (ushort)(bus.Oam[oamOff + 2] | (bus.Oam[oamOff + 3] << 8));
+            ushort a2 = (ushort)(bus.Oam[oamOff + 4] | (bus.Oam[oamOff + 5] << 8));
+            int objMode = (a0 >> 10) & 0x3;
+            if (objMode != 2) continue;
+            bool affine    = (a0 & (1 << 8))  != 0;
+            bool disable   = !affine && (a0 & (1 << 9)) != 0;
+            if (disable) continue;
+            // Reuse the same address-computation skeleton as RenderObjects
+            // — we just write to the mask buffer instead of the framebuffer
+            // and ignore palette/colour entirely.
+            RasterizeObjPixels(bus, a0, a1, a2, oneDimensional, (sx, sy) =>
+            {
+                _objWindowMask[sy * Width + sx] = 1;
+            });
+        }
+    }
+
+    /// <summary>
+    /// Walk the screen-space bounding box of an OBJ entry and call
+    /// <paramref name="emit"/> for every pixel that maps to a non-
+    /// transparent texel. Centralises the size/affine/4bpp/8bpp/
+    /// 1D-vs-2D-mapping logic shared between OBJ-Window mask building
+    /// and the main RenderObjects pass.
+    /// </summary>
+    private static void RasterizeObjPixels(
+        GbaMemoryBus bus, ushort a0, ushort a1, ushort a2,
+        bool oneDimensional, System.Action<int, int> emit)
+    {
+        bool affine    = (a0 & (1 << 8))  != 0;
+        bool color8    = (a0 & (1 << 13)) != 0;
+        int  paletteN  = color8 ? 0 : (a2 >> 12) & 0xF;
+        int  tileBase  = a2 & 0x3FF;
+        int  yOrigin   = a0 & 0xFF;
+        int  xOrigin   = a1 & 0x1FF;
+        bool doubleSize = affine && (a0 & (1 << 9)) != 0;
+        int  affineIdx = affine ? (a1 >> 9) & 0x1F : 0;
+        bool hflip = !affine && (a1 & (1 << 12)) != 0;
+        bool vflip = !affine && (a1 & (1 << 13)) != 0;
+        int shape = (a0 >> 14) & 0x3, size = (a1 >> 14) & 0x3;
+        var (sw, sh) = SpriteDimensions(shape, size);
+        int boxW = doubleSize ? sw * 2 : sw;
+        int boxH = doubleSize ? sh * 2 : sh;
+        int sxOrigin = xOrigin >= 256 ? xOrigin - 512 : xOrigin;
+        int syOrigin = yOrigin >= 160 ? yOrigin - 256 : yOrigin;
+
+        int pa = 0x100, pb = 0, pc = 0, pd = 0x100;
+        if (affine)
+        {
+            int matBase = affineIdx * 32;
+            pa = (short)(bus.Oam[matBase + 0x06] | (bus.Oam[matBase + 0x07] << 8));
+            pb = (short)(bus.Oam[matBase + 0x0E] | (bus.Oam[matBase + 0x0F] << 8));
+            pc = (short)(bus.Oam[matBase + 0x16] | (bus.Oam[matBase + 0x17] << 8));
+            pd = (short)(bus.Oam[matBase + 0x1E] | (bus.Oam[matBase + 0x1F] << 8));
+        }
+        int halfW = boxW / 2, halfH = boxH / 2;
+        int tilesPerRow = oneDimensional ? sw / 8 : 32;
+        int bytesPerTile = color8 ? 64 : 32;
+
+        for (int dy = 0; dy < boxH; dy++)
+        {
+            int sy = syOrigin + dy;
+            if ((uint)sy >= Height) continue;
+            for (int dx = 0; dx < boxW; dx++)
+            {
+                int sx = sxOrigin + dx;
+                if ((uint)sx >= Width) continue;
+                int tx, ty;
+                if (affine)
+                {
+                    int rx = dx - halfW, ry = dy - halfH;
+                    tx = (pa * rx + pb * ry) >> 8;
+                    ty = (pc * rx + pd * ry) >> 8;
+                    tx += sw / 2; ty += sh / 2;
+                    if ((uint)tx >= sw || (uint)ty >= sh) continue;
+                }
+                else
+                {
+                    tx = hflip ? (sw - 1 - dx) : dx;
+                    ty = vflip ? (sh - 1 - dy) : dy;
+                }
+                int tileX = tx >> 3, tileY = ty >> 3;
+                int tileId = color8
+                    ? (tileBase / 2) + (tileY * tilesPerRow + tileX)
+                    : tileBase + (tileY * tilesPerRow + tileX);
+                int vramTileOff = 0x10000 + tileId * bytesPerTile;
+                int pixInTileX = tx & 7, pixInTileY = ty & 7;
+                byte palIdx;
+                if (color8)
+                {
+                    int byteOff = vramTileOff + pixInTileY * 8 + pixInTileX;
+                    if ((uint)byteOff >= bus.Vram.Length) continue;
+                    palIdx = bus.Vram[byteOff];
+                }
+                else
+                {
+                    int byteOff = vramTileOff + pixInTileY * 4 + (pixInTileX >> 1);
+                    if ((uint)byteOff >= bus.Vram.Length) continue;
+                    byte twoPix = bus.Vram[byteOff];
+                    palIdx = (byte)((pixInTileX & 1) == 0 ? (twoPix & 0xF) : (twoPix >> 4));
+                }
+                if (palIdx == 0) continue;
+                emit(sx, sy);
+            }
+        }
+    }
+
+    private void RenderAffineBg(GbaMemoryBus bus, int bgIndex, ushort dispcnt)
     {
         // Register offsets (BG2 starts at 0x04000020, BG3 at 0x04000030).
         uint cntAddr = bgIndex == 2 ? 0x04000008u : 0x0400000Au;
         uint paBase  = bgIndex == 2 ? 0x04000020u : 0x04000030u;
+        int  layerBit = bgIndex;       // BG0..BG3 occupy bits 0..3 in WININ/WINOUT
 
         ushort cnt = bus.ReadHalfword(cntAddr);
         int charBase   = ((cnt >> 2) & 0x3) * 0x4000;
@@ -156,6 +336,10 @@ public sealed class GbaPpu
                 byte palIdx = bus.Vram[tileOff];
                 if (palIdx == 0) continue;     // colour 0 = transparent
 
+                // Window check — BG3 is typically restricted to inside
+                // the OBJ Window during the BIOS logo intro.
+                if (!LayerVisibleAt(bus, layerBit, sx, sy, dispcnt)) continue;
+
                 int palOff = palIdx * 2;
                 ushort px = (ushort)(bus.Palette[palOff] | (bus.Palette[palOff + 1] << 8));
                 Framebuffer[dst    ] = (byte)((px        & 0x1F) << 3);
@@ -199,6 +383,18 @@ public sealed class GbaPpu
 
     private void RenderObjects(GbaMemoryBus bus, bool oneDimensional)
     {
+        // Read alpha-blending registers up front. BIOS uses these heavily
+        // for the rainbow logo fade and various OBJ effects.
+        //   BLDALPHA: bits 0-4  EVA (Target1 weight, 0..16, clamped)
+        //             bits 8-12 EVB (Target2 weight, 0..16, clamped)
+        // OBJ "mode 1" sprites act as semi-transparent regardless of
+        // BLDCNT — their pixels are blended with whatever's underneath.
+        ushort bldAlpha = bus.ReadHalfword(0x04000052);
+        int eva = System.Math.Min(16,  bldAlpha       & 0x1F);
+        int evb = System.Math.Min(16, (bldAlpha >> 8) & 0x1F);
+        ushort dispcnt = bus.ReadHalfword(0x04000000);
+        const int objLayerBit = 4;     // OBJ layer in WININ/WINOUT bitmask
+
         // Render in REVERSE priority order so lower-priority pixels go
         // down first and higher-priority sprites overwrite them. Within
         // a priority bucket, lower OBJ index draws on top.
@@ -216,6 +412,9 @@ public sealed class GbaPpu
                 if (disable) continue;
                 int spritePri = (a2 >> 10) & 0x3;
                 if (spritePri != prio) continue;
+
+                int  objMode = (a0 >> 10) & 0x3;     // 0 normal, 1 alpha, 2 obj-window, 3 reserved
+                if (objMode == 2) continue;          // OBJ-Window: contributes to mask in BuildObjWindowMask, doesn't draw
 
                 int  shape   = (a0 >> 14) & 0x3;
                 int  size    = (a1 >> 14) & 0x3;
@@ -317,15 +516,44 @@ public sealed class GbaPpu
                         }
                         if (palIdx == 0) continue;     // colour 0 = transparent
 
+                        // Window check — sprites covered by Win0/Win1/OBJ-Window
+                        // rules may be hidden in this region.
+                        if (!LayerVisibleAt(bus, objLayerBit, sx, sy, dispcnt)) continue;
+
                         // Sprite palette base = 0x200 in PRAM. 4bpp adds
                         // palette# × 16; 8bpp uses raw 8-bit index.
                         int palOff = 0x200 + (color8 ? palIdx : (paletteN * 16 + palIdx)) * 2;
                         if ((uint)(palOff + 1) >= bus.Palette.Length) continue;
                         ushort px = (ushort)(bus.Palette[palOff] | (bus.Palette[palOff + 1] << 8));
                         int dst = (sy * Width + sx) * 3;
-                        Framebuffer[dst    ] = (byte)((px        & 0x1F) << 3);
-                        Framebuffer[dst + 1] = (byte)(((px >> 5) & 0x1F) << 3);
-                        Framebuffer[dst + 2] = (byte)(((px >> 10) & 0x1F) << 3);
+
+                        if (objMode == 1)
+                        {
+                            // Semi-transparent OBJ: blend sprite (Target1)
+                            // with current framebuffer pixel (Target2).
+                            // Per GBATEK formula:
+                            //   result = min(31, (T1·EVA + T2·EVB) >> 4)
+                            // applied per RGB channel in 5-bit space; we
+                            // upscale to 8-bit at the end.
+                            int srcR = (px        & 0x1F);
+                            int srcG = ((px >> 5) & 0x1F);
+                            int srcB = ((px >> 10) & 0x1F);
+                            int dstR = Framebuffer[dst    ] >> 3;
+                            int dstG = Framebuffer[dst + 1] >> 3;
+                            int dstB = Framebuffer[dst + 2] >> 3;
+                            int r = System.Math.Min(31, (srcR * eva + dstR * evb) >> 4);
+                            int g = System.Math.Min(31, (srcG * eva + dstG * evb) >> 4);
+                            int b = System.Math.Min(31, (srcB * eva + dstB * evb) >> 4);
+                            Framebuffer[dst    ] = (byte)(r << 3);
+                            Framebuffer[dst + 1] = (byte)(g << 3);
+                            Framebuffer[dst + 2] = (byte)(b << 3);
+                        }
+                        else
+                        {
+                            Framebuffer[dst    ] = (byte)((px        & 0x1F) << 3);
+                            Framebuffer[dst + 1] = (byte)(((px >> 5) & 0x1F) << 3);
+                            Framebuffer[dst + 2] = (byte)(((px >> 10) & 0x1F) << 3);
+                        }
                     }
                 }
             }
