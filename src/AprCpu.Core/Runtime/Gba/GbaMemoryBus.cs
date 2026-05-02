@@ -41,8 +41,8 @@ public sealed class GbaMemoryBus : IMemoryBus
     /// vector via <c>MOVS PC, LR</c> (encoding 0xE1B0F00E).
     ///
     /// Used by Phase 4.x test runs that want SWI / Undefined / etc. to
-    /// be no-ops rather than full HLE. Real HLE BIOS (Div, Sqrt, etc.)
-    /// would land in a later phase.
+    /// be no-ops rather than full HLE. Phase 5+ prefers <see cref="LoadBios"/>
+    /// (real LLE BIOS file) for verification credibility.
     ///
     /// Without this, a ROM that issues SWI sees PC jump to 0x00000008
     /// in our zeroed BIOS region, decodes 0x00000000 as AND with cond=EQ,
@@ -55,6 +55,46 @@ public sealed class GbaMemoryBus : IMemoryBus
         // Vectors at 0x00,04,08,0C,10,(reserved 14),18,1C.
         foreach (var vecOff in new uint[] { 0x00, 0x04, 0x08, 0x0C, 0x10, 0x18, 0x1C })
             BinaryPrimitives.WriteUInt32LittleEndian(Bios.AsSpan((int)vecOff, 4), MovsPcLr);
+    }
+
+    /// <summary>
+    /// Phase 5: load a real GBA BIOS image into the BIOS region (LLE).
+    /// Caller is expected to have read the file into bytes (the canonical
+    /// GBA BIOS is exactly 16 KB; smaller blobs are zero-padded).
+    /// Replaces any prior <see cref="InstallMinimalBiosStubs"/> call.
+    /// </summary>
+    public void LoadBios(byte[] biosBytes)
+    {
+        if (biosBytes is null || biosBytes.Length == 0)
+            throw new ArgumentException("BIOS bytes cannot be null/empty.", nameof(biosBytes));
+        if (biosBytes.Length > Bios.Length)
+            throw new ArgumentException(
+                $"BIOS size {biosBytes.Length} exceeds GBA BIOS region ({Bios.Length}).",
+                nameof(biosBytes));
+        Array.Clear(Bios, 0, Bios.Length);
+        Array.Copy(biosBytes, 0, Bios, 0, biosBytes.Length);
+    }
+
+    /// <summary>
+    /// Phase 5: raise an interrupt — sets the corresponding bit in IF.
+    /// PPU/Timer/DMA/keypad call this when their condition fires; the
+    /// CPU dispatches via the IRQ vector (0x18) when IME==1 &amp; IE&amp;IF != 0.
+    /// </summary>
+    public void RaiseInterrupt(GbaInterrupt kind)
+    {
+        var bit = (ushort)(1 << (int)kind);
+        var current = BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)GbaMemoryMap.IF_Off, 2));
+        BinaryPrimitives.WriteUInt16LittleEndian(Io.AsSpan((int)GbaMemoryMap.IF_Off, 2), (ushort)(current | bit));
+    }
+
+    /// <summary>True iff IME is set AND any IE&amp;IF bit is pending.</summary>
+    public bool HasPendingInterrupt()
+    {
+        var ime = BinaryPrimitives.ReadUInt32LittleEndian(Io.AsSpan((int)GbaMemoryMap.IME_Off, 4)) & 1u;
+        if (ime == 0) return false;
+        var ie = BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)GbaMemoryMap.IE_Off, 2));
+        var iff = BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)GbaMemoryMap.IF_Off, 2));
+        return (ie & iff & 0x3FFF) != 0;
     }
 
     /// <summary>
@@ -133,7 +173,7 @@ public sealed class GbaMemoryBus : IMemoryBus
             case Region.Bios:    Bios[off]    = value; break;
             case Region.Ewram:   Ewram[off]   = value; break;
             case Region.Iwram:   Iwram[off]   = value; break;
-            case Region.Io:      Io[off]      = value; break;
+            case Region.Io:      WriteIoByte((uint)off, value); break;
             case Region.Palette: Palette[off] = value; break;
             case Region.Vram:    Vram[off]    = value; break;
             case Region.Oam:     Oam[off]     = value; break;
@@ -144,12 +184,12 @@ public sealed class GbaMemoryBus : IMemoryBus
     public void WriteHalfword(uint addr, ushort value)
     {
         var (region, off) = Locate(addr);
+        if (region == Region.Io) { WriteIoHalfword((uint)off, value); return; }
         var bytes = region switch
         {
             Region.Bios    => Bios,
             Region.Ewram   => Ewram,
             Region.Iwram   => Iwram,
-            Region.Io      => Io,
             Region.Palette => Palette,
             Region.Vram    => Vram,
             Region.Oam     => Oam,
@@ -161,12 +201,17 @@ public sealed class GbaMemoryBus : IMemoryBus
     public void WriteWord(uint addr, uint value)
     {
         var (region, off) = Locate(addr);
+        if (region == Region.Io)
+        {
+            WriteIoHalfword((uint)off,       (ushort)(value        & 0xFFFF));
+            WriteIoHalfword((uint)(off + 2), (ushort)((value >> 16) & 0xFFFF));
+            return;
+        }
         var bytes = region switch
         {
             Region.Bios    => Bios,
             Region.Ewram   => Ewram,
             Region.Iwram   => Iwram,
-            Region.Io      => Io,
             Region.Palette => Palette,
             Region.Vram    => Vram,
             Region.Oam     => Oam,
@@ -233,5 +278,40 @@ public sealed class GbaMemoryBus : IMemoryBus
     {
         _dispstatReadCount++;
         return (_dispstatReadCount & 1) == 1 ? GbaMemoryMap.STAT_VBLANK_FLG : (ushort)0;
+    }
+
+    // ---------------- IO write helpers ----------------
+
+    private void WriteIoByte(uint off, byte value)
+    {
+        // IF (0x202..0x203): "write 1 to clear" semantics.
+        if (off == GbaMemoryMap.IF_Off || off == GbaMemoryMap.IF_Off + 1)
+        {
+            Io[off] = (byte)(Io[off] & ~value);
+            return;
+        }
+        Io[off] = value;
+    }
+
+    private void WriteIoHalfword(uint off, ushort value)
+    {
+        if (off == GbaMemoryMap.IF_Off)
+        {
+            // Write 1 to clear: new IF = old & ~value.
+            var old = BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)off, 2));
+            BinaryPrimitives.WriteUInt16LittleEndian(Io.AsSpan((int)off, 2), (ushort)(old & ~value));
+            return;
+        }
+        if (off == GbaMemoryMap.DISPSTAT_Off)
+        {
+            // Bits 0..2 (VBlank/HBlank/VCount FLAGS) are read-only — only
+            // bits 3..15 (IRQ enables + VCount target) are writable.
+            var old = BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)off, 2));
+            const ushort writableMask = 0xFFF8;
+            var combined = (ushort)((old & ~writableMask) | (value & writableMask));
+            BinaryPrimitives.WriteUInt16LittleEndian(Io.AsSpan((int)off, 2), combined);
+            return;
+        }
+        BinaryPrimitives.WriteUInt16LittleEndian(Io.AsSpan((int)off, 2), value);
     }
 }
