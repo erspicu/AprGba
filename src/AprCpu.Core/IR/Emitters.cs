@@ -318,7 +318,11 @@ internal sealed class MvnEmitter : IMicroOpEmitter
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
         var v = StandardEmitters.ResolveInput(ctx, step.Raw, 0);
-        var res = ctx.Builder.BuildXor(v, ctx.ConstU32(0xFFFFFFFFu), StandardEmitters.GetOut(step.Raw));
+        // Use all-ones at the input value's native width — pre-Step 5.7.A
+        // this was hardcoded to i32, which broke for i8 inputs (LR35902 CPL
+        // would produce a wrong-width XOR result).
+        var allOnes = LLVMValueRef.CreateConstInt(v.TypeOf, ulong.MaxValue, false);
+        var res = ctx.Builder.BuildXor(v, allOnes, StandardEmitters.GetOut(step.Raw));
         ctx.Values[StandardEmitters.GetOut(step.Raw)] = res;
     }
 }

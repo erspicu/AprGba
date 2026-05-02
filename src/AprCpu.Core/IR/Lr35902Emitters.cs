@@ -30,9 +30,10 @@ public static class Lr35902Emitters
 
         // LR35902-specific control / flag ops with no operand fetch
         // and no memory access — easiest first cut.
-        reg.Register(new ScfEmitter());
-        reg.Register(new CcfEmitter());
-        reg.Register(new CplEmitter());
+        // SCF / CCF / CPL migrated to generic ops (Phase 5.8 Step 5.7.A):
+        // SCF: 3× set_flag (was already migrated in 5.2)
+        // CCF: toggle_flag(C) + 2× set_flag
+        // CPL: read_reg_named(A) + mvn (now width-aware) + write_reg_named(A) + 2× set_flag
 
         // HALT / IME / EI-delayed lower to extern host calls; JsonCpu
         // tracks the actual flags in C# state. Names of the externs
@@ -363,92 +364,7 @@ internal sealed class WriteRegNamedEmitter : IMicroOpEmitter
     }
 }
 
-// ---------------- F-register flag ops ----------------
-
-/// <summary>
-/// SCF — set carry flag. C ← 1, N ← 0, H ← 0, Z preserved.
-/// </summary>
-internal sealed class ScfEmitter : IMicroOpEmitter
-{
-    public string OpName => "lr35902_scf";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        WriteFlagsScfCcfStyle(ctx, carryValue: ctx.Builder.BuildZExt(
-            LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, 1, false),
-            LLVMTypeRef.Int8, "scf_c"));
-    }
-
-    /// <summary>
-    /// Common: clear N and H, set C to <paramref name="carryValue"/> (i8 0/1),
-    /// preserve Z. Implements both SCF (carryValue=1) and the C-write half
-    /// of CCF (carryValue=!oldC).
-    /// </summary>
-    internal static void WriteFlagsScfCcfStyle(EmitContext ctx, LLVMValueRef carryValue)
-    {
-        var fPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "F");
-        var fOld = ctx.Builder.BuildLoad2(LLVMTypeRef.Int8, fPtr, "f_old");
-
-        // Mask: keep Z (bit 7), clear N (6), H (5), and the existing C (4).
-        var preserveMask = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0x80, false);
-        var preserved    = ctx.Builder.BuildAnd(fOld, preserveMask, "f_preserve_z");
-
-        // Stamp new C in bit 4.
-        var cMask = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0x10, false);
-        var cBit  = ctx.Builder.BuildAnd(carryValue, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), "c_bit");
-        var cShifted = ctx.Builder.BuildShl(cBit, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 4, false), "c_shifted");
-        // (extra mask is defensive — cBit already 0/1, so cShifted is 0 or 0x10)
-        cShifted = ctx.Builder.BuildAnd(cShifted, cMask, "c_in_place");
-
-        var fNew = ctx.Builder.BuildOr(preserved, cShifted, "f_new");
-        ctx.Builder.BuildStore(fNew, fPtr);
-    }
-}
-
-/// <summary>CCF — toggle carry. C ← !C, N ← 0, H ← 0, Z preserved.</summary>
-internal sealed class CcfEmitter : IMicroOpEmitter
-{
-    public string OpName => "lr35902_ccf";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        var fPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "F");
-        var fOld = ctx.Builder.BuildLoad2(LLVMTypeRef.Int8, fPtr, "f_old");
-
-        // Extract existing C (bit 4) into bit 0 of an i8.
-        var cShr = ctx.Builder.BuildLShr(fOld, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 4, false), "c_shr");
-        var cBit = ctx.Builder.BuildAnd(cShr, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), "c_old");
-        // Toggle.
-        var cNew = ctx.Builder.BuildXor(cBit, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), "c_new");
-
-        ScfEmitter.WriteFlagsScfCcfStyle(ctx, cNew);
-    }
-}
-
-/// <summary>
-/// CPL — A ← ~A, N ← 1, H ← 1, Z and C preserved.
-/// </summary>
-internal sealed class CplEmitter : IMicroOpEmitter
-{
-    public string OpName => "lr35902_cpl";
-    public void Emit(EmitContext ctx, MicroOpStep step)
-    {
-        // 1. A ← ~A
-        var (aPtr, _) = Lr35902Emitters.LocateRegister(ctx, "A");
-        var aOld = ctx.Builder.BuildLoad2(LLVMTypeRef.Int8, aPtr, "a_old");
-        var aNew = ctx.Builder.BuildXor(aOld, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0xFF, false), "a_inv");
-        ctx.Builder.BuildStore(aNew, aPtr);
-
-        // 2. F: set N=H=1, preserve Z and C.
-        var fPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "F");
-        var fOld = ctx.Builder.BuildLoad2(LLVMTypeRef.Int8, fPtr, "f_old");
-        // Preserve Z (bit 7) and C (bit 4): mask = 0x90.
-        var preserveMask = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0x90, false);
-        var preserved    = ctx.Builder.BuildAnd(fOld, preserveMask, "f_preserve_zc");
-        // Set N (bit 6) and H (bit 5): or with 0x60.
-        var setMask      = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0x60, false);
-        var fNew         = ctx.Builder.BuildOr(preserved, setMask, "f_new");
-        ctx.Builder.BuildStore(fNew, fPtr);
-    }
-}
+// SCF / CCF / CPL emitters deleted in Phase 5.8 Step 5.7.A — see RegisterAll comment.
 
 // ---------------- placeholder no-op emitters ----------------
 
