@@ -81,8 +81,11 @@ runSw.Stop();
     var hostSecs = runSw.Elapsed.TotalSeconds;
     var emSecs   = consumed / (double)GbTiming.CpuClockHz;
     var ratio    = hostSecs > 0 ? emSecs / hostSecs : 0;
+    var instr    = cpu.InstructionsExecuted;
+    var mips     = hostSecs > 0 ? (instr / 1_000_000.0) / hostSecs : 0;
     Console.WriteLine($"  ran {consumed:N0} t-cycles in {hostSecs:F3} s host time " +
                       $"({emSecs:F3} DMG-emulated s, {ratio:F1}× real-time)");
+    Console.WriteLine($"  instructions: {instr:N0}  →  {mips:F2} MIPS");
 }
 Console.WriteLine($"  final PC=0x{cpu.ReadReg16(GbReg16.PC):X4} halted={cpu.IsHalted}");
 Console.WriteLine($"  LCDC=0x{bus.Io[0x40]:X2} STAT=0x{bus.Io[0x41]:X2} LY=0x{bus.Io[0x44]:X2} LYC=0x{bus.Io[0x45]:X2}");

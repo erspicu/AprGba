@@ -110,8 +110,11 @@ runSw.Stop();
     var hostSecs   = runSw.Elapsed.TotalSeconds;
     var emSecs     = opts.Cycles / (double)GbaTiming.CpuClockHz;
     var realtimeX  = hostSecs > 0 ? emSecs / hostSecs : 0;
+    var instr      = cpu.InstructionsExecuted;
+    var mips       = hostSecs > 0 ? (instr / 1_000_000.0) / hostSecs : 0;
     Console.WriteLine($"  ran {opts.Cycles:N0} cycles in {hostSecs:F3} s host time " +
                       $"({emSecs:F3} GBA-emulated s, {realtimeX:F1}× real-time)");
+    Console.WriteLine($"  instructions: {instr:N0}  →  {mips:F2} MIPS");
 }
 Console.WriteLine($"  final PC = 0x{cpu.Pc:X8}, R0..R15 = {DumpRegs(cpu)}");
 Console.WriteLine($"  IRQs delivered: {runner.IrqsDelivered}, frames: {runner.Scheduler.FrameCount}");
