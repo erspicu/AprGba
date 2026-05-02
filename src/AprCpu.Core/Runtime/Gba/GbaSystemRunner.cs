@@ -69,6 +69,13 @@ public sealed unsafe class GbaSystemRunner
     }
 
     /// <summary>
+    /// Public wrapper around <see cref="BusHasAnyPendingIrq"/> for callers
+    /// outside this class that need the same wake-up condition (e.g. an
+    /// external trace loop that mimics RunCycles).
+    /// </summary>
+    public bool HasAnyPendingIrqPublic() => BusHasAnyPendingIrq();
+
+    /// <summary>
     /// HALT wake-up condition is IE &amp; IF != 0, regardless of IME (the
     /// CPU resumes; whether the IRQ then dispatches depends on IME).
     /// </summary>
