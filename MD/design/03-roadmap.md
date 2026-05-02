@@ -458,6 +458,14 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
 
 #### C. Lazy flag computation（Gemini 建議 #2）
 
+- [x] **C.a Width-correct status flag access**（2026-05-03，perf note
+  `MD/performance/202605030135-width-correct-flag-access.md`）— CpsrHelpers
+  的 SetStatusFlagAt / ReadStatusFlag 之前永遠用 i32 read/write 不管 status
+  reg 實際宽度。對 LR35902 F (i8) 是讀 4 bytes 跨進相鄰 SP/PC，preserved
+  其他 bytes 所以無 correctness bug 但 LLVM 看不清 aliasing 不能 combine
+  連續 flag updates。改成依 WidthBits 用 i8/i16/i32。**GB json-llvm +2.7%
+  (6.31 → 6.48 MIPS)**, GBA 不受影響 (CPSR 已 i32)。順便修了潛在的
+  unaligned i32 access 問題。
 - [ ] **ARM CPSR NZCV lazy**：目前每條 ALU 指令都計算 N/Z/C/V 寫進
   CPSR；改成「只記錄 last-ALU-result + ALU-kind」，conditional
   execution 真要讀 flag 時再 derive
