@@ -20,29 +20,29 @@
 | 5.2 flag setters generalisation | ✅ 完成 | `6c377ec` | +`FlagOps.cs` 新 3 ops (`set_flag`/`update_h_add`/`update_h_sub`)；LR35902 SCF migration |
 | 5.3 branch / call_cc / ret_cc unification | ✅ 完成 | `7c0f486` `bd8f46d` `afe5dad` | 新 5 ops (`branch_cc`/`call_cc`/`ret_cc`/`read_pc`/`sext`) + `target_const`；LR35902 JP/JR/CALL/RET/RST 全 cc 變體；cleanup `-408 lines` |
 | 5.4 bit ops + shift unification | ✅ 完成 | `1c1f6a5` `0e23ad7` `390eb7e` | +`BitOps.cs` 新 4 ops (`bit_test`/`bit_set`/`bit_clear`/`shift`)；LR35902 BIT/SET/RES + 8 種 CB shift + 4 個 A-rotate；cleanup `-485 lines` |
-| 5.5 memory IO region 統一 | ⏳ 待做 | — | LR35902 `lr35902_ldh_io_load/store` 收掉 |
-| 5.6 IME / interrupt enable 統一 | ⏳ 待做 | — | LR35902 `lr35902_ime`/`ime_delayed`/`cb_dispatch` 收掉 |
-| 5.7 operand resolver 通用化 | ⏳ 待做 | — | LR35902 `lr35902_read_r8`/`write_r8`/`write_rr_dd` (sss/dd 解碼) |
-| 5.8 L3 cleanup + intrinsic naming | ⏳ 待做 | — | 把剩下真 L3 集中 `*Intrinsics.cs` |
-| 5.9 第三 CPU 驗證 | ⏳ 待做 | — | RISC-V RV32I 或 MIPS R3000 |
+| 5.5 memory IO region 統一 | ✅ 完成 | `28eab8e` | Binary 加 width auto-coerce；LR35902 LDH/LD-(C) 改用 `or` + load_byte/store_byte；刪 LdhIoLoad/Store emitter |
+| 5.6 IME / cb_dispatch cleanup | ✅ 完成 | `3661bbf` | 刪 `cb_dispatch` no-op (空 steps)；IME/HALT/DAA 標 L3 intrinsics 帶 divider |
+| 5.7.A flag micro-ops cleanup | ✅ 完成 | `f6eede5` | `mvn` width-aware；新 `toggle_flag`；LR35902 CCF/CPL/SCF 完成 migration |
+| 5.7.B inc/dec migration | ✅ 完成 | `7695858` | 新 `update_zero`/`update_h_inc`/`update_h_dec`/`trunc`；LR35902 INC/DEC r/(HL) + named-pair inc/dec |
+| 5.7.C/D 16-bit selectors + L3 marker | ✅ 完成 | `2b277d1` | INC/DEC rr 改 4 selector variants；剩餘 13 個 LR35902 ops 標 L3 intrinsics with reasons |
+| 5.8/5.9 第三 CPU 驗證 | ⏳ 待做 | — | RISC-V RV32I 或 MIPS R3000 |
 
-**5.4 收工 snapshot (2026-05-02)**：
+**5.7 收工 snapshot (2026-05-02)**：
 
-| 檔案 | 起點 (5.0 前) | 5.4 收工 | 變化 |
+| 檔案 | 起點 (5.0 前) | 5.7 收工 | 變化 |
 |---|---:|---:|---:|
-| `Lr35902Emitters.cs` | ~2620 行 | 1646 行 | **−37%** |
-| `Emitters.cs` (通用) | 613 行 | ~700 行 | +14%（吸收 LR35902 通用化） |
+| `Lr35902Emitters.cs` | ~2620 行 | 1346 行 | **−49%** |
+| `Emitters.cs` (通用) | 613 行 | ~770 行 | +25%（吸收 LR35902 通用化） |
 | 新增 `StackOps.cs` | — | ~415 行 | — |
-| 新增 `FlagOps.cs` | — | ~88 行 | — |
+| 新增 `FlagOps.cs` | — | ~155 行 | — |
 | 新增 `BitOps.cs` | — | ~195 行 | — |
-| **net delta** | — | — | **−約 200 行** + 結構大幅清晰 |
 
 **驗證面**：每個 step 都跑 345/345 unit test + 至少 3 個 Blargg sub-test
-（含 07-jr,jp,call,ret,rst / 10-bit ops）在 legacy + json-llvm 兩條後端
-Passed。345 unit test 從 5.0 到 5.4 結束數量沒變過 — 純結構，沒新增
-測試也沒掉測試。
+（含 02-interrupts / 07-jr,jp,call,ret,rst / 10-bit ops）在 legacy +
+json-llvm 兩條後端 Passed。345 unit test 從 5.0 到 5.7 結束數量沒變過 —
+純結構，沒新增測試也沒掉測試。
 
-**移除的 LR35902-specific emitters（5.1–5.4 累計）**：
+**移除的 LR35902-specific emitters（5.1–5.7 累計）**：
 
 ```
 push_qq / pop_qq                                   (5.1 stack)
@@ -52,10 +52,34 @@ cb_bit / cb_bit_hl_mem / cb_set / cb_resset_hl_mem /
   cb_res / cb_shift / cb_shift_hl_mem               (5.4 CB-prefix)
 ARotateEmitter (lr35902_rlca/rrca/rla/rra)         (5.4.B A-rotates)
 EvalCondition / PcPointer / NormaliseToI16 helpers (5.3 cleanup)
+ldh_io_load / ldh_io_store                          (5.5 IO region)
+SimpleNoOpEmitter (cb_dispatch)                     (5.6 dispatch)
+scf / ccf / cpl                                     (5.7.A flag ops)
+inc_pair / dec_pair / inc_r8 / dec_r8 /
+  inc_hl_mem / dec_hl_mem / inc_rr_dd / dec_rr_dd  (5.7.B/C inc/dec)
 ```
 
-合計刪除 **18 個 LR35902-specific ops + 多個 helper**。剩下的
-LR35902 ops 預計在 5.5–5.8 收掉再剩 4–6 個真 L3。
+合計刪除 **27 個 LR35902-specific ops + 多個 helper**。剩下 13 個都在
+clearly-marked L3 intrinsic 區段，分兩類：
+
+1. **Operand resolvers** — `lr35902_read_r8` / `write_r8` / `write_rr_dd`：
+   sss/dd field → register table 編碼是 LR35902 ISA 特性，跨 CPU 無法
+   通用化（ARM 4-bit、RISC-V 5-bit、各自不同 table）。等第三 CPU 真要
+   port 時，再加 spec-side operand resolver registry。
+
+2. **Compound ALU + flag rules** — `alu_a_r8/hl/imm8`（一個 class 三個
+   名字）、`add_hl_rr`、`add_sp_e8`、`ld_hl_sp_e8`：算術本身通用，但
+   flag bit 位置 + derivation rules 是 arch-specific。拆成 10+ 個 generic
+   ops/指令會把 spec 灌爆而沒實質收穫。
+
+3. **真 L3 hardware quirks**（5.6 已標）— `lr35902_ime` / `ime_delayed`
+   (EI delay)、`halt` / `stop` (halt-bug + STOP wakeup)、`lr35902_daa`
+   (BCD adjust)。
+
+**結論**：~62 個 arch-specific ops（refactor 起點）→ **13 個 L3 intrinsics**
+（=−79%）。設計 doc §1.3 預估 5–10 個 L3 floor，實際稍高（13 個），主要差
+在 operand resolver 跟 compound ALU 都還沒拆。等第三 CPU 上線再驗證
+這個 floor 是否真的合理 — 這是 Phase 5.8/5.9 階段的工作。
 
 ---
 
