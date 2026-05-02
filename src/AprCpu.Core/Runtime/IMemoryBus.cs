@@ -19,6 +19,16 @@ public interface IMemoryBus
     void   WriteWord    (uint addr, uint   value);
 
     /// <summary>
+    /// Called by <see cref="CpuExecutor"/> just BEFORE the instruction
+    /// fetch for the next step, so buses that model PC-conditional read
+    /// behaviour (GBA BIOS open-bus protection: data reads from the
+    /// BIOS region only return real bytes when the executing PC is
+    /// also inside BIOS) see the correct PC during the fetch itself.
+    /// Default no-op.
+    /// </summary>
+    void NotifyExecutingPc(uint pc) { }
+
+    /// <summary>
     /// Called by <see cref="CpuExecutor"/> immediately after a successful
     /// instruction fetch. Buses that model fetch-side state — GBA BIOS
     /// open-bus protection, ARM prefetch buffer, etc. — implement this

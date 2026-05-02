@@ -68,19 +68,24 @@ public sealed class GbaMemoryBus : IMemoryBus
     }
 
     /// <summary>
-    /// CpuExecutor calls this after every successful fetch. Updates the
-    /// "currently executing PC" so subsequent data reads in this Step
-    /// know where the instruction lives, and snapshots the BIOS opcode
-    /// at <c>PC + 2×instrSize</c> as the open-bus sticky — matching
-    /// real ARM7TDMI's 3-stage pipeline (by the time PC executes, the
-    /// fetch stage is already 2 instructions ahead). GBATEK confirms
-    /// the sticky value is the opcode at <c>[LR-4+8]</c> for SWIs and
-    /// <c>[0DCh+8]</c> after startup, i.e. PC of last EXECUTE plus the
-    /// pipeline depth in bytes.
+    /// CpuExecutor calls this BEFORE every fetch so that <c>ReadWord</c>
+    /// from the BIOS region can see the new PC during the fetch itself
+    /// (otherwise the BIOS open-bus rule would mis-fire on the first
+    /// fetch after any vector entry — SWI / IRQ / BX into BIOS).
+    /// </summary>
+    public void NotifyExecutingPc(uint pc) => ExecutingPc = pc;
+
+    /// <summary>
+    /// CpuExecutor calls this after every successful fetch. Snapshots
+    /// the BIOS opcode at <c>PC + 2×instrSize</c> as the open-bus sticky
+    /// — matching real ARM7TDMI's 3-stage pipeline (by the time PC
+    /// executes, the fetch stage is already 2 instructions ahead).
+    /// GBATEK confirms the sticky value is the opcode at <c>[LR-4+8]</c>
+    /// for SWIs and <c>[0DCh+8]</c> after startup, i.e. PC of last
+    /// EXECUTE plus the pipeline depth in bytes.
     /// </summary>
     public void NotifyInstructionFetch(uint pc, uint instructionWord, uint instrSizeBytes)
     {
-        ExecutingPc = pc;
         if (pc >= GbaMemoryMap.BiosBase + GbaMemoryMap.BiosSize) return;
 
         // Sticky = BIOS[pc + 2 × instrSize]. ARM = +8, Thumb = +4.
@@ -251,21 +256,28 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     private bool PcInBios => ExecutingPc < GbaMemoryMap.BiosBase + GbaMemoryMap.BiosSize;
 
+    /// <summary>
+    /// Opt-out: if true, BIOS reads always return the real BIOS bytes
+    /// regardless of PC. Used as a diagnostic to isolate open-bus impl
+    /// bugs from genuine BIOS execution issues.
+    /// </summary>
+    public bool DisableBiosOpenBus { get; set; }
+
     private byte ReadBiosByte(uint addr, int off)
     {
-        if (PcInBios) return Bios[off];
+        if (DisableBiosOpenBus || PcInBios) return Bios[off];
         return (byte)((LastBiosFetchWord >> ((int)(addr & 3) * 8)) & 0xFF);
     }
 
     private ushort ReadBiosHalfword(uint addr, int off)
     {
-        if (PcInBios) return BinaryPrimitives.ReadUInt16LittleEndian(Bios.AsSpan(off, 2));
+        if (DisableBiosOpenBus || PcInBios) return BinaryPrimitives.ReadUInt16LittleEndian(Bios.AsSpan(off, 2));
         return (ushort)((LastBiosFetchWord >> ((int)(addr & 2) * 8)) & 0xFFFF);
     }
 
     private uint ReadBiosWord(uint addr, int off)
     {
-        if (PcInBios) return BinaryPrimitives.ReadUInt32LittleEndian(Bios.AsSpan(off, 4));
+        if (DisableBiosOpenBus || PcInBios) return BinaryPrimitives.ReadUInt32LittleEndian(Bios.AsSpan(off, 4));
         return LastBiosFetchWord;
     }
 
