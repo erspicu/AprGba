@@ -439,9 +439,14 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 > + DecoderTable + JsonCpu/CpuExecutor。理論收益 8-13× over current
 > (per starting baseline note §4)。**目前 0/9，整個 group 待動工。**
 
-- [ ] **A.1 Block detector**：從 PC 掃前往 branch/return/IO 寫入為止組成
-  一個 basic block。**為什麼還沒做**：是 group A 起點，沒做這個其他全部
-  blocked。**估時**：1-2 天。
+- [x] **A.1 Block detector**（2026-05-03 完成）— 新檔案
+  `src/AprCpu.Core/Runtime/Block.cs` (Block + DecodedBlockInstruction +
+  BlockEndReason enum) + `src/AprCpu.Core/Runtime/BlockDetector.cs`
+  (走 PC、查 decoder、停在 boundary)。Boundary 條件：`writes_pc:
+  "always"` (B/BL/BX/SWI/UND/Coproc) / `switches_instruction_set` /
+  `changes_mode` / undecodable / 64-instr cap。`conditional_via_rd`
+  **不**算 boundary (太 pessimistic 會切爆每個 ALU op)。4 個新 unit
+  test 全綠，349/349 全套測試。
 - [ ] **A.2 Block-level IR generation**：把連續 N 條 spec instruction 串接
   成一個 LLVM function，LLVM optimizer 才有空間做 register caching、CSE、
   constant folding、DCE。**為什麼還沒做**：要 A.1 先給 block 邊界；要重寫
