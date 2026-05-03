@@ -198,7 +198,7 @@ internal sealed class ReadReg : IMicroOpEmitter
         return false;
     }
 
-    internal static LLVMValueRef ResolveRegPtr(EmitContext ctx, JsonElement indexExpr)
+    internal static unsafe LLVMValueRef ResolveRegPtr(EmitContext ctx, JsonElement indexExpr)
     {
         // index can be a string (field name) or integer (literal 0..N-1).
         if (indexExpr.ValueKind == JsonValueKind.Number)
@@ -217,6 +217,24 @@ internal sealed class ReadReg : IMicroOpEmitter
             var idx = ctx.Resolve(name);
             var maskBits = NextPowerOfTwoMinusOne(ctx.Layout.GprCount);
             var masked = ctx.Builder.BuildAnd(idx, ctx.ConstU32(maskBits), $"{name}_idx");
+            // Phase 7 A.6.1 — when the masked index is a JIT-time constant
+            // (typical in block-JIT where instruction word is baked in),
+            // produce a struct-typed GEP so LLVM's alias analysis sees the
+            // pointer with the same {struct}-element type as fixed-index
+            // GepGpr writes. Otherwise mismatched GEP types (i32-array
+            // vs struct-field) cause LLVM to assume no aliasing → codegen
+            // can use a stale register value across a memory write to the
+            // same byte address. Observed in Thumb POP {R3}; BX R3 path:
+            // POP wrote R3 via struct GEP, BX read R3 via array GEP, BX
+            // got the pre-POP register value (0) instead of the popped
+            // 0x895 — eventually triggered UND in BIOS LLE.
+            var maskedConst = LLVM.IsAConstantInt(masked);
+            if (maskedConst != null)
+            {
+                int litIdx = (int)LLVM.ConstIntGetSExtValue(maskedConst);
+                if (litIdx >= 0 && litIdx < ctx.Layout.GprCount)
+                    return ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, litIdx);
+            }
             return ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, masked);
         }
         throw new InvalidOperationException("read_reg/write_reg 'index' must be string or number.");
