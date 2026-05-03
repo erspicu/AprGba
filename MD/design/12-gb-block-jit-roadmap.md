@@ -90,6 +90,15 @@ LR35902 length **完全由第一 byte 決定**（256-entry static table）：
 路徑不能退步）/ GB Blargg cpu_instrs 在 block-JIT mode 通過 / T3 bench
 GB 09-loop100 從 6.5 → ≥10 MIPS（保守目標 ~50% 進步）。
 
+#### P0 後續 — 已 ship + pending
+
+| # | Item | Status | Commit | 備註 |
+|---|---|---|---|---|
+| **P0.5** | HALT/STOP block boundary | ✅ | `a10a718` | detector 看 step `op:"halt"`/`"stop"` 自動切 block |
+| **P0.5b** | EI delay band-aid (block ends at EI+1) | ✅ partial | `6a86005` | hardcoded LR35902-specific；P0.6 取代 |
+| **P0.5c** | `Lr35902Alu8Emitter.FetchImmediate` Strategy 2 baking | ✅ | `d760b08` | + `--diff-bjit=N` lockstep harness；Blargg 01-special PASSED |
+| **P0.6** | **Generic `defer` micro-op + AST pre-pass** | 📋 planned | — | Gemini-recommended phantom-instruction-injection pattern；replaces P0.5b hardcode；details in `MD/design/13-defer-microop.md`；3-4 天 |
+
 ### Tier P1 — Big-win 延伸（共 ~3-4 天，P0 完成後才有意義）
 
 | # | Item | Cost | Risk | Value | 備註 |
