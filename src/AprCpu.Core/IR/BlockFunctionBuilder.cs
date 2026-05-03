@@ -166,8 +166,11 @@ public sealed unsafe class BlockFunctionBuilder
                 : (byte?)null;
             // Phase 7 GB block-JIT P0.7 — pass instruction cycle cost
             // so sync-exit emitters can deduct cycles_left correctly.
-            int cycleCost = ParseCyclesForm(bi.Decoded.Instruction.Cycles?.Form);
-            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord), bi.Pc, len, cycleCost);
+            // P0.7b: also pass extra-taken-cycles for "Nm_or_Mm" forms
+            // (conditional branches: per-instr backend's taken path
+            // costs Mm = base + (M-N) m-cycles extra).
+            var (cycleCost, extraTaken) = ParseCyclesFormBoth(bi.Decoded.Instruction.Cycles?.Form);
+            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord), bi.Pc, len, cycleCost, extraTaken);
 
             // 1. Pre block: clear PcWritten, then cond gate.
             //
@@ -212,56 +215,55 @@ public sealed unsafe class BlockFunctionBuilder
             }
             if (!IsTerminated(builder)) builder.BuildBr(postBBs[i]);
 
-            // 3. Post block: did this instruction write PC? If so, exit
-            //    block (control transferred). Otherwise go to budget check.
+            // 3. Post block: deduct base cycles, then check if PC was
+            //    written (branch taken). If branch taken, exit block;
+            //    otherwise go to budget check.
+            //
+            // Phase 7 GB block-JIT P0.7b — base cycle deduct moved from
+            // budgetCheckBBs to here. Previously the deduct only happened
+            // in the not-taken path (budget check); taken-branch path
+            // (post → blockExit) skipped it, causing block-JIT to under-
+            // count cycles for taken branches → DIV/timer drift vs
+            // per-instr backend (which always ticks the full cycle cost).
+            // Now both paths pay the base; BranchCc/CallCc/RetCc emit
+            // their own EXTRA deduct in exec BB for the taken case
+            // (CurrentInstructionExtraTakenCycles).
+            int instrCycleCost = ParseCyclesForm(bi.Decoded.Instruction.Cycles?.Form);
             builder.PositionAtEnd(postBBs[i]);
+            var basePtr = Layout.GepCyclesLeft(builder, statePtr);
+            var baseOld = builder.BuildLoad2(LLVMTypeRef.Int32, basePtr, $"i{i}_cycles_base_old");
+            var baseNew = builder.BuildSub(baseOld,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)instrCycleCost, false), $"i{i}_cycles_base_new");
+            builder.BuildStore(baseNew, basePtr);
             var pcWrittenSlot = Layout.GepPcWritten(builder, statePtr);
             var pcWritten = builder.BuildLoad2(LLVMTypeRef.Int8, pcWrittenSlot, $"i{i}_pcw");
             var pcNotWritten = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
                 pcWritten, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false), $"i{i}_pcw_eq0");
             builder.BuildCondBr(pcNotWritten, budgetCheckBBs[i], blockExit);
 
-            // 4. Budget check: deduct this instruction's cycle cost from
-            //    cycles_left. If exhausted, write next-PC + mark PcWritten
-            //    and exit; otherwise continue to advance. For the last
-            //    instruction in the block, budget check is moot (we'd exit
-            //    anyway), so just skip straight to advance.
+            // 4. Budget check: cycles already deducted in postBB; just
+            //    check exhaustion. If exhausted, exit via budgetExit;
+            //    otherwise continue to advance.
             //
             // Phase 7 A.6.1 — predictive downcounting (Dolphin/mGBA pattern,
             // recommended by Gemini). cycles_left is loaded by the host
-            // before each block call; the IR decrements per instruction.
-            // Sub-block IRQ delivery + MMIO catch-up granularity without
-            // losing the JIT throughput win.
-            //
-            // Phase 7 GB block-JIT P0.4 — per-instruction cycle cost is now
-            // spec-driven (parsed from cycles.form: "Nm" → N×4 t-cycles).
-            // For LR35902 this matters a lot because instructions vary
-            // 4-24 t-cycles; the previous fixed 4 caused under-counting →
-            // outer scheduler ticked too few cycles → IRQ delivery delayed.
-            // For ARM most instructions are ~1 S-cycle = 4 t-cycles so the
-            // old constant was already accurate; spec-driven keeps it so.
-            int instrCycleCost = ParseCyclesForm(bi.Decoded.Instruction.Cycles?.Form);
+            // before each block call; the IR decrements per instruction
+            // (in postBB, P0.7b).
             builder.PositionAtEnd(budgetCheckBBs[i]);
             if (i + 1 < block.Instructions.Count)
             {
+                // Re-load latest cycles_left (postBB just stored it; LLVM
+                // can fold this back to the value if the BBs collapse).
                 var cyclesPtr = Layout.GepCyclesLeft(builder, statePtr);
-                var cyclesOld = builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, $"i{i}_cycles_old");
-                var cyclesNew = builder.BuildSub(cyclesOld,
-                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)instrCycleCost, false), $"i{i}_cycles_new");
-                builder.BuildStore(cyclesNew, cyclesPtr);
+                var cyclesNow = builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, $"i{i}_cycles_check");
                 var exhausted = builder.BuildICmp(LLVMIntPredicate.LLVMIntSLE,
-                    cyclesNew, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false), $"i{i}_budget_done");
+                    cyclesNow, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false), $"i{i}_budget_done");
                 builder.BuildCondBr(exhausted, budgetExitBBs[i], advanceBBs[i]);
             }
             else
             {
-                // Last instruction: still deduct cycles but no need to check
-                // (block ends regardless).
-                var cyclesPtr = Layout.GepCyclesLeft(builder, statePtr);
-                var cyclesOld = builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, $"i{i}_cycles_old");
-                var cyclesNew = builder.BuildSub(cyclesOld,
-                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)instrCycleCost, false), $"i{i}_cycles_new");
-                builder.BuildStore(cyclesNew, cyclesPtr);
+                // Last instruction: cycles already deducted in postBB;
+                // no exhaustion check needed (block ends regardless).
                 builder.BuildBr(advanceBBs[i]);
             }
 
@@ -378,6 +380,48 @@ public sealed unsafe class BlockFunctionBuilder
         }
         if (n == 0) n = 1;
         return n * 4;
+    }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P0.7b — parse spec's <c>cycles.form</c>
+    /// returning both the not-taken (base) cost and the extra cycles
+    /// when a conditional branch is taken. Recognised forms:
+    /// <list type="bullet">
+    ///   <item><c>"Nm"</c> → (N*4, 0) — unconditional / single-form</item>
+    ///   <item><c>"Nm_or_Mm"</c> → (N*4, (M-N)*4) — conditional with
+    ///         M-cycle taken cost</item>
+    /// </list>
+    /// Anything unparseable defaults to (4, 0).
+    /// </summary>
+    internal static (int notTakenT, int extraTakenT) ParseCyclesFormBoth(string? form)
+    {
+        if (string.IsNullOrEmpty(form)) return (4, 0);
+        int n = 0, m = 0;
+        bool inFirst = true, sawDigit = false;
+        for (int i = 0; i < form.Length; i++)
+        {
+            var ch = form[i];
+            if (ch >= '0' && ch <= '9')
+            {
+                if (inFirst) n = n * 10 + (ch - '0');
+                else         m = m * 10 + (ch - '0');
+                sawDigit = true;
+            }
+            else if (sawDigit && (ch == 'm' || ch == 't'))
+            {
+                // Skip the unit suffix; check for "_or_" continuation.
+                if (i + 4 <= form.Length && form.Substring(i + 1, 4) == "_or_")
+                {
+                    inFirst = false;
+                    sawDigit = false;
+                    i += 4;   // skip "m_or_"
+                }
+                else break;
+            }
+        }
+        if (n == 0) n = 1;
+        if (m == 0) return (n * 4, 0);
+        return (n * 4, (m - n) * 4);
     }
 
     private static unsafe LLVMAttributeRef CreateEnumAttribute(LLVMContextRef ctx, string name)

@@ -109,7 +109,7 @@ public sealed unsafe class EmitContext
     /// the executor's per-step "pre-set R15" memory write). Per-instr
     /// mode leaves it null so the legacy load-from-GPR[15] path runs.
     /// </summary>
-    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord, uint? baseAddress = null, byte? lengthBytes = null, int currentInstructionCycleCost = 0)
+    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord, uint? baseAddress = null, byte? lengthBytes = null, int currentInstructionCycleCost = 0, int currentInstructionExtraTakenCycles = 0)
     {
         Format = format;
         Def = def;
@@ -118,6 +118,7 @@ public sealed unsafe class EmitContext
         CurrentInstructionBaseAddress = baseAddress;
         CurrentInstructionLengthBytes = lengthBytes;
         CurrentInstructionCycleCost = currentInstructionCycleCost;
+        CurrentInstructionExtraTakenCycles = currentInstructionExtraTakenCycles;
         PcWriteEmittedInCurrentInstruction = false;
     }
 
@@ -130,6 +131,17 @@ public sealed unsafe class EmitContext
     /// early via sync. 0 means unknown / per-instr mode.
     /// </summary>
     public int CurrentInstructionCycleCost { get; private set; }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P0.7b — extra t-cycles to deduct when a
+    /// conditional branch is TAKEN at runtime (parsed from spec
+    /// <c>cycles.form</c> like "2m_or_3m" → not_taken=8, taken=12,
+    /// extra_taken=4). The base cost <see cref="CurrentInstructionCycleCost"/>
+    /// is the not-taken cost; branch_cc/call_cc/ret_cc emitters add
+    /// this extra inside their taken-path IR.
+    /// 0 means non-conditional or single-cycle-form spec.
+    /// </summary>
+    public int CurrentInstructionExtraTakenCycles { get; private set; }
 
     /// <summary>
     /// Phase 7 GB block-JIT P0.4 — when set (block-JIT mode for variable-width

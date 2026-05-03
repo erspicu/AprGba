@@ -954,6 +954,26 @@ internal sealed class BranchCc : IMicroOpEmitter
         var taken     = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false);
         var pcWritten = ctx.Builder.BuildSelect(pred, taken, oldFlag, "pc_w_new");
         ctx.Builder.BuildStore(pcWritten, flagSlot);
+
+        // Phase 7 GB block-JIT P0.7b — taken-branch extra cycle deduct.
+        // For LR35902 JR cc / JP cc, taken path costs +4 t-cycles vs
+        // not-taken (3m vs 2m for JR cc; 4m vs 3m for JP cc). Without
+        // this deduct, block-JIT under-counts cycles for taken branches,
+        // causing DIV/timer drift vs per-instr (which has its own
+        // ConditionalBranchExtraCycles fix in JsonCpu.StepOne). Per-instr
+        // mode (CurrentInstructionExtraTakenCycles == 0 OR null base)
+        // skips this — outer loop handles cycle accounting differently.
+        if (ctx.CurrentInstructionBaseAddress is not null
+            && ctx.CurrentInstructionExtraTakenCycles > 0)
+        {
+            var cyclesPtr = ctx.Layout.GepCyclesLeft(ctx.Builder, ctx.StatePtr);
+            var cyclesOld = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, "bcc_cycles_old");
+            var extra     = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32,
+                (ulong)ctx.CurrentInstructionExtraTakenCycles, false);
+            var minus     = ctx.Builder.BuildSub(cyclesOld, extra, "bcc_cycles_minus");
+            var chosenC   = ctx.Builder.BuildSelect(pred, minus, cyclesOld, "bcc_cycles_new");
+            ctx.Builder.BuildStore(chosenC, cyclesPtr);
+        }
     }
 }
 

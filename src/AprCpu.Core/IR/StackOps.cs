@@ -376,6 +376,19 @@ internal static class StackOps
             // mark PC-written for the open-bus detector
             var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
             ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
+            // Phase 7 GB block-JIT P0.7b — taken-branch extra cycle deduct.
+            // CALL cc, nn = 3m_or_6m → taken adds 12 t-cycles; for the
+            // taken-only thenBB just unconditionally subtract.
+            if (ctx.CurrentInstructionBaseAddress is not null
+                && ctx.CurrentInstructionExtraTakenCycles > 0)
+            {
+                var cyclesPtr = ctx.Layout.GepCyclesLeft(ctx.Builder, ctx.StatePtr);
+                var cyclesOld = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, "ccc_cycles_old");
+                var cyclesNew = ctx.Builder.BuildSub(cyclesOld,
+                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32,
+                        (ulong)ctx.CurrentInstructionExtraTakenCycles, false), "ccc_cycles_new");
+                ctx.Builder.BuildStore(cyclesNew, cyclesPtr);
+            }
             ctx.Builder.BuildBr(endBB);
 
             ctx.Builder.PositionAtEnd(endBB);
@@ -404,6 +417,18 @@ internal static class StackOps
             ctx.Builder.BuildStore(newPc, pcPtr);
             var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
             ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
+            // Phase 7 GB block-JIT P0.7b — RET cc = 2m_or_5m → taken adds
+            // 12 t-cycles. Same pattern as call_cc thenBB.
+            if (ctx.CurrentInstructionBaseAddress is not null
+                && ctx.CurrentInstructionExtraTakenCycles > 0)
+            {
+                var cyclesPtr = ctx.Layout.GepCyclesLeft(ctx.Builder, ctx.StatePtr);
+                var cyclesOld = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, "rcc_cycles_old");
+                var cyclesNew = ctx.Builder.BuildSub(cyclesOld,
+                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32,
+                        (ulong)ctx.CurrentInstructionExtraTakenCycles, false), "rcc_cycles_new");
+                ctx.Builder.BuildStore(cyclesNew, cyclesPtr);
+            }
             ctx.Builder.BuildBr(endBB);
 
             ctx.Builder.PositionAtEnd(endBB);
