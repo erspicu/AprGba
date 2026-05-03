@@ -61,11 +61,21 @@ public sealed unsafe class GbaSystemRunner
                 continue;
             }
 
+            // Phase 7 A.6.1 — predictive downcounting. Set the CPU's cycle
+            // budget to the smaller of (remaining frame budget, distance
+            // to next scheduler event). Block-JIT IR will decrement the
+            // budget per instruction and exit early if exhausted, giving
+            // sub-block IRQ delivery granularity. Per-instr mode ignores
+            // this (always charges cyclesPerInstr) so its loop iteration
+            // is unchanged.
+            int budget = (int)Math.Min(cycleBudget - consumed, Scheduler.CyclesUntilNextEvent());
+            if (budget < cyclesPerInstr) budget = cyclesPerInstr;   // never set zero/negative
+            Cpu.CyclesLeft = budget;
+
             Cpu.Step();
-            // Phase 7 A.6 — when block-JIT is enabled, one Step may
-            // execute many instructions atomically. Scale the per-tick
-            // cycle charge by the count the executor reports.
-            var ticks = cyclesPerInstr * Cpu.LastStepInstructionCount;
+            // Use the actually-consumed cycles from the executor (block-JIT
+            // reads it from the cycles_left delta; per-instr always sets 4).
+            var ticks = Cpu.LastStepCycles;
             Scheduler.Tick(ticks);
             consumed += ticks;
             DeliverIrqIfPending();

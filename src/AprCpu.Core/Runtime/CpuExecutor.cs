@@ -79,6 +79,27 @@ public sealed unsafe class CpuExecutor
     /// </summary>
     public int LastStepInstructionCount { get; private set; } = 1;
 
+    /// <summary>
+    /// Phase 7 A.6.1 — actual cycles consumed by the most recent Step.
+    /// Set from the cycles_left downcount delta (block-JIT) or from
+    /// cyclesPerInstr × LastStepInstructionCount (per-instr fallback).
+    /// Used by GbaSystemRunner to feed the scheduler accurate cycle counts.
+    /// </summary>
+    public int LastStepCycles { get; private set; } = 4;
+
+    /// <summary>
+    /// Phase 7 A.6.1 — predictive-downcounting budget for block-JIT.
+    /// Host loads cycles-until-next-event before calling Step(); block IR
+    /// decrements it per instruction and exits when it hits zero. Read
+    /// after Step() to compute actually-consumed cycles. Per-instr mode
+    /// ignores this (always charges cyclesPerInstr per Step).
+    /// </summary>
+    public int CyclesLeft
+    {
+        get => System.Runtime.InteropServices.Marshal.ReadInt32((IntPtr)(_statePtr + _cyclesLeftOffset));
+        set => System.Runtime.InteropServices.Marshal.WriteInt32((IntPtr)(_statePtr + _cyclesLeftOffset), value);
+    }
+
     /// <summary>Total number of distinct blocks compiled into the JIT
     /// (cache misses) — block-JIT mode only.</summary>
     public long BlocksCompiled { get; private set; }
@@ -97,6 +118,7 @@ public sealed unsafe class CpuExecutor
     // looked up once at construction.
     private readonly int   _pcGprOffset;
     private readonly int   _pcWrittenOffset;
+    private readonly int   _cyclesLeftOffset;
     private readonly ModeInfo _defaultMode;
     private readonly Dictionary<uint, ModeInfo>? _modesBySelectorValue;
     private readonly Func<byte[], uint>?         _readSelector;
@@ -137,6 +159,7 @@ public sealed unsafe class CpuExecutor
         _statePtr = (byte*)_stateHandle.AddrOfPinnedObject();
         _pcGprOffset = (int)_rt.GprOffset(_pcRegIndex);
         _pcWrittenOffset = (int)_rt.PcWrittenOffset;
+        _cyclesLeftOffset = (int)_rt.CyclesLeftOffset;
     }
 
     /// <summary>
@@ -171,6 +194,7 @@ public sealed unsafe class CpuExecutor
         _statePtr = (byte*)_stateHandle.AddrOfPinnedObject();
         _pcGprOffset = (int)_rt.GprOffset(_pcRegIndex);
         _pcWrittenOffset = (int)_rt.PcWrittenOffset;
+        _cyclesLeftOffset = (int)_rt.CyclesLeftOffset;
 
         // Build value→ModeInfo map from selector_values.
         _modesBySelectorValue = new Dictionary<uint, ModeInfo>();
@@ -393,6 +417,7 @@ public sealed unsafe class CpuExecutor
         }
 
         LastStepInstructionCount = 1;
+        LastStepCycles           = 4;   // 1S cycle approximation
         InstructionsExecuted++;
         var mode = CurrentMode();
         var pc = ReadPc();   // Phase 7 B.e: fast cached-offset accessor
@@ -580,16 +605,20 @@ public sealed unsafe class CpuExecutor
             cpsrBefore = (uint)System.Runtime.InteropServices.Marshal.ReadInt32((IntPtr)(_statePtr + cpsrOff));
             modeBefore = cpsrBefore & 0x1Fu;
         }
+        // Phase 7 A.6.1 — predictive downcounting. Snapshot cycles_left
+        // before block runs to compute cycles actually consumed afterwards.
+        // Block IR decrements cycles_left per instruction and exits early
+        // when it hits zero (writing the next-instruction PC + PcWritten=1
+        // so the post-block "advance PC" path doesn't overshoot).
+        int cyclesBudgetBefore = CyclesLeft;
         var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
         fn(_statePtr);
+        int cyclesConsumed = cyclesBudgetBefore - CyclesLeft;
         if (_state[_pcWrittenOffset] == 0)
         {
-            // No branch fired — straight-line block, advance PC by N×size.
-            // Note: this overstates by some when an early instruction's
-            // cond-gate failed (the block IR still falls through advance
-            // for skipped instrs). For PC accounting that's correct (a
-            // skipped conditional instr still occupies its slot, PC must
-            // advance past it). For cycle counting see LastStepInstructionCount.
+            // No branch fired AND budget didn't exhaust — straight-line
+            // block executed fully. Advance PC by N×size. (Budget exit
+            // path sets PcWritten=1 + writes next-instr PC itself.)
             var totalBytes = (uint)entry.InstructionCount * mode.InstrSizeBytes;
             WritePc(pc + totalBytes);
         }
@@ -625,8 +654,15 @@ public sealed unsafe class CpuExecutor
             }
         }
 
-        LastStepInstructionCount = entry.InstructionCount;
-        InstructionsExecuted    += entry.InstructionCount;
+        // Phase 7 A.6.1 — actual cycle count comes from the budget delta.
+        // Convert back to instruction count for callers that still want
+        // it (Scheduler.Tick uses cycles directly via LastStepCycles).
+        const int instrCycleCost = 4;
+        int actualInstrCount = cyclesConsumed > 0 ? cyclesConsumed / instrCycleCost : entry.InstructionCount;
+        if (actualInstrCount > entry.InstructionCount) actualInstrCount = entry.InstructionCount;
+        LastStepInstructionCount = actualInstrCount;
+        LastStepCycles           = cyclesConsumed > 0 ? cyclesConsumed : entry.InstructionCount * instrCycleCost;
+        InstructionsExecuted    += actualInstrCount;
         BlocksExecuted++;
     }
 

@@ -60,6 +60,9 @@ public class BlockFunctionBuilderTests
         state.Clear();
         // Pre-set CPSR to AL-mode user (so cond gate passes). User-mode = 0x10.
         WriteI32(state, rt.StatusOffset("CPSR"), 0x10u);
+        // Phase 7 A.6.1 — set predictive-downcount budget large enough that
+        // the block runs to completion without budget exit.
+        WriteI32(state, rt.CyclesLeftOffset, 1_000_000u);
 
         fixed (byte* p = state)
             fn(p);
@@ -116,6 +119,7 @@ public class BlockFunctionBuilderTests
         state.Clear();
         // CPSR = User mode + Z=0 (so EQ fails, AL passes).
         WriteI32(state, rt.StatusOffset("CPSR"), 0x10u);
+        WriteI32(state, rt.CyclesLeftOffset, 1_000_000u);
 
         fixed (byte* p = state)
             fn(p);
@@ -166,6 +170,7 @@ public class BlockFunctionBuilderTests
         Span<byte> state = stackalloc byte[(int)rt.StateSizeBytes];
         state.Clear();
         WriteI32(state, rt.StatusOffset("CPSR"), 0x10u);  // user mode, AL passes
+        WriteI32(state, rt.CyclesLeftOffset, 1_000_000u);
 
         fixed (byte* p = state)
             fn(p);

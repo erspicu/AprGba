@@ -102,18 +102,23 @@ public sealed unsafe class BlockFunctionBuilder
         var pcOffsetBytes = (uint)set.PcOffsetBytes;
         var pcWrittenSlotInEntry = Layout.GepPcWritten(builder, statePtr);
 
-        // For each instruction we'll create up to 4 BBs: pre, exec,
-        // post, advance. Pre-create them all so we can branch forward.
-        var preBBs     = new LLVMBasicBlockRef[block.Instructions.Count];
-        var execBBs    = new LLVMBasicBlockRef[block.Instructions.Count];
-        var postBBs    = new LLVMBasicBlockRef[block.Instructions.Count];
-        var advanceBBs = new LLVMBasicBlockRef[block.Instructions.Count];
+        // For each instruction we'll create up to 5 BBs: pre, exec,
+        // post, budget_check (predictive downcount), advance.
+        // Pre-create them all so we can branch forward.
+        var preBBs        = new LLVMBasicBlockRef[block.Instructions.Count];
+        var execBBs       = new LLVMBasicBlockRef[block.Instructions.Count];
+        var postBBs       = new LLVMBasicBlockRef[block.Instructions.Count];
+        var budgetCheckBBs= new LLVMBasicBlockRef[block.Instructions.Count];
+        var budgetExitBBs = new LLVMBasicBlockRef[block.Instructions.Count];
+        var advanceBBs    = new LLVMBasicBlockRef[block.Instructions.Count];
         for (int i = 0; i < block.Instructions.Count; i++)
         {
-            preBBs[i]     = fn.AppendBasicBlock($"i{i}_pre");
-            execBBs[i]    = fn.AppendBasicBlock($"i{i}_exec");
-            postBBs[i]    = fn.AppendBasicBlock($"i{i}_post");
-            advanceBBs[i] = fn.AppendBasicBlock($"i{i}_advance");
+            preBBs[i]         = fn.AppendBasicBlock($"i{i}_pre");
+            execBBs[i]        = fn.AppendBasicBlock($"i{i}_exec");
+            postBBs[i]        = fn.AppendBasicBlock($"i{i}_post");
+            budgetCheckBBs[i] = fn.AppendBasicBlock($"i{i}_budget");
+            budgetExitBBs[i]  = fn.AppendBasicBlock($"i{i}_budget_exit");
+            advanceBBs[i]     = fn.AppendBasicBlock($"i{i}_advance");
         }
 
         // Branch from entry to first instruction's pre block.
@@ -171,15 +176,73 @@ public sealed unsafe class BlockFunctionBuilder
             if (!IsTerminated(builder)) builder.BuildBr(postBBs[i]);
 
             // 3. Post block: did this instruction write PC? If so, exit
-            //    block (control transferred). Otherwise advance.
+            //    block (control transferred). Otherwise go to budget check.
             builder.PositionAtEnd(postBBs[i]);
             var pcWrittenSlot = Layout.GepPcWritten(builder, statePtr);
             var pcWritten = builder.BuildLoad2(LLVMTypeRef.Int8, pcWrittenSlot, $"i{i}_pcw");
             var pcNotWritten = builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
                 pcWritten, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false), $"i{i}_pcw_eq0");
-            builder.BuildCondBr(pcNotWritten, advanceBBs[i], blockExit);
+            builder.BuildCondBr(pcNotWritten, budgetCheckBBs[i], blockExit);
 
-            // 4. Advance block: just branch to next instr's pre (or
+            // 4. Budget check: deduct this instruction's cycle cost from
+            //    cycles_left. If exhausted, write next-PC + mark PcWritten
+            //    and exit; otherwise continue to advance. For the last
+            //    instruction in the block, budget check is moot (we'd exit
+            //    anyway), so just skip straight to advance.
+            //
+            // Phase 7 A.6.1 — predictive downcounting (Dolphin/mGBA pattern,
+            // recommended by Gemini). cycles_left is loaded by the host
+            // before each block call; the IR decrements per instruction.
+            // Sub-block IRQ delivery + MMIO catch-up granularity without
+            // losing the JIT throughput win.
+            const int instrCycleCost = 4;   // 1S cycle approximation
+            builder.PositionAtEnd(budgetCheckBBs[i]);
+            if (i + 1 < block.Instructions.Count)
+            {
+                var cyclesPtr = Layout.GepCyclesLeft(builder, statePtr);
+                var cyclesOld = builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, $"i{i}_cycles_old");
+                var cyclesNew = builder.BuildSub(cyclesOld,
+                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, instrCycleCost, false), $"i{i}_cycles_new");
+                builder.BuildStore(cyclesNew, cyclesPtr);
+                var exhausted = builder.BuildICmp(LLVMIntPredicate.LLVMIntSLE,
+                    cyclesNew, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false), $"i{i}_budget_done");
+                builder.BuildCondBr(exhausted, budgetExitBBs[i], advanceBBs[i]);
+            }
+            else
+            {
+                // Last instruction: still deduct cycles but no need to check
+                // (block ends regardless).
+                var cyclesPtr = Layout.GepCyclesLeft(builder, statePtr);
+                var cyclesOld = builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, $"i{i}_cycles_old");
+                var cyclesNew = builder.BuildSub(cyclesOld,
+                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, instrCycleCost, false), $"i{i}_cycles_new");
+                builder.BuildStore(cyclesNew, cyclesPtr);
+                builder.BuildBr(advanceBBs[i]);
+            }
+
+            // 4b. Budget exit: write the NEXT instruction's PC into the PC
+            //     slot (so the host dispatches there next), mark PcWritten=1
+            //     (so the host's "no branch → advance PC" path doesn't
+            //     overwrite our exit PC), and jump to block_exit. Only the
+            //     non-last instructions have a meaningful budget exit; for
+            //     the last we still create the BB but make it an unreachable
+            //     stub so LLVM verifier accepts the function.
+            builder.PositionAtEnd(budgetExitBBs[i]);
+            if (i + 1 < block.Instructions.Count)
+            {
+                uint nextPc = block.Instructions[i + 1].Pc;
+                WritePcConst(builder, statePtr, nextPc);
+                builder.BuildStore(
+                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false),
+                    Layout.GepPcWritten(builder, statePtr));
+                builder.BuildBr(blockExit);
+            }
+            else
+            {
+                builder.BuildUnreachable();
+            }
+
+            // 5. Advance block: just branch to next instr's pre (or
             //    block_exit if last). NO PC write — executor advances
             //    PC by total block size when PcWritten=0 at exit.
             builder.PositionAtEnd(advanceBBs[i]);

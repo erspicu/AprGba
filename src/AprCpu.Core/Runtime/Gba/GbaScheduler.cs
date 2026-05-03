@@ -59,6 +59,27 @@ public sealed class GbaScheduler
     }
 
     /// <summary>
+    /// Phase 7 A.6.1 — return the cycle count until the NEXT scheduler
+    /// event boundary (HBlank entry, scanline rollover, VBlank entry,
+    /// VCount match). Used by predictive downcounting in GbaSystemRunner
+    /// to set the JIT block's cycle budget so block-JIT exits at exactly
+    /// the right time for IRQ delivery + MMIO catch-up.
+    ///
+    /// Conservative: returns the smallest of (cycles to HBlank entry,
+    /// cycles to next scanline). Doesn't peek at VCount target — caller
+    /// would still get that on the scanline boundary tick that crosses it.
+    /// </summary>
+    public int CyclesUntilNextEvent()
+    {
+        // Within visible scanline + before HBlank entry: distance to HBlank.
+        if (!_inHBlank && _scanline < VisibleScanlines && _cycleInScanline < CyclesHDraw)
+            return CyclesHDraw - _cycleInScanline;
+        // Otherwise distance to next scanline rollover (which fires VBlank
+        // entry on scanline 159→160, scanline rollover otherwise).
+        return CyclesPerScanline - _cycleInScanline;
+    }
+
+    /// <summary>
     /// Advance the scheduler by <paramref name="cycles"/> CPU cycles.
     /// Fires VBlank/HBlank/VCount-match events as boundaries are crossed.
     /// Caller is the CPU loop after each Step() (or batched).

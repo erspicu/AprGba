@@ -75,6 +75,17 @@ public sealed unsafe class CpuStateLayout
     /// </summary>
     public int PcWrittenFieldIndex { get; }
 
+    /// <summary>
+    /// Phase 7 A.6.1 — i32 "cycles remaining in current budget" downcounter.
+    /// The host runtime (GbaSystemRunner) loads this with the cycles-until-
+    /// next-scheduler-event before each block-JIT call. The block IR
+    /// subtracts each instruction's cycle cost from this slot and exits
+    /// early when it reaches zero. Predictive downcounting pattern from
+    /// Dolphin/mGBA — gives sub-block granularity for IRQ delivery and
+    /// MMIO catch-up without losing the JIT throughput win.
+    /// </summary>
+    public int CyclesLeftFieldIndex { get; }
+
     public CpuStateLayout(
         LLVMContextRef context,
         RegisterFile registerFile,
@@ -137,6 +148,8 @@ public sealed unsafe class CpuStateLayout
         elements.Add(LLVMTypeRef.Int32);
         PcWrittenFieldIndex         = elements.Count;
         elements.Add(LLVMTypeRef.Int8);
+        CyclesLeftFieldIndex        = elements.Count;
+        elements.Add(LLVMTypeRef.Int32);
 
         StructType  = LLVMTypeRef.CreateStruct(elements.ToArray(), Packed: false);
         PointerType = LLVMTypeRef.CreatePointer(StructType, 0);
@@ -244,6 +257,10 @@ public sealed unsafe class CpuStateLayout
     /// <summary>GEP into the i8 "pc was written" sticky flag slot.</summary>
     public LLVMValueRef GepPcWritten(LLVMBuilderRef builder, LLVMValueRef statePtr)
         => BuildGep(builder, statePtr, PcWrittenFieldIndex, "pc_written_ptr");
+
+    /// <summary>GEP into the i32 "cycles remaining in JIT budget" slot.</summary>
+    public LLVMValueRef GepCyclesLeft(LLVMBuilderRef builder, LLVMValueRef statePtr)
+        => BuildGep(builder, statePtr, CyclesLeftFieldIndex, "cycles_left_ptr");
 
     /// <summary>
     /// GEP into a GPR slot by a runtime-computed index. Bitcasts the state
