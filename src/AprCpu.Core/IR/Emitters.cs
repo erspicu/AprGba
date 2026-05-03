@@ -154,7 +154,7 @@ internal sealed class ReadReg : IMicroOpEmitter
 internal sealed class WriteReg : IMicroOpEmitter
 {
     public string OpName => "write_reg";
-    public void Emit(EmitContext ctx, MicroOpStep step)
+    public unsafe void Emit(EmitContext ctx, MicroOpStep step)
     {
         var indexExpr = step.Raw.GetProperty("index");
         var valueName = step.Raw.GetProperty("value").GetString()!;
@@ -162,12 +162,71 @@ internal sealed class WriteReg : IMicroOpEmitter
 
         var ptr = ReadReg.ResolveRegPtr(ctx, indexExpr);
         ctx.Builder.BuildStore(value, ptr);
+
+        // Phase 7 A.6.1 — static-analysis PC-write detection. When the
+        // instruction word is a baked-in constant (block-JIT mode), we
+        // can extract the Rd field at JIT time and unconditionally mark
+        // PcWritten=1 if Rd resolves to PC. mGBA's dynarec uses the same
+        // pattern (special "DPPC" emitter for data-processing→PC).
+        // Per-instr mode keeps the legacy backup check
+        // (executor's `postR15 != pcReadValue`) so we only emit the mark
+        // when needed for correctness.
+        StaticallyMarkPcWrittenIfNeeded(ctx, indexExpr);
     }
 
     internal static void MarkPcWritten(EmitContext ctx)
     {
         var slot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
         ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), slot);
+    }
+
+    /// <summary>
+    /// Decode the register index AT JIT TIME (not at runtime). When the
+    /// instruction word is a constant in IR (block-JIT bakes it as
+    /// <c>ConstU32(bi.InstructionWord)</c>), we can extract the Rd field
+    /// from the spec format's bit range and check against PC index. If
+    /// Rd resolves to PC, emit an unconditional <see cref="MarkPcWritten"/>
+    /// — the block exit logic will then correctly route to block_exit
+    /// instead of advance.
+    /// </summary>
+    internal static unsafe void StaticallyMarkPcWrittenIfNeeded(EmitContext ctx, System.Text.Json.JsonElement indexExpr)
+    {
+        var pcIdx = ctx.Layout.RegisterFile.GeneralPurpose.PcIndex;
+        if (pcIdx is not int pc) return;   // CPUs without GPR-resident PC (LR35902) — N/A
+
+        // Literal index: trivial check.
+        if (indexExpr.ValueKind == System.Text.Json.JsonValueKind.Number)
+        {
+            if (indexExpr.GetInt32() == pc) MarkPcWritten(ctx);
+            return;
+        }
+        if (indexExpr.ValueKind != System.Text.Json.JsonValueKind.String) return;
+
+        // Field-name index: check if Instruction word is a constant.
+        // LLVM.IsAConstantInt returns the value cast to ConstantInt iff
+        // the operand is a constant integer; null otherwise. In per-instr
+        // mode the instruction word is a function PARAMETER (runtime),
+        // so this returns null and we skip — per-instr executor's backup
+        // check handles those cases.
+        var instrConst = LLVM.IsAConstantInt(ctx.Instruction);
+        if (instrConst == null) return;
+
+        var instrWord = (uint)LLVM.ConstIntGetZExtValue(instrConst);
+        var name = indexExpr.GetString()!;
+        if (!ctx.Format.Fields.TryGetValue(name, out var range)) return;
+
+        // Extract field bits from constant instruction word at JIT time.
+        var maskBits = NextPowerOfTwoMinusOne(ctx.Layout.GprCount);
+        var idxValue = ((instrWord >> range.Low) & range.LowMask) & maskBits;
+        if (idxValue == (uint)pc) MarkPcWritten(ctx);
+    }
+
+    private static uint NextPowerOfTwoMinusOne(int count)
+    {
+        if (count <= 1) return 0;
+        uint v = 1;
+        while (v < (uint)count) v <<= 1;
+        return v - 1;
     }
 }
 
