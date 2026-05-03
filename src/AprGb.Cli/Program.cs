@@ -32,6 +32,21 @@ if (opts.DiffMaxSteps > 0 && opts.RomPath is not null)
     return 1;
 }
 
+if (opts.DiffBjitMaxBlocks > 0 && opts.RomPath is not null)
+{
+    Console.WriteLine($"apr-gb — diff mode: per-instr vs block-JIT");
+    Console.WriteLine($"  ROM:         {opts.RomPath}");
+    Console.WriteLine($"  max blocks:  {opts.DiffBjitMaxBlocks}");
+    var report = CpuDiff.RunBjitVsPerInstr(opts.RomPath, opts.DiffBjitMaxBlocks);
+    if (report is null)
+    {
+        Console.WriteLine($"  no divergence in {opts.DiffBjitMaxBlocks} blocks. Backends agree.");
+        return 0;
+    }
+    Console.WriteLine(CpuDiff.FormatBjitDiff(report));
+    return 1;
+}
+
 if (opts.Bench && opts.RomPath is not null)
 {
     return RunBench(opts);
@@ -134,6 +149,7 @@ static Options? ParseArgs(string[] args)
         else if (arg.StartsWith("--diff="))       opts.DiffMaxSteps = long.Parse(arg.Substring("--diff=".Length));
         else if (arg == "--bench")                opts.Bench = true;
         else if (arg == "--block-jit")            opts.BlockJit = true;
+        else if (arg.StartsWith("--diff-bjit=")) opts.DiffBjitMaxBlocks = long.Parse(arg.Substring("--diff-bjit=".Length));
         else                                      return null;
     }
     return opts.RomPath is null ? null : opts;
@@ -220,6 +236,7 @@ internal sealed class Options
     public long     DiffMaxSteps;        // when > 0, run lockstep diff harness instead
     public bool     Bench;               // when true, run both backends and report MIPS
     public bool     BlockJit;            // --block-jit: enable Phase 7 GB block-JIT path on json-llvm
+    public long     DiffBjitMaxBlocks;   // --diff-bjit=N: lockstep per-instr vs block-JIT
 }
 
 /// <summary>

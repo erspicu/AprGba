@@ -311,6 +311,16 @@ public sealed unsafe class JsonCpu : ICpuBackend
     }
 
     /// <summary>
+    /// Phase 7 GB block-JIT P0.5c — diff-harness override. When set to a
+    /// positive value, StepBlock forces this as the per-block cycle
+    /// budget (the host IR exits early when budget ≤ 0). Setting it to 1
+    /// forces block-JIT to run exactly one instruction per call (matches
+    /// per-instr granularity for lockstep comparison via CpuDiff).
+    /// Default 0 means use the normal 256-cycle budget.
+    /// </summary>
+    public int BlockBudgetOverride { get; set; }
+
+    /// <summary>
     /// Phase 7 GB block-JIT P0.4 — execute one block. On cache miss,
     /// detect + compile + cache. Returns total t-cycles consumed by the
     /// block (instruction count × 4 — GB has uniform 4 t-cycles per
@@ -331,7 +341,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
         // cycles_left. Block IR decrements by 4 per instruction and
         // exits early when it hits zero (writes next-PC + sets PcWritten=1).
         // For GB use 64×4=256 as the per-block budget (matches detector cap).
-        const int blockBudget = 256;
+        int blockBudget = BlockBudgetOverride > 0 ? BlockBudgetOverride : 256;
         Marshal.WriteInt32((IntPtr)(_statePtr + _cyclesLeftOffset), blockBudget);
         // Reset PcWritten before block runs. Branches inside the block
         // will set this so the post-block PC-advance path knows to skip.

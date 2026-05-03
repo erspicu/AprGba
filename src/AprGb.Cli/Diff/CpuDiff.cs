@@ -144,6 +144,99 @@ public static class CpuDiff
         return null;
     }
 
+    /// <summary>
+    /// Phase 7 GB block-JIT P0.5c — lockstep diff between JsonCpu in
+    /// per-instr mode vs JsonCpu in block-JIT mode. Both backends step
+    /// the same JsonCpu code but the latter has --block-jit enabled.
+    /// Comparison granularity is one block: after each block-JIT block
+    /// completes, the per-instr backend is advanced by the same number
+    /// of instructions, then both states are compared. The first
+    /// register/PC/SP/WRAM divergence is reported.
+    ///
+    /// Caveat: block-JIT and per-instr handle IRQ timing at different
+    /// granularities (per-block vs per-instr). For ROMs that depend on
+    /// per-instruction IRQ delivery (timer / serial interrupts), this
+    /// harness will report divergences that aren't really bugs in the
+    /// emitter — they're inherent to the block-JIT model. For Blargg
+    /// cpu_instrs the IRQ paths are minimal so first divergences are
+    /// usually genuine emitter bugs.
+    /// </summary>
+    public static DivergenceReport? RunBjitVsPerInstr(string romPath, long maxBlocks, bool verbose = false)
+    {
+        var rom = RomLoader.Load(romPath);
+
+        var busP = new GbMemoryBus(); busP.LoadRom(rom);
+        var busB = new GbMemoryBus(); busB.LoadRom(rom);
+
+        var pi = new JsonCpu(enableBlockJit: false); pi.Reset(busP);
+        var bj = new JsonCpu(enableBlockJit: true);  bj.Reset(busB);
+        // Force block-JIT to run exactly 1 instruction per call so we
+        // can compare 1:1 with per-instr without instruction-count
+        // approximation problems.
+        bj.BlockBudgetOverride = 1;
+
+        for (long iter = 0; iter < maxBlocks; iter++)
+        {
+            var preBj = TakeSnapshot(bj, busB);
+
+            // Step both backends by exactly 1 instruction.
+            bj.RunCycles(1);
+            pi.RunCycles(1);
+
+            if (verbose && iter % 1000 == 0)
+                Console.WriteLine($"iter {iter,6}: bj_pc={preBj.PC:X4}");
+
+            var postBj = TakeSnapshot(bj, busB);
+            var postPi = TakeSnapshot(pi, busP);
+
+            var diff = FirstDifference(postBj, postPi);
+            if (diff is not null)
+            {
+                return new DivergenceReport(
+                    Step: iter,
+                    Legacy: postPi,   // re-using "Legacy" field for per-instr
+                    Json:   postBj,   // re-using "Json" field for block-JIT
+                    FirstDifferingField: diff,
+                    PreStepPc: preBj.PC,
+                    PreStepOpcode: preBj.Opcode);
+            }
+
+            // Cheap WRAM/HRAM check — catches stores that diverge before
+            // visible register state does.
+            var memDiff = FindFirstWramDiff(busP, busB);
+            if (memDiff is not null)
+            {
+                return new DivergenceReport(
+                    Step: iter,
+                    Legacy: postPi,
+                    Json:   postBj,
+                    FirstDifferingField: $"WRAM[0x{memDiff.Value.Addr:X4}] (per-instr={memDiff.Value.LegacyByte:X2}, block-jit={memDiff.Value.JsonByte:X2})",
+                    PreStepPc: preBj.PC,
+                    PreStepOpcode: preBj.Opcode);
+            }
+
+            // Stop if either side halted (Blargg passes via HALT loop;
+            // our diff has run long enough).
+            if (pi.IsHalted && bj.IsHalted) return null;
+        }
+        return null;
+    }
+
+    public static string FormatBjitDiff(DivergenceReport r)
+    {
+        var w = new System.Text.StringBuilder();
+        w.AppendLine($"DIVERGENCE per-instr vs block-JIT at iter {r.Step}");
+        w.AppendLine($"  pre-step bj_pc = 0x{r.PreStepPc:X4}, opcode = 0x{r.PreStepOpcode:X2}");
+        w.AppendLine($"  first differing field: {r.FirstDifferingField}");
+        w.AppendLine($"  per-instr:  PC={r.Legacy.PC:X4} SP={r.Legacy.SP:X4} " +
+                     $"A={r.Legacy.A:X2} F={r.Legacy.F:X2} B={r.Legacy.B:X2} C={r.Legacy.C:X2} " +
+                     $"D={r.Legacy.D:X2} E={r.Legacy.E:X2} H={r.Legacy.H:X2} L={r.Legacy.L:X2}");
+        w.AppendLine($"  block-jit:  PC={r.Json.PC:X4} SP={r.Json.SP:X4} " +
+                     $"A={r.Json.A:X2} F={r.Json.F:X2} B={r.Json.B:X2} C={r.Json.C:X2} " +
+                     $"D={r.Json.D:X2} E={r.Json.E:X2} H={r.Json.H:X2} L={r.Json.L:X2}");
+        return w.ToString();
+    }
+
     public static string Format(DivergenceReport r)
     {
         var w = new System.Text.StringBuilder();

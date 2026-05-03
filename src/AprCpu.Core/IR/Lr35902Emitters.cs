@@ -773,9 +773,30 @@ internal sealed class Lr35902Alu8Emitter : IMicroOpEmitter
     /// (Equivalent to a synthesised read_imm8 inline — the spec's
     /// alu-imm8 group has no separate read_imm8 step, so the source
     /// fetch lives here.)
+    ///
+    /// Phase 7 GB block-JIT P0.5c — block-JIT mode bakes the immediate
+    /// from the instruction-word constant (set by BlockDetector P0.1:
+    /// 2-byte instr packs opcode | (imm8 &lt;&lt; 8)) without going through
+    /// the bus or touching real PC. Same fix as
+    /// <see cref="Lr35902ReadImm8Emitter"/> in P0.3 — applied here
+    /// independently because this emitter has its own inline fetch
+    /// rather than going through the read_imm8 micro-op. Without this
+    /// fix, ALU A,n reads from PC=block_start_pc (Strategy 2 — real PC
+    /// slot isn't updated per-instr), getting a wrong byte and
+    /// computing wrong flags. CpuDiff caught this as F-register
+    /// divergence on `CP A,n` in Blargg 01-special "JR negative".
     /// </summary>
     private static LLVMValueRef FetchImmediate(EmitContext ctx)
     {
+        if (ctx.CurrentInstructionBaseAddress is not null)
+        {
+            // Block-JIT mode: extract imm8 from instruction word constant.
+            var shifted = ctx.Builder.BuildLShr(ctx.Instruction,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 8, false), "alu_imm_shr8");
+            return ctx.Builder.BuildTrunc(shifted, LLVMTypeRef.Int8, "alu_imm");
+        }
+
+        // Per-instr fallback: walk PC + bus.ReadByte (legacy JsonCpu path).
         var pcPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "PC");
         var pc16 = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "alu_pc");
         var pc32 = ctx.Builder.BuildZExt(pc16, LLVMTypeRef.Int32, "alu_pc32");
