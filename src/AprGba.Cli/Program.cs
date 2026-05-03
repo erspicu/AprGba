@@ -354,6 +354,33 @@ static (CpuExecutor Cpu, Arm7tdmiBankSwapHandler Swap, HostRuntime Rt, IDisposab
         exec.IrDumpPath = irDumpPath;
         if (System.IO.File.Exists(irDumpPath)) System.IO.File.Delete(irDumpPath);
     }
+    var memWatchAddr = Environment.GetEnvironmentVariable("APR_MEM_WATCH");
+    var memWatchLog  = Environment.GetEnvironmentVariable("APR_MEM_WATCH_LOG");
+    if (!string.IsNullOrEmpty(memWatchAddr) && !string.IsNullOrEmpty(memWatchLog))
+    {
+        if (System.IO.File.Exists(memWatchLog)) System.IO.File.Delete(memWatchLog);
+        // Range: APR_MEM_WATCH=0x03007E80-0x03007EB0  or single addr 0x03007E9C
+        uint loAddr, hiAddr;
+        var parts = memWatchAddr.Split('-');
+        loAddr = Convert.ToUInt32(parts[0].Trim().Replace("0x", ""), 16);
+        hiAddr = parts.Length > 1 ? Convert.ToUInt32(parts[1].Trim().Replace("0x", ""), 16) : loAddr;
+        var sb = new System.Text.StringBuilder();
+        long count = 0;
+        bus.DebugMemoryWrite = (addr, val, width, pc) =>
+        {
+            if (addr < loAddr || addr > hiAddr) return;
+            if (count++ > 5000) return;
+            sb.Append("write addr=0x").Append(addr.ToString("X8"))
+              .Append(" val=0x").Append(val.ToString("X8"))
+              .Append(" width=").Append(width)
+              .Append(" pc=0x").Append(pc.ToString("X8")).Append('\n');
+            if (count % 200 == 0) { System.IO.File.AppendAllText(memWatchLog, sb.ToString()); sb.Clear(); }
+        };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            if (sb.Length > 0) System.IO.File.AppendAllText(memWatchLog, sb.ToString());
+        };
+    }
     var ioReadLog = Environment.GetEnvironmentVariable("APR_IO_READ_LOG");
     if (!string.IsNullOrEmpty(ioReadLog))
     {

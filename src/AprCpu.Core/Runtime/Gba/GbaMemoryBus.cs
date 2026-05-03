@@ -303,6 +303,7 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     public void WriteByte(uint addr, byte value)
     {
+        DebugMemoryWrite?.Invoke(addr, value, 1, ExecutingPc);
         var (region, off) = Locate(addr);
         switch (region)
         {
@@ -319,6 +320,7 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     public void WriteHalfword(uint addr, ushort value)
     {
+        DebugMemoryWrite?.Invoke(addr, value, 2, ExecutingPc);
         var (region, off) = Locate(addr);
         if (region == Region.Io) { WriteIoHalfword((uint)off, value); return; }
         var bytes = region switch
@@ -336,6 +338,7 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     public void WriteWord(uint addr, uint value)
     {
+        DebugMemoryWrite?.Invoke(addr, value, 4, ExecutingPc);
         var (region, off) = Locate(addr);
         if (region == Region.Io)
         {
@@ -392,6 +395,9 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     /// <summary>DEBUG: when set, ReadIo* logs (offset, value, executingPc) here.</summary>
     public Action<uint, uint, uint>? DebugIoReadLog { get; set; }
+
+    /// <summary>DEBUG: when set, every byte/halfword/word write fires (addr, value, width, executingPc).</summary>
+    public Action<uint, uint, int, uint>? DebugMemoryWrite { get; set; }
 
     private byte ReadIoByte(uint off)
     {
