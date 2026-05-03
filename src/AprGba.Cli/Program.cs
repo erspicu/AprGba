@@ -328,6 +328,31 @@ static (CpuExecutor Cpu, Arm7tdmiBankSwapHandler Swap, HostRuntime Rt, IDisposab
             if (System.IO.File.Exists(debugLog)) System.IO.File.Delete(debugLog);
         }
     }
+    // PC watch works in both per-instr and block-JIT modes.
+    var pcWatchHex = Environment.GetEnvironmentVariable("APR_PC_WATCH");
+    var pcWatchLog = Environment.GetEnvironmentVariable("APR_PC_WATCH_LOG");
+    if (!string.IsNullOrEmpty(pcWatchHex) && !string.IsNullOrEmpty(pcWatchLog))
+    {
+        exec.PcWatchAddress = Convert.ToUInt32(pcWatchHex.Replace("0x", ""), 16);
+        exec.PcWatchLogPath = pcWatchLog;
+        if (System.IO.File.Exists(pcWatchLog)) System.IO.File.Delete(pcWatchLog);
+    }
+    var snapPath = Environment.GetEnvironmentVariable("APR_INSTR_SNAP");
+    var snapInterval = Environment.GetEnvironmentVariable("APR_INSTR_SNAP_INTERVAL");
+    if (!string.IsNullOrEmpty(snapPath))
+    {
+        exec.InstrSnapshotPath = snapPath;
+        if (!string.IsNullOrEmpty(snapInterval)) exec.InstrSnapshotInterval = long.Parse(snapInterval);
+        if (System.IO.File.Exists(snapPath)) System.IO.File.Delete(snapPath);
+    }
+    var irDumpPcHex = Environment.GetEnvironmentVariable("APR_IR_DUMP_PC");
+    var irDumpPath  = Environment.GetEnvironmentVariable("APR_IR_DUMP_PATH");
+    if (!string.IsNullOrEmpty(irDumpPcHex) && !string.IsNullOrEmpty(irDumpPath))
+    {
+        exec.IrDumpPc = Convert.ToUInt32(irDumpPcHex.Replace("0x", ""), 16);
+        exec.IrDumpPath = irDumpPath;
+        if (System.IO.File.Exists(irDumpPath)) System.IO.File.Delete(irDumpPath);
+    }
     return (exec, swap, rt, bindings);
 }
 
