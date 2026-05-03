@@ -336,6 +336,7 @@ public sealed unsafe class HostRuntime : IDisposable
     public ulong BankedGprOffset(string mode, int idxInGroup) => GetFieldOffsetBytes(Layout.BankedGprFieldIndex(mode, idxInGroup));
     public ulong CycleCounterOffset => GetFieldOffsetBytes(Layout.CycleCounterFieldIndex);
     public ulong PcWrittenOffset    => GetFieldOffsetBytes(Layout.PcWrittenFieldIndex);
+    public ulong CyclesLeftOffset   => GetFieldOffsetBytes(Layout.CyclesLeftFieldIndex);
 
     private void EnsureFinalized()
     {
