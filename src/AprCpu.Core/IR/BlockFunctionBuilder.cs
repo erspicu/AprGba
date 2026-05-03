@@ -58,13 +58,22 @@ public sealed unsafe class BlockFunctionBuilder
     /// Build one block-level LLVM function. Returns the function value
     /// — caller can <see cref="HostRuntime.GetFunctionPointer"/> by name
     /// after Compile().
+    ///
+    /// <para><paramref name="generation"/> (Phase 7 A.5 SMC support) — when
+    /// non-zero, the function name gets a "_g{generation}" suffix so
+    /// re-compiles after SMC invalidation don't collide with stale names
+    /// in ORC LLJIT (which keeps definitions even after our cache
+    /// removes them; "Duplicate definition" error otherwise). Caller
+    /// (JsonCpu.CompileBlockAtPc) bumps a monotonic counter per compile
+    /// and passes it both here and to the subsequent
+    /// <see cref="HostRuntime.GetFunctionPointer"/> call.</para>
     /// </summary>
-    public LLVMValueRef Build(InstructionSetSpec set, Block block)
+    public LLVMValueRef Build(InstructionSetSpec set, Block block, int generation = 0)
     {
         if (block.Instructions.Count == 0)
             throw new ArgumentException("Cannot build a block with zero instructions.", nameof(block));
 
-        var name = BlockFunctionName(set.Name, block.StartPc);
+        var name = BlockFunctionName(set.Name, block.StartPc, generation);
         var paramTypes = new[] { Layout.PointerType };
         var fnType = LLVMTypeRef.CreateFunction(Module.Context.VoidType, paramTypes);
         var fn = Module.AddFunction(name, fnType);
@@ -363,9 +372,12 @@ public sealed unsafe class BlockFunctionBuilder
     /// <summary>
     /// Canonical name for a block function, used for both
     /// <c>AddFunction</c> and post-Compile <c>GetFunctionPointer</c>.
+    /// Generation suffix appended when non-zero (Phase 7 A.5 SMC).
     /// </summary>
-    public static string BlockFunctionName(string setName, uint startPc)
-        => $"ExecuteBlock_{setName}_pc{startPc:X8}";
+    public static string BlockFunctionName(string setName, uint startPc, int generation = 0)
+        => generation > 0
+            ? $"ExecuteBlock_{setName}_pc{startPc:X8}_g{generation}"
+            : $"ExecuteBlock_{setName}_pc{startPc:X8}";
 
     private LLVMValueRef ConstU32(uint v) =>
         LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, v, SignExtend: false);

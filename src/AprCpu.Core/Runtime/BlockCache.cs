@@ -41,12 +41,33 @@ public readonly struct CachedBlock
     /// </summary>
     public uint NextPcAfterLastInstr { get; }
 
-    public CachedBlock(IntPtr fn, int instructionCount, int totalByteLength, uint nextPcAfterLastInstr)
+    /// <summary>
+    /// Phase 7 A.5 SMC support — lowest memory address covered by any
+    /// instruction in this block. For sequential blocks equals StartPc;
+    /// for cross-jump blocks (P1 #6) may be lower if a followed JP
+    /// went backward.
+    /// </summary>
+    public uint CoverageStartPc { get; }
+
+    /// <summary>
+    /// Phase 7 A.5 SMC support — exclusive upper bound of memory
+    /// covered by any instruction in this block (= max(instr.Pc +
+    /// instr.LengthBytes)). Used by SMC detection: a memory write to
+    /// any address in [CoverageStartPc, CoverageEndPcExclusive) MAY
+    /// invalidate this block (conservative: covers gaps in cross-jump
+    /// blocks; over-invalidates by a few bytes max).
+    /// </summary>
+    public uint CoverageEndPcExclusive { get; }
+
+    public CachedBlock(IntPtr fn, int instructionCount, int totalByteLength, uint nextPcAfterLastInstr,
+                       uint coverageStartPc, uint coverageEndPcExclusive)
     {
         Fn = fn;
         InstructionCount = instructionCount;
         TotalByteLength = totalByteLength;
         NextPcAfterLastInstr = nextPcAfterLastInstr;
+        CoverageStartPc = coverageStartPc;
+        CoverageEndPcExclusive = coverageEndPcExclusive;
     }
 }
 
@@ -86,19 +107,31 @@ public sealed class BlockCache
     private readonly Dictionary<uint, LinkedListNode<Entry>> _map;
     private readonly LinkedList<Entry> _lru;   // head = MRU, tail = LRU
 
+    // Phase 7 A.5 SMC support — per-byte coverage count. Each entry
+    // is the number of cached blocks whose CoverageStartPc..CoverageEndPcExclusive
+    // range includes this address. Bus.WriteByte calls NotifyMemoryWrite
+    // which checks this counter; if >0, scans cached blocks for any
+    // overlapping the address and invalidates them. Memory-bounded by
+    // the addressable space (e.g. LR35902 = 64KB → 64KB counter array).
+    // Per-write fast-path = 1 byte read + branch (~1ns).
+    private readonly byte[] _coverageCount;
+    private readonly uint _addressSpaceBytes;
+
     private struct Entry
     {
         public uint        Pc;
         public CachedBlock Block;
     }
 
-    public BlockCache(int capacity = DefaultCapacity)
+    public BlockCache(int capacity = DefaultCapacity, uint addressSpaceBytes = 0x10000)
     {
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity), capacity, "capacity must be > 0");
         _capacity = capacity;
         _map = new Dictionary<uint, LinkedListNode<Entry>>(capacity);
         _lru = new LinkedList<Entry>();
+        _addressSpaceBytes = addressSpaceBytes;
+        _coverageCount = new byte[addressSpaceBytes];
     }
 
     /// <summary>Number of currently-cached entries.</summary>
@@ -134,18 +167,23 @@ public sealed class BlockCache
     {
         if (_map.TryGetValue(pc, out var existing))
         {
-            // Update entry + promote to MRU.
+            // Update entry + promote to MRU. Decrement old block's
+            // coverage; increment new block's.
+            DecrementCoverage(existing.Value.Block);
             _lru.Remove(existing);
             existing.Value = new Entry { Pc = pc, Block = block };
             _lru.AddFirst(existing);
+            IncrementCoverage(block);
             return;
         }
         var node = _lru.AddFirst(new Entry { Pc = pc, Block = block });
         _map[pc] = node;
+        IncrementCoverage(block);
         if (_map.Count > _capacity)
         {
             var tail = _lru.Last!;
             _lru.RemoveLast();
+            DecrementCoverage(tail.Value.Block);
             _map.Remove(tail.Value.Pc);
         }
     }
@@ -158,6 +196,7 @@ public sealed class BlockCache
     {
         if (_map.TryGetValue(pc, out var node))
         {
+            DecrementCoverage(node.Value.Block);
             _lru.Remove(node);
             _map.Remove(pc);
             return true;
@@ -170,5 +209,54 @@ public sealed class BlockCache
     {
         _map.Clear();
         _lru.Clear();
+        Array.Clear(_coverageCount, 0, _coverageCount.Length);
+    }
+
+    /// <summary>
+    /// Phase 7 A.5 SMC — call this on every memory write. Fast path:
+    /// 1-byte read + branch when no cached block covers the address.
+    /// Slow path: scan cached blocks, invalidate any whose coverage
+    /// range includes the address. Returns true if any block was
+    /// invalidated (mainly for diagnostics).
+    /// </summary>
+    public bool NotifyMemoryWrite(uint addr)
+    {
+        if (addr >= _addressSpaceBytes) return false;
+        if (_coverageCount[addr] == 0) return false;
+
+        // Slow path: linear scan to find blocks covering this addr.
+        // Cached blocks at this point: typically 100s-1000s in steady
+        // state. This is the rare "RAM write hits cached block code"
+        // path that fires only occasionally (test framework loading
+        // new code, JIT warmup, etc.). Invalidating triggers recompile
+        // on next dispatch.
+        List<uint>? toRemove = null;
+        foreach (var kvp in _map)
+        {
+            var blk = kvp.Value.Value.Block;
+            if (addr >= blk.CoverageStartPc && addr < blk.CoverageEndPcExclusive)
+            {
+                (toRemove ??= new List<uint>()).Add(kvp.Key);
+            }
+        }
+        if (toRemove is null) return false;
+        foreach (var pc in toRemove) Invalidate(pc);
+        return true;
+    }
+
+    private void IncrementCoverage(CachedBlock blk)
+    {
+        for (uint a = blk.CoverageStartPc; a < blk.CoverageEndPcExclusive && a < _addressSpaceBytes; a++)
+        {
+            if (_coverageCount[a] < byte.MaxValue) _coverageCount[a]++;
+        }
+    }
+
+    private void DecrementCoverage(CachedBlock blk)
+    {
+        for (uint a = blk.CoverageStartPc; a < blk.CoverageEndPcExclusive && a < _addressSpaceBytes; a++)
+        {
+            if (_coverageCount[a] > 0) _coverageCount[a]--;
+        }
     }
 }

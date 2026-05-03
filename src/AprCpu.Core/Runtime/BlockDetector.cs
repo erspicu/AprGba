@@ -249,14 +249,21 @@ public sealed class BlockDetector
             // already-visited PC (or block_start), and we must have room
             // for at least one more instruction under the cap.
             //
-            // P1 #6 V1 — additionally restrict to "ROM-to-ROM" follow:
-            // BOTH source PC and target must be in cart ROM (0x0000-
-            // 0x7FFF) for LR35902. Following into WRAM/HRAM/VRAM is
-            // unsafe because those regions are writeable; if the
-            // target's bytes change after we cache the block, the IR
-            // is stale and CPU diverges. Proper SMC detection (P1 #5
-            // Phase 7 A.5 followup) would let us safely cross-jump into
-            // RAM by invalidating cached blocks on writes.
+            // P1 #6 V1 — restrict to "ROM-to-ROM" follow: BOTH source
+            // PC and target must be in cart ROM (0x0000-0x7FFF) for
+            // LR35902. Following into WRAM/HRAM/VRAM is unsafe even
+            // with SMC because:
+            //   (a) P1 #7's IR-level inline RAM writes bypass the bus
+            //       extern entirely, so SMC's NotifyMemoryWrite isn't
+            //       called — stale blocks could run after RAM-code
+            //       overwrite via inline path.
+            //   (b) Coverage span of cross-jump blocks across RAM is
+            //       large; SMC invalidates aggressively → constant
+            //       recompile + perf tanks ~10×.
+            // Proper RAM cross-jump needs P1 #7 inline path to also
+            // notify SMC (extra IR cost) OR a smarter coverage scheme.
+            // Deferred — V1 SMC infrastructure is in place but
+            // cross-jump stays ROM-only for both correctness + perf.
             bool isRomToRom = false;
             if (followTarget is uint t0)
             {

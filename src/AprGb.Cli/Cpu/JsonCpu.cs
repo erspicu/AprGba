@@ -66,6 +66,14 @@ public sealed unsafe class JsonCpu : ICpuBackend
     private readonly BlockDetector? _blockDetector;
     private readonly BlockCache?    _blockCache;
     private readonly bool _blockJitEnabled;
+    // Phase 7 A.5 SMC — monotonic counter for unique block-function
+    // names. After SMC invalidates a cached block + we re-compile the
+    // same PC, ORC LLJIT still holds the old definition; reusing the
+    // same function name throws "Duplicate definition". Each compile
+    // bumps this counter and uses it as a name suffix so re-compiles
+    // get fresh symbols. Old definitions stay resident in JIT memory
+    // until process exit (small leak; bounded by SMC frequency).
+    private int _blockGeneration;
 
     private byte[]    _state = Array.Empty<byte>();
     // Phase 7 B.f: permanent pin of the state buffer. Reset() re-allocates
@@ -449,16 +457,19 @@ public sealed unsafe class JsonCpu : ICpuBackend
         // P0.2 packs CB sub-opcode), so emitter Strategy 2 + immediate
         // baking (P0.3) reduces the IR to constant arith with no bus
         // calls inside the block.
-        var moduleName = $"AprGb_BlockJit_pc{pc:X4}";
+        // P1 SMC — bump generation so re-compiles after invalidation
+        // get unique function names (ORC LLJIT keeps stale definitions).
+        var generation = ++_blockGeneration;
+        var moduleName = $"AprGb_BlockJit_pc{pc:X4}_g{generation}";
         var module = LLVMModuleRef.CreateWithName(moduleName);
         var bfb = new BlockFunctionBuilder(
             module, _compileResult.Layout,
             _compileResult.EmitterRegistry, _compileResult.ResolverRegistry);
         var mainSetSpec = _spec.InstructionSets["Main"];
-        bfb.Build(mainSetSpec, block);
+        bfb.Build(mainSetSpec, block, generation);
 
         _rt.AddModule(module);
-        var fnName = BlockFunctionBuilder.BlockFunctionName("Main", pc);
+        var fnName = BlockFunctionBuilder.BlockFunctionName("Main", pc, generation);
         var fnPtr = _rt.GetFunctionPointer(fnName);
 
         // Compute total byte length so RunCycles can advance PC correctly
@@ -472,7 +483,15 @@ public sealed unsafe class JsonCpu : ICpuBackend
         // StartPc; use lastBi.Pc + LengthBytes (not StartPc + totalBytes).
         var lastBi = block.Instructions[block.Instructions.Count - 1];
         uint nextPcAfterLastInstr = (uint)((lastBi.Pc + lastBi.LengthBytes) & 0xFFFFu);
-        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes, nextPcAfterLastInstr);
+        // P1 SMC — coverage range across all instruction PCs.
+        uint covStart = uint.MaxValue, covEnd = 0;
+        foreach (var bi in block.Instructions)
+        {
+            if (bi.Pc < covStart) covStart = bi.Pc;
+            uint instrEnd = bi.Pc + bi.LengthBytes;
+            if (instrEnd > covEnd) covEnd = instrEnd;
+        }
+        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes, nextPcAfterLastInstr, covStart, covEnd);
     }
 
     /// <summary>
@@ -707,7 +726,9 @@ public sealed unsafe class JsonCpu : ICpuBackend
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static void MemWrite8(uint addr, byte value)
     {
-        if (_activeBus is not null) _activeBus.WriteByte((ushort)addr, value);
+        if (_activeBus is null) return;
+        _activeBus.WriteByte((ushort)addr, value);
+        _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -716,6 +737,8 @@ public sealed unsafe class JsonCpu : ICpuBackend
         if (_activeBus is null) return;
         _activeBus.WriteByte((ushort)addr,        (byte)(value & 0xFF));
         _activeBus.WriteByte((ushort)(addr + 1),  (byte)(value >> 8));
+        _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
+        _activeCpu?._blockCache?.NotifyMemoryWrite(addr + 1);
     }
 
     /// <summary>
@@ -736,6 +759,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
     {
         if (_activeBus is null) return 0;
         _activeBus.WriteByte((ushort)addr, value);
+        _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
         return IsIrqRelevantAddress((ushort)addr) ? (byte)1 : (byte)0;
     }
 
@@ -745,6 +769,8 @@ public sealed unsafe class JsonCpu : ICpuBackend
         if (_activeBus is null) return 0;
         _activeBus.WriteByte((ushort)addr,        (byte)(value & 0xFF));
         _activeBus.WriteByte((ushort)(addr + 1),  (byte)(value >> 8));
+        _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
+        _activeCpu?._blockCache?.NotifyMemoryWrite(addr + 1);
         return (IsIrqRelevantAddress((ushort)addr) || IsIrqRelevantAddress((ushort)(addr + 1)))
             ? (byte)1 : (byte)0;
     }

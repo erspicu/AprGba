@@ -583,6 +583,16 @@ public sealed unsafe class CpuExecutor
         // blocks differs (last instr can be in a different PC range).
         var lastBi = block.Instructions[block.Instructions.Count - 1];
         uint nextPc = lastBi.Pc + lastBi.LengthBytes;
-        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes, nextPc);
+        // P1 SMC — coverage range = min/max PC across all instructions.
+        // For sequential = [StartPc, StartPc + totalBytes); for cross-jump
+        // may span larger range (gaps included for conservative invalidation).
+        uint covStart = uint.MaxValue, covEnd = 0;
+        foreach (var bi in block.Instructions)
+        {
+            if (bi.Pc < covStart) covStart = bi.Pc;
+            uint instrEnd = bi.Pc + bi.LengthBytes;
+            if (instrEnd > covEnd) covEnd = instrEnd;
+        }
+        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes, nextPc, covStart, covEnd);
     }
 }
