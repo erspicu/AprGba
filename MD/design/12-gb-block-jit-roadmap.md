@@ -77,14 +77,18 @@ LR35902 length **完全由第一 byte 決定**（256-entry static table）：
 下面是所有跟 GB block-JIT 相關 + 既有 Phase 7 H 群未完項目的綜合 priority。
 **P0 = 必做 + 短時 + 解鎖後續**；**P4 = 投機 + 可能不做**。
 
-### Tier P0 — Foundation（共 ~3 天，必做才能解鎖任何後續）
+### Tier P0 — Foundation（✅ **完工 2026-05-04**）
 
-| # | Item | Cost | Risk | Value | 備註 |
-|---|---|---|---|---|---|
-| **1** | **Variable-width `BlockDetector`** | M | L | H (enabler) | Sequential crawl + 256-entry length table from spec；ctor 不再 throw |
-| **2** | **0xCB prefix as 2-byte atomic** | S | L | H (~2× block size) | Spec 加 `prefix_to_set: "CB"` 欄位；detector 自動 fetch+lookup |
-| **3** | **Immediate baking via instruction_word packing** | S | L | M | `read_imm8/16` 退化成 BitPattern field extract；統一 ARM 模式 |
-| **4** | **GB CLI `--block-jit` flag + CpuExecutor wiring** | S | L | (enabler) | `AprGb.Cli/Program.cs` 加 flag；GB 接 `CpuExecutor.EnableBlockJit` |
+完工紀錄：`MD/performance/202605040000-gb-block-jit-p0-complete.md`。
+Blargg cpu_instrs 全 11 子測試 PASS（含 BIOS LLE）；GB block-JIT MIPS
+從 0 → 22.64（per-instr 9 的 +150%）。
+
+| # | Item | Status | Commit |
+|---|---|---|---|
+| **1** | Variable-width `BlockDetector` | ✅ | `3024100` |
+| **2** | 0xCB prefix as 2-byte atomic | ✅ | `0cb93a8` |
+| **3** | Immediate baking via instruction_word packing | ✅ | `7a8305a` |
+| **4** | GB CLI `--block-jit` + Strategy 2 PC fixes | ✅ | `adddade` |
 
 **P0 完工 milestone**：T1 360+ tests / T2 8-combo screenshot matrix（GBA
 路徑不能退步）/ GB Blargg cpu_instrs 在 block-JIT mode 通過 / T3 bench
