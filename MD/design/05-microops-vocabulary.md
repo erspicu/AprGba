@@ -96,26 +96,38 @@ flags（見 §6）。這些保留給控制流條件判斷。
 | `sign_extend`      | `in: [v], from_bits` | `out` | sign-extend to target width |
 | `zero_extend`      | `in: [v], from_bits` | `out` | zero-extend to target width |
 | `truncate`         | `in: [v], to_bits` | `out` | 取低 n bits |
+| `bit_test`  | `in: [v], bit_index` | `out: i1` | 測試指定 bit（LR35902 BIT b,r → Z=!result） |
+| `bit_set`   | `in: [v], bit_index` | `out` | 設指定 bit 為 1（SET b,r） |
+| `bit_clear` | `in: [v], bit_index` | `out` | 設指定 bit 為 0（RES b,r） |
+| `shift`     | `in: [v, n], kind, width: 8\|16\|32, capture_carry: bool` | `out`, `carry_out?` | 統一的 shift wrapper（kind: `lsl`/`lsr`/`asr`/`rol`/`ror`/`rolc`/`rorc`/`swap_nibbles`），由 5.4 refactor 加入給 LR35902 CB-shift 跟 A-rotate 共用 |
+| `sext`      | `in: [v], from_bits, to_bits` | `out` | width-aware sign-extend（5.3 加入；用 `to_bits` 顯式指定目標寬度，不依賴 step.width 預設）|
+| `trunc`     | `in: [v], to_bits` | `out` | width-aware truncate（5.7.B 加入；同上原因，`truncate` 已存在但用 step.width 推目標） |
 
 ---
 
 ## 6. 旗標更新 (Flag update) ⚠
 
-直接寫入 CPSR 對應 bit；JIT 端可做 lazy flag 優化。
+直接寫入對應 status register bit；JIT 端可做 lazy flag 優化。
 
 | op | 說明 | 觸發條件 |
 |---|---|---|
 | `update_n`       | N = result[31] | 所有更新 flag 的指令 |
 | `update_z`       | Z = (result == 0) | 同上 |
 | `update_nz`      | 同時更新 N 與 Z | 縮寫 |
+| `update_zero`    | Z = (result == 0)，width-aware（5.7.B 加入；給 8/16-bit ALU 用，`update_z` 預設 i32 寬度）| LR35902 INC/DEC r |
 | `update_c_add`   | C = (rn + op2) > 0xFFFFFFFF (unsigned overflow) | ADD/ADC/CMN |
 | `update_c_sub`   | C = !(rn − op2) borrow (i.e. rn ≥ op2) | SUB/SBC/CMP/RSB |
 | `update_c_shifter` | C = shifter_carry_out | logical/MOV with shift |
 | `update_v_add`   | V = signed overflow of (rn + op2) | ADD/ADC/CMN |
 | `update_v_sub`   | V = signed overflow of (rn − op2) | SUB/SBC/CMP/RSB |
 | `update_q`       | Q = saturation occurred | DSP ext (ARMv5TE) |
-| `set_flag`       | `flag, value` 直接指定 | edge cases |
+| `update_h_add`   | H = ((a & 0xF) + (b & 0xF)) > 0xF（half-carry on add；5.2 加入） | LR35902 ADD/ADC/INC |
+| `update_h_sub`   | H = (a & 0xF) < (b & 0xF)（half-carry on sub；5.2 加入） | LR35902 SUB/SBC/CP/DEC |
+| `update_h_inc`   | H = ((a & 0xF) == 0xF)（INC 專用 short-form；5.7.B） | LR35902 INC r |
+| `update_h_dec`   | H = ((a & 0xF) == 0)（DEC 專用 short-form；5.7.B） | LR35902 DEC r |
+| `set_flag`       | `flag, value` 直接指定 | edge cases / SCF |
 | `clear_flag`     | `flag` | edge cases |
+| `toggle_flag`    | `flag`：flag = !flag（5.7.A 加入） | LR35902 CCF |
 
 例：`{ "op": "update_c_add", "in": ["rn_val", "op2_value"] }`
 
@@ -127,7 +139,12 @@ flags（見 §6）。這些保留給控制流條件判斷。
 |---|---|---|---|
 | `read_reg`  | `index: <field-or-int>` | `out` | 依 mode 自動處理 banked register |
 | `write_reg` | `index, value`           | (none) | 同上；若 index==15 等同寫 PC |
-| `read_psr`  | `which: "CPSR" | "SPSR"` | `out` | 讀取（current mode 的 SPSR） |
+| `read_pc`   | (none) | `out` | 讀目前 PC（block-JIT 模式下會 resolve 到 baked-in 常數，per-instr 模式 fallback 到 GPR[pc_index] load）；5.3 加入給 LR35902 PC-relative 用 |
+| `read_reg_pair`  | `pair_name` | `out` (i16) | 讀 8-bit pair（如 BC/DE/HL/AF），自動合成 `(high << 8) \| low`；需要 spec 宣告 `register_pairs` |
+| `write_reg_pair` | `pair_name, value` | (none) | 寫 8-bit pair，自動拆 `value >> 8 → high; value & 0xFF → low` |
+| `push_pair` | `value` (i16) | (none) | SP -= 2、`store_halfword(SP, value)`（5.1 加入；用 spec 的 `stack_pointer` metadata）|
+| `pop_pair`  | (none) | `out` (i16) | `out = load_halfword(SP); SP += 2`（5.1 加入） |
+| `read_psr`  | `which: "CPSR" \| "SPSR"` | `out` | 讀取（current mode 的 SPSR） |
 | `write_psr` | `which, value, mask?`   | (none) | mask 指定哪些 bits 可寫 |
 | `restore_cpsr_from_spsr` | (none) | (none) | mode return（如 ALU 寫 PC + S-bit） |
 | `swap_registers_for_mode` | `mode_id` | (none) | 強制做 banked register swap（內部用） |
@@ -178,6 +195,12 @@ flags（見 §6）。這些保留給控制流條件判斷。
 | `branch`          | `target` | 立即無條件跳轉，會 `block_terminate` |
 | `branch_link`     | `target` | BL：寫 LR = next_pc 後跳轉 |
 | `branch_indirect` | `target_value` | BX 等；自動處理 T-bit 與對齊 |
+| `branch_cc` | `cond_field, target` | conditional branch — eval cond 再選跳；5.3 加入給 LR35902 JR cc / JP cc |
+| `call`      | `target` | 統一 call wrapper：push next_pc → SP，PC = target；5.3 加入給 LR35902 CALL 跟 RST |
+| `call_cc`   | `cond_field, target` | conditional call；5.3 |
+| `ret`       | (none) | pop SP → PC（自動處理 PC alignment + block_terminate）；5.3 |
+| `ret_cc`    | `cond_field` | conditional return；5.3 |
+| `target_const` | `value: int` | 常數 branch target；5.3 加入（取代 `{ "const": ... }` inline 寫法的歧義） |
 | `block_terminate` | `reason`, `next_pc?` | 顯式結束 block，給 JIT 用 |
 | `nop`             |  | 真正不做事（編譯時可消除） |
 
@@ -324,21 +347,27 @@ public interface IMicroOpEmitter
 arithmetic   : add, adc, sub, sbc, rsb, rsc, mul, mul_hi, umul64, smul64,
                neg, abs, min, max
 logical      : and, or, xor, not, bic
-shift        : shl, lsr, asr, ror, rrx
+shift        : shl, lsr, asr, ror, rrx, shift (5.4 unified wrapper)
 compare      : cmp_eq, cmp_ne, cmp_ult, cmp_slt, cmp_ule, cmp_sle
 bit          : bitfield_extract, bitfield_insert, clz, popcount,
-               byte_swap, sign_extend, zero_extend, truncate
-flag         : update_n, update_z, update_nz,
+               byte_swap, sign_extend, zero_extend, truncate,
+               bit_test, bit_set, bit_clear, sext, trunc
+flag         : update_n, update_z, update_nz, update_zero,
                update_c_add, update_c_sub, update_c_shifter,
                update_v_add, update_v_sub, update_q,
-               set_flag, clear_flag
-register     : read_reg, write_reg, read_psr, write_psr,
+               update_h_add, update_h_sub, update_h_inc, update_h_dec,
+               set_flag, clear_flag, toggle_flag
+register     : read_reg, write_reg, read_pc,
+               read_reg_pair, write_reg_pair, push_pair, pop_pair,
+               read_psr, write_psr,
                restore_cpsr_from_spsr, swap_registers_for_mode
 operand      : imm_rotated, imm_sign_extend, pc_relative_address
 memory       : load, store, load_aligned, swap_word,
                block_load, block_store
 control      : if, if_arm_cond, switch, branch, branch_link,
-               branch_indirect, block_terminate, nop
+               branch_indirect, branch_cc,
+               call, call_cc, ret, ret_cc, target_const,
+               block_terminate, nop
 exception    : raise_exception, restore_cpsr_from_spsr, enter_mode,
                disable_interrupts, enable_interrupts,
                wait_for_interrupt, coprocessor_call, breakpoint
@@ -347,8 +376,9 @@ jit_aux      : host_callback, assert, trace_event, mark_block_boundary
 lazy_flag    : lazy_flags_set, lazy_flags_resolve
 ```
 
-共 **~75 個 base micro-op**，足以覆蓋 ARMv4T 全部指令以及大多數 8/16/32-bit
-經典 RISC/CISC 架構（6502、Z80、MIPS、SH-2 等）。
+共 **~95 個 base micro-op**（5.1-5.7 emitter refactor + Phase 4.5 LR35902
+驗證後擴增），足以覆蓋 ARMv4T 全部指令、LR35902（GB DMG）全部指令以及大
+多數 8/16/32-bit 經典 RISC/CISC 架構（6502、Z80、MIPS、SH-2 等）。
 
 ---
 

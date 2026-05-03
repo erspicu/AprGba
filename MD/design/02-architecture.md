@@ -47,17 +47,21 @@
 - 為每個 micro-op 呼叫 LLVMSharp API emit IR
 - 輸出 `.ll`（除錯）或記憶體中的 `LLVMModuleRef`（執行）
 
-### 3. Block Compiler（`AprCpu.Core/Jit`）
-- 從給定 PC 開始 fetch、decode、累積指令
-- 遇到 branch / return / 不可預測 PC 改寫即結束 block
-- 將整個 block 的所有指令 IR 串成一個 LLVM Function
-- 呼叫 LLVM JIT，得到原生函式指標
+### 3. Block Compiler（`AprCpu.Core/IR/BlockFunctionBuilder.cs` +
+   `AprCpu.Core/Runtime/BlockDetector.cs`）
+- 從給定 PC 開始 fetch、decode、累積指令（detector 上限 64 instr）
+- 遇到 `writes_pc:"always"` / `switches_instruction_set` / `changes_mode`
+  即結束 block
+- 將整個 block 的所有指令 IR 串成一個 LLVM Function（per-instr 4 個內部
+  BB：pre/exec/post/advance + 共用 `block_exit`）
+- 呼叫 ORC LLJIT (`HostRuntime.AddModule`)，得到原生函式指標
 
-### 4. Code Cache（`AprCpu.Core/Jit`）
-- `Dictionary<uint, IntPtr>`：PC → compiled function pointer
-- 命中即跳轉執行
-- SMC 偵測：寫入「已編譯區域」時 invalidate
-- 進階：block linking（patch native call 直接跳下一個 block）
+### 4. Code Cache（`AprCpu.Core/Runtime/BlockCache.cs`）
+- `Dictionary<uint, LinkedListNode<Entry>>` + LRU 雙向鏈，capacity-bound
+  (default 4096)
+- 命中即跳轉執行（`CpuExecutor.StepBlock`）
+- SMC 偵測：寫入「已編譯區域」時 invalidate（A.5 未實作，pending）
+- 進階：block linking（patch native call 直接跳下一個 block）（A.7 未實作）
 
 ### 5. Register File / CPU State（`AprCpu.Core/IR/CpuStateLayout`）
 - **由 spec 動態建構**：layout 不寫死成 ARM 形狀；`CpuStateLayout` 讀取
@@ -69,14 +73,18 @@
 - C# host 端的 `CpuState` 鏡像此 layout（Phase 3 工作項），透過 `unsafe`
   指標傳給 JIT 機器碼直接存取，避免 marshal
 
-### 6. Memory Bus（`AprGba.Bus`）
-- `IMemoryBus` 介面，CPU JIT 透過 callback 呼叫
-- **Fast Path**：RAM 區段直接 unsafe ptr 讀寫（IWRAM/EWRAM/VRAM bulk）
-- **Slow Path**：IO 暫存器走 callback 分派
+### 6. Memory Bus（`AprCpu.Core/Runtime/Gba/GbaMemoryBus.cs`，
+   實作 `AprCpu.Core/Runtime/IMemoryBus.cs`）
+- `IMemoryBus` 介面，CPU JIT 透過 trampoline 呼叫
+- **Fast Path**：RAM 區段直接 unsafe ptr 讀寫（IWRAM/EWRAM/VRAM bulk），
+  GBA bus 用 typed cast (`bus as GbaMemoryBus`) + cart-ROM range check
+  bypass interface dispatch
+- **Slow Path**：IO 暫存器走 callback 分派 + IRQ 觸發
 - 預留 SMC write barrier hook
-- 預留 IO 寫入觸發同步點 hook（給 PPU 追趕用）
+- 預留 IO 寫入觸發同步點 hook（給 PPU 追趕用，Phase 1a/1b downcounting
+  + MMIO catch-up callback 已實作）
 
-### 7. PPU（`AprGba.Ppu`，hand-written，不走 JSON spec）
+### 7. PPU（`AprGba.Cli/Video/`，hand-written，不走 JSON spec）
 - LCD 暫存器：DISPCNT、DISPSTAT、VCOUNT
 - VBlank / HBlank 中斷觸發
 - Mode 3（240×160 RGB555 framebuffer）— 最簡單，部分 homebrew 用
@@ -86,10 +94,13 @@
   stream，是 fixed-function pipeline，硬 JSON 化沒有 framework 槓桿；
   學 GB 端 `GbPpu` 寫法直接 host code 即可
 
-### 8. CLI / Host（`AprGba.Cli`，純 headless）
+### 8. CLI / Host（`AprGba.Cli`，單一專案，純 headless）
 - **不做 GUI、不做 60fps loop、不做即時播放**（2026-05 scope decision）
+- 包含 `Program.cs` (entry)、`Video/` (PPU host code)、`RomPatcher.cs`
+  (Nintendo logo / header checksum 補丁) — bus / scheduler / system
+  runner 都在 `AprCpu.Core/Runtime/Gba/` 下，CLI 只負責 wiring
 - 學 `apr-gb` 的設計：`apr-gba --rom=X.gba --bios=Y.bin --cycles=N
-  --screenshot=Z.png`
+  --screenshot=Z.png [--block-jit]`
 - 跑完 N cycles 後呼叫 `GbaPpu.RenderFrame(bus)` → PNG 寫檔
 - 可選 `--info` 印 ROM header / cartridge type，跟 mGBA dump 對拍
   PRAM/VRAM 用
@@ -215,12 +226,23 @@ public unsafe struct CpuState_Arm7tdmi
 LR35902 會是完全不同的 layout（A/B/C/D/E/H/L/F 都 8-bit、SP/PC 16-bit、
 無 banked、無 SPSR）。framework code 不變，只 spec 不同。
 
-### JIT block 函式簽章
+### JIT 函式簽章
 
+Per-instruction (Phase 7.A.6 之前的 dispatcher 路徑，per-instr mode 仍使用)：
 ```
-ulong execute_block(CpuState* state, IMemoryBus* bus);
-// 回傳：高 32 bits = exit PC, 低 32 bits = consumed cycles
-// （或拆兩個欄位寫回 state）
+void Execute_<Set>_<Format>_<Mnemonic>(CpuState* state, uint32_t instruction_word);
+// 寫入 state、回傳 void。caller 從 state.PcWritten / state.GPR[pc_index]
+// 推算下一條 PC。
+```
+
+Block (Phase 7.A.6+，`--block-jit` flag 啟用)：
+```
+void ExecuteBlock_<Set>_pc<XXXXXXXX>(CpuState* state);
+// instruction word 都已 baked into IR (block compile 時從 bus 讀完)。
+// 函式內每條指令是一個 instr_pre/exec/post/advance BB sequence；
+// block 結束 fall through 到共用的 block_exit BB → ret void。
+// caller (CpuExecutor.StepBlock) 從 state.PcWritten 判斷是否跳轉、
+// 從 state.CyclesLeft delta 算實際消耗 cycles (Phase 1a downcounting)。
 ```
 
 ---
@@ -232,30 +254,38 @@ ulong execute_block(CpuState* state, IMemoryBus* bus);
 
 ---
 
-## 目錄結構（建議）
+## 目錄結構（實際）
 
 ```
 AprGba/
 ├── MD/
-│   └── design/                  ← 設計文件（本目錄）
+│   ├── design/                  ← 設計文件（本目錄）
+│   ├── note/                    ← 收工筆記
+│   ├── performance/             ← bench 紀錄（每個策略一檔）
+│   └── process/                 ← 跨 phase 流程（QA workflow 等）
 ├── src/
-│   ├── AprCpu.Core/           ← CPU 框架核心
-│   │   ├── JsonSpec/            ← JSON loader & schema
-│   │   ├── Decoder/             ← bit pattern matching
-│   │   ├── IR/                  ← LLVMSharp emitter
-│   │   ├── Jit/                 ← block compiler, code cache
-│   │   └── State/               ← register file, CPU state
-│   ├── AprCpu.Compiler/       ← CLI: json → .ll
-│   ├── AprGba.Bus/              ← memory bus 實作
-│   ├── AprGba.Ppu/              ← framebuffer (Phase 8)
-│   ├── AprGba.Host/             ← GUI / 主程式
-│   └── AprGba.Tests/            ← xUnit
+│   ├── AprCpu.Core/             ← CPU 框架核心（spec → IR → JIT 都在這）
+│   │   ├── JsonSpec/              ← JSON loader & schema
+│   │   ├── Decoder/               ← bit pattern matching + DecoderTable
+│   │   ├── IR/                    ← LLVMSharp emitter (Emitters/ArmEmitters/
+│   │   │                            Lr35902Emitters/StackOps/FlagOps/BitOps/
+│   │   │                            BlockFunctionBuilder/InstructionFunctionBuilder)
+│   │   └── Runtime/               ← HostRuntime (ORC LLJIT) + CpuExecutor +
+│   │       │                        BlockCache + BlockDetector
+│   │       └── Gba/                 ← GBA-specific bus / scheduler / system
+│   │                                  runner (GbaMemoryBus / GbaScheduler /
+│   │                                  GbaSystemRunner)
+│   ├── AprCpu.Compiler/         ← CLI: `aprcpu --spec X.json --output Y.ll`
+│   ├── AprCpu.Tests/            ← xUnit (360 tests)
+│   ├── AprGba.Cli/              ← `apr-gba` GBA harness (Program/Video/RomPatcher)
+│   └── AprGb.Cli/               ← `apr-gb` Game Boy harness (legacy + json-llvm)
 ├── spec/
-│   └── arm7tdmi/
-│       ├── arm.json
-│       └── thumb.json
-├── test-roms/                   ← arm.gba, thumb.gba 等
-└── docs/                        ← 對外文件（未來）
+│   ├── arm7tdmi/                ← cpu.json + arm/thumb sub-specs
+│   └── lr35902/                 ← cpu.json + 25 group files (block0/1/2/3 + cb-*)
+├── test-roms/                   ← gba-tests/ + gb-tests/
+├── BIOS/                        ← gba_bios.bin (LLE)
+├── ref/                         ← vendor manuals + datasheets (gitignored 大檔)
+└── temp/                        ← 本地 scratch (gitignored)
 ```
 
 ---

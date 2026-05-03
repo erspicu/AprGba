@@ -1,8 +1,18 @@
-# Phase 4.5：GB LR35902 移植驗證計畫
+# Phase 4.5：GB LR35902 移植驗證計畫 ✅ 完成 (2026-05-02)
 
 > 用 [erspicu/AprGBemu](https://github.com/erspicu/AprGBemu) 當 reference
 > implementation，把 Game Boy 的 Sharp LR35902 CPU 寫成 JSON spec、跑通
 > 同樣的 host runtime，驗證 framework 真的可以「換 CPU 只要換 JSON」。
+>
+> **狀態**：4.5A/B/C 全部完成。LR35902 spec 涵蓋全 ISA（501 opcodes、
+> 23 group files），跑通 Blargg `cpu_instrs` 11/11 + master "Passed all
+> tests"，跟 LegacyCpu 截圖完全一致。原本「預期會擴充」的 framework
+> 點（register pairs、F register 半進位、CB prefix dispatch、variable
+> width fetch）全都在 SpecLoader / Emitters 端實作完成。
+>
+> 後續 emitter 結構優化（Phase 5.8 refactor）見
+> `MD/design/11-emitter-library-refactor.md`。spec 結構見
+> `MD/design/10-lr35902-bit-pattern-groups.md`。本檔保留為歷史計畫紀錄。
 
 ---
 

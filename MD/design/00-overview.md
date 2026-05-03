@@ -32,7 +32,7 @@
   **不做 GUI / 60fps loop / 即時播放** ✅
 - Windows 平台優先 ✅
 
-完工狀態快照：345 unit tests 全綠；arm/thumb/bios.gba 三 ROM 透過
+完工狀態快照：360 unit tests 全綠；arm/thumb/bios.gba 三 ROM 透過
 真 BIOS LLE 6 GBA-秒內全 PASS；GB 端拿到 BIOS LLE + DMG Nintendo®
 logo 截圖。完整收工筆記：
 - `MD/note/phase5-gba-mvp-complete-2026-05.md`（5.1–5.4）
@@ -109,4 +109,9 @@ logo 截圖。完整收工筆記：
 - `06-arm7tdmi-completion-plan.md` — Phase 2.5 計畫（已完成）
 - `07-spec-authoring-conventions.md` — spec 寫作規範
 - `08-portability-refactor.md` — Phase 2.6 通用化 refactor（已完成）
-- `09-gb-lr35902-validation-plan.md` — Phase 4.5 GB CPU 移植驗證計畫
+- `09-gb-lr35902-validation-plan.md` — Phase 4.5 GB CPU 移植驗證計畫 ✅
+- `10-lr35902-bit-pattern-groups.md` — LR35902 bit-pattern 分群表（Phase 4.5C spec 結構）
+- `11-emitter-library-refactor.md` — Phase 5.8 emitter library refactor 設計與進度
+
+跨 phase 流程：
+- `MD/process/01-commit-qa-workflow.md` — Tier 0-4 commit QA workflow（任何 commit 前依改動性質決定要跑哪一 tier）

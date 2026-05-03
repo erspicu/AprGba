@@ -167,6 +167,38 @@ PC 的特殊處理），於指令定義 `quirks` 標注。
   透過此表知道要寫入哪個 bit。
 - `banked_per_mode` 列出此暫存器在哪些處理器模式下有獨立副本（影子暫存器）。
 
+### 5.1 `register_pairs`（Phase 4.5 加入）
+
+對於 LR35902 (Game Boy)、Z80、6502 等 8-bit 主架構，會把兩個 8-bit GPR
+組成 16-bit pair 用：
+
+```json
+"register_file": {
+  "general_purpose": {
+    "count": 7,
+    "width_bits": 8,
+    "names": ["A", "B", "C", "D", "E", "H", "L"]
+  },
+  "register_pairs": [
+    { "name": "BC", "high": "B", "low": "C" },
+    { "name": "DE", "high": "D", "low": "E" },
+    { "name": "HL", "high": "H", "low": "L" },
+    { "name": "AF", "high": "A", "low": "F" }
+  ],
+  "stack_pointer": "SP"
+}
+```
+
+- `name` 是 pair 的對外名稱，spec steps / operand resolvers 可用它直接讀寫。
+- `high` / `low` 對應到 `general_purpose.names` 裡的 8-bit register。
+- micro-op `read_reg_pair` / `write_reg_pair` 會自動 emit
+  `(high << 8) | low` / `(value >> 8 & 0xFF) → high; value & 0xFF → low`
+  的合成/拆解 IR。
+- pair 名稱也可以在 `aliases` 出現給 SP/LR 等 alias 用（LR35902 的
+  `stack_pointer: "SP"` 視為獨立 16-bit register 而非 pair）。
+
+ARM7TDMI 不需要這欄位（GPR 全 32-bit）；schema 上是可選的。
+
 ---
 
 ## 6. 處理器模式（`processor_modes`）

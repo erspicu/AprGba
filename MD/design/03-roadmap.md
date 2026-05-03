@@ -4,20 +4,40 @@
 
 業餘投入估計：每週 8–15 小時。
 
-> **狀態快照**（2026-05-02 更新）：Phase 0/1/2/2.5/2.6/3/4.1/4.2/4.3/4.4/
-> 4.5/5/8 ✅ 完成；**Phase 5.8 emitter library refactor 5.1–5.7 完成**
-> （`Lr35902Emitters.cs` 從 ~2620 → 1346 行，−49%；27 個 LR35902-specific
-> ops 收成 generic + 通用 ops；剩 13 個全在 clearly-marked L3 intrinsic
-> 區段）。GBA 端從 test-ROM 驗證一路推到 **真 Nintendo BIOS LLE** +
-> 完整 PPU pipeline（Mode 0/1/2/3/4 + OBJ + BLDCNT alpha/brighten/darken
-> + WININ/WINOUT/OBJ Window）。BIOS 開機 logo 視覺與 mGBA 同等。GB 端
-> 拿到 BIOS LLE + DMG Nintendo® logo 截圖。345 個 unit test 全綠，跨
-> GB + GBA 兩 CLI 操作介面 (`--bios` / `--cycles` / `--frames` /
-> `--seconds` / `--screenshot`) 一致。完整收工筆記見
-> `MD/note/phase5.7-bios-lle-and-ppu-2026-05.md`；refactor 進度見
-> `MD/design/11-emitter-library-refactor.md`。
-> 下一步可選：Phase 5.8/5.9 第三 CPU 驗證（RISC-V / MIPS）→ 驗證 L3
-> floor 是否合理 → 視情況再進 Phase 7 block-JIT / APU。
+> **狀態快照**（2026-05-03 更新）：Phase 0/1/2/2.5/2.6/3/4.1/4.2/4.3/4.4/
+> 4.5/5/7（部分）/8 ✅ 完成。
+>
+> - **MVP**：GBA 端 test-ROM → 真 Nintendo BIOS LLE → 完整 PPU pipeline
+>   (Mode 0/1/2/3/4 + OBJ + BLDCNT + WIN)。GB 端 BIOS LLE + DMG Nintendo®
+>   logo 截圖。
+> - **Framework 通用性**：Phase 4.5 LR35902 全 ISA spec (501 opcodes / 23
+>   group files) + Blargg cpu_instrs 11/11 → 「換 CPU 只要換 JSON」驗證
+>   通過。Phase 5.8 emitter refactor 5.1–5.7 完成（`Lr35902Emitters.cs`
+>   從 ~2620 → 1346 行，−49%；27 個 LR35902-specific ops 收成 generic）。
+> - **Phase 7 block-JIT**：A.1-A.6 + A.6.1（Strategy 2 BIOS LLE 修補）+
+>   Phase 1a/1b（predictive cycle downcounting + MMIO catch-up callback）
+>   + H.a (LLVM pass pipeline 含 instcombine，2026-05-03 datalayout root
+>   cause 修復) 全部 ship。`--block-jit` flag 在 HLE arm/thumb 跑 loop100
+>   ~10-11 MIPS（vs per-instr ~8 MIPS，+30-40%）；BIOS LLE bjit 因 block
+>   平均長度只 1.0-1.1 instr 反而比 per-instr 慢，已紀錄為 known
+>   characteristic + followup。C.b lazy flag deferred (correctness regression
+>   in BJIT/BIOS-LLE，main 的版本不適合 recovery 分支結構)。
+> - **QA 流程**：所有 commit 依改動性質跑對應 tier，見
+>   `MD/process/01-commit-qa-workflow.md`（T0 docs / T1 360 unit tests /
+>   T2 8-combo screenshot matrix / T3 3-run loop100 bench / T4 baseline
+>   update）。
+>
+> 360 個 unit test 全綠；跨 GB + GBA 兩 CLI 操作介面 (`--bios` / `--cycles`
+> / `--frames` / `--seconds` / `--screenshot` / `--block-jit`) 一致。
+>
+> 完整收工筆記：`MD/note/phase5.7-bios-lle-and-ppu-2026-05.md`；refactor
+> 進度：`MD/design/11-emitter-library-refactor.md`；Phase 7 perf 紀錄：
+> `MD/performance/`。
+>
+> 下一步可選：(a) Phase 5.8/5.9 第三 CPU 驗證（RISC-V / MIPS）；(b) Phase
+> 7 後續：A.5 SMC invalidation、A.7 block linking、E.c IR-level region
+> check、解決 BIOS LLE bjit block 太短問題（detector 跨 unconditional B
+> detect）；(c) Phase 9 APU。
 
 ---
 
@@ -395,42 +415,61 @@ canonical loop100 bench (`MD/performance/202605030002-jit-optimisation-starting-
 
 順序大致從低風險高回報 → 高風險未驗證。
 
-#### 進度快照（2026-05-03）
+#### 進度快照（2026-05-03 update）
 
-**已完成 12 步**（commit chronological order）：
+**已完成 14 步 + A.6.1 sub-phase + 後續 cleanup**（commit chronological order）：
 B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 → B.e cache state offsets → B.f permanent pin → B.g inline bus
 → E.a fetch fast path → E.b mem trampoline fast path
 → C.a width-correct flag → B.h Tick/IRQ inline
-→ H.a LLVM pass pipeline → C.b alloca-shadow retry
+→ H.a LLVM pass pipeline (4-pass 版) → A.1-A.6 block-JIT 整合
+→ A.6.1 Strategy 2 BIOS LLE 修補 sub-phase (13 個 commit, 見下)
+→ Phase 1a/1b predictive downcounting + MMIO catch-up
+→ H.a-instcombine fix（datalayout root cause，2026-05-03 啟用 5-pass）
+→ debug log cleanup（移除 A.6.1 dev-only env-gated logging，bjit BIOS +7%）
 
 **累計成果（vs Phase 5.8 starting baseline）**：
 
-| ROM / Backend | baseline | 現在 | 累計 | real-time |
-|---|---:|---:|---:|---:|
-| GBA arm json-llvm | 3.82 MIPS | 8.49 | **+122%** | 0.9× → **2.0×** |
-| GBA thumb json-llvm | 3.75 | 8.51 | **+127%** | 0.9× → **2.0×** |
-| GB json-llvm | 2.66 | 6.52 | **+145%** | 5.5× → **13×** |
-| GB legacy | 32.76 | 31.66 | unchanged (noise) | 67× |
+| Combo                | baseline | per-instr | block-JIT | real-time (bjit) |
+|----------------------|---------:|----------:|----------:|-----------------:|
+| HLE arm   loop100    | 3.82 MIPS | 7.5-8.2  | **10.3** | **2.4×** |
+| HLE thumb loop100    | 3.75      | 8.0-8.2  | **11.4** | **2.7×** |
+| BIOS arm   loop100   |    —      | 7.4-7.5  | 5.4-5.7  | 1.3× (bjit < pi: 見 known characteristic ↓) |
+| BIOS thumb loop100   |    —      | 7.3-7.6  | 5.6-6.0  | 1.4× |
+| GB  09-loop100 json  | 2.66      | ~6.5     |    —     | ~13×（GB 走 per-instr） |
+| GB  09-loop100 LEGACY| 32.76     | ~31.7    |    —     | ~67× |
+
+**Known characteristic — BIOS LLE bjit 反慢**：詳見
+`MD/performance/202605032030-bios-loop100-bench.md`。Detector 把 unconditional
+`B`/`BL`/`BX` 切成 block 邊界，loop100 ROM 在 BIOS path 平均 block 長度
+**1.0-1.1 instr** → block fn call overhead 攤不平。HLE path block 平均也
+~1.0 但 cache hit rate 高 + 編譯量少（518 unique blocks vs BIOS 1675），
+attempted block-JIT advantage 仍可保。Followup：detector 把 unconditional
+B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，bjit
+應該勝 pi 50%+）。
 
 **剩餘項目分類**（B-G 區內每個未打勾的都標了狀態）：
-- **[⏸ blocked]** = 需要 prerequisite 才能做（多半 blocked on A block-JIT
-  或 H.a LLVM pass pipeline）
+- **[⏸ blocked]** = 需要 prerequisite 才能做（多半 blocked on A.5 SMC
+  或 A.7 block linking）
 - **[⊘ skipped]** = 經評估 ROI 太低 / 已被其他 step cover / LLVM 自己會做
-- **[ ]** = doable 但還沒做（剩 E.c IR-level region check + G.a/b host
-  runtime 優化）
+- **[ ]** = doable 但還沒做（剩 A.5 SMC、A.7 block linking、A.8 state→reg
+  caching、A.9 profiling、E.c IR-level region check、G.a/b host runtime
+  優化、H.b-i 各種未做）
 
-**已嘗試但未 ship**：
-- **C.b alloca-based shadow lazy flag** — 設計兩版（deferred-batch 跟
-  alloca-shadow）都實作完成，alloca 版 unit + Blargg 全綠但 perf 未明顯
-  改善（loop100 GBA 跌 ~3-5% noise）。MCJIT 可能沒跑 mem2reg，alloca
-  沒被 lift to SSA 所以 load/store 沒被 DSE 掉。詳細見
-  `MD/performance/202605030148-lazy-flag-attempt-postmortem.md`。後續
-  要重做需 (1) 顯式跑 mem2reg pass (2) 處理 raw CPSR writers 的
-  drain/invalidate plumbing。
+**已嘗試但 deferred**：
+- **C.b alloca-based shadow lazy flag** — 兩次 retry 都失敗：第一次 (2026-05-03
+  上午) MCJIT 沒跑 mem2reg；第二次 (2026-05-03 H.a 之後) 在 recovery 分支
+  T1 通過但 T2 8-combo screenshot 5/8 fail (BIOS LLE bjit 撞 stale shadow
+  shadow → CPSR.T mismatch → undecodable)。Root cause 是 shadow alloca init
+  load 在 entry block，但 MSR-induced raw CPSR write 後 ReinitShadowFromReal
+  跨 cond-skip 路徑時 mem2reg PHI 算不對。**收益 main note 自承 +0.5-0.6%**，
+  GVN+DSE 已撈走大半同樣工作。Defer 到未來真有 perf 量測證實 ReadFlag/
+  SetFlag 是 hot path 才重設計（per-BB explicit PHI 而非 alloca）。詳見
+  `MD/performance/202605031930-Cb-lazy-flag-deferred.md`。
 
 **dispatcher / mem-bus / bus inline 端 quick win 全 saturated**。Phase 7
-繼續下去要嘛 architectural 改動 (block-JIT) 要嘛碰 LLVM passes pipeline。
+繼續下去要嘛 architectural 改動 (A.7/A.8 / detector 跨 B 連續編譯) 要嘛
+碰 LLVM passes pipeline (H.b/c)。
 
 #### A. Block-level JIT（核心，textbook 路徑）
 
@@ -496,11 +535,40 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   **驗證**：360/360 unit tests + Blargg cpu_instrs 11/11 全綠（per-instr 路徑沒退步）。
   **Perf (loop100, 1200 frames)**：GBA arm 8.55 → **85.39 MIPS (10.0× 加速)**，
   GBA thumb 8.55 → **85.61 MIPS (10.0× 加速)**，real-time 多 20×。
+  （上面是 A.6 剛 ship 時的初值；後續 A.6.1 + Phase 1a/1b + H.a-instcombine
+  fix 之後 HLE bjit 穩定在 ~10-11 MIPS、BIOS bjit ~5-6 MIPS — 見 §進度
+  快照。）
   **限制**：menu / interactive ROM (e.g. armwrestler) headless 跑會在 menu
   loop 執行 garbage memory，block-JIT 對 garbage 大量編譯 64-instr block 顯
   hang —— 不是 correctness bug，是 ROM 本身行為（per-instr 也會跑 garbage 但
-  慢到看不出來）。Future work: PC-out-of-region fallback to per-instr
-  Step (A.6.1).
+  慢到看不出來）。Followup: PC-out-of-region fallback to per-instr Step。
+- [x] **A.6.1 BIOS-LLE Strategy 2 修補 sub-phase**（2026-05-03 完成，13
+  個 commit）— A.6 ship 時 HLE 跑得起 jsmolka，但 BIOS LLE path 在
+  block-JIT 模式下 CPSR.T / PC corruption / undecodable instruction
+  各種 crash。Root cause 是 block IR 內的 PC 處理跟 per-instr executor
+  的「pre-set R15 = pc + pc_offset」假設不一致。改用 **Strategy 2**：
+  block fn 不 pre-set PC、不在末尾 advance PC；pipeline-PC 讀取在 emit
+  時 resolve 成 baked-in 常數 (`bi.Pc + offset`)；只有真分支才寫
+  GPR[15]。後續 cleanup 包含：
+    - `read_reg(15)` after PC-write 改回讀記憶體（commit 260cbb0）
+    - `block_store STM` 含 R15 用 Strategy 2 常數（0fa2153）
+    - `IfStep` constant-cond fold 減少 dead BB IR (1a9b908)
+    - `OperandResolvers` stale-PC reads 修補 (3fa5b17)
+    - LDM with PC in rlist 必 `MarkPcWritten` (ea7f1c8)
+    - `RaiseException` emitter Strategy 2 awareness (9e7a77c)
+    - `RestoreCpsrFromSpsr` PHI alignment 修補
+  **驗證**：8-combo screenshot matrix（arm/thumb × HLE/BIOS × pi/bjit）
+  全部產生 canonical "All tests passed" md5 (`7e829e9e837418c0f48c038341440bcb`)。
+- [x] **Phase 1a — predictive cycle downcounting in block-JIT IR**
+  （2026-05-03，commit 738c90e）— Block fn 改用「entry 算 budget 後遞減
+   per-instruction、達 0 時提早退出 + 寫 next-PC + PcWritten=1」的模式，
+   讓 caller (`CpuExecutor.StepBlock`) 從 `cycles_left` snapshot diff
+   算實際消耗 cycles，不用 caller 傳 instruction count 進去再乘。
+- [x] **Phase 1b — MMIO catch-up callback + double-tick fix**（2026-05-03，
+  commit 3252165 + 8290cb1）— Bus 寫 MMIO 時 invoke `OnMmioRead`/
+  `OnMmioWrite` callback，scheduler 端做 catch-up tick 同步外部硬體
+  (PPU / Timer / IRQ delivery)。修了 BIOS LLE 路徑下 IRQ 跳過 frame
+  的 MMIO sync re-entry guard 跟 per-instr cycle 雙倍累計問題。
 - [ ] **A.7 Block linking**：直接 patch native call site (relocate)，後續
   branch 不退出 JIT，省一次 dispatch。**為什麼還沒做**：高複雜度 native
   code patching；ORC LLJIT 提供 stub-rewriting 機制。**估時**：3-4 天 +
@@ -594,18 +662,22 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   連續 flag updates。改成依 WidthBits 用 i8/i16/i32。**GB json-llvm +2.7%
   (6.31 → 6.48 MIPS)**, GBA 不受影響 (CPSR 已 i32)。順便修了潛在的
   unaligned i32 access 問題。
-- [x] **C.b Alloca-based shadow lazy flag**（2026-05-03 retry after H.a，
-  perf note `MD/performance/202605030241-cb-alloca-shadow-retry.md`）—
-  EmitContext 加 `StatusShadowAllocas` + `EntryBlock`；CpsrHelpers 重寫
-  走 alloca shadow (lazy create on first SetStatusFlag, drained at
-  end-of-fn)；ArmEmitters 的 raw CPSR writers (write_psr /
-  raise_exception / restore_cpsr_from_spsr) 加 `InvalidateShadow`。
-  **GBA arm +0.5% (8.45 → 8.49 MIPS), GBA thumb +0.6%**, GB JIT 持平
-  (噪聲)。比預期 +5-15% 小，因為 LLVM GVN/DSE 對原 raw-memory
-  pattern 已能優化好；alloca shadow 主要 unlock 的「合併連續 store」
-  原本就大致在做。**真正 unlock 是 abstraction**：未來「真 lazy flag」
-  (defer 計算非只 batch)、PcWritten LLVM register hint 等 alloca-pattern
-  優化都能直接套用。
+- [⏸ deferred — 2026-05-03 retry 失敗] **C.b Alloca-based shadow lazy flag**
+  — main 分支 (`18051f6`) 在 2026-05-03 上午有實作完成 (+0.5%) 但 recovery
+  分支 retry 失敗：T1 (360 unit tests) 通過，但 T2 8-combo screenshot 5/8
+  fail（HLE bjit 空白畫面 + 4 個 BIOS LLE crash「Undecodable instruction
+  at PC=0x...」CPSR.T mismatch）。Root cause hypothesis：shadow alloca init
+  load 必須在 entry block (mem2reg dominance)，但 ReinitShadowFromReal 是在
+  body 中段（after raw MSR write）做的。某些 control-flow 路徑從 entry 直接
+  跳 cond-skip-endBlock 沒走 body，DrainAllShadows 看到 entry-init 的 stale
+  shadow 值蓋掉 raw write 之後的 real CPSR → CPSR.T 錯亂 → 錯指令集 decoder。
+  **defer 原因**：
+    - 收益小 (<1% per main 自承，GVN+DSE 已撈大半)
+    - 正確實作需 explicit per-BB PHI 設計（alloca + mem2reg 不夠用）
+    - recovery 分支的 IR 結構（Phase 1a budget BB + multi-instr block）跟
+      main 不同，main 的 alloca-shadow 設計不可直接 cherry-pick
+  詳見 `MD/performance/202605031930-Cb-lazy-flag-deferred.md`。**何時重評**：
+  未來 perf 量測證實 ReadFlag/SetFlag 是 hot path，再用 per-BB PHI 重設計。
 - [⚠ revised hypothesis] **真 ARM CPSR NZCV lazy** — defer 計算（非
   C.b 的 defer-store）：原預期 lazy 的主要收益是「跳過不需要的計算」
   而非「合併連續 write」(C.b 已試)。需要新 state slots (last_alu_kind/
@@ -750,13 +822,23 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 
 A-G 之外，盤點實作 Phase 7 過程發現可以做的：
 
-- [x] **H.a LLVM pass pipeline 調校**（2026-05-03，perf note
-  `MD/performance/202605030228-llvm-pass-pipeline.md`）— HostRuntime.Compile
-  在 module 移交 MCJIT 之前用 `LLVM.RunPasses` (新 pass manager API) 顯式
-  跑 `mem2reg,instcombine<no-verify-fixpoint>,gvn,dse,simplifycfg`。
-  **直接 GBA arm +1.4% (8.33 → 8.45 MIPS), GBA thumb +0.8%**, GB 兩條
-  path 持平。**間接價值更大** — unblock C.b alloca-shadow lazy flag 跟
-  任何未來用 alloca/SSA pattern 的優化。建議下一步 retry C.b。
+- [x] **H.a LLVM pass pipeline 調校**（2026-05-03，perf notes
+  `MD/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md` +
+  `MD/performance/202605031940-Ha-instcombine-fix.md`）— HostRuntime.Compile
+  在 module 移交 ORC LLJIT 之前用 `LLVM.RunPasses` (新 pass manager API)
+  顯式跑 `mem2reg,instcombine<no-verify-fixpoint>,gvn,dse,simplifycfg`。
+  **過程**：原本 instcombine 開了 3 個 BlockFunctionBuilderTests 掛 (R1=0
+  expected 2)，先 disable 跑 4-pass 版 (mem2reg/gvn/dse/simplifycfg)
+  穩定上線；後續 (commit ea08d17) 找到 root cause — module 沒設
+  `target datalayout`，instcombine canonicalise struct GEP 成 byte GEP
+  時用預設 layout 算錯 4-byte offset (i64 alignment 處理不同)。修法：
+  Compile() 重排序，先建 LLJIT 拿 datalayout、`LLVM.SetDataLayout`
+  寫進 module、再跑 pipeline。AddModule (per-block path) 走同樣流程。
+  **Perf**：4-pass 版直接 +1-2%；5-pass (含 instcombine) 直接收益 +0.2-1.8%
+  per-instr / ±1% bjit；T2 8-combo screenshot 全綠 canonical hash。
+  **間接價值**：本來預期 unblock C.b alloca-shadow lazy flag，實際 retry
+  C.b 撞到 shadow drain edge case 失敗 deferred — 但 instcombine 本身
+  是純 IR-level wins，sticking。
 - [ ] **H.b Spec-time IR pre-processing** — SpecCompiler 階段先掃過所有
   指令的 step 序列做 dead-flag-elimination：如果一條 ALU 指令的 update_nz
   寫的 N 在「同 instruction 的後續 step / 任何 callable cond gate」都不會
@@ -803,6 +885,17 @@ A-G 之外，盤點實作 Phase 7 過程發現可以做的：
 `MD/performance/202605030002-jit-optimisation-starting-point.md`，
 記錄 before/after delta + 該策略 hypothesis。**不要批一次做完幾項
 混在一起跑**，會搞不清楚哪個帶來收益。
+
+**Commit 前 QA**：依改動性質跑對應 tier，定義在
+`MD/process/01-commit-qa-workflow.md`：
+- T0 = 純文件 / 註解 → 無 QA
+- T1 = refactor / debug helper → 360 unit tests
+- T2 = bug fix / 新 emitter / spec 改動 → T1 + 8-combo screenshot matrix
+- T3 = hot path / JIT IR / dispatcher / bus 改動 → T1 + T2 + 3-run
+       loop100 bench + 紀錄到 `MD/performance/`
+- T4 = 大型架構變更 → T1 + T2 + T3 + 完整 matrix + baseline 更新
+
+T2 fail = 不准 commit；T3 退步 > 5% 要追 root cause 再決定 ship/revert。
 
 ---
 

@@ -104,7 +104,27 @@ total）— 不是 framework 主路徑。詳細數據見
 | `OperandResolvers.cs` | 480 | 0 | ARM operand 解析（resolver，不是 emitter） |
 | `MemoryEmitters.cs` | 163 | (helpers) | 通用 mem hook 宣告 |
 | `ConditionEvaluator.cs` | 136 | (helpers) | ARM/LR35902 共用 cond table |
-| **合計** | **~5800 lines** | **74** ops | |
+| **合計（refactor 起點）** | **~5800 lines** | **74** ops | |
+
+**2026-05-03 更新後實際狀態**（5.7 完工 + Phase 7 額外加 BlockFunctionBuilder
++ InstructionFunctionBuilder + 4.5c 跟 instcombine fix 後）：
+
+| 檔案 | 行數 |
+|---|---:|
+| `Emitters.cs` | 1051（+438：吸收 LR35902 generic ops + IfStep const-fold + cpsr helpers） |
+| `ArmEmitters.cs` | 909（+55：A.6.1 Strategy 2 + freeze switch 等修補後又移除） |
+| `Lr35902Emitters.cs` | 1346（−47%：5.7 refactor 一次到位） |
+| `BlockTransferEmitters.cs` | 399 |
+| `BlockFunctionBuilder.cs` | 320（Phase 7.A.2 新加） |
+| `InstructionFunctionBuilder.cs` | 139（Phase 7.A.2 新加） |
+| `StackOps.cs` / `FlagOps.cs` / `BitOps.cs` | 425 / 182 / 261（5.1-5.4 新檔） |
+| `OperandResolvers.cs` | 525 |
+| `CpuStateLayout.cs` / `EmitContext.cs` / `MemoryEmitters.cs` / `ConditionEvaluator.cs` | 325 / 206 / 182 / 234 |
+| `IMicroOpEmitter.cs` / `IOperandResolver.cs` | 42 / 61 |
+| **目前合計** | **6607 lines** |
+
+新增的行數主要進到 generic 區（`Emitters.cs` +438、新檔 `Stack/Flag/BitOps`），
+LR35902-specific 區一直在縮小（−1168 行）。framework 通用化 trajectory 持續。
 
 ### 1.2 74 個 op 的「直覺分類」(WRONG — 過度保守)
 
