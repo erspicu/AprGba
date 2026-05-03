@@ -55,13 +55,39 @@ namespace AprCpu.Core.IR
         /// Thumb F16 that carry their own per-instruction cond field
         /// rather than going through the instruction-set-wide cond gate.
         /// </summary>
-        public static LLVMValueRef EmitCheckOnCondValue(
+        public static unsafe LLVMValueRef EmitCheckOnCondValue(
             EmitContext ctx,
             LLVMValueRef cond,
             IReadOnlyDictionary<string, string>? table = null)
         {
             table ??= StandardArmCondTable;
 
+            // Phase 7 A.6.1 Golden Fix (Gemini-suggested, mGBA/Dolphin/
+            // Ryujinx pattern) — when cond is a compile-time constant
+            // (block-JIT mode bakes the instruction word as a constant),
+            // emit ONLY the IR for the specific matching mnemonic. Avoids
+            // the 14-deep select chain that FastISel may codegen incorrectly
+            // (observed: BLT branch fired despite N==V==0 due to chain
+            // anomaly). Per-instr mode (cond is a runtime function param)
+            // falls through to the runtime select chain below.
+            var condConst = LLVM.IsAConstantInt(cond);
+            if (condConst != null)
+            {
+                var condVal = (uint)LLVM.ConstIntGetZExtValue(condConst);
+                foreach (var (codeStr, mnemonic) in table)
+                {
+                    uint codeVal;
+                    try { codeVal = Convert.ToUInt32(codeStr, 2); }
+                    catch { continue; }
+                    if (codeVal != condVal) continue;
+                    return EmitMnemonicCheck(ctx, mnemonic);
+                }
+                // Cond value not in table → never execute (matches the
+                // default of the runtime chain).
+                return ctx.ConstBool(false);
+            }
+
+            // Runtime cond — generate the full chain (per-instr fallback).
             // Read CPSR flags as i32 0/1 then convert to i1.
             var nI32 = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "N");
             var zI32 = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "Z");
@@ -125,6 +151,78 @@ namespace AprCpu.Core.IR
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Phase 7 A.6.1 Golden Fix — emit ONLY the IR needed for the
+        /// specific known-at-JIT-time cond mnemonic. Reads the minimum
+        /// CPSR flags required (e.g. AL emits no reads at all, EQ only
+        /// reads Z, LT only reads N+V). No select chain.
+        /// </summary>
+        private static LLVMValueRef EmitMnemonicCheck(EmitContext ctx, string mnemonic)
+        {
+            switch (mnemonic.ToUpperInvariant())
+            {
+                case "AL": return ctx.ConstBool(true);
+                case "NV": return ctx.ConstBool(false);
+
+                case "EQ": return ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "Z"), "eq_z");
+                case "NE": return NotI1(ctx, ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "Z"), "ne_z"), "ne_notz");
+
+                case "CS": case "HS":
+                    return ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "C"), "cs_c");
+                case "CC": case "LO":
+                    return NotI1(ctx, ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "C"), "cc_c"), "cc_notc");
+
+                case "MI": return ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "N"), "mi_n");
+                case "PL": return NotI1(ctx, ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "N"), "pl_n"), "pl_notn");
+
+                case "VS": return ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "V"), "vs_v");
+                case "VC": return NotI1(ctx, ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "V"), "vc_v"), "vc_notv");
+
+                case "HI":
+                {
+                    var c = ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "C"), "hi_c");
+                    var nz = NotI1(ctx, ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "Z"), "hi_z"), "hi_notz");
+                    return ctx.Builder.BuildAnd(c, nz, "hi");
+                }
+                case "LS":
+                {
+                    var notC = NotI1(ctx, ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "C"), "ls_c"), "ls_notc");
+                    var z    = ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "Z"), "ls_z");
+                    return ctx.Builder.BuildOr(notC, z, "ls");
+                }
+
+                case "GE":
+                {
+                    var n = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "N");
+                    var v = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "V");
+                    return ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, n, v, "ge_neqv");
+                }
+                case "LT":
+                {
+                    var n = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "N");
+                    var v = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "V");
+                    return ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, n, v, "lt_nnev");
+                }
+                case "GT":
+                {
+                    var notZ = NotI1(ctx, ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "Z"), "gt_z"), "gt_notz");
+                    var n = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "N");
+                    var v = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "V");
+                    var neq = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, n, v, "gt_neqv");
+                    return ctx.Builder.BuildAnd(notZ, neq, "gt");
+                }
+                case "LE":
+                {
+                    var z = ToI1(ctx, CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "Z"), "le_z");
+                    var n = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "N");
+                    var v = CpsrHelpers.ReadStatusFlag(ctx, "CPSR", "V");
+                    var nne = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, n, v, "le_nnev");
+                    return ctx.Builder.BuildOr(z, nne, "le");
+                }
+            }
+            return ctx.ConstBool(false);   // unknown mnemonic → never execute
         }
 
         private static LLVMValueRef ToI1(EmitContext ctx, LLVMValueRef i32val, string name)
