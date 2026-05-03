@@ -102,6 +102,10 @@ if (opts.TraceBiosPath is not null)
 {
     RunWithBiosTrace(runner, cpu, bus, opts.Cycles, opts.TraceBiosPath);
 }
+else if (opts.TraceFramesPath is not null)
+{
+    RunWithFrameTrace(runner, cpu, bus, opts.Cycles, opts.TraceFramesPath);
+}
 else
 {
     runner.RunCycles(opts.Cycles);
@@ -244,6 +248,48 @@ static void RunWithBiosTrace(GbaSystemRunner runner, CpuExecutor cpu, GbaMemoryB
     fs.Flush();
 }
 
+/// <summary>
+/// Per-frame state trace — at every frame boundary dump PC, CPSR, key
+/// IO regs, and selected GPRs. Designed to compare per-instr vs
+/// block-JIT execution paths for divergence detection. The same
+/// emulated cycle budget produces the same number of frame samples
+/// regardless of execution mode.
+/// </summary>
+static void RunWithFrameTrace(GbaSystemRunner runner, CpuExecutor cpu, GbaMemoryBus bus,
+                               long cycleBudget, string outPath)
+{
+    using var fs = new StreamWriter(outPath) { AutoFlush = true };
+    fs.WriteLine("frame\tPC\tCPSR\tIE\tIF\tIME\tDISPCNT\tHALTCNT_writes\tIRQs\tR0\tR13\tR14");
+    long lastFrame = -1;
+    long consumed = 0;
+    while (consumed < cycleBudget)
+    {
+        if (bus.CpuHalted)
+        {
+            runner.Scheduler.Tick(4);
+            consumed += 4;
+            if (runner.HasAnyPendingIrqPublic()) bus.CpuHalted = false;
+            runner.DeliverIrqIfPending();
+        }
+        else
+        {
+            cpu.Step();
+            var ticks = 4 * cpu.LastStepInstructionCount;
+            runner.Scheduler.Tick(ticks);
+            consumed += ticks;
+            runner.DeliverIrqIfPending();
+        }
+
+        // Sample at frame boundary.
+        if (runner.Scheduler.FrameCount != lastFrame)
+        {
+            lastFrame = runner.Scheduler.FrameCount;
+            fs.WriteLine($"{lastFrame}\t0x{cpu.Pc:X8}\t0x{cpu.ReadStatus("CPSR"):X8}\t0x{bus.ReadHalfword(0x04000200):X4}\t0x{bus.ReadHalfword(0x04000202):X4}\t0x{bus.ReadWord(0x04000208):X4}\t0x{bus.ReadHalfword(0x04000000):X4}\t{bus.HaltCntWriteCount}\t{runner.IrqsDelivered}\t0x{cpu.ReadGpr(0):X8}\t0x{cpu.ReadGpr(13):X8}\t0x{cpu.ReadGpr(14):X8}");
+        }
+    }
+    fs.Flush();
+}
+
 static (CpuExecutor Cpu, Arm7tdmiBankSwapHandler Swap, HostRuntime Rt, IDisposable[] Bindings)
     BootCpu(GbaMemoryBus bus, bool enableBlockJit = false)
 {
@@ -326,6 +372,7 @@ static Options? ParseArgs(string[] args)
         else if (arg.StartsWith("--seconds="))    opts.Cycles = (long)System.Math.Round(double.Parse(arg.Substring("--seconds=".Length), System.Globalization.CultureInfo.InvariantCulture) * GbaTiming.CpuClockHz);
         else if (arg.StartsWith("--screenshot=")) opts.ScreenshotPath = arg.Substring("--screenshot=".Length);
         else if (arg.StartsWith("--trace-bios=")) opts.TraceBiosPath = arg.Substring("--trace-bios=".Length);
+        else if (arg.StartsWith("--trace-frames=")) opts.TraceFramesPath = arg.Substring("--trace-frames=".Length);
         else if (arg == "--info")                 opts.InfoOnly = true;
         else if (arg == "--no-bios-openbus")      opts.DisableBiosOpenBus = true;
         else if (arg == "--no-obj")               opts.DisableObj = true;
@@ -372,6 +419,7 @@ internal sealed class Options
     public long     Cycles  = GbaScheduler.CyclesPerFrame;
     public string?  ScreenshotPath;
     public string?  TraceBiosPath;
+    public string?  TraceFramesPath;
     public bool     InfoOnly;
     public bool     DisableBiosOpenBus;
     public bool     DisableObj;
