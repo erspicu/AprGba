@@ -187,7 +187,21 @@ internal static class OperandResolverImpl
         var idx   = ctx.Resolve(name);
         var maskd = ctx.Builder.BuildAnd(idx, ctx.ConstU32(0xF), $"{name}_idx_masked");
         var ptr   = ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, maskd);
-        var v     = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, $"{name}_value");
+        var raw   = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, $"{name}_raw");
+        // Phase 7 A.6.1 Strategy 2 — block-JIT does NOT pre-set GPR[15],
+        // so direct memory reads for PC return stale data. Override with
+        // pipeline constant via runtime select when index resolves to 15.
+        LLVMValueRef v;
+        if (ctx.PipelinePcConstant is uint pipelineValue)
+        {
+            var pcConst = ctx.ConstU32(pipelineValue);
+            var isPc    = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, maskd, ctx.ConstU32(15), $"{name}_is_pc");
+            v = ctx.Builder.BuildSelect(isPc, pcConst, raw, $"{name}_value");
+        }
+        else
+        {
+            v = raw;
+        }
         ctx.Values[$"{name}_value"] = v;
     }
 
@@ -315,7 +329,18 @@ internal static class OperandResolverImpl
         var idx    = ctx.Resolve(fieldName);
         var masked = ctx.Builder.BuildAnd(idx, ctx.ConstU32(0xF), $"{fieldName}_idx_masked");
         var ptr    = ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, masked);
-        return ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, outName);
+        var raw    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, $"{outName}_raw");
+        // Phase 7 A.6.1 Strategy 2 — block-JIT does NOT pre-set GPR[15]
+        // each instruction (it stays as last branch target), so a runtime
+        // read of GPR[15] returns stale data. Override with the pipeline
+        // PC constant via a runtime select when index resolves to 15.
+        if (ctx.PipelinePcConstant is uint pipelineValue)
+        {
+            var pcConst = ctx.ConstU32(pipelineValue);
+            var isPc    = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, masked, ctx.ConstU32(15), $"{fieldName}_is_pc");
+            return ctx.Builder.BuildSelect(isPc, pcConst, raw, outName);
+        }
+        return raw;
     }
 
     /// <summary>
@@ -332,6 +357,14 @@ internal static class OperandResolverImpl
         var ptr    = ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, masked);
         var raw    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, $"{outName}_raw");
         var isPc   = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, masked, ctx.ConstU32(15), $"{fieldName}_is_pc");
+        // Phase 7 A.6.1 Strategy 2 — same stale-PC issue as
+        // LoadRegisterByFieldIndex. When index resolves to PC, replace
+        // raw memory load with pipeline constant + 4 (A5.1.5 PC+12).
+        if (ctx.PipelinePcConstant is uint pipelineValue)
+        {
+            var pcConstPlus4 = ctx.ConstU32(pipelineValue + 4);
+            return ctx.Builder.BuildSelect(isPc, pcConstPlus4, raw, outName);
+        }
         var plus4  = ctx.Builder.BuildAdd(raw, ctx.ConstU32(4), $"{outName}_plus4");
         return ctx.Builder.BuildSelect(isPc, plus4, raw, outName);
     }
