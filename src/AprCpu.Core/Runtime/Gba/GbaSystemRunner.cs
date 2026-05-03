@@ -40,6 +40,12 @@ public sealed unsafe class GbaSystemRunner
     /// "how many cycles consumed since Step entry".</summary>
     private int _budgetAtStep;
 
+    /// <summary>Phase 7 A.6.1 phase1b — re-entry guard for SyncSchedulerForMmio.
+    /// Scheduler.Tick can cross VBlank/HBlank, calling Dma.TriggerOnVBlank,
+    /// which may itself read MMIO via the bus — re-firing OnMmioRead.
+    /// Without this guard the recursion crashes testhost via stack overflow.</summary>
+    private bool _inMmioSync;
+
     public GbaSystemRunner(CpuExecutor cpu, GbaMemoryBus bus, Arm7tdmiBankSwapHandler swap)
     {
         Cpu  = cpu;
@@ -57,18 +63,29 @@ public sealed unsafe class GbaSystemRunner
     /// the current Step started, ticks the scheduler, delivers IRQs, and
     /// rebases the budget so the rest of the block doesn't double-count.
     /// </summary>
+    public long DebugMmioSyncCalls;
+    public long DebugMmioSyncTickedCycles;
+
     private void SyncSchedulerForMmio()
     {
+        DebugMmioSyncCalls++;
+        if (_inMmioSync) return;          // re-entry guard (DMA inside Scheduler.Tick → bus read → here)
         var consumed = _budgetAtStep - Cpu.CyclesLeft;
         if (consumed <= 0) return;
-        Scheduler.Tick(consumed);
-        // Note: don't deliver IRQ here — block IR is in the middle of an
-        // instruction that just called us. Delivering an IRQ would corrupt
-        // PC/CPSR mid-instruction. IRQ delivery happens in the outer loop
-        // after Cpu.Step() returns. We just need MMIO reads to see updated
-        // hardware state (VCOUNT, DISPSTAT, IF flags) — which they will,
-        // because the scheduler tick above already updated those bytes.
-        _budgetAtStep = Cpu.CyclesLeft;   // rebase so we don't re-tick.
+        DebugMmioSyncTickedCycles += consumed;
+        _inMmioSync = true;
+        try
+        {
+            Scheduler.Tick(consumed);
+            // Note: don't deliver IRQ here — block IR is in the middle of an
+            // instruction that just called us. Delivering an IRQ would corrupt
+            // PC/CPSR mid-instruction. IRQ delivery happens in the outer loop
+            // after Cpu.Step() returns. We just need MMIO reads to see updated
+            // hardware state (VCOUNT, DISPSTAT, IF flags) — which they will,
+            // because the scheduler tick above already updated those bytes.
+            _budgetAtStep = Cpu.CyclesLeft;   // rebase so we don't re-tick.
+        }
+        finally { _inMmioSync = false; }
     }
 
     /// <summary>Run for at least <paramref name="cycleBudget"/> CPU cycles.</summary>
@@ -102,13 +119,15 @@ public sealed unsafe class GbaSystemRunner
             _budgetAtStep  = budget;   // phase1b: MMIO catch-up reference point
 
             Cpu.Step();
-            // Phase 7 A.6.1 phase1b — total cycles consumed in this Step =
-            // budget - CyclesLeft. SOME of those may have been ticked by
-            // MMIO catch-up callbacks already (which advance _budgetAtStep
-            // to CyclesLeft at callback time). The REMAINING un-ticked
-            // delta = _budgetAtStep - CyclesLeft (now).
-            var totalConsumed = budget - Cpu.CyclesLeft;
-            var remainingTicks = _budgetAtStep - Cpu.CyclesLeft;
+            // Phase 7 A.6.1 phase1b — Cpu.LastStepCycles is the authoritative
+            // count: per-instr always sets 4; block-JIT sets it from the
+            // (budget - CyclesLeft) delta in StepBlock. MMIO catch-up may
+            // have already ticked SOME of those cycles into the scheduler,
+            // tracked via _budgetAtStep being rebased toward CyclesLeft.
+            // Tick only the un-synced remainder.
+            var totalConsumed = Cpu.LastStepCycles;
+            var alreadyTicked = budget - _budgetAtStep;        // sum of MMIO catch-up ticks
+            var remainingTicks = totalConsumed - alreadyTicked;
             if (remainingTicks > 0) Scheduler.Tick(remainingTicks);
             consumed += totalConsumed;
             DeliverIrqIfPending();
