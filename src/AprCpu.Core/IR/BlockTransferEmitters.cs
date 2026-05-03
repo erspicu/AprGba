@@ -263,12 +263,12 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
                 new[] { ctx.StatePtr, ctx.ConstU32((uint)i), loaded }, "");
             // Phase 7 A.6.1 Strategy 2 — same MarkPcWritten as visible
             // path: if i==15, the user-mode write also writes PC (LDM ^
-            // exception-return form).
-            if (i == 15)
-            {
-                var pcWrittenSlotU = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
-                ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), pcWrittenSlotU);
-            }
+            // exception-return form). MUST go through WriteReg.MarkPcWritten
+            // (not direct store) so ctx.PcWriteEmittedInCurrentInstruction
+            // is set — required for the subsequent read_reg(15) in spec
+            // patterns like Thumb POP {PC}'s alignment step to read from
+            // memory instead of short-circuiting to the pipeline constant.
+            if (i == 15) WriteReg.MarkPcWritten(ctx);
             ctx.Builder.BuildBr(afterWriteBB);
 
             ctx.Builder.PositionAtEnd(visibleWriteBB);
@@ -279,12 +279,10 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
             // post-instr check exits the block; otherwise executor's
             // "no branch → advance PC by N×size" path overwrites the
             // loaded target. Affects ARM `LDM ... {..., PC}` and
-            // Thumb `POP {..., PC}` (delegated to block_load).
-            if (i == 15)
-            {
-                var pcWrittenSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
-                ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), pcWrittenSlot);
-            }
+            // Thumb `POP {..., PC}` (delegated to block_load). MUST go
+            // through WriteReg.MarkPcWritten (not direct store) — see
+            // userWriteBB comment.
+            if (i == 15) WriteReg.MarkPcWritten(ctx);
             ctx.Builder.BuildBr(afterWriteBB);
 
             ctx.Builder.PositionAtEnd(afterWriteBB);

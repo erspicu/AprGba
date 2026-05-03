@@ -116,7 +116,24 @@ public sealed unsafe class EmitContext
         Instruction = instructionWord;
         Values.Clear();
         CurrentInstructionBaseAddress = baseAddress;
+        PcWriteEmittedInCurrentInstruction = false;
     }
+
+    /// <summary>
+    /// Phase 7 A.6.1 — set by emitters that store into GPR[15] via
+    /// <see cref="WriteReg.MarkPcWritten"/>. While true, subsequent
+    /// <c>read_reg(15)</c> calls in the SAME instruction must NOT
+    /// short-circuit to <see cref="PipelinePcConstant"/> — the popped /
+    /// computed PC value must be re-read from memory. Reset by
+    /// <see cref="BeginInstruction"/>. Without this, the spec pattern in
+    /// Thumb POP {PC}: <c>block_load → if r_bit=1 [read_reg 15; and
+    /// 0xFFFFFFFE; write_reg 15]</c> would have the read_reg return the
+    /// pipeline constant instead of the just-popped PC, overwriting it
+    /// with the static value at the next write_reg. Caused BIOS LLE
+    /// divergence: POP {R4,R5,PC} stored bogus aligned-pipeline PC
+    /// instead of the popped target.
+    /// </summary>
+    public bool PcWriteEmittedInCurrentInstruction { get; set; }
 
     /// <summary>
     /// Phase 7 A.6.1 — when set (block-JIT mode), this is the address of

@@ -143,6 +143,15 @@ internal sealed class ReadReg : IMicroOpEmitter
     {
         pcConst = default;
         if (ctx.PipelinePcConstant is not uint pipelineValue) return false;
+        // Phase 7 A.6.1 — if the current instruction has already written PC
+        // (e.g., block_load with bit 15 in list, or a prior write_reg(15)),
+        // a subsequent read_reg(15) within the same instruction must see
+        // the just-written value from memory, NOT the static pipeline
+        // constant. Otherwise patterns like Thumb POP {PC}'s alignment
+        // step (read_reg 15; and 0xFFFFFFFE; write_reg 15) overwrite the
+        // popped PC with the pipeline constant. Caused BIOS LLE BJIT
+        // divergence at first POP {R4,R5,PC}.
+        if (ctx.PcWriteEmittedInCurrentInstruction) return false;
         var pcIdx = ctx.Layout.RegisterFile.GeneralPurpose.PcIndex;
         if (pcIdx is not int pc) return false;
 
@@ -274,6 +283,11 @@ internal sealed class WriteReg : IMicroOpEmitter
 
     internal static void MarkPcWritten(EmitContext ctx)
     {
+        // Phase 7 A.6.1 — track that this instruction has touched PC, so
+        // any subsequent read_reg(15) within the same instruction reads
+        // the just-written value from memory instead of short-circuiting
+        // to the static pipeline constant.
+        ctx.PcWriteEmittedInCurrentInstruction = true;
         var slot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
         ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), slot);
     }
