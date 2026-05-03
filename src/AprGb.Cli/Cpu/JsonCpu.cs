@@ -84,9 +84,15 @@ public sealed unsafe class JsonCpu : ICpuBackend
 
     private bool _halted;
     private long _totalInstructions;
-    private static bool _ime;             // shared with extern shims
-    private static int  _eiDelay;         // counts down to IME=1 after EI
-    private static bool _haltSignal;      // set by host_lr35902_halt extern
+    // Per-instance EI/IME/HALT state. Shim methods route through
+    // _activeCpu so that lockstep diff harness (CpuDiff.RunBjitVsPerInstr)
+    // with two JsonCpu instances doesn't accidentally share these
+    // bits. Each RunCycles call updates _activeCpu = this; reset
+    // to the LAST active on return.
+    private bool _ime;
+    private int  _eiDelay;
+    private bool _haltSignal;
+    private static JsonCpu? _activeCpu;
 
     public long InstructionsExecuted => _totalInstructions;
 
@@ -290,6 +296,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
     {
         long consumed = 0;
         _activeBus = _bus;     // ensure shims see the right bus
+        _activeCpu = this;     // route HALT/IME extern shims to this instance's state
         while (consumed < targetCycles)
         {
             // Wake from HALT if any enabled IRQ is pending (whether or
@@ -714,12 +721,20 @@ public sealed unsafe class JsonCpu : ICpuBackend
         => (addr >= 0xFF00 && addr <= 0xFF7F) || addr == 0xFFFF;
 
     // ---------------- HALT / IME shims (called from JIT'd IR) ----------------
+    // Route through _activeCpu so per-instance state isn't shared across
+    // multiple JsonCpu instances (CpuDiff.RunBjitVsPerInstr creates two).
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void HostHalt() => _haltSignal = true;
+    private static void HostHalt()
+    {
+        if (_activeCpu is not null) _activeCpu._haltSignal = true;
+    }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void HostSetIme(byte v) => _ime = v != 0;
+    private static void HostSetIme(byte v)
+    {
+        if (_activeCpu is not null) _activeCpu._ime = v != 0;
+    }
 
     /// <summary>
     /// EI sets _eiDelay = 2 so RunCycles' --_eiDelay applies one
@@ -727,5 +742,8 @@ public sealed unsafe class JsonCpu : ICpuBackend
     /// becomes effective AFTER the instruction following EI completes).
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void HostArmImeDelayed() => _eiDelay = 2;
+    private static void HostArmImeDelayed()
+    {
+        if (_activeCpu is not null) _activeCpu._eiDelay = 2;
+    }
 }

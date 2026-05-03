@@ -131,20 +131,17 @@ public sealed unsafe class BlockFunctionBuilder
         // See MD/design/13-defer-microop.md.
         var loweredInstrs = DeferLowering.Lower(block.Instructions, out var crossBlockPending);
         // crossBlockPending list: any defers whose delay extends past
-        // block end. V1 logs to console as a known-unsupported edge
-        // case (LR35902 EI is the only consumer for now and the
-        // detector keeps blocks short enough to avoid this path in
-        // practice). V2 will serialize to pending_deferred_flags slot
-        // (P0.6 step 3 followup).
-        if (crossBlockPending.Count > 0)
-        {
-            // Silently drop for V1 — same effect as legacy behaviour
-            // pre-defer. Tracked as P0.6-step-3 followup. This path is
-            // only reachable when EI / similar is in the LAST instruction
-            // of a block, which BlockDetector currently caps at 64 instr
-            // (so the action just gets lost; per-instr backend's own
-            // _eiDelay extern still works as the canonical path).
-        }
+        // block end (e.g. EI is the LAST instruction of the block).
+        // P0.6 step 3 (P0.7 era): emit the pending bodies inline at
+        // block_exit BB before ret void. For delay=1 this is equivalent
+        // to "fire body at next block start" since no instructions
+        // execute between block exit and next block entry. For delay>1
+        // this V1 simplification fires bodies one block too early — but
+        // delay>1 isn't currently supported by any spec.
+        // The body emit happens AFTER all instruction-level emits but
+        // BEFORE block_exit's ret void; ctx is still positioned with
+        // the last instruction's per-instr state (Format/Def/baseAddress).
+        // See MD/design/13-defer-microop.md.
 
         // Branch from entry to first instruction's pre block.
         builder.PositionAtEnd(entry);
@@ -298,9 +295,28 @@ public sealed unsafe class BlockFunctionBuilder
             builder.BuildBr(next);
         }
 
-        // 5. Block exit: drain shadow status registers, ret void.
+        // 5. Block exit: drain shadow status registers + emit any
+        //    cross-block pending defer bodies + ret void.
+        //
+        // Cross-block pending bodies (P0.6 step 3): emit in order at
+        // block exit. ctx is still positioned at the LAST instruction's
+        // per-instr state (Format/Def/baseAddress/cycleCost), which is
+        // appropriate because PipelinePcConstant for SyncEmitter etc.
+        // resolves to "address right after the last instruction" =
+        // exactly where we want execution to resume. If a body's `sync`
+        // step emits its own ret void, the trailing block_exit ret void
+        // becomes unreachable and LLVM's simplifycfg cleans it up.
         builder.PositionAtEnd(blockExit);
         CpsrHelpers.DrainAllShadows(ctx);
+        if (crossBlockPending.Count > 0)
+        {
+            using (EmitterContextHolder.Push(Registry))
+            {
+                foreach (var pending in crossBlockPending)
+                    foreach (var step in pending.Body)
+                        Registry.EmitStep(ctx, step);
+            }
+        }
         builder.BuildRetVoid();
 
         return fn;

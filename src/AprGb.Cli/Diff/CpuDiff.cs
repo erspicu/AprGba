@@ -109,6 +109,14 @@ public static class CpuDiff
             if (a.Hram[i] != b.Hram[i])
                 return ((ushort)(0xFF80 + i), a.Hram[i], b.Hram[i]);
         }
+        // Also check Io[] (FF00-FF7F + IF + IE). MMIO writes affect this
+        // and an emitter bug touching IF/IE/STAT here would cause
+        // CheckInterrupts to take different paths between backends.
+        for (int i = 0; i < a.Io.Length; i++)
+        {
+            if (a.Io[i] != b.Io[i])
+                return ((ushort)(0xFF00 + i), a.Io[i], b.Io[i]);
+        }
         return null;
     }
 
