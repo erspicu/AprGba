@@ -74,6 +74,15 @@ public static class StandardEmitters
         reg.Register(new ReadPc());
         reg.Register(new SextEmitter());
         reg.Register(new TruncEmitter());
+        // Phase 7 GB block-JIT P0.7 — generic `sync` micro-op. Forces
+        // the JIT'd block to exit (write next-PC + PcWritten=1 + ret
+        // void) so the outer loop can re-check IRQ pending state at
+        // the EXACT instruction boundary the spec specifies. Used by
+        // EI/DI/MSR-style ops that change IRQ state without going
+        // through MMIO writes (the latter already trigger sync via the
+        // Write*WithSync extern's return value). Per-instr mode: no-op
+        // (outer loop already polls IRQ between instructions).
+        reg.Register(new SyncEmitter());
     }
 
     // ---------------- helpers ----------------
@@ -945,6 +954,67 @@ internal sealed class BranchCc : IMicroOpEmitter
         var taken     = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false);
         var pcWritten = ctx.Builder.BuildSelect(pred, taken, oldFlag, "pc_w_new");
         ctx.Builder.BuildStore(pcWritten, flagSlot);
+    }
+}
+
+/// <summary>
+/// Phase 7 GB block-JIT P0.7 — generic sync exit micro-op. In block-JIT
+/// mode this writes next-PC + PcWritten=1 + ret void so the outer loop
+/// can deliver any pending IRQ at the exact instruction boundary the
+/// spec specifies (matches per-instr behaviour). In per-instr mode
+/// this is a no-op — the outer loop already polls IRQ between every
+/// instruction.
+///
+/// <para>Used by spec ops that mutate IRQ state without writing MMIO
+/// (EI/DI/MSR-style). MMIO writes trigger sync via the
+/// <c>memory_write_8_sync</c> extern's return value (Lr35902StoreByte
+/// etc.) — those don't need this op.</para>
+///
+/// <para>Spec syntax: <c>{ "op": "sync" }</c> — no fields.</para>
+/// </summary>
+internal sealed class SyncEmitter : IMicroOpEmitter
+{
+    public string OpName => "sync";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // Per-instr mode: no-op. Outer loop checks IRQ between each
+        // StepOne anyway.
+        if (ctx.CurrentInstructionBaseAddress is null) return;
+
+        // Block-JIT mode: deduct cycles + write next-PC + PcWritten=1 +
+        // ret void. Cycle deduct mirrors Lr35902StoreByteEmitter's sync-
+        // exit path — BlockFunctionBuilder's per-instr budget check runs
+        // AFTER exec, so a ret void from inside exec skips it. Without
+        // manual deduct, scheduler sees 0 cycles and state diverges.
+        if (ctx.CurrentInstructionCycleCost > 0)
+        {
+            var cyclesPtr = ctx.Layout.GepCyclesLeft(ctx.Builder, ctx.StatePtr);
+            var cyclesOld = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, "sync_cycles_old");
+            var cyclesNew = ctx.Builder.BuildSub(cyclesOld,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)ctx.CurrentInstructionCycleCost, false),
+                "sync_cycles_new");
+            ctx.Builder.BuildStore(cyclesNew, cyclesPtr);
+        }
+        // Next-PC = bi.Pc + bi.LengthBytes (= PipelinePcConstant for
+        // variable-width sets like LR35902 where PipelinePcConstant
+        // already equals pc+length). For ARM-style fixed-width sets,
+        // PipelinePcConstant is pc+8 (architectural pipeline value),
+        // not the next-instruction PC; this op currently shouldn't be
+        // used in fixed-width specs (no use case yet).
+        if (ctx.PipelinePcConstant is uint nextPc)
+        {
+            var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(pcType, nextPc, false), pcPtr);
+            var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), pcwSlot);
+        }
+        ctx.Builder.BuildRetVoid();
+
+        // Position builder at a fresh dead BB so any subsequent step
+        // emit doesn't crash. The dead BB will be eliminated by LLVM's
+        // simplifycfg pass.
+        var dead = ctx.Function.AppendBasicBlock("after_sync_dead");
+        ctx.Builder.PositionAtEnd(dead);
     }
 }
 

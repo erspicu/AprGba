@@ -73,6 +73,14 @@ public class CoverageTests
             // / dec_pair indirectly through the 16-bit add chain).
             // ARM has its own update_nz / update_c_* / update_v_* family.
             "update_zero", "update_h_inc", "update_h_dec", "trunc",
+
+            // Phase 7 GB block-JIT P0.7 — generic block-JIT IRQ sync exit.
+            // Used by LR35902 EI's defer body (and any future CPU's
+            // IRQ-mutator instructions). ARM7TDMI doesn't currently use
+            // this; ARM's MSR-CPSR_c IRQ-state changes happen through
+            // CPSR writes which the per-instr executor / block-JIT outer
+            // loop catches via PcWritten interaction, not via sync.
+            "sync",
         };
 
         var (registered, used) = CollectOps();
@@ -139,8 +147,8 @@ public class CoverageTests
             sink.Add(opEl.GetString()!);
 
         // Recurse into nested step arrays under "then" / "else" (used by
-        // `if` and `if_arm_cond`).
-        foreach (var nest in new[] { "then", "else" })
+        // `if` and `if_arm_cond`) and "body" (used by P0.6 `defer`).
+        foreach (var nest in new[] { "then", "else", "body" })
             if (step.TryGetProperty(nest, out var arr) && arr.ValueKind == JsonValueKind.Array)
                 foreach (var inner in arr.EnumerateArray())
                     CollectStepOps(inner, sink);

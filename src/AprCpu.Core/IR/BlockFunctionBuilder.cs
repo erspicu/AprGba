@@ -167,7 +167,10 @@ public sealed unsafe class BlockFunctionBuilder
             byte? len = (block.InstrSizeBytes == 0u && bi.LengthBytes > 0)
                 ? bi.LengthBytes
                 : (byte?)null;
-            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord), bi.Pc, len);
+            // Phase 7 GB block-JIT P0.7 — pass instruction cycle cost
+            // so sync-exit emitters can deduct cycles_left correctly.
+            int cycleCost = ParseCyclesForm(bi.Decoded.Instruction.Cycles?.Form);
+            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord), bi.Pc, len, cycleCost);
 
             // 1. Pre block: clear PcWritten, then cond gate.
             //

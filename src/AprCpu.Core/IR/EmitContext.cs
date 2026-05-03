@@ -109,7 +109,7 @@ public sealed unsafe class EmitContext
     /// the executor's per-step "pre-set R15" memory write). Per-instr
     /// mode leaves it null so the legacy load-from-GPR[15] path runs.
     /// </summary>
-    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord, uint? baseAddress = null, byte? lengthBytes = null)
+    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord, uint? baseAddress = null, byte? lengthBytes = null, int currentInstructionCycleCost = 0)
     {
         Format = format;
         Def = def;
@@ -117,8 +117,19 @@ public sealed unsafe class EmitContext
         Values.Clear();
         CurrentInstructionBaseAddress = baseAddress;
         CurrentInstructionLengthBytes = lengthBytes;
+        CurrentInstructionCycleCost = currentInstructionCycleCost;
         PcWriteEmittedInCurrentInstruction = false;
     }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P0.7 — when set (block-JIT mode), the t-cycle
+    /// cost of the current instruction (parsed from spec cycles.form).
+    /// Used by sync-exit IR (Lr35902StoreByteEmitter etc.) to decrement
+    /// cycles_left budget before returning, so the host scheduler sees
+    /// the correct number of cycles consumed even when block exits
+    /// early via sync. 0 means unknown / per-instr mode.
+    /// </summary>
+    public int CurrentInstructionCycleCost { get; private set; }
 
     /// <summary>
     /// Phase 7 GB block-JIT P0.4 — when set (block-JIT mode for variable-width

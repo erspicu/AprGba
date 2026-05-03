@@ -1164,16 +1164,25 @@ internal sealed class Lr35902StoreByteEmitter : IMicroOpEmitter
         var exitBB   = fn.AppendBasicBlock("sync_exit_block");
         ctx.Builder.BuildCondBr(syncBool, exitBB, contBB);
 
-        // sync_exit_block: write next-PC + PcWritten=1 + ret void.
-        // For variable-width LR35902 the next-PC is bi.Pc + bi.LengthBytes
-        // = PipelinePcConstant. ARM (fixed-width) also has PipelinePcConstant
-        // set (= bi.Pc + 8). If somehow null (per-instr mode hit this path),
-        // the addr32 calc would have failed earlier; we conservatively
-        // skip the PC write.
+        // sync_exit_block: deduct cycles + write next-PC + PcWritten=1 +
+        // ret void. Cycle deduction is critical: BlockFunctionBuilder's
+        // Phase 1a budget downcount happens AFTER exec BB, so by sync-
+        // exiting from inside exec we'd skip the deduction. Without it
+        // host scheduler sees 0 cycles consumed → PPU/timer don't advance
+        // → state diverges from per-instr (which always ticks N cycles
+        // per StepOne via outer loop).
         ctx.Builder.PositionAtEnd(exitBB);
+        if (ctx.CurrentInstructionCycleCost > 0)
+        {
+            var cyclesPtr = ctx.Layout.GepCyclesLeft(ctx.Builder, ctx.StatePtr);
+            var cyclesOld = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, "sync_cycles_old");
+            var cyclesNew = ctx.Builder.BuildSub(cyclesOld,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)ctx.CurrentInstructionCycleCost, false),
+                "sync_cycles_new");
+            ctx.Builder.BuildStore(cyclesNew, cyclesPtr);
+        }
         if (ctx.PipelinePcConstant is uint nextPc)
         {
-            // Coerce to PC width.
             var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
             var nextPcConst = LLVMValueRef.CreateConstInt(pcType, nextPc, false);
             ctx.Builder.BuildStore(nextPcConst, pcPtr);
