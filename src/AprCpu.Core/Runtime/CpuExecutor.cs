@@ -307,97 +307,6 @@ public sealed unsafe class CpuExecutor
     /// into fresh modules that get added to the live JIT via
     /// <see cref="HostRuntime.AddModule"/>.
     /// </summary>
-    /// <summary>DEBUG (A.6.1): when set, StepBlock writes mode-change events here.</summary>
-    public string? BlockDebugLogPath { get; set; }
-
-    /// <summary>DEBUG (A.6.1): when set + matches PC at any step, log full GPR snapshot.</summary>
-    public uint? PcWatchAddress { get; set; }
-    public string? PcWatchLogPath { get; set; }
-    private long _pcWatchHitCount;
-
-    /// <summary>DEBUG (A.6.1): when set, log GPR snapshot every N instructions
-    /// (use to diff per-instr vs block-JIT side-by-side).</summary>
-    public string? InstrSnapshotPath { get; set; }
-    public long InstrSnapshotInterval { get; set; } = 1000;
-    private long _instrSnapshotNext;
-
-    /// <summary>DEBUG (A.6.1): when set, log [InstructionsExecuted PC StateHash]
-    /// at every block-JIT block boundary OR per-instr instruction. Compare PI vs
-    /// BJIT logs to find first divergence in execution.</summary>
-    public string? StateHashLogPath { get; set; }
-
-    private void LogGprSnapshot(string mode, uint pc)
-    {
-        if (PcWatchLogPath is null) return;
-        _pcWatchHitCount++;
-        if (_pcWatchHitCount > 50) return;   // cap logs
-        var sb = new System.Text.StringBuilder();
-        sb.Append(mode).Append(" hit#").Append(_pcWatchHitCount).Append(" pc=0x").Append(pc.ToString("X8"));
-        for (int i = 0; i < 16; i++)
-        {
-            uint v = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
-                (IntPtr)(_statePtr + (int)_rt.GprOffset(i)));
-            sb.Append(" R").Append(i).Append("=0x").Append(v.ToString("X8"));
-        }
-        uint cpsr = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
-            (IntPtr)(_statePtr + (int)_rt.StatusOffset("CPSR")));
-        sb.Append(" CPSR=0x").Append(cpsr.ToString("X8"));
-        // DEBUG: also dump memory at SP, SP+4, SP+8, SP+12 (POP {R4,R5,R3} sources).
-        uint sp = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
-            (IntPtr)(_statePtr + (int)_rt.GprOffset(13)));
-        for (int o = 0; o < 16; o += 4)
-        {
-            uint word = _bus.ReadWord(sp + (uint)o);
-            sb.Append(" [SP+").Append(o).Append("]=0x").Append(word.ToString("X8"));
-        }
-        sb.Append('\n');
-        System.IO.File.AppendAllText(PcWatchLogPath, sb.ToString());
-    }
-
-    /// <summary>FNV-1a hash of R0-R15 + CPSR — quick state checksum for cross-mode diff.</summary>
-    private uint ComputeStateHash()
-    {
-        uint hash = 2166136261u;
-        for (int i = 0; i < 16; i++)
-        {
-            uint v = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
-                (IntPtr)(_statePtr + (int)_rt.GprOffset(i)));
-            hash = (hash ^ v) * 16777619u;
-        }
-        uint cpsr = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
-            (IntPtr)(_statePtr + (int)_rt.StatusOffset("CPSR")));
-        hash = (hash ^ cpsr) * 16777619u;
-        return hash;
-    }
-
-    private void LogStateHashIfNeeded(uint pc)
-    {
-        if (StateHashLogPath is null) return;
-        var hash = ComputeStateHash();
-        System.IO.File.AppendAllText(StateHashLogPath,
-            $"instr={InstructionsExecuted} pc=0x{pc:X8} hash=0x{hash:X8}\n");
-    }
-
-    private void LogInstrSnapshotIfDue(uint pc)
-    {
-        if (InstrSnapshotPath is null) return;
-        if (InstructionsExecuted < _instrSnapshotNext) return;
-        _instrSnapshotNext = InstructionsExecuted + InstrSnapshotInterval;
-        var sb = new System.Text.StringBuilder();
-        sb.Append("instr=").Append(InstructionsExecuted).Append(" pc=0x").Append(pc.ToString("X8"));
-        for (int i = 0; i < 16; i++)
-        {
-            uint v = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
-                (IntPtr)(_statePtr + (int)_rt.GprOffset(i)));
-            sb.Append(" R").Append(i).Append("=0x").Append(v.ToString("X8"));
-        }
-        uint cpsr = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
-            (IntPtr)(_statePtr + (int)_rt.StatusOffset("CPSR")));
-        sb.Append(" CPSR=0x").Append(cpsr.ToString("X8"));
-        sb.Append('\n');
-        System.IO.File.AppendAllText(InstrSnapshotPath, sb.ToString());
-    }
-
     public void EnableBlockJit(SpecCompiler.CompileResult compileResult)
     {
         _compileResult = compileResult;
@@ -432,18 +341,6 @@ public sealed unsafe class CpuExecutor
     {
         if (_compileResult is not null)
         {
-            // PC watch (block-JIT): check before StepBlock executes.
-            if (PcWatchAddress is uint w1 && PcWatchLogPath is not null)
-            {
-                var pc1 = ReadPc();
-                if (pc1 == w1) LogGprSnapshot("BJIT", pc1);
-            }
-            // Instruction-count snapshot (block-JIT): log BEFORE block executes
-            // so we can compare with per-instr at same instruction count.
-            if (InstrSnapshotPath is not null) LogInstrSnapshotIfDue(ReadPc());
-            // State hash (block-JIT): log BEFORE block executes — represents
-            // CPU state at this PC, comparable to per-instr at same PC.
-            if (StateHashLogPath is not null) LogStateHashIfNeeded(ReadPc());
             StepBlock();
             return default!;   // block mode: no single decoded-instr to return
         }
@@ -453,14 +350,6 @@ public sealed unsafe class CpuExecutor
         InstructionsExecuted++;
         var mode = CurrentMode();
         var pc = ReadPc();   // Phase 7 B.e: fast cached-offset accessor
-
-        // PC watch (per-instr): log on PC match, before any pre-set.
-        if (PcWatchAddress is uint w2 && PcWatchLogPath is not null && pc == w2)
-            LogGprSnapshot("PI", pc);
-        // Instruction-count snapshot (per-instr).
-        if (InstrSnapshotPath is not null) LogInstrSnapshotIfDue(pc);
-        // State hash (per-instr) — log BEFORE instruction so PI matches BJIT block-start hash.
-        if (StateHashLogPath is not null) LogStateHashIfNeeded(pc);
 
         // Pre-set R15 to PC + pc_offset_bytes so the IR's "read R15"
         // returns the correct pipeline-offset value mid-execution.
@@ -630,15 +519,6 @@ public sealed unsafe class CpuExecutor
         // and we advance PC by total block size; if PcWritten=1 the
         // branch already wrote PC to the target, leave it.
         _state[_pcWrittenOffset] = 0;
-        // DEBUG (A.6.1): track CPSR mode before/after block to find first
-        // divergence into UND/ABT. Remove once block-JIT BIOS LLE works.
-        uint cpsrBefore = 0, modeBefore = 0;
-        if (BlockDebugLogPath is not null)
-        {
-            var cpsrOff = (int)_rt.StatusOffset("CPSR");
-            cpsrBefore = (uint)System.Runtime.InteropServices.Marshal.ReadInt32((IntPtr)(_statePtr + cpsrOff));
-            modeBefore = cpsrBefore & 0x1Fu;
-        }
         // Phase 7 A.6.1 — predictive downcounting. Snapshot cycles_left
         // before block runs to compute cycles actually consumed afterwards.
         // Block IR decrements cycles_left per instruction and exits early
@@ -656,38 +536,6 @@ public sealed unsafe class CpuExecutor
             var totalBytes = (uint)entry.InstructionCount * mode.InstrSizeBytes;
             WritePc(pc + totalBytes);
         }
-        // DEBUG: log R3 + R15 + memory[old_R13+8] after specific blocks.
-        if (pc == 0xB96 && BlockDebugLogPath is not null)
-        {
-            uint r3 = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
-                (IntPtr)(_statePtr + (int)_rt.GprOffset(3)));
-            uint r15 = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
-                (IntPtr)(_statePtr + (int)_rt.GprOffset(15)));
-            uint r13 = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
-                (IntPtr)(_statePtr + (int)_rt.GprOffset(13)));
-            // Original SP (before POPs) was r13 - 12 since 3 words popped.
-            uint origSp = r13 - 12;
-            uint memAtSp8 = _bus.ReadWord(origSp + 8);
-            System.IO.File.AppendAllText(BlockDebugLogPath,
-                $"  AFTER block#{BlocksExecuted} pc=0x{pc:X8}: R3=0x{r3:X8} R15=0x{r15:X8} R13=0x{r13:X8} mem[origSP+8]=0x{memAtSp8:X8}\n");
-        }
-        if (BlockDebugLogPath is not null)
-        {
-            var cpsrOff = (int)_rt.StatusOffset("CPSR");
-            uint cpsrAfter = (uint)System.Runtime.InteropServices.Marshal.ReadInt32((IntPtr)(_statePtr + cpsrOff));
-            uint modeAfter = cpsrAfter & 0x1Fu;
-            // Log mode change OR T-bit change (bit 5 of CPSR), OR if BlocksExecuted in interesting range.
-            uint tBefore = (cpsrBefore >> 5) & 1u;
-            uint tAfter  = (cpsrAfter  >> 5) & 1u;
-            // Log mode change OR T-bit change OR specific block range (16380-16400) for failure.
-            bool inRange = (BlocksExecuted >= 16380 && BlocksExecuted <= 16400);
-            if (modeBefore != modeAfter || tBefore != tAfter || inRange)
-            {
-                var newPc = ReadPc();
-                System.IO.File.AppendAllText(BlockDebugLogPath,
-                    $"block#{BlocksExecuted} pc=0x{pc:X8}->0x{newPc:X8} N={entry.InstructionCount} cpsr 0x{cpsrBefore:X8}->0x{cpsrAfter:X8} mode 0x{modeBefore:X}->0x{modeAfter:X} T {tBefore}->{tAfter}\n");
-            }
-        }
 
         // Phase 7 A.6.1 — actual cycle count comes from the budget delta.
         // Convert back to instruction count for callers that still want
@@ -700,10 +548,6 @@ public sealed unsafe class CpuExecutor
         InstructionsExecuted    += actualInstrCount;
         BlocksExecuted++;
     }
-
-    /// <summary>DEBUG (A.6.1): if set + pc matches, dump compiled module's IR to this file.</summary>
-    public uint? IrDumpPc { get; set; }
-    public string? IrDumpPath { get; set; }
 
     private CachedBlock CompileBlockAtPc(uint pc, ModeInfo mode)
     {
@@ -724,14 +568,6 @@ public sealed unsafe class CpuExecutor
             module, _compileResult!.Layout,
             _compileResult.EmitterRegistry, _compileResult.ResolverRegistry);
         bfb.Build(mode.Set, block);
-
-        // DEBUG: dump IR if requested for this PC.
-        if (IrDumpPc is uint dumpPc && dumpPc == pc && IrDumpPath is not null)
-        {
-            var irText = module.PrintToString();
-            System.IO.File.AppendAllText(IrDumpPath,
-                $"=== module {moduleName} (block N={block.Instructions.Count}) ===\n{irText}\n");
-        }
 
         _rt.AddModule(module);
         var fnName = BlockFunctionBuilder.BlockFunctionName(mode.Set.Name, pc);
