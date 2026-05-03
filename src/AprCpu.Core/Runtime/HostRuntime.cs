@@ -62,6 +62,16 @@ public sealed unsafe class HostRuntime : IDisposable
     private LLVMOrcOpaqueJITDylib*            _mainJD;
     private LLVMOrcOpaqueThreadSafeContext*   _tsCtx;
     private LLVMTargetDataRef                 _targetData;
+    // Phase 7 H.a-instcombine fix (2026-05-03): the LLJIT-derived data
+    // layout string. Stored so AddModule() can apply it to per-block
+    // modules before they hit RunOptimizationPipeline. Without this,
+    // instcombine uses a default datalayout that disagrees with our
+    // OffsetOfElement-derived field offsets (in particular, struct
+    // alignment/padding around i64+i8+i32 mix), producing GEPs whose
+    // byte-offsets are wrong by 4 bytes — breaks BlockFunctionBuilder
+    // tests where pc_written / cycles_left / R-register accesses end
+    // up pointing at the wrong slot.
+    private string? _dataLayoutStr;
     private bool _finalized;
     private bool _disposed;
 
@@ -162,18 +172,11 @@ public sealed unsafe class HostRuntime : IDisposable
         // instead of dereferencing NULL.
         BindUnboundExternsToTrap(_initialModule);
 
-        // Phase 7 H.a (re-enabled 2026-05-03): explicit LLVM new pass
-        // manager pipeline (mem2reg/instcombine/gvn/dse/simplifycfg).
-        // Originally disabled on recovery branch when instcombine
-        // miscompiled BIOS LLE path. Subsequent investigation traced
-        // the symptom to our Strategy 2 read_reg(15)/PC handling bugs
-        // (commits 260cbb0 + 0fa2153) which generated IR patterns that
-        // instcombine optimised into broken code. With those fixed
-        // upstream the pipeline can re-enable safely. ~50ms one-shot
-        // compile cost per spec module — acceptable.
-        RunOptimizationPipeline(_initialModule);
-
-        // --- Build the LLJIT engine ---
+        // --- Build the LLJIT engine FIRST so we can pull its datalayout
+        // and apply it to the module BEFORE optimisation runs. Required
+        // for Phase 7 H.a-instcombine fix (see _dataLayoutStr field
+        // comment). Module ownership is still transferred at AddModuleToJit
+        // call below, so creating the engine early is safe.
         var jitBuilder = LLVM.OrcCreateLLJITBuilder();
         LLVMOrcOpaqueLLJIT* lljitOut;
         var createErr = LLVM.OrcCreateLLJIT(&lljitOut, jitBuilder);
@@ -185,9 +188,25 @@ public sealed unsafe class HostRuntime : IDisposable
         // layout (LLJIT-derived) — lengths are independent of the module's
         // own LLVMContext so we can use Layout.StructType directly.
         var dlStrPtr = LLVM.OrcLLJITGetDataLayoutStr(_lljit);
-        var dlStr    = MarshalUtf8(dlStrPtr) ?? string.Empty;
-        _targetData  = LLVMTargetDataRef.FromStringRepresentation(dlStr);
+        _dataLayoutStr = MarshalUtf8(dlStrPtr) ?? string.Empty;
+        _targetData    = LLVMTargetDataRef.FromStringRepresentation(_dataLayoutStr);
         StateSizeBytes = LLVM.SizeOfTypeInBits(_targetData, Layout.StructType) / 8;
+
+        // Phase 7 H.a-instcombine fix — propagate the datalayout into the
+        // module so passes (instcombine especially) see the same struct
+        // layout that our OffsetOfElement-derived field offsets use.
+        SetModuleDataLayoutString(_initialModule, _dataLayoutStr);
+
+        // Phase 7 H.a (re-enabled 2026-05-03): explicit LLVM new pass
+        // manager pipeline (mem2reg/instcombine/gvn/dse/simplifycfg).
+        // Originally disabled on recovery branch when instcombine
+        // miscompiled BIOS LLE path. Subsequent investigation traced
+        // the symptom to our Strategy 2 read_reg(15)/PC handling bugs
+        // (commits 260cbb0 + 0fa2153) which generated IR patterns that
+        // instcombine optimised into broken code. With those fixed
+        // upstream the pipeline can re-enable safely. ~50ms one-shot
+        // compile cost per spec module — acceptable.
+        RunOptimizationPipeline(_initialModule);
 
         // Hand the module to the JIT. ORC takes ownership of both the
         // module and its TSM wrapper on success — never touch the
@@ -196,6 +215,20 @@ public sealed unsafe class HostRuntime : IDisposable
         AddModuleToJit(_initialModule);
 
         _finalized = true;
+    }
+
+    /// <summary>
+    /// Phase 7 H.a-instcombine fix — assign the LLJIT-derived data layout
+    /// string to a module before optimisation. Must agree with the layout
+    /// used by <see cref="LLVM.OffsetOfElement"/> calls used to derive
+    /// field byte-offsets host-side, otherwise instcombine simplifies
+    /// struct GEPs into raw byte GEPs using the WRONG offsets.
+    /// </summary>
+    private static void SetModuleDataLayoutString(LLVMModuleRef module, string dlStr)
+    {
+        if (string.IsNullOrEmpty(dlStr)) return;
+        var bytes = System.Text.Encoding.ASCII.GetBytes(dlStr + "\0");
+        fixed (byte* p = bytes) LLVM.SetDataLayout(module, (sbyte*)p);
     }
 
     /// <summary>
@@ -224,6 +257,12 @@ public sealed unsafe class HostRuntime : IDisposable
         // in our binding map — shouldn't happen for our emitters) falls
         // back to the trap stub.
         BindUnboundExternsToTrap(module);
+        // Phase 7 H.a-instcombine fix — apply same datalayout to per-block
+        // modules so instcombine sees the same struct layout the host
+        // computed offsets against. Skipped silently if Compile() never
+        // recorded one (won't happen — AddModule requires Compile first).
+        if (_dataLayoutStr is not null)
+            SetModuleDataLayoutString(module, _dataLayoutStr);
         // Phase 7 H.a — apply same IR-level pipeline to per-block JIT
         // modules so they get the same alloca→SSA + DSE benefits.
         RunOptimizationPipeline(module);
@@ -266,7 +305,15 @@ public sealed unsafe class HostRuntime : IDisposable
         // that's safe to skip for our use case.
         // BISECT mode: APR_PASSES env can override
         var passesEnv = Environment.GetEnvironmentVariable("APR_PASSES");
-        var passes = passesEnv ?? "mem2reg,gvn,dse,simplifycfg";
+        // Phase 7 H.a-instcombine (2026-05-03): instcombine added back to
+        // default pipeline now that the underlying root cause (missing
+        // module datalayout → instcombine using wrong struct field
+        // offsets) is fixed in Compile()/AddModule(). Use the
+        // <no-verify-fixpoint> variant because our IR (ARM v4T spec with
+        // restore_cpsr_from_spsr's switch-then-PHI alignment chain)
+        // doesn't reach instcombine's expected fixpoint in 1 iteration —
+        // the verify is a sanity check that's safe to skip for our use.
+        var passes = passesEnv ?? "mem2reg,instcombine<no-verify-fixpoint>,gvn,dse,simplifycfg";
 
         var optionsHandle = LLVMPassBuilderOptionsRef.Create();
         try
