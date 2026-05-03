@@ -468,19 +468,39 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
   **驗證**：351/351 unit tests + Blargg cpu_instrs 11/11 全綠；perf
   vs MCJIT 在 ±2% noise (GBA arm 8.49→8.55, thumb 8.51→8.55, GB JIT
   6.52→6.64) — 純 infra swap，沒帶來 perf 倒退。
-- [ ] **A.4 Code cache (hashmap PC → fn pointer + LRU eviction)**：blocks
-  快速查找 + 容量上限避免無限長大。**為什麼還沒做**：要 A.1/A.2 才有
-  block；ORC LLJIT (A.3) 提供更乾淨的 module add/remove API。**估時**：
-  1 天。
+- [x] **A.4 Code cache (hashmap PC → fn pointer + LRU eviction)**
+  （2026-05-02 完成）— 新檔 `src/AprCpu.Core/Runtime/BlockCache.cs`：
+  Dictionary&lt;uint, LinkedListNode&lt;Entry&gt;&gt; + LinkedList LRU
+  pattern, capacity-bound (default 4096). 值改成 `CachedBlock` struct
+  含 `(Fn, InstructionCount)` 給 cycle accounting 用。HostRuntime
+  `BindExtern` 開始記下 (name → addr) 到 dict，`AddModule` 自動把所有
+  已知 binding replay 進新 module — 讓 block module 透明繼承 initial
+  module 的 memory_read_* / bank_swap 等 trampoline。8 新 unit tests
+  (round-trip / miss / capacity / MRU promotion / invalidate / clear /
+  ctor 防呆)。
 - [ ] **A.5 SMC 偵測 + invalidation**：寫入「已編譯區域」時 invalidate
   cached blocks。需要 memory bus write 攔截 + page-level dirty bit table，
   跟 invalidate-on-write 的 cascade。**為什麼還沒做**：SMC 罕見但漏掉
   會 silent corruption；要先有 A.4 code cache 才能 invalidate。**估時**：
   2-3 天。
-- [ ] **A.6 Indirect branch dispatch**：BX / JP HL / RET 等 indirect
-  branch 不能 block-link，要 cache lookup → 找不到 fall-through 進
-  dispatcher。**為什麼還沒做**：block-JIT 必備功能；indirect branch 是
-  block 邊界之一。**估時**：1-2 天。
+- [x] **A.6 Indirect branch dispatch + CpuExecutor block-JIT 整合**
+  （2026-05-02 完成）— `CpuExecutor` 新加 `EnableBlockJit(compileResult)`
+  + 內部 `StepBlock()` + `CompileBlockAtPc()`：cache 命中直接 jump block fn；
+  miss 時 `BlockDetector.Detect` → 在 fresh `LLVMModuleRef` 上 `BlockFunctionBuilder.Build`
+  → `HostRuntime.AddModule` (replay externs + RunPasses + JIT add) →
+  `GetFunctionPointer` → 進 cache → call。`LastStepInstructionCount` 報
+  block size, `GbaSystemRunner.RunCycles` 拿這個 scale `Scheduler.Tick(cyclesPerInstr × N)`
+  保 cycle 帳。apr-gba 新 `--block-jit` flag。「indirect branch 找下一個
+  block」這件事退化成「block fn exit → 外迴圈 read PC → 下一輪 cache lookup」，
+  等同 dispatcher。
+  **驗證**：360/360 unit tests + Blargg cpu_instrs 11/11 全綠（per-instr 路徑沒退步）。
+  **Perf (loop100, 1200 frames)**：GBA arm 8.55 → **85.39 MIPS (10.0× 加速)**，
+  GBA thumb 8.55 → **85.61 MIPS (10.0× 加速)**，real-time 多 20×。
+  **限制**：menu / interactive ROM (e.g. armwrestler) headless 跑會在 menu
+  loop 執行 garbage memory，block-JIT 對 garbage 大量編譯 64-instr block 顯
+  hang —— 不是 correctness bug，是 ROM 本身行為（per-instr 也會跑 garbage 但
+  慢到看不出來）。Future work: PC-out-of-region fallback to per-instr
+  Step (A.6.1).
 - [ ] **A.7 Block linking**：直接 patch native call site (relocate)，後續
   branch 不退出 JIT，省一次 dispatch。**為什麼還沒做**：高複雜度 native
   code patching；ORC LLJIT 提供 stub-rewriting 機制。**估時**：3-4 天 +

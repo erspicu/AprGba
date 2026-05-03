@@ -1,8 +1,10 @@
 using System.Buffers.Binary;
+using AprCpu.Core.Compilation;
 using AprCpu.Core.Decoder;
 using AprCpu.Core.IR;
 using AprCpu.Core.JsonSpec;
 using AprCpu.Core.Runtime.Gba;
+using LLVMSharp.Interop;
 
 namespace AprCpu.Core.Runtime;
 
@@ -58,6 +60,32 @@ public sealed unsafe class CpuExecutor
     // decoder returns it via `decoded.Instruction`.
     private readonly Dictionary<JsonSpec.InstructionDef, IntPtr> _fnPtrByDef
         = new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
+
+    // Phase 7 A.6 — optional block-JIT mode. When _compileResult is set,
+    // Step() takes the block path: cache lookup, miss → detect+compile,
+    // hit → call block fn (handles N instructions atomically).
+    // null → original per-instruction dispatch path.
+    private SpecCompiler.CompileResult? _compileResult;
+    private Dictionary<string, BlockCache>?    _blockCachesBySetName;
+    private Dictionary<string, BlockDetector>? _blockDetectorsBySetName;
+
+    /// <summary>
+    /// Phase 7 A.6 — number of host instructions executed by the most
+    /// recent <see cref="Step"/> call. Per-instruction mode always
+    /// reports 1; block-JIT mode reports the size of the block executed.
+    /// External cycle accounting (e.g. <see cref="Gba.GbaSystemRunner"/>)
+    /// multiplies its per-instruction Tick by this to keep the GBA clock
+    /// in sync when one Step represents many instructions.
+    /// </summary>
+    public int LastStepInstructionCount { get; private set; } = 1;
+
+    /// <summary>Total number of distinct blocks compiled into the JIT
+    /// (cache misses) — block-JIT mode only.</summary>
+    public long BlocksCompiled { get; private set; }
+
+    /// <summary>Total number of block-fn invocations (cache hits +
+    /// misses) — block-JIT mode only.</summary>
+    public long BlocksExecuted { get; private set; }
 
     private readonly int   _pcRegIndex;
     // Phase 7 B.e: state-buffer field offsets cached at construction.
@@ -242,9 +270,58 @@ public sealed unsafe class CpuExecutor
     /// <summary>Total number of instructions executed since construction.</summary>
     public long InstructionsExecuted { get; private set; }
 
-    /// <summary>Run exactly one instruction.</summary>
+    /// <summary>
+    /// Phase 7 A.6 — opt this executor into block-JIT mode. After this
+    /// call, every <see cref="Step"/> executes a whole block (cache
+    /// hit) or detects + compiles + caches + executes a fresh block
+    /// (cache miss). <see cref="LastStepInstructionCount"/> reports
+    /// the size of the block that just ran.
+    ///
+    /// <paramref name="compileResult"/> must be the same one used to
+    /// build the <see cref="HostRuntime"/> — its EmitterRegistry /
+    /// ResolverRegistry / Layout are reused to compile per-block IR
+    /// into fresh modules that get added to the live JIT via
+    /// <see cref="HostRuntime.AddModule"/>.
+    /// </summary>
+    public void EnableBlockJit(SpecCompiler.CompileResult compileResult)
+    {
+        _compileResult = compileResult;
+        _blockCachesBySetName    = new Dictionary<string, BlockCache>(StringComparer.Ordinal);
+        _blockDetectorsBySetName = new Dictionary<string, BlockDetector>(StringComparer.Ordinal);
+
+        // Pre-populate one cache + detector per known instruction set.
+        if (_modesBySelectorValue is not null)
+        {
+            foreach (var mode in _modesBySelectorValue.Values)
+            {
+                if (_blockCachesBySetName.ContainsKey(mode.Set.Name)) continue;
+                _blockCachesBySetName[mode.Set.Name]    = new BlockCache();
+                _blockDetectorsBySetName[mode.Set.Name] = new BlockDetector(mode.Set, mode.Decoder);
+            }
+        }
+        else
+        {
+            _blockCachesBySetName[_defaultMode.Set.Name]    = new BlockCache();
+            _blockDetectorsBySetName[_defaultMode.Set.Name] = new BlockDetector(_defaultMode.Set, _defaultMode.Decoder);
+        }
+    }
+
+    /// <summary>
+    /// Run exactly one instruction (per-instr mode) or one block
+    /// (block-JIT mode, see <see cref="EnableBlockJit"/>). In block
+    /// mode the returned <see cref="DecodedInstruction"/> is a default
+    /// value — callers wanting per-instruction info should not enable
+    /// block-JIT.
+    /// </summary>
     public DecodedInstruction Step()
     {
+        if (_compileResult is not null)
+        {
+            StepBlock();
+            return default!;   // block mode: no single decoded-instr to return
+        }
+
+        LastStepInstructionCount = 1;
         InstructionsExecuted++;
         var mode = CurrentMode();
         var pc = ReadPc();   // Phase 7 B.e: fast cached-offset accessor
@@ -386,5 +463,66 @@ public sealed unsafe class CpuExecutor
             : def.Mnemonic;
         var fnName = $"Execute_{setName}_{format.Name}_{disambig}";
         return _rt.GetFunctionPointer(fnName);
+    }
+
+    // ---------------------------------------------------------------- Phase 7 A.6 ----
+    // Block-JIT dispatch — taken when EnableBlockJit has been called.
+
+    private void StepBlock()
+    {
+        var mode = CurrentMode();
+        var pc = ReadPc();
+
+        // Notify bus before any potential extern call from inside the
+        // block (memory_read for ROM access, etc). The block IR doesn't
+        // do its own NotifyExecutingPc because that would mean an extern
+        // call per block start; we do it once here.
+        _bus.NotifyExecutingPc(pc);
+
+        var cache = _blockCachesBySetName![mode.Set.Name];
+        if (!cache.TryGet(pc, out var entry))
+        {
+            entry = CompileBlockAtPc(pc, mode);
+            cache.Add(pc, entry);
+        }
+
+        // Block fn handles its own per-instruction PC pre-set + cond
+        // gate + drain shadows + ret. We just clear the PcWritten flag
+        // (which the block fn's per-instr post-checks read) and call.
+        _state[_pcWrittenOffset] = 0;
+        var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
+        fn(_statePtr);
+
+        LastStepInstructionCount = entry.InstructionCount;
+        InstructionsExecuted    += entry.InstructionCount;
+        BlocksExecuted++;
+    }
+
+    private CachedBlock CompileBlockAtPc(uint pc, ModeInfo mode)
+    {
+        // Detect — read instruction words from bus until a boundary.
+        var detector = _blockDetectorsBySetName![mode.Set.Name];
+        var block = detector.Detect(_bus, pc, maxInstructions: 64);
+        if (block.Instructions.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"BlockJit: detector found no instructions at PC=0x{pc:X8} (set {mode.Set.Name})." +
+                " Likely the bus returned undecodable bytes — fall back to per-instr Step is not yet wired up.");
+        }
+
+        // Build block IR into a fresh module, hand to JIT, look up fn ptr.
+        var moduleName = $"AprCpu_BlockJit_{mode.Set.Name}_pc{pc:X8}";
+        var module = LLVMModuleRef.CreateWithName(moduleName);
+        var bfb = new BlockFunctionBuilder(
+            module, _compileResult!.Layout,
+            _compileResult.EmitterRegistry, _compileResult.ResolverRegistry);
+        bfb.Build(mode.Set, block);
+
+        _rt.AddModule(module);
+        var fnName = BlockFunctionBuilder.BlockFunctionName(mode.Set.Name, pc);
+        var fnPtr = _rt.GetFunctionPointer(fnName);
+
+        BlocksCompiled++;
+        return new CachedBlock(fnPtr, block.Instructions.Count);
     }
 }
