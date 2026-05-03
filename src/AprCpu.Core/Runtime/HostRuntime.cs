@@ -123,14 +123,14 @@ public sealed unsafe class HostRuntime : IDisposable
             throw new InvalidOperationException(
                 $"BindExtern('{symbolName}'): runtime already finalized — externs must be bound first.");
 
-        var globalSlot = _initialModule.GetNamedGlobal(symbolName);
-        if (globalSlot.Handle == IntPtr.Zero)
-            throw new InvalidOperationException(
-                $"Extern '{symbolName}' not declared in module — nothing to bind. " +
-                "Declare it as an external global pointer variable.");
-
+        // Phase 7 GB block-JIT P0.7 — allow binding externs whose global
+        // doesn't exist in the initial module YET. Lazy-declared externs
+        // (only used in block-JIT modules added via AddModule) wouldn't
+        // be present at initial Compile time but still need to be in the
+        // _externBindings dict so AddModule can replay the binding later.
+        // BindExternInModule silently no-ops if the global isn't there.
         BindExternInModule(_initialModule, symbolName, nativeFn);
-        // Phase 7 A.4 — remember binding so block modules added later
+        // Always remember the binding so block-JIT modules added later
         // (via AddModule) can replay the same trampoline address.
         _externBindings[symbolName] = nativeFn;
     }

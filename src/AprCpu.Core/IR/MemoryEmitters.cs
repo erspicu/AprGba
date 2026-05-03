@@ -47,6 +47,17 @@ public static class MemoryEmitters
         public const string Write8  = "memory_write_8";
         public const string Write16 = "memory_write_16";
         public const string Write32 = "memory_write_32";
+
+        // Phase 7 GB block-JIT P0.7 — sync-flag write variants. Return
+        // i8: 1 = sync needed (IRQ state may have changed; JIT'd block
+        // should exit early), 0 = no sync needed (continue executing).
+        // Block-JIT memory emitter uses these; per-instr backend uses
+        // the void variants above (outer loop checks IRQ between every
+        // instruction regardless). Bus shims bind both. See
+        // MD/design/14-irq-sync-fastslow.md.
+        public const string Write8WithSync  = "memory_write_8_sync";
+        public const string Write16WithSync = "memory_write_16_sync";
+        public const string Write32WithSync = "memory_write_32_sync";
     }
 
     // ---------------- Public byte-level helpers (used by StackOps etc) ----------------
@@ -66,6 +77,23 @@ public static class MemoryEmitters
             ctx.Module.Context.VoidType, LLVMTypeRef.Int32, LLVMTypeRef.Int8);
         var fn = ctx.Builder.BuildLoad2(ptrType, slot, "w8_fn");
         ctx.Builder.BuildCall2(fnType, fn, new[] { addrI32, valueI8 }, "");
+    }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P0.7 — write 8-bit + receive sync flag (i8:
+    /// 1 = IRQ state may have changed, JIT'd block should exit early;
+    /// 0 = no sync needed). Block-JIT memory emitter uses this so it can
+    /// branch on the result. Per-instr backends should keep using
+    /// <see cref="CallWrite8"/> — there's no benefit since per-instr
+    /// already checks IRQ between every instruction.
+    /// </summary>
+    public static LLVMValueRef CallWrite8WithSync(EmitContext ctx, LLVMValueRef addrI32, LLVMValueRef valueI8, string outLabel = "w8_sync")
+    {
+        var (slot, fnType, ptrType) = GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, ExternFunctionNames.Write8WithSync,
+            LLVMTypeRef.Int8, LLVMTypeRef.Int32, LLVMTypeRef.Int8);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, "w8s_fn");
+        return ctx.Builder.BuildCall2(fnType, fn, new[] { addrI32, valueI8 }, outLabel);
     }
 
     /// <summary>

@@ -128,6 +128,11 @@ public sealed unsafe class JsonCpu : ICpuBackend
             (IntPtr)(delegate* unmanaged[Cdecl]<uint, byte, void>)&MemWrite8);
         _rt.BindExtern(MemoryEmitters.ExternFunctionNames.Write16,
             (IntPtr)(delegate* unmanaged[Cdecl]<uint, ushort, void>)&MemWrite16);
+        // Phase 7 GB block-JIT P0.7 — sync-flag write variants for block-JIT.
+        TryBindWrite8Sync(MemoryEmitters.ExternFunctionNames.Write8WithSync,
+            (IntPtr)(delegate* unmanaged[Cdecl]<uint, byte, byte>)&MemWrite8Sync);
+        TryBindWrite16Sync(MemoryEmitters.ExternFunctionNames.Write16WithSync,
+            (IntPtr)(delegate* unmanaged[Cdecl]<uint, ushort, byte>)&MemWrite16Sync);
 
         // HALT / IME externs (declared by Lr35902HostHelpers; bound only
         // when the spec actually contains those ops). BindExtern throws
@@ -240,6 +245,22 @@ public sealed unsafe class JsonCpu : ICpuBackend
     }
 
     private void TryBindI8(string name, IntPtr fn)
+    {
+        try { _rt.BindExtern(name, fn); }
+        catch (InvalidOperationException) { }
+    }
+
+    /// <summary>P0.7: bind sync-flag write extern only if the IR
+    /// declared it (block-JIT path uses it; per-instr-only specs may
+    /// not). BindExtern throws InvalidOperationException if global slot
+    /// missing — silently swallow per existing pattern.</summary>
+    private void TryBindWrite8Sync(string name, IntPtr fn)
+    {
+        try { _rt.BindExtern(name, fn); }
+        catch (InvalidOperationException) { }
+    }
+
+    private void TryBindWrite16Sync(string name, IntPtr fn)
     {
         try { _rt.BindExtern(name, fn); }
         catch (InvalidOperationException) { }
@@ -648,6 +669,49 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _activeBus.WriteByte((ushort)addr,        (byte)(value & 0xFF));
         _activeBus.WriteByte((ushort)(addr + 1),  (byte)(value >> 8));
     }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P0.7 — write 8-bit + return sync flag.
+    /// Returns 1 when the write touched an IRQ-relevant address (writes
+    /// to 0xFF0F IF, 0xFFFF IE, 0xFF41 STAT, 0xFF40 LCDC may indirectly
+    /// alter STAT IRQ readiness via LCD enable, etc). Block-JIT exits
+    /// the current block on sync=1 so outer loop can deliver any IRQ
+    /// at the exact instruction boundary, matching per-instr behaviour.
+    ///
+    /// Conservative implementation: any write to 0xFF00..0xFF7F or
+    /// 0xFFFF returns sync=1. False-positive cost (block exits when
+    /// IRQ state didn't actually change) is one block boundary
+    /// (~negligible); precise tracking can be added later if needed.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static byte MemWrite8Sync(uint addr, byte value)
+    {
+        if (_activeBus is null) return 0;
+        _activeBus.WriteByte((ushort)addr, value);
+        return IsIrqRelevantAddress((ushort)addr) ? (byte)1 : (byte)0;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static byte MemWrite16Sync(uint addr, ushort value)
+    {
+        if (_activeBus is null) return 0;
+        _activeBus.WriteByte((ushort)addr,        (byte)(value & 0xFF));
+        _activeBus.WriteByte((ushort)(addr + 1),  (byte)(value >> 8));
+        return (IsIrqRelevantAddress((ushort)addr) || IsIrqRelevantAddress((ushort)(addr + 1)))
+            ? (byte)1 : (byte)0;
+    }
+
+    /// <summary>
+    /// LR35902 IRQ-relevant memory addresses. Writes here may change
+    /// what IRQs the CPU should deliver, so block-JIT must sync after.
+    /// MMIO range (0xFF00..0xFF7F) is conservatively all-IRQ-relevant —
+    /// many MMIO regs indirectly affect IRQ state (e.g. LCDC enables LCD
+    /// which affects STAT IRQ, TIMA controls timer IRQ, etc.). 0xFFFF
+    /// is IE register. WRAM/HRAM writes (0x8000..0xFEFF, 0xFF80..0xFFFE)
+    /// can never alter IRQ state.
+    /// </summary>
+    private static bool IsIrqRelevantAddress(ushort addr)
+        => (addr >= 0xFF00 && addr <= 0xFF7F) || addr == 0xFFFF;
 
     // ---------------- HALT / IME shims (called from JIT'd IR) ----------------
 

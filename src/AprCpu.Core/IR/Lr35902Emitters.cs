@@ -1131,7 +1131,59 @@ internal sealed class Lr35902StoreByteEmitter : IMicroOpEmitter
             : raw.TypeOf.IntWidth < 8
                 ? ctx.Builder.BuildZExt(raw, LLVMTypeRef.Int8, $"{valueName}_z8")
                 : ctx.Builder.BuildTrunc(raw, LLVMTypeRef.Int8, $"{valueName}_t8");
+        // Phase 7 GB block-JIT P0.7 — block-JIT mode uses sync-flag write
+        // variant. If sync flag returns 1 (IRQ-relevant address written),
+        // block exits early so outer loop can deliver the IRQ at the
+        // exact instruction boundary. Per-instr mode skips the sync
+        // check (outer loop already polls IRQ between instructions).
+        if (ctx.CurrentInstructionBaseAddress is not null)
+        {
+            EmitWriteByteWithSync(ctx, addr32, v8);
+            return;
+        }
         Lr35902MemoryHelpers.CallWrite8(ctx, addr32, v8);
+    }
+
+    /// <summary>
+    /// Emit IR sequence: call memory_write_8_sync(addr, value) → if
+    /// returned i8 == 1, set PcWritten=1 + write next-instr PC + ret void
+    /// (block exits). Else fall through to next instr.
+    /// Cost: 1 i8-compare + 1 branch with llvm.expect cold-path hint.
+    /// </summary>
+    internal static void EmitWriteByteWithSync(EmitContext ctx, LLVMValueRef addr32, LLVMValueRef v8)
+    {
+        var sync = MemoryEmitters.CallWrite8WithSync(ctx, addr32, v8, "w8s");
+        var syncBool = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            sync, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), "w8s_eq1");
+        // V1 simple form: branch on raw sync flag (no llvm.expect.i1 hint
+        // yet — LLVMSharp doesn't trivially expose the intrinsic; the
+        // backend's profile-driven layout still puts the unlikely path
+        // at the bottom even without explicit hint).
+        var fn       = ctx.Function;
+        var contBB   = fn.AppendBasicBlock("after_sync");
+        var exitBB   = fn.AppendBasicBlock("sync_exit_block");
+        ctx.Builder.BuildCondBr(syncBool, exitBB, contBB);
+
+        // sync_exit_block: write next-PC + PcWritten=1 + ret void.
+        // For variable-width LR35902 the next-PC is bi.Pc + bi.LengthBytes
+        // = PipelinePcConstant. ARM (fixed-width) also has PipelinePcConstant
+        // set (= bi.Pc + 8). If somehow null (per-instr mode hit this path),
+        // the addr32 calc would have failed earlier; we conservatively
+        // skip the PC write.
+        ctx.Builder.PositionAtEnd(exitBB);
+        if (ctx.PipelinePcConstant is uint nextPc)
+        {
+            // Coerce to PC width.
+            var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
+            var nextPcConst = LLVMValueRef.CreateConstInt(pcType, nextPc, false);
+            ctx.Builder.BuildStore(nextPcConst, pcPtr);
+            var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), pcwSlot);
+        }
+        ctx.Builder.BuildRetVoid();
+
+        // Continue path resumes the next instruction.
+        ctx.Builder.PositionAtEnd(contBB);
     }
 }
 
