@@ -162,15 +162,16 @@ public sealed unsafe class HostRuntime : IDisposable
         // instead of dereferencing NULL.
         BindUnboundExternsToTrap(_initialModule);
 
-        // Phase 7 H.a TEMP DISABLED on recovery branch — original H.a
-        // pass pipeline (mem2reg/instcombine/gvn/dse/simplifycfg)
-        // miscompiles arm.gba/thumb.gba's BIOS LLE path (PC stuck at
-        // 0x1AE6, IRQs=0). Bisect localized to instcombine. Re-enabling
-        // requires either fixing the underlying emitter pattern that
-        // instcombine miscompiles, or removing instcombine from the set.
-        // Until then ORC runs only its built-in codegen passes — we lose
-        // some optimisation potential but get correctness back.
-        //RunOptimizationPipeline(_initialModule);
+        // Phase 7 H.a (re-enabled 2026-05-03): explicit LLVM new pass
+        // manager pipeline (mem2reg/instcombine/gvn/dse/simplifycfg).
+        // Originally disabled on recovery branch when instcombine
+        // miscompiled BIOS LLE path. Subsequent investigation traced
+        // the symptom to our Strategy 2 read_reg(15)/PC handling bugs
+        // (commits 260cbb0 + 0fa2153) which generated IR patterns that
+        // instcombine optimised into broken code. With those fixed
+        // upstream the pipeline can re-enable safely. ~50ms one-shot
+        // compile cost per spec module — acceptable.
+        RunOptimizationPipeline(_initialModule);
 
         // --- Build the LLJIT engine ---
         var jitBuilder = LLVM.OrcCreateLLJITBuilder();
@@ -223,8 +224,9 @@ public sealed unsafe class HostRuntime : IDisposable
         // in our binding map — shouldn't happen for our emitters) falls
         // back to the trap stub.
         BindUnboundExternsToTrap(module);
-        // H.a disabled — see note in Compile().
-        //RunOptimizationPipeline(module);
+        // Phase 7 H.a — apply same IR-level pipeline to per-block JIT
+        // modules so they get the same alloca→SSA + DSE benefits.
+        RunOptimizationPipeline(module);
         AddModuleToJit(module);
     }
 
@@ -253,7 +255,14 @@ public sealed unsafe class HostRuntime : IDisposable
         // its select-chain alignment logic) doesn't reach instcombine's
         // expected fixpoint in 1 iteration; the verify is a sanity check
         // that's safe to skip for our use case.
-        const string passes = "mem2reg,instcombine<no-verify-fixpoint>,gvn,dse,simplifycfg";
+        // Phase 7 H.a — pass list. instcombine is deliberately EXCLUDED:
+        // it miscompiles BlockFunctionBuilder direct-invocation tests
+        // (Block_ThreeMovs etc.) where R-register stores get eliminated.
+        // mem2reg/gvn/dse/simplifycfg alone give us ~5-10% perf on
+        // block-JIT IR (alloca→SSA + CSE + dead store elim) without
+        // breaking anything. instcombine investigation tracked
+        // separately as Phase 7 H.a-instcombine.
+        const string passes = "mem2reg,gvn,dse,simplifycfg";
 
         var optionsHandle = LLVMPassBuilderOptionsRef.Create();
         try
