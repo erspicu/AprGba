@@ -125,6 +125,56 @@ public class BlockFunctionBuilderTests
     }
 
     /// <summary>
+    /// Phase 7 A.4 — exercise the cache-miss path: build the spec module
+    /// + Compile → then later add a block function in a SEPARATE module
+    /// via HostRuntime.AddModule, and verify it resolves + executes.
+    /// This is exactly what BlockJitExecutor (A.6) will do per cache miss.
+    /// </summary>
+    [Fact]
+    public unsafe void AddModule_PostCompile_RoundTripExecutes()
+    {
+        var loaded = SpecLoader.LoadCpuSpec(CpuJson);
+        var armSet = loaded.InstructionSets["ARM"];
+        var compileResult = SpecCompiler.Compile(loaded);
+
+        // Compile the spec module first (sealed in the JIT).
+        using var rt = HostRuntime.Build(compileResult.Module, compileResult.Layout);
+        rt.Compile();
+
+        // Now build a block in a FRESH module (post-Compile) and add it
+        // via the new AddModule API.
+        var bus = new FlatBus(0x1000);
+        bus.WriteWord(0x200, 0xE3A05055u);  // MOV R5,#0x55
+        bus.WriteWord(0x204, 0xE3A06066u);  // MOV R6,#0x66
+        bus.WriteWord(0x208, 0xEAFFFFFEu);  // B .  (boundary)
+
+        var detector = new BlockDetector(armSet, compileResult.DecoderTables["ARM"]);
+        var block = detector.Detect(bus, 0x200u);
+
+        var blockModule = LLVMModuleRef.CreateWithName("AprCpu_BlockJit_AddModuleTest");
+        var bfb = new BlockFunctionBuilder(
+            blockModule, compileResult.Layout,
+            compileResult.EmitterRegistry, compileResult.ResolverRegistry);
+        bfb.Build(armSet, block);
+
+        rt.AddModule(blockModule);
+
+        var fnPtr = rt.GetFunctionPointer(
+            BlockFunctionBuilder.BlockFunctionName("ARM", 0x200u));
+        var fn = (delegate* unmanaged[Cdecl]<byte*, void>)fnPtr;
+
+        Span<byte> state = stackalloc byte[(int)rt.StateSizeBytes];
+        state.Clear();
+        WriteI32(state, rt.StatusOffset("CPSR"), 0x10u);  // user mode, AL passes
+
+        fixed (byte* p = state)
+            fn(p);
+
+        Assert.Equal(0x55u, ReadI32(state, rt.GprOffset(5)));
+        Assert.Equal(0x66u, ReadI32(state, rt.GprOffset(6)));
+    }
+
+    /// <summary>
     /// FlatBus = simple 64KB byte array implementing IMemoryBus, used by
     /// these tests to feed instructions into BlockDetector.
     /// </summary>

@@ -62,8 +62,12 @@ public sealed unsafe class GbaSystemRunner
             }
 
             Cpu.Step();
-            Scheduler.Tick(cyclesPerInstr);
-            consumed += cyclesPerInstr;
+            // Phase 7 A.6 — when block-JIT is enabled, one Step may
+            // execute many instructions atomically. Scale the per-tick
+            // cycle charge by the count the executor reports.
+            var ticks = cyclesPerInstr * Cpu.LastStepInstructionCount;
+            Scheduler.Tick(ticks);
+            consumed += ticks;
             DeliverIrqIfPending();
         }
         return consumed;

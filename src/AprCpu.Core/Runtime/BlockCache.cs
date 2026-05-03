@@ -1,11 +1,33 @@
 namespace AprCpu.Core.Runtime;
 
 /// <summary>
+/// Phase 7 A.4 — one cached compiled block: native fn pointer +
+/// metadata used by the executor for cycle accounting / stats.
+/// </summary>
+public readonly struct CachedBlock
+{
+    /// <summary>Native entry point of the compiled block fn (signature
+    /// <c>void(byte*)</c>).</summary>
+    public IntPtr Fn { get; }
+
+    /// <summary>Number of instructions the detector found in this block —
+    /// used by the runner to scale cycle accounting / instruction
+    /// counters per block execution.</summary>
+    public int InstructionCount { get; }
+
+    public CachedBlock(IntPtr fn, int instructionCount)
+    {
+        Fn = fn;
+        InstructionCount = instructionCount;
+    }
+}
+
+/// <summary>
 /// Phase 7 A.4 — PC-keyed cache mapping a block's start PC to its
-/// JIT'd block function pointer. Backs the block-JIT dispatch path:
-/// before fetch+decode, the executor first checks here; on hit it
-/// jumps directly to the block function, skipping per-instruction
-/// dispatch entirely.
+/// JIT'd block function pointer (and instruction count). Backs the
+/// block-JIT dispatch path: before fetch+decode, the executor first
+/// checks here; on hit it jumps directly to the block function,
+/// skipping per-instruction dispatch entirely.
 ///
 /// LRU eviction at capacity bound — bounded memory is important
 /// because every distinct block start PC gets compiled into its own
@@ -38,8 +60,8 @@ public sealed class BlockCache
 
     private struct Entry
     {
-        public uint    Pc;
-        public IntPtr  Fn;
+        public uint        Pc;
+        public CachedBlock Block;
     }
 
     public BlockCache(int capacity = DefaultCapacity)
@@ -58,20 +80,20 @@ public sealed class BlockCache
     public int Capacity => _capacity;
 
     /// <summary>
-    /// Look up a cached block fn by start PC. On hit, marks the entry
+    /// Look up a cached block by start PC. On hit, marks the entry
     /// as most-recently-used (so it survives subsequent eviction passes).
     /// </summary>
-    public bool TryGet(uint pc, out IntPtr fn)
+    public bool TryGet(uint pc, out CachedBlock entry)
     {
         if (_map.TryGetValue(pc, out var node))
         {
             // Promote to MRU. LinkedList<T> Remove + AddFirst is O(1).
             _lru.Remove(node);
             _lru.AddFirst(node);
-            fn = node.Value.Fn;
+            entry = node.Value.Block;
             return true;
         }
-        fn = IntPtr.Zero;
+        entry = default;
         return false;
     }
 
@@ -80,17 +102,17 @@ public sealed class BlockCache
     /// capacity and this is a new PC, the least-recently-used entry
     /// is evicted.
     /// </summary>
-    public void Add(uint pc, IntPtr fn)
+    public void Add(uint pc, CachedBlock block)
     {
         if (_map.TryGetValue(pc, out var existing))
         {
-            // Update fn pointer + promote to MRU.
+            // Update entry + promote to MRU.
             _lru.Remove(existing);
-            existing.Value = new Entry { Pc = pc, Fn = fn };
+            existing.Value = new Entry { Pc = pc, Block = block };
             _lru.AddFirst(existing);
             return;
         }
-        var node = _lru.AddFirst(new Entry { Pc = pc, Fn = fn });
+        var node = _lru.AddFirst(new Entry { Pc = pc, Block = block });
         _map[pc] = node;
         if (_map.Count > _capacity)
         {

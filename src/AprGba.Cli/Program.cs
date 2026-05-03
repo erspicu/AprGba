@@ -72,10 +72,11 @@ else
 bus.LoadRom(rom);
 
 var setupSw = System.Diagnostics.Stopwatch.StartNew();
-var (cpu, swap, rt, disposables) = BootCpu(bus);
+var (cpu, swap, rt, disposables) = BootCpu(bus, opts.BlockJit);
 var runner = new GbaSystemRunner(cpu, bus, swap);
 setupSw.Stop();
 Console.WriteLine($"  setup time: {setupSw.Elapsed.TotalMilliseconds:F0} ms (incl. spec compile + ORC LLJIT)");
+if (opts.BlockJit) Console.WriteLine("  block-jit:  ON (Phase 7 A.6 path — block detection + cache + on-demand compile)");
 
 // LLE boot (real BIOS file loaded): start in Supervisor mode with IRQs +
 // FIQs disabled (CPSR=0xD3) and PC at 0x00000000. The BIOS does its own
@@ -244,7 +245,7 @@ static void RunWithBiosTrace(GbaSystemRunner runner, CpuExecutor cpu, GbaMemoryB
 }
 
 static (CpuExecutor Cpu, Arm7tdmiBankSwapHandler Swap, HostRuntime Rt, IDisposable[] Bindings)
-    BootCpu(GbaMemoryBus bus)
+    BootCpu(GbaMemoryBus bus, bool enableBlockJit = false)
 {
     var cpuJson = LocateArm7tdmiSpec();
     var compileResult = SpecCompiler.Compile(cpuJson);
@@ -271,6 +272,7 @@ static (CpuExecutor Cpu, Arm7tdmiBankSwapHandler Swap, HostRuntime Rt, IDisposab
     var dispatch = loaded.Cpu.InstructionSetDispatch
         ?? throw new InvalidOperationException("CPU spec missing instruction_set_dispatch");
     var exec = new CpuExecutor(rt, setsByName, dispatch, bus);
+    if (enableBlockJit) exec.EnableBlockJit(compileResult);
     return (exec, swap, rt, bindings);
 }
 
@@ -329,6 +331,7 @@ static Options? ParseArgs(string[] args)
         else if (arg == "--no-obj")               opts.DisableObj = true;
         else if (arg == "--no-bg")                opts.DisableBg  = true;
         else if (arg.StartsWith("--only-obj="))   opts.OnlyObjIndex = int.Parse(arg.Substring("--only-obj=".Length));
+        else if (arg == "--block-jit")            opts.BlockJit = true;
         else                                      return null;
     }
     return opts.RomPath is null ? null : opts;
@@ -374,4 +377,5 @@ internal sealed class Options
     public bool     DisableObj;
     public bool     DisableBg;
     public int      OnlyObjIndex = -1;
+    public bool     BlockJit;
 }
