@@ -109,15 +109,32 @@ public sealed unsafe class EmitContext
     /// the executor's per-step "pre-set R15" memory write). Per-instr
     /// mode leaves it null so the legacy load-from-GPR[15] path runs.
     /// </summary>
-    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord, uint? baseAddress = null)
+    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord, uint? baseAddress = null, byte? lengthBytes = null)
     {
         Format = format;
         Def = def;
         Instruction = instructionWord;
         Values.Clear();
         CurrentInstructionBaseAddress = baseAddress;
+        CurrentInstructionLengthBytes = lengthBytes;
         PcWriteEmittedInCurrentInstruction = false;
     }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P0.4 — when set (block-JIT mode for variable-width
+    /// sets), this is the byte length of the current instruction. Drives
+    /// <see cref="PipelinePcConstant"/> for variable-width sets where
+    /// "what PC value does this instruction's read_pc see" depends on how
+    /// many bytes were fetched (1/2/3 for LR35902, where per-instr-mode
+    /// read_imm8 + read_imm16 bump PC during execution; block-JIT bakes
+    /// those out, so read_pc must compensate by adding the full length
+    /// instead of the spec's static pc_offset_bytes).
+    ///
+    /// Fixed-width sets (ARM/Thumb) leave this null and continue using
+    /// <see cref="InstructionSetSpec.PcOffsetBytes"/> via the original
+    /// pipeline-quirk path (ARM PC = pc+8 etc.).
+    /// </summary>
+    public byte? CurrentInstructionLengthBytes { get; private set; }
 
     /// <summary>
     /// Phase 7 A.6.1 — set by emitters that store into GPR[15] via
@@ -152,7 +169,9 @@ public sealed unsafe class EmitContext
     /// </summary>
     public uint? PipelinePcConstant
         => CurrentInstructionBaseAddress is uint pc
-           ? pc + (uint)InstructionSet.PcOffsetBytes
+           ? pc + (CurrentInstructionLengthBytes is byte len
+                ? (uint)len                          // variable-width: pc + actual byte length
+                : (uint)InstructionSet.PcOffsetBytes) // fixed-width (ARM): spec's pipeline offset
            : null;
 }
 

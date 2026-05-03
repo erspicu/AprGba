@@ -923,8 +923,17 @@ internal sealed class BranchCc : IMicroOpEmitter
         var target = ctx.Resolve(targetName);
         var pred   = StackOps.ResolveFlagCond(ctx, step.Raw.GetProperty("cond"));
 
+        // Phase 7 GB block-JIT P0.4 — block-JIT mode: use PipelinePcConstant
+        // (= bi.Pc + length, the next-instr PC) as the not-taken value
+        // instead of loading stale PC from memory. Without this, not-taken
+        // case writes the BLOCK START PC back to memory, causing infinite
+        // loops at the first conditional branch in the block.
         var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
-        var curPc   = ctx.Builder.BuildLoad2(pcType, pcPtr, "branch_cc_pc_cur");
+        LLVMValueRef curPc;
+        if (ctx.PipelinePcConstant is uint pipelineValue)
+            curPc = LLVMValueRef.CreateConstInt(pcType, pipelineValue, false);
+        else
+            curPc = ctx.Builder.BuildLoad2(pcType, pcPtr, "branch_cc_pc_cur");
         var coerced = StackOps.CoerceToType(ctx, target, pcType, "branch_cc_target");
         var chosen  = ctx.Builder.BuildSelect(pred, coerced, curPc, "branch_cc_chosen");
         ctx.Builder.BuildStore(chosen, pcPtr);

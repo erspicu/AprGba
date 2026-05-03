@@ -13,7 +13,7 @@ namespace AprCpu.Tests;
 /// </summary>
 public class BlockCacheTests
 {
-    private static CachedBlock B(long fn, int n = 1) => new((IntPtr)fn, n);
+    private static CachedBlock B(long fn, int n = 1) => new((IntPtr)fn, n, n * 4 /* ARM-style fixed width approx */);
 
     [Fact]
     public void Add_Then_TryGet_Returns_Stored_Entry()

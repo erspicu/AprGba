@@ -275,15 +275,36 @@ internal static class StackOps
         public void Emit(EmitContext ctx, MicroOpStep step)
         {
             // PC currently points at the next instruction (read_imm16 or
-            // similar has already advanced it). Push it first.
+            // similar has already advanced it in per-instr mode). Push the
+            // return address first.
+            //
+            // Phase 7 GB block-JIT P0.4 — block-JIT mode: real PC slot
+            // holds the BLOCK START PC (Strategy 2 — never written
+            // per-instr). Use PipelinePcConstant (= bi.Pc + length, set by
+            // BeginInstruction) as the return address instead of loading
+            // stale PC from memory. Without this, CALL pushes the block
+            // start PC and on RET we jump to the wrong place — explains
+            // the GB Blargg "01-special" divergence (block-JIT 2026-05-03).
             var (pcPtr, pcType) = LocateProgramCounter(ctx);
             var (_, _, wordBytes) = LocateStackPointer(ctx);
-            var curPc = ctx.Builder.BuildLoad2(pcType, pcPtr, "call_pc_cur");
+            LLVMValueRef curPc;
+            if (ctx.PipelinePcConstant is uint pipelineValue)
+                curPc = LLVMValueRef.CreateConstInt(pcType, pipelineValue, false);
+            else
+                curPc = ctx.Builder.BuildLoad2(pcType, pcPtr, "call_pc_cur");
             PushWord(ctx, curPc, wordBytes, "call");
 
             var target = ResolveCallTarget(ctx, step, pcType);
             var coerced = CoerceToType(ctx, target, pcType, "call_target");
             ctx.Builder.BuildStore(coerced, pcPtr);
+
+            // Mark PC-written so block-JIT outer loop knows the call's
+            // target survives past block exit (otherwise the outer loop's
+            // "no branch → advance PC by block size" path would overwrite
+            // it). Harmless in per-instr mode (executor checks the same
+            // flag for the same reason).
+            var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
         }
     }
 
@@ -310,6 +331,14 @@ internal static class StackOps
             var (_, _, wordBytes) = LocateStackPointer(ctx);
             var newPc = PopWord(ctx, wordBytes, "ret", pcType);
             ctx.Builder.BuildStore(newPc, pcPtr);
+
+            // Phase 7 GB block-JIT P0.4 — mark PC-written so block-JIT
+            // outer loop preserves the popped target instead of advancing
+            // PC by block size. (RET is `writes_pc:"always"` in spec so
+            // BlockDetector ends the block here, but the PcWritten signal
+            // is still required.)
+            var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
         }
     }
 
@@ -334,7 +363,12 @@ internal static class StackOps
             ctx.Builder.PositionAtEnd(thenBB);
             var (pcPtr, pcType) = LocateProgramCounter(ctx);
             var (_, _, wordBytes) = LocateStackPointer(ctx);
-            var curPc = ctx.Builder.BuildLoad2(pcType, pcPtr, "call_cc_pc_cur");
+            // Phase 7 GB block-JIT P0.4 — same Strategy-2 gating as Call.
+            LLVMValueRef curPc;
+            if (ctx.PipelinePcConstant is uint pipelineValue)
+                curPc = LLVMValueRef.CreateConstInt(pcType, pipelineValue, false);
+            else
+                curPc = ctx.Builder.BuildLoad2(pcType, pcPtr, "call_cc_pc_cur");
             PushWord(ctx, curPc, wordBytes, "call_cc");
             var target = ResolveCallTarget(ctx, step, pcType);
             var coerced = CoerceToType(ctx, target, pcType, "call_cc_target");

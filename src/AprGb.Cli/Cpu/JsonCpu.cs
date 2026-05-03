@@ -7,6 +7,7 @@ using AprCpu.Core.IR;
 using AprCpu.Core.JsonSpec;
 using AprCpu.Core.Runtime;
 using AprGb.Cli.Memory;
+using LLVMSharp.Interop;
 
 namespace AprGb.Cli.Cpu;
 
@@ -48,12 +49,23 @@ public sealed unsafe class JsonCpu : ICpuBackend
     private readonly HostRuntime    _rt;
     private readonly DecoderTable   _mainDecoder;
     private readonly DecoderTable   _cbDecoder;
+    private readonly SpecCompiler.CompileResult _compileResult;
     // Phase 7 F.x: identity-keyed cache (InstructionDef reference →
     // fn pointer). The previous string-keyed cache forced
     // BuildFunctionKey to allocate a Dictionary AND format a string
     // PER INSTRUCTION — both gone on the hot path now.
     private readonly Dictionary<InstructionDef, IntPtr> _fnPtrByDef
         = new(System.Collections.Generic.ReferenceEqualityComparer.Instance);
+
+    // Phase 7 GB block-JIT P0.4: optional block-JIT path.
+    // _blockDetector + _blockCache are non-null iff EnableBlockJit was true
+    // at construction. RunCycles() branches on _blockDetector to pick path.
+    // Block IR uses the same emitter machinery as ARM block-JIT (Phase 7.A.6),
+    // augmented with variable-width detection (P0.1) + CB-prefix dispatch
+    // (P0.2) + immediate baking (P0.3) for LR35902.
+    private readonly BlockDetector? _blockDetector;
+    private readonly BlockCache?    _blockCache;
+    private readonly bool _blockJitEnabled;
 
     private byte[]    _state = Array.Empty<byte>();
     // Phase 7 B.f: permanent pin of the state buffer. Reset() re-allocates
@@ -66,6 +78,9 @@ public sealed unsafe class JsonCpu : ICpuBackend
     // Pre-cached field offsets for fast register access.
     private readonly int _aOff, _bOff, _cOff, _dOff, _eOff, _hOff, _lOff;
     private readonly int _fOff, _spOff, _pcOff;
+    // Phase 7 GB block-JIT P0.4: cached offsets for block-JIT host loop.
+    private readonly int _pcWrittenOffset;
+    private readonly int _cyclesLeftOffset;
 
     private bool _halted;
     private long _totalInstructions;
@@ -75,8 +90,9 @@ public sealed unsafe class JsonCpu : ICpuBackend
 
     public long InstructionsExecuted => _totalInstructions;
 
-    public JsonCpu()
+    public JsonCpu(bool enableBlockJit = false)
     {
+        _blockJitEnabled = enableBlockJit;
         var specPath = LocateSpec();
         var compileResult = SpecCompiler.Compile(specPath);
         if (compileResult.Diagnostics.Count != 0)
@@ -85,6 +101,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
                 "JsonCpu: spec compilation produced diagnostics:\n  " +
                 string.Join("\n  ", compileResult.Diagnostics));
         }
+        _compileResult = compileResult;
 
         _spec = SpecLoader.LoadCpuSpec(specPath);
         if (!compileResult.DecoderTables.TryGetValue("Main", out var mainDecoder) ||
@@ -136,6 +153,27 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _fOff = (int)_rt.StatusOffset("F");
         _spOff = (int)_rt.StatusOffset("SP");
         _pcOff = (int)_rt.StatusOffset("PC");
+
+        // Phase 7 GB block-JIT P0.4: build BlockDetector + BlockCache when
+        // requested. Detector gets the LR35902 length oracle (1/2/3-byte
+        // table) for variable-width sequential crawl + a CB-prefix
+        // dispatch dict so 0xCB+sub-byte becomes one atomic 2-byte
+        // instruction in the block instead of a boundary.
+        _pcWrittenOffset  = (int)_rt.PcWrittenOffset;
+        _cyclesLeftOffset = (int)_rt.CyclesLeftOffset;
+        if (_blockJitEnabled)
+        {
+            var prefixDispatch = new Dictionary<byte, DecoderTable> { [0xCB] = _cbDecoder };
+            // Look up the Main set spec from compileResult — we need the
+            // actual InstructionSetSpec instance for the detector.
+            var mainSetSpec = _spec.InstructionSets["Main"];
+            _blockDetector = new BlockDetector(
+                mainSetSpec,
+                _mainDecoder,
+                lengthOracle: Lr35902InstructionLengths.GetLength,
+                prefixSubDecoders: prefixDispatch);
+            _blockCache = new BlockCache();
+        }
     }
 
     private static string LocateSpec()
@@ -242,8 +280,21 @@ public sealed unsafe class JsonCpu : ICpuBackend
                 else { _bus.Tick(4); consumed += 4; CheckInterrupts(out var srvHalt); consumed += srvHalt; continue; }
             }
 
-            var stepCycles = StepOne();
-            _totalInstructions++;
+            // Phase 7 GB block-JIT P0.4: branch on block-JIT mode. Block
+            // path runs N instructions per call (cached or detected+JIT'd
+            // on miss); per-instr path runs exactly 1.
+            long stepCycles;
+            int  stepInstructions;
+            if (_blockDetector is not null)
+            {
+                stepCycles = StepBlock(out stepInstructions);
+            }
+            else
+            {
+                stepCycles = StepOne();
+                stepInstructions = 1;
+            }
+            _totalInstructions += stepInstructions;
             _bus.Tick((int)stepCycles);
             consumed += stepCycles;
 
@@ -257,6 +308,92 @@ public sealed unsafe class JsonCpu : ICpuBackend
             consumed += serviceCycles;
         }
         return consumed;
+    }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P0.4 — execute one block. On cache miss,
+    /// detect + compile + cache. Returns total t-cycles consumed by the
+    /// block (instruction count × 4 — GB has uniform 4 t-cycles per
+    /// "M-cycle"; cycles_left in state is the budget the block IR
+    /// decrements). <paramref name="instructions"/> reports actual N
+    /// for instruction counter.
+    /// </summary>
+    private long StepBlock(out int instructions)
+    {
+        ushort pc = ReadI16(_pcOff);
+        if (!_blockCache!.TryGet(pc, out var entry))
+        {
+            entry = CompileBlockAtPc(pc);
+            _blockCache.Add(pc, entry);
+        }
+
+        // Phase 1a predictive downcounting — load a per-block budget into
+        // cycles_left. Block IR decrements by 4 per instruction and
+        // exits early when it hits zero (writes next-PC + sets PcWritten=1).
+        // For GB use 64×4=256 as the per-block budget (matches detector cap).
+        const int blockBudget = 256;
+        Marshal.WriteInt32((IntPtr)(_statePtr + _cyclesLeftOffset), blockBudget);
+        // Reset PcWritten before block runs. Branches inside the block
+        // will set this so the post-block PC-advance path knows to skip.
+        _statePtr[_pcWrittenOffset] = 0;
+
+        var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
+        fn(_statePtr);
+
+        int cyclesLeft = Marshal.ReadInt32((IntPtr)(_statePtr + _cyclesLeftOffset));
+        int cyclesConsumed = blockBudget - cyclesLeft;
+
+        // If no branch fired AND budget didn't exhaust, advance PC by the
+        // block's total byte length (sum of per-instr LengthBytes, cached
+        // on CachedBlock.TotalByteLength). When budget exhausts the block
+        // IR has already written the next-PC and set PcWritten=1, so we
+        // leave PC alone.
+        if (_statePtr[_pcWrittenOffset] == 0)
+        {
+            ushort newPc = (ushort)(pc + entry.TotalByteLength);
+            WriteI16(_pcOff, newPc);
+        }
+
+        // Convert cycles → instruction count for the counter (approximate;
+        // GB instructions are 1+ M-cycle = 4+ t-cycle each).
+        instructions = cyclesConsumed > 0 ? cyclesConsumed / 4 : entry.InstructionCount;
+        if (instructions > entry.InstructionCount) instructions = entry.InstructionCount;
+        return cyclesConsumed > 0 ? cyclesConsumed : entry.InstructionCount * 4;
+    }
+
+    private CachedBlock CompileBlockAtPc(ushort pc)
+    {
+        var block = _blockDetector!.Detect(new GbMemoryBusAdapter(_bus), pc, maxInstructions: 64);
+        if (block.Instructions.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"JsonCpu: block detector found no instructions at PC=0x{pc:X4}.");
+        }
+
+        // Build block IR into a fresh module. The BlockFunctionBuilder
+        // uses per-instr Pc + InstructionWord (P0.1 packs imm bytes;
+        // P0.2 packs CB sub-opcode), so emitter Strategy 2 + immediate
+        // baking (P0.3) reduces the IR to constant arith with no bus
+        // calls inside the block.
+        var moduleName = $"AprGb_BlockJit_pc{pc:X4}";
+        var module = LLVMModuleRef.CreateWithName(moduleName);
+        var bfb = new BlockFunctionBuilder(
+            module, _compileResult.Layout,
+            _compileResult.EmitterRegistry, _compileResult.ResolverRegistry);
+        var mainSetSpec = _spec.InstructionSets["Main"];
+        bfb.Build(mainSetSpec, block);
+
+        _rt.AddModule(module);
+        var fnName = BlockFunctionBuilder.BlockFunctionName("Main", pc);
+        var fnPtr = _rt.GetFunctionPointer(fnName);
+
+        // Compute total byte length so RunCycles can advance PC correctly
+        // for fall-through blocks (no branch, no budget exit). Sum per-instr
+        // LengthBytes since LR35902 is variable-width.
+        int totalBytes = 0;
+        foreach (var bi in block.Instructions) totalBytes += bi.LengthBytes;
+
+        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes);
     }
 
     /// <summary>
@@ -350,6 +487,36 @@ public sealed unsafe class JsonCpu : ICpuBackend
         long cycles = CyclesFor(decoded.Instruction);
         cycles += ConditionalBranchExtraCycles(opcode, fallThroughPc, ReadI16(_pcOff));
         return cycles;
+    }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P0.4 — adapter that exposes GbMemoryBus
+    /// (ushort addr) under the IMemoryBus interface (uint addr) so
+    /// BlockDetector can fetch instruction bytes without a parallel
+    /// implementation. Used only at block detect time (cache miss path) —
+    /// the JIT'd block IR uses host externs (memory_read_8 etc.) directly,
+    /// not this adapter.
+    /// </summary>
+    private sealed class GbMemoryBusAdapter : AprCpu.Core.Runtime.IMemoryBus
+    {
+        private readonly GbMemoryBus _bus;
+        public GbMemoryBusAdapter(GbMemoryBus bus) => _bus = bus;
+        public byte   ReadByte    (uint addr) => _bus.ReadByte((ushort)addr);
+        public ushort ReadHalfword(uint addr) => (ushort)(_bus.ReadByte((ushort)addr) | (_bus.ReadByte((ushort)(addr + 1)) << 8));
+        public uint   ReadWord    (uint addr) => (uint)(
+              _bus.ReadByte((ushort)addr)
+            | (_bus.ReadByte((ushort)(addr + 1)) << 8)
+            | (_bus.ReadByte((ushort)(addr + 2)) << 16)
+            | (_bus.ReadByte((ushort)(addr + 3)) << 24));
+        public void WriteByte    (uint addr, byte   v) => _bus.WriteByte((ushort)addr, v);
+        public void WriteHalfword(uint addr, ushort v) { _bus.WriteByte((ushort)addr, (byte)v); _bus.WriteByte((ushort)(addr + 1), (byte)(v >> 8)); }
+        public void WriteWord    (uint addr, uint   v)
+        {
+            _bus.WriteByte((ushort)addr,        (byte)v);
+            _bus.WriteByte((ushort)(addr + 1), (byte)(v >> 8));
+            _bus.WriteByte((ushort)(addr + 2), (byte)(v >> 16));
+            _bus.WriteByte((ushort)(addr + 3), (byte)(v >> 24));
+        }
     }
 
     /// <summary>

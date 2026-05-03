@@ -15,10 +15,21 @@ public readonly struct CachedBlock
     /// counters per block execution.</summary>
     public int InstructionCount { get; }
 
-    public CachedBlock(IntPtr fn, int instructionCount)
+    /// <summary>
+    /// Total byte length of the block (sum of per-instruction lengths).
+    /// For fixed-width sets equals <c>InstructionCount × InstrSizeBytes</c>;
+    /// for variable-width sets (LR35902) it must be the sum of the
+    /// per-instruction <see cref="DecodedBlockInstruction.LengthBytes"/>.
+    /// Used by the runner to advance PC after a fall-through (no branch,
+    /// no budget exit) block execution. Phase 7 GB block-JIT P0.4.
+    /// </summary>
+    public int TotalByteLength { get; }
+
+    public CachedBlock(IntPtr fn, int instructionCount, int totalByteLength)
     {
         Fn = fn;
         InstructionCount = instructionCount;
+        TotalByteLength = totalByteLength;
     }
 }
 

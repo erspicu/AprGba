@@ -132,7 +132,16 @@ public sealed unsafe class BlockFunctionBuilder
             // statically resolve "read R15" to a pipeline-PC constant
             // instead of loading from GPR[15] (which is no longer
             // pre-set per instruction).
-            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord), bi.Pc);
+            // Pass per-instr length ONLY for variable-width sets (LR35902).
+            // For these, PipelinePcConstant becomes bi.Pc + bi.LengthBytes
+            // — what per-instr-mode read_pc would see after read_imm8/16
+            // bumped PC. For fixed-width sets (ARM/Thumb), pass null so
+            // PipelinePcConstant uses spec.PcOffsetBytes (ARM's pc+8
+            // pipeline quirk, which is NOT the same as instruction length).
+            byte? len = (block.InstrSizeBytes == 0u && bi.LengthBytes > 0)
+                ? bi.LengthBytes
+                : (byte?)null;
+            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord), bi.Pc, len);
 
             // 1. Pre block: clear PcWritten, then cond gate.
             //
@@ -195,14 +204,22 @@ public sealed unsafe class BlockFunctionBuilder
             // before each block call; the IR decrements per instruction.
             // Sub-block IRQ delivery + MMIO catch-up granularity without
             // losing the JIT throughput win.
-            const int instrCycleCost = 4;   // 1S cycle approximation
+            //
+            // Phase 7 GB block-JIT P0.4 — per-instruction cycle cost is now
+            // spec-driven (parsed from cycles.form: "Nm" → N×4 t-cycles).
+            // For LR35902 this matters a lot because instructions vary
+            // 4-24 t-cycles; the previous fixed 4 caused under-counting →
+            // outer scheduler ticked too few cycles → IRQ delivery delayed.
+            // For ARM most instructions are ~1 S-cycle = 4 t-cycles so the
+            // old constant was already accurate; spec-driven keeps it so.
+            int instrCycleCost = ParseCyclesForm(bi.Decoded.Instruction.Cycles?.Form);
             builder.PositionAtEnd(budgetCheckBBs[i]);
             if (i + 1 < block.Instructions.Count)
             {
                 var cyclesPtr = Layout.GepCyclesLeft(builder, statePtr);
                 var cyclesOld = builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, $"i{i}_cycles_old");
                 var cyclesNew = builder.BuildSub(cyclesOld,
-                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, instrCycleCost, false), $"i{i}_cycles_new");
+                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)instrCycleCost, false), $"i{i}_cycles_new");
                 builder.BuildStore(cyclesNew, cyclesPtr);
                 var exhausted = builder.BuildICmp(LLVMIntPredicate.LLVMIntSLE,
                     cyclesNew, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 0, false), $"i{i}_budget_done");
@@ -215,7 +232,7 @@ public sealed unsafe class BlockFunctionBuilder
                 var cyclesPtr = Layout.GepCyclesLeft(builder, statePtr);
                 var cyclesOld = builder.BuildLoad2(LLVMTypeRef.Int32, cyclesPtr, $"i{i}_cycles_old");
                 var cyclesNew = builder.BuildSub(cyclesOld,
-                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, instrCycleCost, false), $"i{i}_cycles_new");
+                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)instrCycleCost, false), $"i{i}_cycles_new");
                 builder.BuildStore(cyclesNew, cyclesPtr);
                 builder.BuildBr(advanceBBs[i]);
             }
@@ -296,6 +313,25 @@ public sealed unsafe class BlockFunctionBuilder
 
     private static bool IsTerminated(LLVMBuilderRef builder)
         => builder.InsertBlock.Terminator.Handle != IntPtr.Zero;
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P0.4 — parse spec's <c>cycles.form</c> string
+    /// into integer t-cycle count for per-instruction budget decrement.
+    /// Mirrors AprGb.Cli.JsonCpu.CyclesFor: extract first integer N, return
+    /// N × 4 (m-cycle = 4 t-cycles). Default to 4 (= 1 m-cycle) if no form.
+    /// </summary>
+    private static int ParseCyclesForm(string? form)
+    {
+        if (string.IsNullOrEmpty(form)) return 4;
+        int n = 0;
+        foreach (var ch in form)
+        {
+            if (ch >= '0' && ch <= '9') { n = n * 10 + (ch - '0'); continue; }
+            if (n > 0) break;
+        }
+        if (n == 0) n = 1;
+        return n * 4;
+    }
 
     private static unsafe LLVMAttributeRef CreateEnumAttribute(LLVMContextRef ctx, string name)
     {

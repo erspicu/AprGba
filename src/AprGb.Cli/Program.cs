@@ -68,9 +68,13 @@ bus.LoadRom(rom);
 ICpuBackend cpu = opts.Backend switch
 {
     "legacy"    => new LegacyCpu(),
-    "json-llvm" => new JsonCpu(),
+    "json-llvm" => new JsonCpu(enableBlockJit: opts.BlockJit),
     _           => throw new ArgumentException($"Unknown backend '{opts.Backend}'"),
 };
+if (opts.BlockJit && opts.Backend != "json-llvm")
+    Console.WriteLine($"  warning: --block-jit only affects --cpu=json-llvm (current: {opts.Backend})");
+if (opts.BlockJit)
+    Console.WriteLine($"  block-jit:   ON (Phase 7 GB block-JIT P0 path — variable-width detector + CB-prefix atomic + imm baking)");
 cpu.Reset(bus);
 Console.WriteLine($"  initial PC=0x{cpu.ReadReg16(GbReg16.PC):X4} SP=0x{cpu.ReadReg16(GbReg16.SP):X4}");
 
@@ -129,6 +133,7 @@ static Options? ParseArgs(string[] args)
         else if (arg == "--info")                 opts.InfoOnly = true;
         else if (arg.StartsWith("--diff="))       opts.DiffMaxSteps = long.Parse(arg.Substring("--diff=".Length));
         else if (arg == "--bench")                opts.Bench = true;
+        else if (arg == "--block-jit")            opts.BlockJit = true;
         else                                      return null;
     }
     return opts.RomPath is null ? null : opts;
@@ -214,6 +219,7 @@ internal sealed class Options
     public bool     InfoOnly;
     public long     DiffMaxSteps;        // when > 0, run lockstep diff harness instead
     public bool     Bench;               // when true, run both backends and report MIPS
+    public bool     BlockJit;            // --block-jit: enable Phase 7 GB block-JIT path on json-llvm
 }
 
 /// <summary>

@@ -574,6 +574,10 @@ public sealed unsafe class CpuExecutor
         var fnPtr = _rt.GetFunctionPointer(fnName);
 
         BlocksCompiled++;
-        return new CachedBlock(fnPtr, block.Instructions.Count);
+        // Fixed-width sets: total bytes = N × instr_size. Variable-width
+        // (LR35902) callers compute via per-instr LengthBytes sum (see
+        // JsonCpu.CompileBlockAtPc in AprGb.Cli).
+        int totalBytes = block.Instructions.Count * (int)mode.InstrSizeBytes;
+        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes);
     }
 }
