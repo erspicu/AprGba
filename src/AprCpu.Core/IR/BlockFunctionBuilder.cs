@@ -121,6 +121,31 @@ public sealed unsafe class BlockFunctionBuilder
             advanceBBs[i]     = fn.AppendBasicBlock($"i{i}_advance");
         }
 
+        // Phase 7 GB block-JIT P0.6 — defer pre-pass: lower the spec's
+        // `defer` micro-ops into phantom-injected steps in the target
+        // instruction's emit list. After this pass, the per-instruction
+        // step lists may have INJECTED steps prepended (deferred bodies
+        // from earlier instructions whose delay just expired) and any
+        // own-defer wrappers stripped. The original instruction metadata
+        // (Format, Cycles, Pc, etc.) is preserved.
+        // See MD/design/13-defer-microop.md.
+        var loweredInstrs = DeferLowering.Lower(block.Instructions, out var crossBlockPending);
+        // crossBlockPending list: any defers whose delay extends past
+        // block end. V1 logs to console as a known-unsupported edge
+        // case (LR35902 EI is the only consumer for now and the
+        // detector keeps blocks short enough to avoid this path in
+        // practice). V2 will serialize to pending_deferred_flags slot
+        // (P0.6 step 3 followup).
+        if (crossBlockPending.Count > 0)
+        {
+            // Silently drop for V1 — same effect as legacy behaviour
+            // pre-defer. Tracked as P0.6-step-3 followup. This path is
+            // only reachable when EI / similar is in the LAST instruction
+            // of a block, which BlockDetector currently caps at 64 instr
+            // (so the action just gets lost; per-instr backend's own
+            // _eiDelay extern still works as the canonical path).
+        }
+
         // Branch from entry to first instruction's pre block.
         builder.PositionAtEnd(entry);
         builder.BuildBr(preBBs[0]);
@@ -128,6 +153,7 @@ public sealed unsafe class BlockFunctionBuilder
         for (int i = 0; i < block.Instructions.Count; i++)
         {
             var bi = block.Instructions[i];
+            var emittedSteps = loweredInstrs[i].EmittedSteps;
             // Phase 7 A.6.1 Strategy 2 — pass bi.Pc so emitters can
             // statically resolve "read R15" to a pipeline-PC constant
             // instead of loading from GPR[15] (which is no longer
@@ -172,14 +198,16 @@ public sealed unsafe class BlockFunctionBuilder
                 builder.BuildBr(execBBs[i]);
             }
 
-            // 2. Exec block: run all spec steps. Operand resolvers apply
-            //    inside (resolverRegistry can produce values like the
-            //    SetUp barrel-shifter ops do for ARM).
+            // 2. Exec block: run spec steps (post defer-lowering — see
+            //    pre-pass above; emittedSteps may include injected
+            //    bodies from earlier instructions' expired defers, and
+            //    excludes any own defer wrappers which became part of
+            //    later instructions' steps).
             builder.PositionAtEnd(execBBs[i]);
             ResolverRegistry.Apply(ctx);
             using (EmitterContextHolder.Push(Registry))
             {
-                foreach (var step in bi.Decoded.Instruction.Steps)
+                foreach (var step in emittedSteps)
                     Registry.EmitStep(ctx, step);
             }
             if (!IsTerminated(builder)) builder.BuildBr(postBBs[i]);

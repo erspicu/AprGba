@@ -17,7 +17,7 @@
     },
     {
       "name": "Ei",
-      "comment": "0xFB",
+      "comment": "0xFB. Phase 7 GB block-JIT P0.6: migrated from `lr35902_ime_delayed` extern to generic `defer` micro-op (1-instr delay, body sets IME=1). Block-JIT's DeferLowering pre-pass inlines the IME=1 store into the next instruction's steps at compile time (zero runtime cost); per-instr's DeferEmitterPerInstr routes action_id=0 to the same legacy extern (preserves current behaviour). See MD/design/13-defer-microop.md.",
       "pattern": "11111011",
       "fields": {},
       "mask": "0xFF",
@@ -25,7 +25,15 @@
       "instructions": [{
         "mnemonic": "EI", "since": "LR35902", "manual_ref": "GB CPU §EI",
         "cycles": { "form": "1m" },
-        "steps": [{ "op": "lr35902_ime_delayed" }]
+        "steps": [{
+          "op": "defer",
+          "delay_type": "instruction_count",
+          "delay_value": 1,
+          "action_id": 0,
+          "body": [
+            { "op": "lr35902_ime", "value": 1 }
+          ]
+        }]
       }]
     }
   ]

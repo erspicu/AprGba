@@ -40,6 +40,15 @@ public static class Lr35902Emitters
         // are in HostHelpers below.
         reg.Register(new HostFlagOpEmitter("halt",                 Lr35902HostHelpers.HaltExtern));
         reg.Register(new HostFlagOpEmitter("lr35902_ime_delayed",  Lr35902HostHelpers.ArmImeDelayedExtern));
+        // Phase 7 GB block-JIT P0.6 — generic `defer` micro-op:
+        //   - Per-instr backend: V1 routes action_id=0 to the existing
+        //     LR35902 IME-delayed extern (matches current EI semantics).
+        //     Action IDs >0 throw NotSupportedException pending V2.
+        //   - Block-JIT backend: BlockFunctionBuilder runs DeferLowering
+        //     pre-pass that strips the defer wrapper and inlines the body
+        //     into a later instruction's steps; the emitter never gets
+        //     called in block-JIT mode.
+        reg.Register(new DeferEmitterPerInstr());
         reg.Register(new HostImeEmitter());
 
         // STOP is treated like HALT (waits for IRQ). Real DMG also
@@ -1285,6 +1294,44 @@ public static class Lr35902HostHelpers
         var slot = module.AddGlobal(ptrType, name);
         slot.Linkage = LLVMLinkage.LLVMExternalLinkage;
         return (slot, fnType, ptrType);
+    }
+}
+
+/// <summary>
+/// Phase 7 GB block-JIT P0.6 — per-instr `defer` emitter.
+///
+/// In block-JIT mode, the BlockFunctionBuilder runs DeferLowering pre-pass
+/// that strips defer wrappers and inlines the body into a later
+/// instruction's emit list. So this emitter is ONLY hit in per-instr
+/// (InstructionFunctionBuilder) mode.
+///
+/// V1: action_id=0 routes to the existing LR35902 IME-delayed extern
+/// (host_lr35902_arm_ime_delayed) which sets the JsonCpu's _eiDelay
+/// counter. This preserves current EI behaviour exactly. V2 generalises
+/// to any action_id via a per-action runtime mechanism (state slot table
+/// + outer-loop tick).
+/// </summary>
+internal sealed class DeferEmitterPerInstr : IMicroOpEmitter
+{
+    public string OpName => "defer";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var parsed = DeferStep.Parse(step);
+        if (parsed.ActionId != 0)
+            throw new NotSupportedException(
+                $"defer.action_id={parsed.ActionId} not supported in V1 — only action_id=0 (LR35902 EI/IME-delayed). " +
+                "V2 will add a generic per-action runtime mechanism.");
+        if (parsed.DelayValue != 1)
+            throw new NotSupportedException(
+                $"defer.delay_value={parsed.DelayValue} for action_id=0 not supported in V1 — " +
+                "current LR35902 IME extern hardcodes delay=1.");
+        // Route to existing LR35902 IME-delayed extern. Body content is
+        // not re-emitted in per-instr mode — the extern + JsonCpu's
+        // RunCycles _eiDelay countdown owns the IME=1 effect.
+        var (slot, fnType, ptrType) = Lr35902HostHelpers.GetVoidNoArgSlot(
+            ctx.Module, Lr35902HostHelpers.ArmImeDelayedExtern);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, Lr35902HostHelpers.ArmImeDelayedExtern + "_fn");
+        ctx.Builder.BuildCall2(fnType, fn, Array.Empty<LLVMValueRef>(), "");
     }
 }
 
