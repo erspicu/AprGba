@@ -780,13 +780,29 @@ internal sealed class RaiseExceptionEmitter : IMicroOpEmitter
         //    current_addr + pc_offset_bytes; the next instruction is at
         //    current_addr + instruction_size_bytes; so next_pc = R15 -
         //    (pc_offset_bytes - instruction_size_bytes).
-        var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
-        var r15    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "raw_pc");
+        //
+        // Phase 7 A.6.1 Strategy 2 — in block-JIT mode, GPR[15] memory
+        // holds the block-start PC (stale), so use PipelinePcConstant
+        // instead. Per-instr mode falls back to GPR[15] load (executor
+        // pre-set it). Without this fix, the LR_<exception_mode> slot
+        // gets a bogus return address — observed as LR=0 ending up on
+        // the stack and later POPped into PC for an indirect branch
+        // back to PC=0 (reset vector) → infinite re-init loop.
         var widthBytes  = ctx.InstructionSet.WidthBits.Fixed!.Value / 8;
         var pcDelta     = ctx.InstructionSet.PcOffsetBytes - widthBytes;
-        var nextPc      = pcDelta == 0
-            ? r15
-            : ctx.Builder.BuildSub(r15, ctx.ConstU32((uint)pcDelta), "next_pc");
+        var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
+        LLVMValueRef nextPc;
+        if (ctx.PipelinePcConstant is uint pipelineValue)
+        {
+            nextPc = ctx.ConstU32(pipelineValue - (uint)pcDelta);
+        }
+        else
+        {
+            var r15    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "raw_pc");
+            nextPc = pcDelta == 0
+                ? r15
+                : ctx.Builder.BuildSub(r15, ctx.ConstU32((uint)pcDelta), "next_pc");
+        }
 
         // 4. Save next_pc -> R14_<enterMode> (banked LR slot).
         if (modes.BankedRegisters.TryGetValue(enterMode, out var bankedList))
@@ -841,6 +857,12 @@ internal sealed class RaiseExceptionEmitter : IMicroOpEmitter
 
         // 7. PC = vector address.
         ctx.Builder.BuildStore(ctx.ConstU32(vector.Address), r15Ptr);
+
+        // Phase 7 A.6.1 Strategy 2 — exception entry IS a real PC write
+        // (PC redirected to vector). Mark PcWritten so block-JIT exits
+        // the block at this instruction; otherwise advance overwrites
+        // vector address with linear-PC and the exception entry is lost.
+        WriteReg.MarkPcWritten(ctx);
     }
 }
 
