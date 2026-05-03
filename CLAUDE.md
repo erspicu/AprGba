@@ -9,6 +9,25 @@ repository. Keep concise; add new rules as they emerge.
 方案討論、結尾摘要）。**程式碼、commit message、檔案內容、設計文件
 等寫到檔案的內容仍維持英文**，避免污染現有 codebase 的語言一致性。
 
+## Commit QA workflow
+
+Commit 前依改動性質跑對應 tier 的 QA — 詳細流程在
+**`MD/process/01-commit-qa-workflow.md`**。摘要：
+
+| Tier | 改動性質 | QA |
+|---|---|---|
+| 0 | 純文件 / 註解 | — |
+| 1 | refactor / debug helper | T1: 360 unit tests |
+| 2 | bug fix / 新 emitter / spec 改動 | T1 + 8-combo screenshot matrix |
+| 3 | hot path 改動 (JIT IR / dispatcher / bus) | T1 + T2 + 3-run loop100 bench + 紀錄到 `MD/performance/<時戳>.md` |
+| 4 | 大型架構變更 | T1 + T2 + T3 + 完整 matrix + baseline 更新 |
+
+共通規則：
+- 任何測試 / CLI 跑超過 1 分鐘視為掛了 — **不要拉長 timeout，找 root cause**
+- output 一律 `> temp/<name>.log 2>&1`
+- 強制 `--no-incremental` rebuild 避免 stale DLL
+- 遇 file lock 先 `Stop-Process -Name testhost -Force`
+
 ## Knowledgebase — Gemini 查詢工具
 
 碰到瓶頸（卡住的 LLVM/MCJIT 行為、文件查不到的 vendor 細節、ARM ARM
