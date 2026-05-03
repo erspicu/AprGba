@@ -97,7 +97,8 @@ GB 09-loop100 從 6.5 → ≥10 MIPS（保守目標 ~50% 進步）。
 | **P0.5** | HALT/STOP block boundary | ✅ | `a10a718` | detector 看 step `op:"halt"`/`"stop"` 自動切 block |
 | **P0.5b** | EI delay band-aid (block ends at EI+1) | ✅ partial | `6a86005` | hardcoded LR35902-specific；P0.6 取代 |
 | **P0.5c** | `Lr35902Alu8Emitter.FetchImmediate` Strategy 2 baking | ✅ | `d760b08` | + `--diff-bjit=N` lockstep harness；Blargg 01-special PASSED |
-| **P0.6** | **Generic `defer` micro-op + AST pre-pass** | 📋 planned | — | Gemini-recommended phantom-instruction-injection pattern；replaces P0.5b hardcode；details in `MD/design/13-defer-microop.md`；3-4 天 |
+| **P0.6** | Generic `defer` micro-op + AST pre-pass | ✅ | `ca248e8` | Phantom-instruction-injection pattern；replaced P0.5b hardcode；details in `MD/design/13-defer-microop.md` |
+| **P0.7** | **Hybrid IRQ delivery — fast/slow split + `sync` micro-op** | 📋 planned | — | Per-instr-grained IRQ correctness in block-JIT；MMIO write callback returns sync flag, JIT exits block on sync；details in `MD/design/14-irq-sync-fastslow.md`；3 天；**high engineering value** — gates "block-JIT good enough for any commercial ROM" |
 
 ### Tier P1 — Big-win 延伸（共 ~3-4 天，P0 完成後才有意義）
 
