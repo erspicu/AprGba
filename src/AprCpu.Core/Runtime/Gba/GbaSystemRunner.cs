@@ -63,16 +63,11 @@ public sealed unsafe class GbaSystemRunner
     /// the current Step started, ticks the scheduler, delivers IRQs, and
     /// rebases the budget so the rest of the block doesn't double-count.
     /// </summary>
-    public long DebugMmioSyncCalls;
-    public long DebugMmioSyncTickedCycles;
-
     private void SyncSchedulerForMmio()
     {
-        DebugMmioSyncCalls++;
         if (_inMmioSync) return;          // re-entry guard (DMA inside Scheduler.Tick → bus read → here)
         var consumed = _budgetAtStep - Cpu.CyclesLeft;
         if (consumed <= 0) return;
-        DebugMmioSyncTickedCycles += consumed;
         _inMmioSync = true;
         try
         {

@@ -123,7 +123,6 @@ runSw.Stop();
 }
 Console.WriteLine($"  final PC = 0x{cpu.Pc:X8}, R0..R15 = {DumpRegs(cpu)}");
 Console.WriteLine($"  IRQs delivered: {runner.IrqsDelivered}, frames: {runner.Scheduler.FrameCount}");
-Console.WriteLine($"  DEBUG MMIO sync: {runner.DebugMmioSyncCalls} calls, {runner.DebugMmioSyncTickedCycles} cycles ticked via sync");
 Console.WriteLine($"  CPSR=0x{cpu.ReadStatus("CPSR"):X8}");
 Console.WriteLine($"  DISPCNT=0x{bus.ReadHalfword(0x04000000):X4} DISPSTAT=0x{bus.ReadHalfword(0x04000004):X4} VCOUNT=0x{bus.ReadHalfword(0x04000006):X4}");
 Console.WriteLine($"  IE=0x{bus.ReadHalfword(0x04000200):X4} IF=0x{bus.ReadHalfword(0x04000202):X4} IME=0x{bus.ReadWord(0x04000208):X8}");
