@@ -321,6 +321,11 @@ public sealed unsafe class CpuExecutor
     public long InstrSnapshotInterval { get; set; } = 1000;
     private long _instrSnapshotNext;
 
+    /// <summary>DEBUG (A.6.1): when set, log [InstructionsExecuted PC StateHash]
+    /// at every block-JIT block boundary OR per-instr instruction. Compare PI vs
+    /// BJIT logs to find first divergence in execution.</summary>
+    public string? StateHashLogPath { get; set; }
+
     private void LogGprSnapshot(string mode, uint pc)
     {
         if (PcWatchLogPath is null) return;
@@ -347,6 +352,30 @@ public sealed unsafe class CpuExecutor
         }
         sb.Append('\n');
         System.IO.File.AppendAllText(PcWatchLogPath, sb.ToString());
+    }
+
+    /// <summary>FNV-1a hash of R0-R15 + CPSR — quick state checksum for cross-mode diff.</summary>
+    private uint ComputeStateHash()
+    {
+        uint hash = 2166136261u;
+        for (int i = 0; i < 16; i++)
+        {
+            uint v = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
+                (IntPtr)(_statePtr + (int)_rt.GprOffset(i)));
+            hash = (hash ^ v) * 16777619u;
+        }
+        uint cpsr = (uint)System.Runtime.InteropServices.Marshal.ReadInt32(
+            (IntPtr)(_statePtr + (int)_rt.StatusOffset("CPSR")));
+        hash = (hash ^ cpsr) * 16777619u;
+        return hash;
+    }
+
+    private void LogStateHashIfNeeded(uint pc)
+    {
+        if (StateHashLogPath is null) return;
+        var hash = ComputeStateHash();
+        System.IO.File.AppendAllText(StateHashLogPath,
+            $"instr={InstructionsExecuted} pc=0x{pc:X8} hash=0x{hash:X8}\n");
     }
 
     private void LogInstrSnapshotIfDue(uint pc)
@@ -412,6 +441,9 @@ public sealed unsafe class CpuExecutor
             // Instruction-count snapshot (block-JIT): log BEFORE block executes
             // so we can compare with per-instr at same instruction count.
             if (InstrSnapshotPath is not null) LogInstrSnapshotIfDue(ReadPc());
+            // State hash (block-JIT): log BEFORE block executes — represents
+            // CPU state at this PC, comparable to per-instr at same PC.
+            if (StateHashLogPath is not null) LogStateHashIfNeeded(ReadPc());
             StepBlock();
             return default!;   // block mode: no single decoded-instr to return
         }
@@ -427,6 +459,8 @@ public sealed unsafe class CpuExecutor
             LogGprSnapshot("PI", pc);
         // Instruction-count snapshot (per-instr).
         if (InstrSnapshotPath is not null) LogInstrSnapshotIfDue(pc);
+        // State hash (per-instr) — log BEFORE instruction so PI matches BJIT block-start hash.
+        if (StateHashLogPath is not null) LogStateHashIfNeeded(pc);
 
         // Pre-set R15 to PC + pc_offset_bytes so the IR's "read R15"
         // returns the correct pipeline-offset value mid-execution.
@@ -645,7 +679,8 @@ public sealed unsafe class CpuExecutor
             // Log mode change OR T-bit change (bit 5 of CPSR), OR if BlocksExecuted in interesting range.
             uint tBefore = (cpsrBefore >> 5) & 1u;
             uint tAfter  = (cpsrAfter  >> 5) & 1u;
-            bool inRange = BlocksExecuted >= 16188 && BlocksExecuted <= 16210;
+            // Log mode change OR T-bit change OR specific block range (16380-16400) for failure.
+            bool inRange = (BlocksExecuted >= 16380 && BlocksExecuted <= 16400);
             if (modeBefore != modeAfter || tBefore != tAfter || inRange)
             {
                 var newPc = ReadPc();

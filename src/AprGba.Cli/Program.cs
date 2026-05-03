@@ -261,27 +261,20 @@ static void RunWithFrameTrace(GbaSystemRunner runner, CpuExecutor cpu, GbaMemory
 {
     using var fs = new StreamWriter(outPath) { AutoFlush = true };
     fs.WriteLine("frame\tPC\tCPSR\tIE\tIF\tIME\tDISPCNT\tHALTCNT_writes\tIRQs\tR0\tR13\tR14");
-    long lastFrame = -1;
+    // Phase 7 A.6.1 — use runner.RunCycles in 1-frame chunks so block-JIT's
+    // predictive cycle budget + MMIO catch-up logic stays consistent. The
+    // previous hand-rolled loop bypassed runner's CyclesLeft setup, causing
+    // block IR to budget-exit on every instruction and stale-_budgetAtStep
+    // miscounts via the MMIO sync handler.
+    long lastFrame = runner.Scheduler.FrameCount;
     long consumed = 0;
+    long perFrame = AprCpu.Core.Runtime.Gba.GbaScheduler.CyclesPerFrame;
+    // Sample initial state.
+    fs.WriteLine($"{lastFrame}\t0x{cpu.Pc:X8}\t0x{cpu.ReadStatus("CPSR"):X8}\t0x{bus.ReadHalfword(0x04000200):X4}\t0x{bus.ReadHalfword(0x04000202):X4}\t0x{bus.ReadWord(0x04000208):X4}\t0x{bus.ReadHalfword(0x04000000):X4}\t{bus.HaltCntWriteCount}\t{runner.IrqsDelivered}\t0x{cpu.ReadGpr(0):X8}\t0x{cpu.ReadGpr(13):X8}\t0x{cpu.ReadGpr(14):X8}");
     while (consumed < cycleBudget)
     {
-        if (bus.CpuHalted)
-        {
-            runner.Scheduler.Tick(4);
-            consumed += 4;
-            if (runner.HasAnyPendingIrqPublic()) bus.CpuHalted = false;
-            runner.DeliverIrqIfPending();
-        }
-        else
-        {
-            cpu.Step();
-            var ticks = 4 * cpu.LastStepInstructionCount;
-            runner.Scheduler.Tick(ticks);
-            consumed += ticks;
-            runner.DeliverIrqIfPending();
-        }
-
-        // Sample at frame boundary.
+        var chunk = Math.Min(perFrame, cycleBudget - consumed);
+        consumed += runner.RunCycles(chunk);
         if (runner.Scheduler.FrameCount != lastFrame)
         {
             lastFrame = runner.Scheduler.FrameCount;
@@ -345,6 +338,12 @@ static (CpuExecutor Cpu, Arm7tdmiBankSwapHandler Swap, HostRuntime Rt, IDisposab
         exec.InstrSnapshotPath = snapPath;
         if (!string.IsNullOrEmpty(snapInterval)) exec.InstrSnapshotInterval = long.Parse(snapInterval);
         if (System.IO.File.Exists(snapPath)) System.IO.File.Delete(snapPath);
+    }
+    var stateHashPath = Environment.GetEnvironmentVariable("APR_STATE_HASH_LOG");
+    if (!string.IsNullOrEmpty(stateHashPath))
+    {
+        exec.StateHashLogPath = stateHashPath;
+        if (System.IO.File.Exists(stateHashPath)) System.IO.File.Delete(stateHashPath);
     }
     var irDumpPcHex = Environment.GetEnvironmentVariable("APR_IR_DUMP_PC");
     var irDumpPath  = Environment.GetEnvironmentVariable("APR_IR_DUMP_PATH");
