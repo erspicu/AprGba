@@ -65,6 +65,14 @@ public sealed unsafe class HostRuntime : IDisposable
     private bool _finalized;
     private bool _disposed;
 
+    // Phase 7 A.4 — track every BindExtern call so AddModule (called for
+    // block-JIT modules post-Compile) can replay the same trampoline
+    // bindings into the new module's extern global slots. Without this,
+    // a block module that uses memory_read_*, bank_swap, etc. would only
+    // see uninitialized globals → trap stub at runtime.
+    private readonly Dictionary<string, IntPtr> _externBindings
+        = new(StringComparer.Ordinal);
+
     public CpuStateLayout Layout { get; }
 
     /// <summary>Total byte size of the CPU-state struct.</summary>
@@ -111,16 +119,30 @@ public sealed unsafe class HostRuntime : IDisposable
                 $"Extern '{symbolName}' not declared in module — nothing to bind. " +
                 "Declare it as an external global pointer variable.");
 
-        // Set the initializer to inttoptr(addr) so the JIT places the
-        // global in .rdata adjacent to .text. Switch linkage to Internal
-        // so the JIT linker doesn't try to satisfy the symbol externally.
+        BindExternInModule(_initialModule, symbolName, nativeFn);
+        // Phase 7 A.4 — remember binding so block modules added later
+        // (via AddModule) can replay the same trampoline address.
+        _externBindings[symbolName] = nativeFn;
+    }
+
+    /// <summary>
+    /// Inner helper — write the inttoptr-global binding into a specific
+    /// module. Used by both <see cref="BindExtern"/> (initial module)
+    /// and <see cref="AddModule"/> (block-JIT modules, which need the
+    /// same bindings replayed into their own private global slots).
+    /// </summary>
+    private static void BindExternInModule(LLVMModuleRef module, string symbolName, IntPtr nativeFn)
+    {
+        var slot = module.GetNamedGlobal(symbolName);
+        if (slot.Handle == IntPtr.Zero) return;   // module doesn't reference this extern
+
         var i64 = LLVMTypeRef.Int64;
         var addrConst = LLVMValueRef.CreateConstInt(i64, (ulong)nativeFn.ToInt64(), false);
         var ptrType = LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0);
         var ptrConst = LLVMValueRef.CreateConstIntToPtr(addrConst, ptrType);
 
-        globalSlot.Initializer = ptrConst;
-        globalSlot.Linkage = LLVMLinkage.LLVMInternalLinkage;
+        slot.Initializer = ptrConst;
+        slot.Linkage = LLVMLinkage.LLVMInternalLinkage;
     }
 
     /// <summary>
@@ -191,6 +213,15 @@ public sealed unsafe class HostRuntime : IDisposable
     public void AddModule(LLVMModuleRef module)
     {
         EnsureFinalized();
+        // Replay all known extern bindings into this module's matching
+        // global slots. The block IR will have declared each extern it
+        // references via GetOrDeclareExtern (external-linkage global ptr);
+        // here we bake the same trampoline address as the initial module.
+        foreach (var (name, addr) in _externBindings)
+            BindExternInModule(module, name, addr);
+        // Anything still unbound in this module (extern declared but not
+        // in our binding map — shouldn't happen for our emitters) falls
+        // back to the trap stub.
         BindUnboundExternsToTrap(module);
         // H.a disabled — see note in Compile().
         //RunOptimizationPipeline(module);
