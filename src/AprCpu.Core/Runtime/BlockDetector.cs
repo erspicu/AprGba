@@ -230,9 +230,34 @@ public sealed class BlockDetector
                 endReason = BlockEndReason.ChangesMode;
                 break;
             }
+            // Phase 7 GB block-JIT P0.5 — HALT / STOP must end the block.
+            // The host-side outer loop owns the halt/wakeup logic
+            // (CheckInterrupts + HALT-bug semantics); a block that runs
+            // PAST a HALT silently corrupts state because subsequent
+            // "halted" instructions still execute in the JIT'd block.
+            // Detected by step op rather than a new spec field — keeps
+            // the spec schema unchanged and works for both LR35902 (op
+            // "halt" / "stop") and any future CPU that adopts the same
+            // op naming convention.
+            if (HasHaltOrStopStep(def))
+            {
+                endReason = BlockEndReason.ChangesMode;   // closest existing reason
+                break;
+            }
         }
 
         return new Block(startPc, pc, _setSpec.Name, _instrSizeBytes, instrs, endReason);
+    }
+
+    private static bool HasHaltOrStopStep(JsonSpec.InstructionDef def)
+    {
+        // Most instructions have 0-5 steps; linear scan is fine.
+        foreach (var step in def.Steps)
+        {
+            var op = step.Op;
+            if (op == "halt" || op == "stop") return true;
+        }
+        return false;
     }
 
     private static uint ReadFixedWidthWord(IMemoryBus bus, uint pc, uint sizeBytes) =>
