@@ -90,6 +90,12 @@ public sealed unsafe class JsonCpu : ICpuBackend
     // bus assignment (Reset re-pins on bus change).
     private System.Runtime.InteropServices.GCHandle _wramHandle;
     private System.Runtime.InteropServices.GCHandle _hramHandle;
+    // Phase 7 GB block-JIT P1 #5b SMC V2 — pin the BlockCache's per-byte
+    // coverage counter array so its base address can be baked into IR as
+    // a compile-time constant. JIT'd inline RAM writes use this to do an
+    // inline 1-byte coverage check; only when non-zero do they invoke
+    // the slow notify_smc_write extern.
+    private System.Runtime.InteropServices.GCHandle _smcCoverageHandle;
 
     // Pre-cached field offsets for fast register access.
     private readonly int _aOff, _bOff, _cOff, _dOff, _eOff, _hOff, _lOff;
@@ -256,6 +262,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
         {
             if (_wramHandle.IsAllocated) _wramHandle.Free();
             if (_hramHandle.IsAllocated) _hramHandle.Free();
+            if (_smcCoverageHandle.IsAllocated) _smcCoverageHandle.Free();
             _wramHandle = System.Runtime.InteropServices.GCHandle.Alloc(
                 bus.Wram, System.Runtime.InteropServices.GCHandleType.Pinned);
             _hramHandle = System.Runtime.InteropServices.GCHandle.Alloc(
@@ -264,6 +271,19 @@ public sealed unsafe class JsonCpu : ICpuBackend
                 _wramHandle.AddrOfPinnedObject());
             _rt.BindExtern(MemoryEmitters.ExternFunctionNames.Lr35902HramBase,
                 _hramHandle.AddrOfPinnedObject());
+
+            // P1 #5b SMC V2 — pin coverage counter array + bind base
+            // pointer + slow-path notify trampoline. Inline IR coverage
+            // check (1 byte load + branch) gates the slow path; the
+            // notify trampoline scans cached blocks for precise per-instr
+            // coverage match and invalidates any whose [pc, pc+len)
+            // ranges include addr.
+            _smcCoverageHandle = System.Runtime.InteropServices.GCHandle.Alloc(
+                _blockCache!.CoverageCountBuffer, System.Runtime.InteropServices.GCHandleType.Pinned);
+            _rt.BindExtern(MemoryEmitters.ExternFunctionNames.Lr35902SmcCoverageBase,
+                _smcCoverageHandle.AddrOfPinnedObject());
+            TryBindI8(MemoryEmitters.ExternFunctionNames.Lr35902SmcNotifyWrite,
+                (IntPtr)(delegate* unmanaged[Cdecl]<uint, void>)&SmcNotifyWrite);
         }
 
         if (bus.BiosEnabled)
@@ -483,15 +503,26 @@ public sealed unsafe class JsonCpu : ICpuBackend
         // StartPc; use lastBi.Pc + LengthBytes (not StartPc + totalBytes).
         var lastBi = block.Instructions[block.Instructions.Count - 1];
         uint nextPcAfterLastInstr = (uint)((lastBi.Pc + lastBi.LengthBytes) & 0xFFFFu);
-        // P1 SMC — coverage range across all instruction PCs.
+        // P1 SMC V2 — convex hull (legacy fallback) + precise per-instr
+        // (pc, length) arrays. The precise arrays let cross-jump blocks
+        // skip the gap between source ROM portion and target RAM portion
+        // when checking SMC coverage; the hull is kept as the legacy
+        // fallback path for non-precise consumers.
         uint covStart = uint.MaxValue, covEnd = 0;
-        foreach (var bi in block.Instructions)
+        int n = block.Instructions.Count;
+        var instrPcs = new uint[n];
+        var instrLens = new byte[n];
+        for (int i = 0; i < n; i++)
         {
+            var bi = block.Instructions[i];
+            instrPcs[i] = bi.Pc;
+            instrLens[i] = bi.LengthBytes;
             if (bi.Pc < covStart) covStart = bi.Pc;
             uint instrEnd = bi.Pc + bi.LengthBytes;
             if (instrEnd > covEnd) covEnd = instrEnd;
         }
-        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes, nextPcAfterLastInstr, covStart, covEnd);
+        return new CachedBlock(fnPtr, n, totalBytes, nextPcAfterLastInstr, covStart, covEnd,
+            coverageInstrPcs: instrPcs, coverageInstrLens: instrLens);
     }
 
     /// <summary>
@@ -786,6 +817,21 @@ public sealed unsafe class JsonCpu : ICpuBackend
     /// </summary>
     private static bool IsIrqRelevantAddress(ushort addr)
         => (addr >= 0xFF00 && addr <= 0xFF7F) || addr == 0xFFFF;
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #5b SMC V2 — slow-path notify trampoline
+    /// called by JIT'd inline RAM writes when the inline coverage check
+    /// (1-byte load + branch) detects a non-zero counter. Routes to
+    /// BlockCache.NotifyMemoryWrite which scans cached blocks for precise
+    /// per-instr coverage match and invalidates any whose [pc, pc+len)
+    /// ranges include addr. Cold path; the inline check filters out the
+    /// 99%+ case where no cached block covers the written address.
+    /// </summary>
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void SmcNotifyWrite(uint addr)
+    {
+        _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
+    }
 
     // ---------------- HALT / IME shims (called from JIT'd IR) ----------------
     // Route through _activeCpu so per-instance state isn't shared across

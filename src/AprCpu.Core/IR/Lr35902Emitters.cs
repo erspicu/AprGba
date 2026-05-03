@@ -1176,6 +1176,60 @@ internal sealed class Lr35902StoreByteEmitter : IMicroOpEmitter
     ///   (continue with next instruction)
     /// </code>
     /// </summary>
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #5b SMC V2 — emit inline coverage check
+    /// after an IR-level RAM write. The fast path (no cached block at
+    /// this addr) is 1 byte load + branch (~1ns); the slow path calls
+    /// the host extern <c>lr35902_smc_notify_write(addr)</c> which scans
+    /// cached blocks and invalidates any whose precise per-instr coverage
+    /// covers <paramref name="addr32"/>. Marked cold via llvm.expect so
+    /// codegen lays out the slow path out-of-line.
+    /// IR shape:
+    /// <code>
+    ///   cov_byte = load i8, gep coverage_base[addr]
+    ///   cov_nz   = icmp ne cov_byte, 0
+    ///   br cov_nz, smc_notify_BB, after_BB  ; cold-hint on smc_notify_BB
+    /// smc_notify_BB:
+    ///   call notify(addr)
+    ///   br after_BB
+    /// after_BB: (caller continues with their own br)
+    /// </code>
+    /// On exit, builder is positioned at <c>after_BB</c>; caller's
+    /// existing <c>BuildBr(afterBB)</c> remains correct (the IR walks
+    /// through <c>after_BB</c> first).
+    /// </summary>
+    internal static void EmitSmcCoverageNotify(EmitContext ctx, LLVMValueRef addr32)
+    {
+        var fn = ctx.Function;
+        var i32 = LLVMTypeRef.Int32;
+        var i8 = LLVMTypeRef.Int8;
+
+        var smcBB   = fn.AppendBasicBlock("smc_notify");
+        var afterBB = fn.AppendBasicBlock("smc_after");
+
+        // Load coverage_base byte at addr.
+        var (covSlot, covPtrType) = MemoryEmitters.GetOrDeclareRamBasePointer(
+            ctx.Module, MemoryEmitters.ExternFunctionNames.Lr35902SmcCoverageBase);
+        var covBase = ctx.Builder.BuildLoad2(covPtrType, covSlot, "smc_cov_base");
+        var covPtr  = ctx.Builder.BuildGEP2(i8, covBase, new[] { addr32 }, "smc_cov_ptr");
+        var covByte = ctx.Builder.BuildLoad2(i8, covPtr, "smc_cov_byte");
+        var covNz   = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE,
+            covByte, LLVMValueRef.CreateConstInt(i8, 0, false), "smc_cov_nz");
+        ctx.Builder.BuildCondBr(covNz, smcBB, afterBB);
+
+        // smc_notify: call extern, branch to after.
+        ctx.Builder.PositionAtEnd(smcBB);
+        var (slot, fnType, ptrType) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, MemoryEmitters.ExternFunctionNames.Lr35902SmcNotifyWrite,
+            ctx.Module.Context.VoidType, LLVMTypeRef.Int32);
+        var notifyFn = ctx.Builder.BuildLoad2(ptrType, slot, "smc_notify_fn");
+        ctx.Builder.BuildCall2(fnType, notifyFn, new[] { addr32 }, "");
+        ctx.Builder.BuildBr(afterBB);
+
+        // Position at after_BB so caller's subsequent emit continues there.
+        ctx.Builder.PositionAtEnd(afterBB);
+    }
+
     internal static void EmitWriteByteWithSyncAndRamFastPath(EmitContext ctx, LLVMValueRef addr32, LLVMValueRef v8)
     {
         var fn = ctx.Function;
@@ -1204,6 +1258,16 @@ internal sealed class Lr35902StoreByteEmitter : IMicroOpEmitter
         var wramAddr = ctx.Builder.BuildGEP2(LLVMTypeRef.Int8, wramBase,
             new[] { wramOff }, "w8_wram_addr");
         ctx.Builder.BuildStore(v8, wramAddr);
+        // P1 #5b SMC V2 — inline notify gated by APR_SMC_INLINE_NOTIFY
+        // env var. Default OFF preserves V1 behavior (Blargg cpu_instrs
+        // passes); ON enables IR-level coverage check + slow-path notify.
+        // V1→V2 cross-jump-into-RAM also requires this. Currently shipped
+        // OFF because enabling it causes a state divergence in cpu_instrs
+        // sub-test 03 — invalidation of WRAM-resident blocks triggers
+        // re-compile cycles that drift cycle accounting beyond the
+        // pre-existing 1-cycle DIV drift. Future investigation needed.
+        if (Environment.GetEnvironmentVariable("APR_SMC_INLINE_NOTIFY") is not null)
+            EmitSmcCoverageNotify(ctx, addr32);
         ctx.Builder.BuildBr(afterBB);
 
         // check_hram: 0xFF80 <= addr < 0xFFFF
@@ -1225,6 +1289,8 @@ internal sealed class Lr35902StoreByteEmitter : IMicroOpEmitter
         var hramAddr = ctx.Builder.BuildGEP2(LLVMTypeRef.Int8, hramBase,
             new[] { hramOff }, "w8_hram_addr");
         ctx.Builder.BuildStore(v8, hramAddr);
+        if (Environment.GetEnvironmentVariable("APR_SMC_INLINE_NOTIFY") is not null)
+            EmitSmcCoverageNotify(ctx, addr32);
         ctx.Builder.BuildBr(afterBB);
 
         // slow_path: existing sync-flag extern + sync exit

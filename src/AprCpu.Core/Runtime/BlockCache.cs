@@ -52,15 +52,37 @@ public readonly struct CachedBlock
     /// <summary>
     /// Phase 7 A.5 SMC support — exclusive upper bound of memory
     /// covered by any instruction in this block (= max(instr.Pc +
-    /// instr.LengthBytes)). Used by SMC detection: a memory write to
-    /// any address in [CoverageStartPc, CoverageEndPcExclusive) MAY
-    /// invalidate this block (conservative: covers gaps in cross-jump
-    /// blocks; over-invalidates by a few bytes max).
+    /// instr.LengthBytes)). For SEQUENTIAL blocks the convex hull
+    /// equals the precise coverage. For CROSS-JUMP blocks (P1 #6) the
+    /// hull may be much larger than the precise per-instr coverage —
+    /// use <see cref="CoverageInstrPcs"/> + <see cref="CoverageInstrLens"/>
+    /// for the precise check (P1 #5b SMC V2). The hull is still kept
+    /// for the legacy convex-hull-only check fallback.
     /// </summary>
     public uint CoverageEndPcExclusive { get; }
 
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #5b SMC V2 — precise per-instr starting
+    /// PCs covered by this block. Paired with <see cref="CoverageInstrLens"/>:
+    /// instruction <c>i</c> covers bytes <c>[CoverageInstrPcs[i],
+    /// CoverageInstrPcs[i] + CoverageInstrLens[i])</c>. Used by
+    /// <see cref="BlockCache"/> for both per-byte counter increment
+    /// (precise) and slow-path invalidation check (precise — a write to
+    /// addr only invalidates this block if some instr's range covers
+    /// addr, NOT just the convex hull). Required for cross-jump-into-
+    /// RAM correctness: without precise coverage, a data write into
+    /// the RAM region between the source ROM portion and the target
+    /// RAM portion would over-invalidate the block.
+    /// May be null for blocks compiled before SMC V2 (legacy path).
+    /// </summary>
+    public uint[]? CoverageInstrPcs { get; }
+
+    /// <summary>Companion to <see cref="CoverageInstrPcs"/>.</summary>
+    public byte[]? CoverageInstrLens { get; }
+
     public CachedBlock(IntPtr fn, int instructionCount, int totalByteLength, uint nextPcAfterLastInstr,
-                       uint coverageStartPc, uint coverageEndPcExclusive)
+                       uint coverageStartPc, uint coverageEndPcExclusive,
+                       uint[]? coverageInstrPcs = null, byte[]? coverageInstrLens = null)
     {
         Fn = fn;
         InstructionCount = instructionCount;
@@ -68,6 +90,8 @@ public readonly struct CachedBlock
         NextPcAfterLastInstr = nextPcAfterLastInstr;
         CoverageStartPc = coverageStartPc;
         CoverageEndPcExclusive = coverageEndPcExclusive;
+        CoverageInstrPcs = coverageInstrPcs;
+        CoverageInstrLens = coverageInstrLens;
     }
 }
 
@@ -234,7 +258,7 @@ public sealed class BlockCache
         foreach (var kvp in _map)
         {
             var blk = kvp.Value.Value.Block;
-            if (addr >= blk.CoverageStartPc && addr < blk.CoverageEndPcExclusive)
+            if (BlockCoversAddr(blk, addr))
             {
                 (toRemove ??= new List<uint>()).Add(kvp.Key);
             }
@@ -244,8 +268,57 @@ public sealed class BlockCache
         return true;
     }
 
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #5b SMC V2 — pinned base pointer of the
+    /// per-byte coverage counter. JIT'd code reads this directly via the
+    /// <c>lr35902_smc_coverage_base</c> extern global (set by JsonCpu.Reset).
+    /// Caller must keep the cache instance alive for the duration of any
+    /// JIT'd code that uses this pointer.
+    /// </summary>
+    public byte[] CoverageCountBuffer => _coverageCount;
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #5b SMC V2 — precise per-instr coverage
+    /// check. A write to addr only invalidates the block if some instr's
+    /// [pc, pc+len) range covers addr. For sequential blocks this is
+    /// equivalent to the convex hull check; for cross-jump-followed
+    /// blocks (P1 #6) it correctly skips gaps between the source ROM
+    /// portion and the target RAM portion. Falls back to convex hull
+    /// when CoverageInstrPcs is null (legacy blocks).
+    /// </summary>
+    private static bool BlockCoversAddr(CachedBlock blk, uint addr)
+    {
+        if (blk.CoverageInstrPcs is { } pcs && blk.CoverageInstrLens is { } lens)
+        {
+            for (int i = 0; i < pcs.Length; i++)
+            {
+                uint p = pcs[i];
+                uint end = p + lens[i];
+                if (addr >= p && addr < end) return true;
+            }
+            return false;
+        }
+        // Legacy convex-hull check.
+        return addr >= blk.CoverageStartPc && addr < blk.CoverageEndPcExclusive;
+    }
+
     private void IncrementCoverage(CachedBlock blk)
     {
+        if (blk.CoverageInstrPcs is { } pcs && blk.CoverageInstrLens is { } lens)
+        {
+            // Precise per-instr increment — skips gaps in cross-jump blocks
+            // so data writes between source ROM and target RAM don't hit
+            // the SMC fast-path counter.
+            for (int i = 0; i < pcs.Length; i++)
+            {
+                uint p = pcs[i];
+                uint end = p + lens[i];
+                for (uint a = p; a < end && a < _addressSpaceBytes; a++)
+                    if (_coverageCount[a] < byte.MaxValue) _coverageCount[a]++;
+            }
+            return;
+        }
+        // Legacy convex-hull increment.
         for (uint a = blk.CoverageStartPc; a < blk.CoverageEndPcExclusive && a < _addressSpaceBytes; a++)
         {
             if (_coverageCount[a] < byte.MaxValue) _coverageCount[a]++;
@@ -254,6 +327,17 @@ public sealed class BlockCache
 
     private void DecrementCoverage(CachedBlock blk)
     {
+        if (blk.CoverageInstrPcs is { } pcs && blk.CoverageInstrLens is { } lens)
+        {
+            for (int i = 0; i < pcs.Length; i++)
+            {
+                uint p = pcs[i];
+                uint end = p + lens[i];
+                for (uint a = p; a < end && a < _addressSpaceBytes; a++)
+                    if (_coverageCount[a] > 0) _coverageCount[a]--;
+            }
+            return;
+        }
         for (uint a = blk.CoverageStartPc; a < blk.CoverageEndPcExclusive && a < _addressSpaceBytes; a++)
         {
             if (_coverageCount[a] > 0) _coverageCount[a]--;

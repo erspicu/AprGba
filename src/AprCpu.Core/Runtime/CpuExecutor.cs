@@ -583,16 +583,25 @@ public sealed unsafe class CpuExecutor
         // blocks differs (last instr can be in a different PC range).
         var lastBi = block.Instructions[block.Instructions.Count - 1];
         uint nextPc = lastBi.Pc + lastBi.LengthBytes;
-        // P1 SMC — coverage range = min/max PC across all instructions.
-        // For sequential = [StartPc, StartPc + totalBytes); for cross-jump
-        // may span larger range (gaps included for conservative invalidation).
+        // P1 SMC V2 — convex hull + precise per-instr (pc, length) arrays.
+        // For sequential blocks the precise arrays equal the convex hull;
+        // for cross-jump blocks (P1 #6) the precise arrays correctly skip
+        // gaps so a data write between source and target portions doesn't
+        // over-invalidate.
         uint covStart = uint.MaxValue, covEnd = 0;
-        foreach (var bi in block.Instructions)
+        int n = block.Instructions.Count;
+        var instrPcs = new uint[n];
+        var instrLens = new byte[n];
+        for (int i = 0; i < n; i++)
         {
+            var bi = block.Instructions[i];
+            instrPcs[i] = bi.Pc;
+            instrLens[i] = bi.LengthBytes;
             if (bi.Pc < covStart) covStart = bi.Pc;
             uint instrEnd = bi.Pc + bi.LengthBytes;
             if (instrEnd > covEnd) covEnd = instrEnd;
         }
-        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes, nextPc, covStart, covEnd);
+        return new CachedBlock(fnPtr, n, totalBytes, nextPc, covStart, covEnd,
+            coverageInstrPcs: instrPcs, coverageInstrLens: instrLens);
     }
 }

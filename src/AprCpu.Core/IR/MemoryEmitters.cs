@@ -68,6 +68,24 @@ public static class MemoryEmitters
         // ARM/GBA path.
         public const string Lr35902WramBase = "lr35902_wram_base";  // 0xC000..0xDFFF
         public const string Lr35902HramBase = "lr35902_hram_base";  // 0xFF80..0xFFFE
+
+        // Phase 7 GB block-JIT P1 #5b SMC V2 — base of the per-byte coverage
+        // counter array (i8[0x10000] for LR35902). After every IR-level
+        // inline RAM store, JIT'd code does:
+        //     cov_byte = load i8, [coverage_base + addr]
+        //     if (cov_byte != 0) call notify_extern(addr)
+        // so SMC sees writes that bypass the bus extern (P1 #7 inline path).
+        // Without this, RAM writes via the inline fast-path miss the bus
+        // shim's NotifyMemoryWrite call, leaving stale block code resident
+        // for execution after a RAM-code overwrite. Bound by JsonCpu.Reset
+        // to the BlockCache's pinned coverage byte array.
+        public const string Lr35902SmcCoverageBase = "lr35902_smc_coverage_base";
+
+        // The slow-path notify function called when the inline coverage
+        // check fires. Signature: void(uint32 addr). Trampolines to
+        // BlockCache.NotifyMemoryWrite which scans cached blocks and
+        // invalidates any whose precise per-instr coverage covers addr.
+        public const string Lr35902SmcNotifyWrite = "lr35902_smc_notify_write";
     }
 
     // ---------------- Public byte-level helpers (used by StackOps etc) ----------------

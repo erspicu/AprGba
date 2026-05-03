@@ -206,21 +206,38 @@ public sealed class BlockDetector
 
             if (decoded is null)
             {
-                // Undecodable. If we've already collected something, stop
-                // here so the executor can run what we have and then
-                // hit-and-throw on the bad opcode next dispatch. If this
-                // is the very first instruction, still produce a 1-instr
-                // block of nothing — caller knows from EndReason to bail.
+                // Undecodable opcode (LR35902 illegal: 0xD3/DB/DD/E3/E4/EB
+                // /EC/ED/F4/FC/FD; spec has no decoder entry for these).
+                //
+                // Real hardware FREEZES the CPU on these. Most emulators
+                // treat them as silent 1-byte NOPs to keep running; we
+                // do the same so SMC-triggered re-compiles of a WRAM
+                // address that happens to hold an illegal byte don't
+                // crash the emulator.
+                //
+                // If we've already collected something, end the block here
+                // (run what we have, hit the same path on the next dispatch
+                // for the bad byte). If this is the very FIRST instruction
+                // of the block, synthesise a NOP equivalent: lookup the
+                // 0x00 NOP decoded entry, use its DecodedInstruction but
+                // with the original byte's length so PC advances by the
+                // hardware length.
                 if (instrs.Count > 0)
                 {
                     endReason = BlockEndReason.Undecodable;
                     break;
                 }
-                // Synthesise an empty-decode block so callers can check
-                // EndReason. We can't put a null DecodedInstruction in
-                // the list, so just return early with a degenerate block.
-                return new Block(startPc, pc, _setSpec.Name, _instrSizeBytes,
-                    Array.Empty<DecodedBlockInstruction>(), BlockEndReason.Undecodable);
+                var nopDecoded = _decoder.Decode(0x00u);
+                if (nopDecoded is null)
+                {
+                    throw new InvalidOperationException(
+                        $"BlockDetector: undecodable opcode at startPc=0x{startPc:X4} (pc=0x{pc:X4}) and spec has no NOP fallback (decode of 0x00 returned null).");
+                }
+                instrs.Add(new DecodedBlockInstruction(pc, 0u, nopDecoded, (byte)thisLength,
+                    IsFollowedBranch: false));
+                pc += thisLength;
+                endReason = BlockEndReason.Capped;
+                break;
             }
 
             // Phase 7 GB block-JIT P1 #6 — cross-jump follow check.
@@ -249,30 +266,40 @@ public sealed class BlockDetector
             // already-visited PC (or block_start), and we must have room
             // for at least one more instruction under the cap.
             //
-            // P1 #6 V1 — restrict to "ROM-to-ROM" follow: BOTH source
-            // PC and target must be in cart ROM (0x0000-0x7FFF) for
-            // LR35902. Following into WRAM/HRAM/VRAM is unsafe even
-            // with SMC because:
-            //   (a) P1 #7's IR-level inline RAM writes bypass the bus
-            //       extern entirely, so SMC's NotifyMemoryWrite isn't
-            //       called — stale blocks could run after RAM-code
-            //       overwrite via inline path.
-            //   (b) Coverage span of cross-jump blocks across RAM is
-            //       large; SMC invalidates aggressively → constant
-            //       recompile + perf tanks ~10×.
-            // Proper RAM cross-jump needs P1 #7 inline path to also
-            // notify SMC (extra IR cost) OR a smarter coverage scheme.
-            // Deferred — V1 SMC infrastructure is in place but
-            // cross-jump stays ROM-only for both correctness + perf.
+            // P1 #6 V2 (P1 #5b SMC V2) — cross-jump-into-RAM unlocked.
+            // Two prerequisites both shipped:
+            //   (a) Lr35902Emitters.EmitSmcCoverageNotify — every IR-level
+            //       inline RAM store (P1 #7 path) now does a 1-byte
+            //       coverage-counter check + cold-path call to
+            //       lr35902_smc_notify_write, so SMC sees writes that
+            //       bypass the bus extern.
+            //   (b) BlockCache uses precise per-instr (pc, length) arrays
+            //       (CachedBlock.CoverageInstrPcs/Lens). The per-byte
+            //       coverage counter only counts actual code bytes (skips
+            //       the gap between source ROM portion and target RAM
+            //       portion of a cross-jump block), and the slow-path
+            //       scan checks per-instr ranges instead of the convex
+            //       hull. Data writes between source + target portions
+            //       no longer trigger false invalidation.
+            // P1 #6 V2 / P1 #5b SMC V2 — cross-jump-into-RAM gated by
+            // APR_CROSS_JUMP_RAM env var. Default OFF restores V1's
+            // ROM-only restriction (BOTH source and target must be in
+            // cart ROM 0x0000-0x7FFF for LR35902); ON allows the detector
+            // to follow JR/JP into WRAM/HRAM/VRAM. Default OFF because
+            // ON without APR_SMC_INLINE_NOTIFY=1 leaves stale RAM-cached
+            // IR resident after RAM-code overwrites; ON with
+            // APR_SMC_INLINE_NOTIFY=1 currently breaks cpu_instrs sub-
+            // test 03 due to invalidation cycle drift. Both env vars
+            // hide the V2 changes from the default-built test path
+            // until the cycle drift is rooted out.
             bool isRomToRom = false;
+            bool crossJumpRam = Environment.GetEnvironmentVariable("APR_CROSS_JUMP_RAM") is not null;
             if (followTarget is uint t0)
-            {
                 isRomToRom = pc <= 0x7FFFu && t0 <= 0x7FFFu;
-            }
             bool willFollow = followTarget is uint t
                 && !visited.Contains(t)
                 && i + 1 < maxInstructions
-                && isRomToRom;
+                && (crossJumpRam || isRomToRom);
 
             instrs.Add(new DecodedBlockInstruction(pc, word, decoded, (byte)thisLength,
                 IsFollowedBranch: willFollow));
