@@ -374,21 +374,27 @@ jsmolka thumb.gba 通過，ARM↔Thumb BX 切換在實 ROM 中驗證過。
 
 ---
 
-## Phase 7：LLVM Block JIT + Code Cache — 可選優化
+## Phase 7：LLVM Block JIT + Code Cache — **必要 step**
 
-> **Scope decision (2026-05)**：原本 Phase 7 定位是「整個專案最具挑戰
-> 性的階段、GBA 跑到實機速度以上的關鍵」。但 GBA 端目標縮成「test ROM
-> + 截圖驗證」後，real-time 60fps 不再是必要 — test ROM 跑慢一點
-> （現在 ~40% real-time，~10 秒跑完一個 jsmolka subtest）也只是等
-> 截圖出來而已。**Phase 7 從必要降為可選**。
+> **Scope decision (2026-05-03 update)**：原本 Phase 7 定位是「整個專案
+> 最具挑戰性的階段、GBA 跑到實機速度以上的關鍵」，2026-05 一度因 GBA
+> 端目標縮成「test ROM + 截圖驗證」而降級為可選。**現重新定位為必要
+> step** — 一旦把 framework 推向「跑商業遊戲」或第三顆 CPU 移植，
+> instruction-level dispatcher overhead 會是 hard limit；block-JIT
+> 是 framework 能在不同 CPU/負載下保持 viable 的核心能力。
+>
+> 已 ship：A.1-A.6 + A.6.1 sub-phase + Phase 1a/1b + H.a (含
+> instcombine) + cleanup（見下面進度快照）。剩餘 A.5 SMC 偵測 / A.7
+> block linking / A.8 state→reg caching / A.9 profiling / E.c
+> IR-level region check / H.b-i 等是延伸優化，補完才算 Phase 7
+> truly done。
 
-值得做的時機：
-- 想實際把 framework 用在「跑遊戲」級別的場景（commercial GBA ROM、
+值得繼續推進的理由：
+- 把 framework 用在「跑遊戲」級別的場景（commercial GBA ROM、
   homebrew 平台、其他比 GBA 重的 CPU 模擬目標）
-- 想 demo「JSON-driven CPU framework 經過 block-JIT 也能逼近 native
-  interpreter 速度」這個進階論點
-- 想做後續其他 CPU 移植的時候，避免每顆 CPU 都被 dispatch overhead
-  拖累
+- demo「JSON-driven CPU framework 經過 block-JIT 也能逼近 native
+  interpreter 速度」這個論點
+- 後續其他 CPU 移植時，避免每顆 CPU 都被 dispatch overhead 拖累
 
 **當前 canonical baseline（2026-05-02，Phase 5.7 完工後，instruction-level
 JIT）見 `MD/note/loop100-bench-2026-05.md`**。1200 frames stress-test
@@ -807,20 +813,14 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
   fast-path inline 進 RunCycles 的 hot loop，剩餘 cost ~1-2 ns/instr，
   block-batch 後可降到 ~0 但前提是有 block。
 
-#### G. .NET host runtime 優化
-
-- [ ] **G.a Native AOT** — 把整個 host runtime AOT 編譯，避開 .NET
-  tiered JIT 的 cold-start cost (對 GB legacy 那 −15% 量測 noise
-  也可能改善)。需要 `<PublishAot>true</PublishAot>` + 確認所有 dynamic
-  code (LLVMSharp interop) 都 AOT-compatible。中複雜度，純 build-time
-  改動。
-- [ ] **G.b UnmanagedCallersOnly trampolines 走 IL emit**：直接 patch
-  entry，避免 .NET wrapper 的 prologue overhead。微優化，需要熟 .NET
-  IL 內部。
-
 #### H. 漏掉的優化方向（2026-05-03 補充）
 
-A-G 之外，盤點實作 Phase 7 過程發現可以做的：
+A-F 之外，盤點實作 Phase 7 過程發現可以做的：
+
+**註**：原 G 群（.NET host runtime 優化）— Native AOT、UnmanagedCallersOnly
+trampoline IL emit — 已從 Phase 7 主步驟移除，挪到下方「非必要 / 後備」區。
+理由：屬 build-time / .NET 內部 micro-optimization，不影響 framework 的
+JSON-driven 核心命題；ROI 跟風險比偏低。
 
 - [x] **H.a LLVM pass pipeline 調校**（2026-05-03，perf notes
   `MD/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md` +
@@ -868,7 +868,24 @@ A-G 之外，盤點實作 Phase 7 過程發現可以做的：
   (`.bc` file)，下次啟動直接 load 跳過 SpecCompiler。對 startup time
   有幫助，runtime perf 不變。已在後備 #4 列。
 
-### 後備（萬一上面某項實作不順）
+### 非必要 / 後備（不影響 Phase 7 完成判定）
+
+#### G. .NET host runtime 優化（從 Phase 7 主步驟降級）
+
+build-time / .NET 內部 micro-optimization；不影響 framework 的 JSON-driven
+核心命題，跟「block-JIT 推到極致」也沒直接關係。Phase 7 完成判定不要求
+做這群；真要 squeeze 最後幾 % 才考慮。
+
+- [ ] **G.a Native AOT** — 把整個 host runtime AOT 編譯，避開 .NET
+  tiered JIT 的 cold-start cost (對 GB legacy 那 −15% 量測 noise
+  也可能改善)。需要 `<PublishAot>true</PublishAot>` + 確認所有 dynamic
+  code (LLVMSharp interop) 都 AOT-compatible。中複雜度，純 build-time
+  改動。
+- [ ] **G.b UnmanagedCallersOnly trampolines 走 IL emit**：直接 patch
+  entry，避免 .NET wrapper 的 prologue overhead。微優化，需要熟 .NET
+  IL 內部。
+
+#### 萬一某項主步驟實作不順的後備
 
 若 LLVM 編譯太慢造成不可接受 stutter：
 - 後備 1：降 OptLevel 至 O0（或部分 block O0）
@@ -994,7 +1011,7 @@ T2 fail = 不准 commit；T3 退步 > 5% 要追 root cause 再決定 ship/revert
 | Phase 3 | LLVMSharp ORC JIT API 不熟 | 從 Phase 0 spike 的 add(3,4) 樣板擴出去；最差走 MCJIT |
 | Phase 4.5 | GB CPU spec 寫法卡到 paired register | 擴 schema 加 `register_aliases`；或在 spec 用兩個 8-bit + emitter helper |
 | Phase 5 | BIOS 取得問題 | HLE 最小 SWI handler set；不需要自備 BIOS file |
-| Phase 7 (可選) | LLVM 編譯太慢 | 改 .NET DynamicMethod 自寫輕量 JIT；或乾脆不做（test ROM 跑慢一點沒差） |
+| Phase 7 (必要) | LLVM 編譯太慢 | 改 .NET DynamicMethod 自寫輕量 JIT (後備 3)；或部分 block 走 O0 (後備 1)；都不行才考慮放生整個 Phase 7 |
 | Phase 8 | PPU mode 寫錯導致畫面不對 | 跟 mGBA dump VRAM 對拍；headless 截圖好對比 |
 
 ---
@@ -1012,7 +1029,7 @@ T2 fail = 不准 commit；T3 退步 > 5% 要追 root cause 再決定 ship/revert
 | **M4** | Phase 5 完成（GBA memory bus + IRQ + DMA + scheduler + apr-gba CLI） | — | ✅ 完工 (2026-05-02) |
 | **M4.5** | Phase 5.5–5.7（BIOS LLE + 5 ARM bug fix + GB CLI 對齊） | — | ✅ 完工 (2026-05-02) |
 | **M5** | Phase 8 完成（PPU 完整化：Mode 0/1/2 + OBJ + BLDCNT + Window） | — | ✅ 完工 (2026-05-02) |
-| **M6 (可選)** | Phase 7 完成（block-JIT，效能優化） | — | — |
+| **M6 (必要)** | Phase 7 完成（block-JIT 全 group A-F + H 已 ship；剩 A.5/A.7-A.9/E.c/H.b-i） | — | 部分 ✅（A.1-A.6.1 + Phase 1a/1b + H.a 已 ship 2026-05-03） |
 | **M7 (可選)** | GB scheduler / Mosaic / APU / 第三顆 CPU | — | — |
 
 ---
