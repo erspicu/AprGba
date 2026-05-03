@@ -136,6 +136,15 @@ public sealed class BlockDetector
         var instrs = new List<DecodedBlockInstruction>();
         uint pc = startPc;
         BlockEndReason endReason = BlockEndReason.Capped;
+        // Phase 7 GB block-JIT P0.5b — track "previous instruction was EI"
+        // so we can include exactly ONE more instruction after EI and then
+        // end the block. LR35902 EI sets IME=1 only AFTER the next
+        // instruction (1-instr delay quirk); without a hard boundary the
+        // block-JIT outer loop processes the EI delay countdown ONCE per
+        // block (= per N instructions) instead of per instruction, so IME
+        // never gets set correctly. Same approach scales to other "post-
+        // delay" semantics if more CPUs need it.
+        bool eiDelayPending = false;
 
         for (int i = 0; i < maxInstructions; i++)
         {
@@ -244,6 +253,19 @@ public sealed class BlockDetector
                 endReason = BlockEndReason.ChangesMode;   // closest existing reason
                 break;
             }
+            // Phase 7 GB block-JIT P0.5b — EI delay handling. After EI is
+            // appended, allow exactly one more instruction (so the delay
+            // countdown runs through it in the host loop) then end block.
+            if (eiDelayPending)
+            {
+                endReason = BlockEndReason.ChangesMode;
+                break;
+            }
+            if (HasEiDelayStep(def))
+            {
+                eiDelayPending = true;
+                // continue loop — append next instr, then break above.
+            }
         }
 
         return new Block(startPc, pc, _setSpec.Name, _instrSizeBytes, instrs, endReason);
@@ -257,6 +279,18 @@ public sealed class BlockDetector
             var op = step.Op;
             if (op == "halt" || op == "stop") return true;
         }
+        return false;
+    }
+
+    /// <summary>
+    /// LR35902 EI (lr35902_ime_delayed) sets IME=1 only AFTER the next
+    /// instruction completes. Detector flags this so the next iteration
+    /// includes exactly one more instruction then closes the block.
+    /// </summary>
+    private static bool HasEiDelayStep(JsonSpec.InstructionDef def)
+    {
+        foreach (var step in def.Steps)
+            if (step.Op == "lr35902_ime_delayed") return true;
         return false;
     }
 
