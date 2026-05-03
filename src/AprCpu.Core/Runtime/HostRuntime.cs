@@ -119,17 +119,27 @@ public sealed unsafe class HostRuntime : IDisposable
     /// </summary>
     public void BindExtern(string symbolName, IntPtr nativeFn)
     {
-        if (_finalized)
-            throw new InvalidOperationException(
-                $"BindExtern('{symbolName}'): runtime already finalized — externs must be bound first.");
-
         // Phase 7 GB block-JIT P0.7 — allow binding externs whose global
         // doesn't exist in the initial module YET. Lazy-declared externs
         // (only used in block-JIT modules added via AddModule) wouldn't
         // be present at initial Compile time but still need to be in the
         // _externBindings dict so AddModule can replay the binding later.
         // BindExternInModule silently no-ops if the global isn't there.
-        BindExternInModule(_initialModule, symbolName, nativeFn);
+        //
+        // Phase 7 GB block-JIT P1 #7 — also allow binding AFTER Compile.
+        // Per-bus state pointers (like RAM base addresses) only become
+        // available at Reset(bus) time, which is after the initial
+        // module is finalized. Recording in _externBindings still works
+        // because AddModule (block-JIT modules added later) replays
+        // _externBindings into each new module's globals. We just can't
+        // bind into the initial module post-finalization (which is OK
+        // because per-instr code in the initial module doesn't use these
+        // late bindings — block-JIT does, and block-JIT modules are
+        // always lazy-added).
+        if (!_finalized)
+        {
+            BindExternInModule(_initialModule, symbolName, nativeFn);
+        }
         // Always remember the binding so block-JIT modules added later
         // (via AddModule) can replay the same trampoline address.
         _externBindings[symbolName] = nativeFn;

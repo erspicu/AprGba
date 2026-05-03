@@ -74,6 +74,14 @@ public sealed unsafe class JsonCpu : ICpuBackend
     private System.Runtime.InteropServices.GCHandle _stateHandle;
     private byte* _statePtr;
     private GbMemoryBus _bus = null!;
+    // Phase 7 GB block-JIT P1 #7 — pin bus.Wram + bus.Hram so we can
+    // bake their byte-array base addresses into block-JIT IR as
+    // compile-time constants. Block-JIT memory emitter region-checks
+    // addr against RAM ranges and inlines the GEP-store/load directly,
+    // skipping the bus extern call. Pinned for the lifetime of the
+    // bus assignment (Reset re-pins on bus change).
+    private System.Runtime.InteropServices.GCHandle _wramHandle;
+    private System.Runtime.InteropServices.GCHandle _hramHandle;
 
     // Pre-cached field offsets for fast register access.
     private readonly int _aOff, _bOff, _cOff, _dOff, _eOff, _hOff, _lOff;
@@ -139,6 +147,15 @@ public sealed unsafe class JsonCpu : ICpuBackend
             (IntPtr)(delegate* unmanaged[Cdecl]<uint, byte, byte>)&MemWrite8Sync);
         TryBindWrite16Sync(MemoryEmitters.ExternFunctionNames.Write16WithSync,
             (IntPtr)(delegate* unmanaged[Cdecl]<uint, ushort, byte>)&MemWrite16Sync);
+
+        // Phase 7 GB block-JIT P1 #7 — IR-level RAM region inline access.
+        // Pin WRAM + HRAM byte arrays so we can bake their base pointers
+        // into IR as compile-time constants. RAM writes in block-JIT
+        // mode then become a region-check + direct GEP-store pair, no
+        // bus extern call. Only safe because:
+        //  - WRAM/HRAM never have IRQ-relevant side effects (ROM/MBC
+        //    cart RAM, VRAM, OAM, MMIO are all slow-path).
+        //  - Pinning the byte[] keeps the address stable for JIT'd code.
 
         // HALT / IME externs (declared by Lr35902HostHelpers; bound only
         // when the spec actually contains those ops). BindExtern throws
@@ -221,6 +238,25 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _ime = false;
         _eiDelay = 0;
         _haltSignal = false;
+
+        // Phase 7 GB block-JIT P1 #7 — pin bus's RAM byte arrays + bind
+        // their base addresses as IR-level constants for block-JIT fast
+        // path. Re-pin on Reset (bus may change). HostRuntime.BindExtern
+        // records into _externBindings; future block-JIT modules added
+        // via AddModule will see these globals via the replay.
+        if (_blockJitEnabled)
+        {
+            if (_wramHandle.IsAllocated) _wramHandle.Free();
+            if (_hramHandle.IsAllocated) _hramHandle.Free();
+            _wramHandle = System.Runtime.InteropServices.GCHandle.Alloc(
+                bus.Wram, System.Runtime.InteropServices.GCHandleType.Pinned);
+            _hramHandle = System.Runtime.InteropServices.GCHandle.Alloc(
+                bus.Hram, System.Runtime.InteropServices.GCHandleType.Pinned);
+            _rt.BindExtern(MemoryEmitters.ExternFunctionNames.Lr35902WramBase,
+                _wramHandle.AddrOfPinnedObject());
+            _rt.BindExtern(MemoryEmitters.ExternFunctionNames.Lr35902HramBase,
+                _hramHandle.AddrOfPinnedObject());
+        }
 
         if (bus.BiosEnabled)
         {

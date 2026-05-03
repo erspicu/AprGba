@@ -1131,17 +1131,112 @@ internal sealed class Lr35902StoreByteEmitter : IMicroOpEmitter
             : raw.TypeOf.IntWidth < 8
                 ? ctx.Builder.BuildZExt(raw, LLVMTypeRef.Int8, $"{valueName}_z8")
                 : ctx.Builder.BuildTrunc(raw, LLVMTypeRef.Int8, $"{valueName}_t8");
-        // Phase 7 GB block-JIT P0.7 — block-JIT mode uses sync-flag write
-        // variant. If sync flag returns 1 (IRQ-relevant address written),
-        // block exits early so outer loop can deliver the IRQ at the
-        // exact instruction boundary. Per-instr mode skips the sync
-        // check (outer loop already polls IRQ between instructions).
+        // Phase 7 GB block-JIT P0.7 + P1 #7 — block-JIT mode does:
+        //   1. Region check: if addr in WRAM (0xC000..0xDFFF) or HRAM
+        //      (0xFF80..0xFFFE), inline GEP-store into the pinned host
+        //      byte array (P1 #7 — skips bus extern entirely)
+        //   2. Else: sync-flag extern call + sync exit on flag (P0.7)
+        // Per-instr mode: just slow path (no sync check needed since
+        // outer loop polls IRQ between every instruction).
         if (ctx.CurrentInstructionBaseAddress is not null)
         {
-            EmitWriteByteWithSync(ctx, addr32, v8);
+            EmitWriteByteWithSyncAndRamFastPath(ctx, addr32, v8);
             return;
         }
         Lr35902MemoryHelpers.CallWrite8(ctx, addr32, v8);
+    }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #7 — emit fast-path region check (WRAM /
+    /// HRAM inline GEP-store, no extern) + slow-path fallback to
+    /// sync-flag extern (existing P0.7 logic).
+    /// IR shape:
+    /// <code>
+    ///   addr32 = ...
+    ///   is_wram = addr32 ∈ [0xC000, 0xE000)
+    ///   br is_wram, fast_wram, check_hram
+    /// fast_wram:
+    ///   off = addr32 - 0xC000
+    ///   ptr = wram_base + off
+    ///   store v8 → ptr
+    ///   br after_write
+    /// check_hram:
+    ///   is_hram = addr32 ∈ [0xFF80, 0xFFFF)
+    ///   br is_hram, fast_hram, slow_path
+    /// fast_hram:
+    ///   off = addr32 - 0xFF80
+    ///   ptr = hram_base + off
+    ///   store v8 → ptr
+    ///   br after_write
+    /// slow_path:
+    ///   sync = call memory_write_8_sync(addr, v8)
+    ///   if sync == 1: write next-PC + PcWritten=1 + ret void
+    ///   else br after_write
+    /// after_write:
+    ///   (continue with next instruction)
+    /// </code>
+    /// </summary>
+    internal static void EmitWriteByteWithSyncAndRamFastPath(EmitContext ctx, LLVMValueRef addr32, LLVMValueRef v8)
+    {
+        var fn = ctx.Function;
+        var i32 = LLVMTypeRef.Int32;
+        var fastWramBB  = fn.AppendBasicBlock("w8_fast_wram");
+        var checkHramBB = fn.AppendBasicBlock("w8_check_hram");
+        var fastHramBB  = fn.AppendBasicBlock("w8_fast_hram");
+        var slowPathBB  = fn.AppendBasicBlock("w8_slow");
+        var afterBB     = fn.AppendBasicBlock("w8_after");
+
+        // 1. WRAM check: 0xC000 <= addr < 0xE000
+        var wramLo = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE,
+            addr32, LLVMValueRef.CreateConstInt(i32, 0xC000, false), "w8_wram_lo");
+        var wramHi = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntULT,
+            addr32, LLVMValueRef.CreateConstInt(i32, 0xE000, false), "w8_wram_hi");
+        var inWram = ctx.Builder.BuildAnd(wramLo, wramHi, "w8_in_wram");
+        ctx.Builder.BuildCondBr(inWram, fastWramBB, checkHramBB);
+
+        // fast_wram: GEP wram_base + (addr - 0xC000), store
+        ctx.Builder.PositionAtEnd(fastWramBB);
+        var (wramSlot, wramPtrType) = MemoryEmitters.GetOrDeclareRamBasePointer(
+            ctx.Module, MemoryEmitters.ExternFunctionNames.Lr35902WramBase);
+        var wramBase = ctx.Builder.BuildLoad2(wramPtrType, wramSlot, "wram_base");
+        var wramOff  = ctx.Builder.BuildSub(addr32,
+            LLVMValueRef.CreateConstInt(i32, 0xC000, false), "w8_wram_off");
+        var wramAddr = ctx.Builder.BuildGEP2(LLVMTypeRef.Int8, wramBase,
+            new[] { wramOff }, "w8_wram_addr");
+        ctx.Builder.BuildStore(v8, wramAddr);
+        ctx.Builder.BuildBr(afterBB);
+
+        // check_hram: 0xFF80 <= addr < 0xFFFF
+        ctx.Builder.PositionAtEnd(checkHramBB);
+        var hramLo = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE,
+            addr32, LLVMValueRef.CreateConstInt(i32, 0xFF80, false), "w8_hram_lo");
+        var hramHi = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntULT,
+            addr32, LLVMValueRef.CreateConstInt(i32, 0xFFFF, false), "w8_hram_hi");
+        var inHram = ctx.Builder.BuildAnd(hramLo, hramHi, "w8_in_hram");
+        ctx.Builder.BuildCondBr(inHram, fastHramBB, slowPathBB);
+
+        // fast_hram: GEP hram_base + (addr - 0xFF80), store
+        ctx.Builder.PositionAtEnd(fastHramBB);
+        var (hramSlot, hramPtrType) = MemoryEmitters.GetOrDeclareRamBasePointer(
+            ctx.Module, MemoryEmitters.ExternFunctionNames.Lr35902HramBase);
+        var hramBase = ctx.Builder.BuildLoad2(hramPtrType, hramSlot, "hram_base");
+        var hramOff  = ctx.Builder.BuildSub(addr32,
+            LLVMValueRef.CreateConstInt(i32, 0xFF80, false), "w8_hram_off");
+        var hramAddr = ctx.Builder.BuildGEP2(LLVMTypeRef.Int8, hramBase,
+            new[] { hramOff }, "w8_hram_addr");
+        ctx.Builder.BuildStore(v8, hramAddr);
+        ctx.Builder.BuildBr(afterBB);
+
+        // slow_path: existing sync-flag extern + sync exit
+        ctx.Builder.PositionAtEnd(slowPathBB);
+        EmitWriteByteWithSync(ctx, addr32, v8);
+        // EmitWriteByteWithSync already left builder positioned at its
+        // "after_sync" continue-BB. Branch from there to our outer afterBB.
+        if (ctx.Builder.InsertBlock.Terminator.Handle == IntPtr.Zero)
+            ctx.Builder.BuildBr(afterBB);
+
+        // after: continue with next instruction
+        ctx.Builder.PositionAtEnd(afterBB);
     }
 
     /// <summary>

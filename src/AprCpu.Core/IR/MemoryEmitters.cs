@@ -58,6 +58,16 @@ public static class MemoryEmitters
         public const string Write8WithSync  = "memory_write_8_sync";
         public const string Write16WithSync = "memory_write_16_sync";
         public const string Write32WithSync = "memory_write_32_sync";
+
+        // Phase 7 GB block-JIT P1 #7 — RAM region base pointer constants
+        // for IR-level inline memory access. Bound by the host (JsonCpu
+        // pins its byte arrays + binds via inttoptr-global pattern).
+        // When block-JIT memory emitters detect addr ∈ RAM region, they
+        // can do `store/load` directly via GEP from these bases, skipping
+        // the bus extern call entirely. Per-CPU base names; not used by
+        // ARM/GBA path.
+        public const string Lr35902WramBase = "lr35902_wram_base";  // 0xC000..0xDFFF
+        public const string Lr35902HramBase = "lr35902_hram_base";  // 0xFF80..0xFFFE
     }
 
     // ---------------- Public byte-level helpers (used by StackOps etc) ----------------
@@ -94,6 +104,23 @@ public static class MemoryEmitters
             LLVMTypeRef.Int8, LLVMTypeRef.Int32, LLVMTypeRef.Int8);
         var fn = ctx.Builder.BuildLoad2(ptrType, slot, "w8s_fn");
         return ctx.Builder.BuildCall2(fnType, fn, new[] { addrI32, valueI8 }, outLabel);
+    }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #7 — declare/lookup a RAM-region base
+    /// pointer global. Host binds via inttoptr-global pattern (same
+    /// machinery as bus extern function pointers). Returns the global
+    /// slot ref + i8* type; caller does BuildLoad2 to get the actual
+    /// byte pointer at runtime, then GEPs from there with (addr - base_addr).
+    /// </summary>
+    public static (LLVMValueRef Slot, LLVMTypeRef PtrType) GetOrDeclareRamBasePointer(LLVMModuleRef module, string name)
+    {
+        var ptrType = LLVMTypeRef.CreatePointer(LLVMTypeRef.Int8, 0);
+        var existing = module.GetNamedGlobal(name);
+        if (existing.Handle != IntPtr.Zero) return (existing, ptrType);
+        var slot = module.AddGlobal(ptrType, name);
+        slot.Linkage = LLVMLinkage.LLVMExternalLinkage;
+        return (slot, ptrType);
     }
 
     /// <summary>
