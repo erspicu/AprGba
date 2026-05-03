@@ -126,11 +126,15 @@ public class BlockDetectorTests
     public void Lr35902_VariableWidthDetect_AdvancesByLengthTable()
     {
         var (det, bus) = BuildLr35902Main();
-        // LD A,#0x42 (2 bytes: 3E 42) / LD B,A (1 byte: 47) / NOP (1 byte: 00) / JP nn (3 bytes: C3 04 80)
+        // LD A,#0x42 (2 bytes: 3E 42) / LD B,A (1 byte: 47) / NOP (1 byte: 00) / RET (1 byte: C9 — non-followable boundary)
+        // P1 #6: JP nn would now be FOLLOWED to its target instead of
+        // ending the block; using RET here to keep this as a pure
+        // length-table-advance test (RET's target is dynamic — pop SP —
+        // so detector treats it as a hard boundary).
         bus.WriteByte(0x0000, 0x3E); bus.WriteByte(0x0001, 0x42);          // LD A,0x42
         bus.WriteByte(0x0002, 0x47);                                       // LD B,A
         bus.WriteByte(0x0003, 0x00);                                       // NOP
-        bus.WriteByte(0x0004, 0xC3); bus.WriteByte(0x0005, 0x04); bus.WriteByte(0x0006, 0x80); // JP 0x8004
+        bus.WriteByte(0x0004, 0xC9);                                       // RET
 
         var blk = det.Detect(bus, 0x0000u);
 
@@ -138,9 +142,9 @@ public class BlockDetectorTests
         Assert.Equal(0x0000u, blk.Instructions[0].Pc); Assert.Equal((byte)2, blk.Instructions[0].LengthBytes);
         Assert.Equal(0x0002u, blk.Instructions[1].Pc); Assert.Equal((byte)1, blk.Instructions[1].LengthBytes);
         Assert.Equal(0x0003u, blk.Instructions[2].Pc); Assert.Equal((byte)1, blk.Instructions[2].LengthBytes);
-        Assert.Equal(0x0004u, blk.Instructions[3].Pc); Assert.Equal((byte)3, blk.Instructions[3].LengthBytes);
-        Assert.Equal(BlockEndReason.WritesPc, blk.EndReason);     // JP nn ends the block
-        Assert.Equal(0x0007u, blk.EndPc);                         // 4 instructions, total 7 bytes
+        Assert.Equal(0x0004u, blk.Instructions[3].Pc); Assert.Equal((byte)1, blk.Instructions[3].LengthBytes);
+        Assert.Equal(BlockEndReason.WritesPc, blk.EndReason);     // RET ends the block
+        Assert.Equal(0x0005u, blk.EndPc);
         Assert.True(det.IsVariableWidth);
         Assert.Equal(0u, det.InstrSizeBytes);                     // sentinel for variable-width
     }

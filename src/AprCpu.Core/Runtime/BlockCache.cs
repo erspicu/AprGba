@@ -22,14 +22,31 @@ public readonly struct CachedBlock
     /// per-instruction <see cref="DecodedBlockInstruction.LengthBytes"/>.
     /// Used by the runner to advance PC after a fall-through (no branch,
     /// no budget exit) block execution. Phase 7 GB block-JIT P0.4.
+    ///
+    /// <para>For cross-jump-followed blocks (P1 #6) the byte length sum
+    /// no longer equals "next-PC after block" because instructions are
+    /// non-sequential in memory. Use <see cref="NextPcAfterLastInstr"/>
+    /// for the fall-through PC instead.</para>
     /// </summary>
     public int TotalByteLength { get; }
 
-    public CachedBlock(IntPtr fn, int instructionCount, int totalByteLength)
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #6 — PC immediately after the LAST
+    /// instruction in the block (= lastBi.Pc + lastBi.LengthBytes).
+    /// Equals <c>StartPc + TotalByteLength</c> for sequential blocks,
+    /// but DIFFERENT for cross-jump-followed blocks where instructions
+    /// span multiple PC ranges. Runner uses this for the fall-through
+    /// path (PcWritten=0 + budget OK) — sequential PC advance from
+    /// block-start would be wrong after cross-jump.
+    /// </summary>
+    public uint NextPcAfterLastInstr { get; }
+
+    public CachedBlock(IntPtr fn, int instructionCount, int totalByteLength, uint nextPcAfterLastInstr)
     {
         Fn = fn;
         InstructionCount = instructionCount;
         TotalByteLength = totalByteLength;
+        NextPcAfterLastInstr = nextPcAfterLastInstr;
     }
 }
 

@@ -100,7 +100,8 @@ public sealed record DecodedBlockInstruction(
     uint Pc,
     uint InstructionWord,
     DecodedInstruction Decoded,
-    byte LengthBytes);
+    byte LengthBytes,
+    bool IsFollowedBranch = false);
 
 /// <summary>Why <see cref="BlockDetector"/> stopped collecting instructions.</summary>
 public enum BlockEndReason

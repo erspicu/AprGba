@@ -206,12 +206,23 @@ public sealed unsafe class BlockFunctionBuilder
             //    bodies from earlier instructions' expired defers, and
             //    excludes any own defer wrappers which became part of
             //    later instructions' steps).
+            //
+            // Phase 7 GB block-JIT P1 #6 — for cross-jump-followed
+            // instructions (LR35902 JR/JP whose target is also baked
+            // into this block), skip the spec steps entirely. The
+            // branch's "side effects" (set PC, set PcWritten=1) would
+            // exit the block prematurely; we want to fall through to
+            // the next instruction (which is the branch target with
+            // bi.Pc = target). Cycle cost still gets deducted in postBB.
             builder.PositionAtEnd(execBBs[i]);
-            ResolverRegistry.Apply(ctx);
-            using (EmitterContextHolder.Push(Registry))
+            if (!bi.IsFollowedBranch)
             {
-                foreach (var step in emittedSteps)
-                    Registry.EmitStep(ctx, step);
+                ResolverRegistry.Apply(ctx);
+                using (EmitterContextHolder.Push(Registry))
+                {
+                    foreach (var step in emittedSteps)
+                        Registry.EmitStep(ctx, step);
+                }
             }
             if (!IsTerminated(builder)) builder.BuildBr(postBBs[i]);
 

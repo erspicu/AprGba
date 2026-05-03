@@ -578,6 +578,11 @@ public sealed unsafe class CpuExecutor
         // (LR35902) callers compute via per-instr LengthBytes sum (see
         // JsonCpu.CompileBlockAtPc in AprGb.Cli).
         int totalBytes = block.Instructions.Count * (int)mode.InstrSizeBytes;
-        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes);
+        // P1 #6 — fall-through PC = last instr's PC + length. For
+        // sequential blocks equals StartPc + totalBytes; for cross-jump
+        // blocks differs (last instr can be in a different PC range).
+        var lastBi = block.Instructions[block.Instructions.Count - 1];
+        uint nextPc = lastBi.Pc + lastBi.LengthBytes;
+        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes, nextPc);
     }
 }

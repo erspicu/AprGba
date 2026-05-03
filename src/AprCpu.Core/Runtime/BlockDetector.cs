@@ -141,6 +141,18 @@ public sealed class BlockDetector
         // generically by the `defer` micro-op + DeferLowering AST pre-pass
         // in BlockFunctionBuilder (see MD/design/13-defer-microop.md).
         // Detector no longer needs LR35902-specific knowledge of EI.
+        //
+        // Phase 7 GB block-JIT P1 #6 — cross-jump follow. When detector
+        // hits an unconditional branch with a STATICALLY computable
+        // target (LR35902: 0x18 JR e8 or 0xC3 JP nn), it can include
+        // the branch in the block + continue detection at the target,
+        // growing block size from 1.0-1.1 to 5-30 instr per block. The
+        // included branch is marked IsFollowedBranch so
+        // BlockFunctionBuilder skips its branch IR (no PC write, no
+        // PcWritten signal) — it becomes a phantom that just deducts
+        // its cycle cost. Visited-set prevents infinite loops on JR
+        // back-to-block-start (loop body becomes one block per iter).
+        var visited = new HashSet<uint> { startPc };
 
         for (int i = 0; i < maxInstructions; i++)
         {
@@ -211,7 +223,60 @@ public sealed class BlockDetector
                     Array.Empty<DecodedBlockInstruction>(), BlockEndReason.Undecodable);
             }
 
-            instrs.Add(new DecodedBlockInstruction(pc, word, decoded, (byte)thisLength));
+            // Phase 7 GB block-JIT P1 #6 — cross-jump follow check.
+            // Only attempt for variable-width LR35902 path; ARM/Thumb
+            // detector path keeps the existing strict boundary semantic.
+            // Followable opcodes:
+            //   0x18 (JR e8):  target = pc + 2 + sext(e8)
+            //   0xC3 (JP nn):  target = nn (LE imm16)
+            // CALL/RET/JP HL: not followable (dynamic targets).
+            uint? followTarget = null;
+            if (_lengthOracle is not null)
+            {
+                byte op = (byte)(word & 0xFF);
+                if (op == 0x18 && thisLength == 2)
+                {
+                    sbyte e8 = (sbyte)((word >> 8) & 0xFF);
+                    followTarget = (uint)((int)pc + thisLength + e8) & 0xFFFFu;
+                }
+                else if (op == 0xC3 && thisLength == 3)
+                {
+                    followTarget = (word >> 8) & 0xFFFFu;
+                }
+            }
+
+            // Decide whether to follow: target must not loop back into
+            // already-visited PC (or block_start), and we must have room
+            // for at least one more instruction under the cap.
+            //
+            // P1 #6 V1 — additionally restrict to "ROM-to-ROM" follow:
+            // BOTH source PC and target must be in cart ROM (0x0000-
+            // 0x7FFF) for LR35902. Following into WRAM/HRAM/VRAM is
+            // unsafe because those regions are writeable; if the
+            // target's bytes change after we cache the block, the IR
+            // is stale and CPU diverges. Proper SMC detection (P1 #5
+            // Phase 7 A.5 followup) would let us safely cross-jump into
+            // RAM by invalidating cached blocks on writes.
+            bool isRomToRom = false;
+            if (followTarget is uint t0)
+            {
+                isRomToRom = pc <= 0x7FFFu && t0 <= 0x7FFFu;
+            }
+            bool willFollow = followTarget is uint t
+                && !visited.Contains(t)
+                && i + 1 < maxInstructions
+                && isRomToRom;
+
+            instrs.Add(new DecodedBlockInstruction(pc, word, decoded, (byte)thisLength,
+                IsFollowedBranch: willFollow));
+
+            if (willFollow)
+            {
+                pc = followTarget!.Value;
+                visited.Add(pc);
+                continue;   // skip boundary checks below — follow into target
+            }
+
             pc += thisLength;
 
             // Block-end checks on this instruction (POST-add — the boundary

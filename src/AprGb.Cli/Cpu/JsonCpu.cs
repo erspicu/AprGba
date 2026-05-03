@@ -417,15 +417,15 @@ public sealed unsafe class JsonCpu : ICpuBackend
         int cyclesLeft = Marshal.ReadInt32((IntPtr)(_statePtr + _cyclesLeftOffset));
         int cyclesConsumed = blockBudget - cyclesLeft;
 
-        // If no branch fired AND budget didn't exhaust, advance PC by the
-        // block's total byte length (sum of per-instr LengthBytes, cached
-        // on CachedBlock.TotalByteLength). When budget exhausts the block
-        // IR has already written the next-PC and set PcWritten=1, so we
-        // leave PC alone.
+        // If no branch fired AND budget didn't exhaust, advance PC to
+        // the address right after the LAST instruction (P1 #6: this is
+        // CachedBlock.NextPcAfterLastInstr, not pc + TotalByteLength,
+        // because cross-jump blocks have non-sequential PCs). When
+        // budget exhausts the block IR has already written the next-PC
+        // and set PcWritten=1, so we leave PC alone.
         if (_statePtr[_pcWrittenOffset] == 0)
         {
-            ushort newPc = (ushort)(pc + entry.TotalByteLength);
-            WriteI16(_pcOff, newPc);
+            WriteI16(_pcOff, (ushort)entry.NextPcAfterLastInstr);
         }
 
         // Convert cycles → instruction count for the counter (approximate;
@@ -467,7 +467,12 @@ public sealed unsafe class JsonCpu : ICpuBackend
         int totalBytes = 0;
         foreach (var bi in block.Instructions) totalBytes += bi.LengthBytes;
 
-        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes);
+        // P1 #6 — fall-through PC after last instruction. For cross-jump
+        // blocks the last instr's Pc may be in a different region than
+        // StartPc; use lastBi.Pc + LengthBytes (not StartPc + totalBytes).
+        var lastBi = block.Instructions[block.Instructions.Count - 1];
+        uint nextPcAfterLastInstr = (uint)((lastBi.Pc + lastBi.LengthBytes) & 0xFFFFu);
+        return new CachedBlock(fnPtr, block.Instructions.Count, totalBytes, nextPcAfterLastInstr);
     }
 
     /// <summary>
