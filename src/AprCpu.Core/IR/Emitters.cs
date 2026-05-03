@@ -697,10 +697,38 @@ internal sealed class WriteRegPairEmitter : IMicroOpEmitter
 internal sealed class IfStep : IMicroOpEmitter
 {
     public string OpName => "if";
-    public void Emit(EmitContext ctx, MicroOpStep step)
+    public unsafe void Emit(EmitContext ctx, MicroOpStep step)
     {
         var cond = CondExpr.Parse(step.Raw.GetProperty("cond"));
         var condVal = cond.Lower(ctx);
+
+        // Phase 7 H.a-instcombine fix — when cond is a JIT-time constant
+        // (typical in block-JIT where instruction word is baked in and
+        // field extraction const-folds), emit ONLY the taken branch's
+        // body inline. This avoids generating dead basic blocks that
+        // contain switch instructions on (later-poisoned) operands —
+        // such patterns trigger an LLVM instcombine UB-propagation bug
+        // where poison input to the switch in the dead branch taints
+        // the live path's reachability analysis. Observed symptom:
+        // BlockFunctionBuilderTests had R-register stores eliminated.
+        var condConst = LLVM.IsAConstantInt(condVal);
+        if (condConst != null)
+        {
+            ulong v = LLVM.ConstIntGetZExtValue(condConst);
+            if (v != 0)
+            {
+                // cond is statically TRUE — emit then body inline,
+                // skip else entirely.
+                EmitNestedSteps(ctx, step.Raw.GetProperty("then"));
+            }
+            else if (step.Raw.TryGetProperty("else", out var elseEl))
+            {
+                // cond is statically FALSE with else branch — emit else inline.
+                EmitNestedSteps(ctx, elseEl);
+            }
+            // else cond=false with no else → emit nothing
+            return;
+        }
 
         var thenBlock = ctx.AppendBlock("if_then");
         var elseBlock = step.Raw.TryGetProperty("else", out _)
