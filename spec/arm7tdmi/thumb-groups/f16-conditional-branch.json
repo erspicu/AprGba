@@ -15,10 +15,10 @@
         {
           "mnemonic":   "B",
           "since":      "ARMv4T",
-          "writes_pc":  "conditional_via_rd",
+          "writes_pc":  "always",
           "manual_ref": "ARM ARM A7.1.5 (Thumb F16)",
           "cycles":     { "form": "(2S+1N) if taken, 1S if not" },
-          "comment":    "Single mnemonic 'B' with runtime cond evaluation; ARM disassemblers spell as BEQ/BNE/etc by cond field.",
+          "comment":    "Single mnemonic 'B' with runtime cond evaluation; ARM disassemblers spell as BEQ/BNE/etc by cond field. writes_pc=always (matches ARM Bcc) — when cond passes the instruction always writes PC; the conditional-execution gate (cond field) is orthogonal to the writes_pc classification, which describes the instruction's semantic effect when its body executes. Prior 'conditional_via_rd' was wrong (that's reserved for ALU ops whose Rd may be PC) and caused block-JIT to span past Thumb branches, breaking BIOS LLE polling loops.",
           "steps": [
             { "op": "if_arm_cond", "cond_field": "cond", "then": [
               { "op": "read_reg", "index": 15, "out": "raw_pc" },
