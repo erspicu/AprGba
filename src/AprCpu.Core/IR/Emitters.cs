@@ -155,17 +155,47 @@ internal sealed class ReadReg : IMicroOpEmitter
         }
         if (indexExpr.ValueKind != JsonValueKind.String) return false;
 
-        // Field-name index — needs constant instruction word to decode.
-        var instrConst = LLVM.IsAConstantInt(ctx.Instruction);
-        if (instrConst == null) return false;
-        var instrWord = (uint)LLVM.ConstIntGetZExtValue(instrConst);
         var name = indexExpr.GetString()!;
-        if (!ctx.Format.Fields.TryGetValue(name, out var range)) return false;
         var maskBits = NextPowerOfTwoMinusOne(ctx.Layout.GprCount);
-        var idxValue = ((instrWord >> range.Low) & range.LowMask) & maskBits;
-        if (idxValue != (uint)pc) return false;
-        pcConst = ctx.ConstU32(pipelineValue + pcOffsetAddend);
-        return true;
+
+        // Path A: name is a format field → static decode of the constant
+        // instruction word.
+        if (ctx.Format.Fields.TryGetValue(name, out var range))
+        {
+            var instrConst = LLVM.IsAConstantInt(ctx.Instruction);
+            if (instrConst == null) return false;
+            var instrWord = (uint)LLVM.ConstIntGetZExtValue(instrConst);
+            var idxValue = ((instrWord >> range.Low) & range.LowMask) & maskBits;
+            if (idxValue != (uint)pc) return false;
+            pcConst = ctx.ConstU32(pipelineValue + pcOffsetAddend);
+            return true;
+        }
+
+        // Path B: name is a step output (e.g. Thumb f5's eff_rs computed
+        // via shl+or of constant fields). If LLVM IRBuilder constant-
+        // folded the result, ctx.Values[name] is a ConstantInt — extract
+        // and compare. Without this, dynamic-but-effectively-constant
+        // index reads of R15 fall through to the runtime ICmp+Select
+        // fallback (correct but slow).
+        if (ctx.Values.TryGetValue(name, out var resolvedVal))
+        {
+            var valConst = LLVM.IsAConstantInt(resolvedVal);
+            if (valConst != null)
+            {
+                var idxValue = ((uint)LLVM.ConstIntGetZExtValue(valConst)) & maskBits;
+                if (idxValue == (uint)pc)
+                {
+                    pcConst = ctx.ConstU32(pipelineValue + pcOffsetAddend);
+                    return true;
+                }
+                // Constant but NOT PC — return false; caller emits the
+                // normal load path. Skip the runtime fallback ICmp+Select
+                // since we know statically it's not PC (will be caught
+                // by IRBuilder's constant folding of the runtime cmp anyway,
+                // but making it explicit avoids wasted IR).
+            }
+        }
+        return false;
     }
 
     internal static LLVMValueRef ResolveRegPtr(EmitContext ctx, JsonElement indexExpr)
