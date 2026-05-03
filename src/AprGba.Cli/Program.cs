@@ -120,6 +120,11 @@ runSw.Stop();
     Console.WriteLine($"  ran {opts.Cycles:N0} cycles in {hostSecs:F3} s host time " +
                       $"({emSecs:F3} GBA-emulated s, {realtimeX:F1}× real-time)");
     Console.WriteLine($"  instructions: {instr:N0}  →  {mips:F2} MIPS");
+    if (cpu.BlocksExecuted > 0)
+    {
+        var avgBlock = (double)instr / cpu.BlocksExecuted;
+        Console.WriteLine($"  blocks: {cpu.BlocksExecuted:N0} executed, {cpu.BlocksCompiled:N0} compiled (cache miss rate {(double)cpu.BlocksCompiled / cpu.BlocksExecuted:P2}, avg {avgBlock:F1} instr/block)");
+    }
 }
 Console.WriteLine($"  final PC = 0x{cpu.Pc:X8}, R0..R15 = {DumpRegs(cpu)}");
 Console.WriteLine($"  IRQs delivered: {runner.IrqsDelivered}, frames: {runner.Scheduler.FrameCount}");
@@ -312,97 +317,7 @@ static (CpuExecutor Cpu, Arm7tdmiBankSwapHandler Swap, HostRuntime Rt, IDisposab
         ?? throw new InvalidOperationException("CPU spec missing instruction_set_dispatch");
     var exec = new CpuExecutor(rt, setsByName, dispatch, bus);
     if (enableBlockJit)
-    {
         exec.EnableBlockJit(compileResult);
-        var debugLog = Environment.GetEnvironmentVariable("APR_BLOCK_DEBUG_LOG");
-        if (!string.IsNullOrEmpty(debugLog))
-        {
-            exec.BlockDebugLogPath = debugLog;
-            if (System.IO.File.Exists(debugLog)) System.IO.File.Delete(debugLog);
-        }
-    }
-    // PC watch works in both per-instr and block-JIT modes.
-    var pcWatchHex = Environment.GetEnvironmentVariable("APR_PC_WATCH");
-    var pcWatchLog = Environment.GetEnvironmentVariable("APR_PC_WATCH_LOG");
-    if (!string.IsNullOrEmpty(pcWatchHex) && !string.IsNullOrEmpty(pcWatchLog))
-    {
-        exec.PcWatchAddress = Convert.ToUInt32(pcWatchHex.Replace("0x", ""), 16);
-        exec.PcWatchLogPath = pcWatchLog;
-        if (System.IO.File.Exists(pcWatchLog)) System.IO.File.Delete(pcWatchLog);
-    }
-    var snapPath = Environment.GetEnvironmentVariable("APR_INSTR_SNAP");
-    var snapInterval = Environment.GetEnvironmentVariable("APR_INSTR_SNAP_INTERVAL");
-    if (!string.IsNullOrEmpty(snapPath))
-    {
-        exec.InstrSnapshotPath = snapPath;
-        if (!string.IsNullOrEmpty(snapInterval)) exec.InstrSnapshotInterval = long.Parse(snapInterval);
-        if (System.IO.File.Exists(snapPath)) System.IO.File.Delete(snapPath);
-    }
-    var stateHashPath = Environment.GetEnvironmentVariable("APR_STATE_HASH_LOG");
-    if (!string.IsNullOrEmpty(stateHashPath))
-    {
-        exec.StateHashLogPath = stateHashPath;
-        if (System.IO.File.Exists(stateHashPath)) System.IO.File.Delete(stateHashPath);
-    }
-    var irDumpPcHex = Environment.GetEnvironmentVariable("APR_IR_DUMP_PC");
-    var irDumpPath  = Environment.GetEnvironmentVariable("APR_IR_DUMP_PATH");
-    if (!string.IsNullOrEmpty(irDumpPcHex) && !string.IsNullOrEmpty(irDumpPath))
-    {
-        exec.IrDumpPc = Convert.ToUInt32(irDumpPcHex.Replace("0x", ""), 16);
-        exec.IrDumpPath = irDumpPath;
-        if (System.IO.File.Exists(irDumpPath)) System.IO.File.Delete(irDumpPath);
-    }
-    var memWatchAddr = Environment.GetEnvironmentVariable("APR_MEM_WATCH");
-    var memWatchLog  = Environment.GetEnvironmentVariable("APR_MEM_WATCH_LOG");
-    if (!string.IsNullOrEmpty(memWatchAddr) && !string.IsNullOrEmpty(memWatchLog))
-    {
-        if (System.IO.File.Exists(memWatchLog)) System.IO.File.Delete(memWatchLog);
-        // Range: APR_MEM_WATCH=0x03007E80-0x03007EB0  or single addr 0x03007E9C
-        uint loAddr, hiAddr;
-        var parts = memWatchAddr.Split('-');
-        loAddr = Convert.ToUInt32(parts[0].Trim().Replace("0x", ""), 16);
-        hiAddr = parts.Length > 1 ? Convert.ToUInt32(parts[1].Trim().Replace("0x", ""), 16) : loAddr;
-        var sb = new System.Text.StringBuilder();
-        long count = 0;
-        bus.DebugMemoryWrite = (addr, val, width, pc) =>
-        {
-            if (addr < loAddr || addr > hiAddr) return;
-            if (count++ > 5000) return;
-            sb.Append("write addr=0x").Append(addr.ToString("X8"))
-              .Append(" val=0x").Append(val.ToString("X8"))
-              .Append(" width=").Append(width)
-              .Append(" pc=0x").Append(pc.ToString("X8")).Append('\n');
-            if (count % 200 == 0) { System.IO.File.AppendAllText(memWatchLog, sb.ToString()); sb.Clear(); }
-        };
-        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
-        {
-            if (sb.Length > 0) System.IO.File.AppendAllText(memWatchLog, sb.ToString());
-        };
-    }
-    var ioReadLog = Environment.GetEnvironmentVariable("APR_IO_READ_LOG");
-    if (!string.IsNullOrEmpty(ioReadLog))
-    {
-        if (System.IO.File.Exists(ioReadLog)) System.IO.File.Delete(ioReadLog);
-        var sb = new System.Text.StringBuilder();
-        long count = 0;
-        bus.DebugIoReadLog = (off, val, pc) =>
-        {
-            if (count++ > 5000) return;     // cap
-            sb.Append("io_read off=0x").Append(off.ToString("X3"))
-              .Append(" val=0x").Append(val.ToString("X4"))
-              .Append(" pc=0x").Append(pc.ToString("X8")).Append('\n');
-            if (count % 500 == 0)
-            {
-                System.IO.File.AppendAllText(ioReadLog, sb.ToString());
-                sb.Clear();
-            }
-        };
-        // flush at exit via simple AppDomain hook (best effort)
-        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
-        {
-            if (sb.Length > 0) System.IO.File.AppendAllText(ioReadLog, sb.ToString());
-        };
-    }
     return (exec, swap, rt, bindings);
 }
 
