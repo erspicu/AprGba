@@ -261,11 +261,30 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
             var userWriteFn = ctx.Builder.BuildLoad2(userWritePtrType, userWriteSlot, $"blkl_uwrite_{i}");
             ctx.Builder.BuildCall2(userWriteType, userWriteFn,
                 new[] { ctx.StatePtr, ctx.ConstU32((uint)i), loaded }, "");
+            // Phase 7 A.6.1 Strategy 2 — same MarkPcWritten as visible
+            // path: if i==15, the user-mode write also writes PC (LDM ^
+            // exception-return form).
+            if (i == 15)
+            {
+                var pcWrittenSlotU = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+                ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), pcWrittenSlotU);
+            }
             ctx.Builder.BuildBr(afterWriteBB);
 
             ctx.Builder.PositionAtEnd(visibleWriteBB);
             var rPtr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
             ctx.Builder.BuildStore(loaded, rPtr);
+            // Phase 7 A.6.1 Strategy 2 — when LDM loads into PC (R15)
+            // it's an indirect branch. Mark PcWritten so block-JIT's
+            // post-instr check exits the block; otherwise executor's
+            // "no branch → advance PC by N×size" path overwrites the
+            // loaded target. Affects ARM `LDM ... {..., PC}` and
+            // Thumb `POP {..., PC}` (delegated to block_load).
+            if (i == 15)
+            {
+                var pcWrittenSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+                ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), pcWrittenSlot);
+            }
             ctx.Builder.BuildBr(afterWriteBB);
 
             ctx.Builder.PositionAtEnd(afterWriteBB);
