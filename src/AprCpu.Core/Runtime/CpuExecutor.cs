@@ -486,12 +486,27 @@ public sealed unsafe class CpuExecutor
             cache.Add(pc, entry);
         }
 
-        // Block fn handles its own per-instruction PC pre-set + cond
-        // gate + drain shadows + ret. We just clear the PcWritten flag
-        // (which the block fn's per-instr post-checks read) and call.
+        // Phase 7 A.6.1 Strategy 2 — block fn now NEVER pre-sets PC nor
+        // advances PC at the end. Pipeline-PC reads inside the block
+        // resolve to constants (bi.Pc + offset), and GPR[15] in memory
+        // is only written by REAL branches (which also set PcWritten=1).
+        // After block fn returns, if PcWritten=0 then no branch happened
+        // and we advance PC by total block size; if PcWritten=1 the
+        // branch already wrote PC to the target, leave it.
         _state[_pcWrittenOffset] = 0;
         var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
         fn(_statePtr);
+        if (_state[_pcWrittenOffset] == 0)
+        {
+            // No branch fired — straight-line block, advance PC by N×size.
+            // Note: this overstates by some when an early instruction's
+            // cond-gate failed (the block IR still falls through advance
+            // for skipped instrs). For PC accounting that's correct (a
+            // skipped conditional instr still occupies its slot, PC must
+            // advance past it). For cycle counting see LastStepInstructionCount.
+            var totalBytes = (uint)entry.InstructionCount * mode.InstrSizeBytes;
+            WritePc(pc + totalBytes);
+        }
 
         LastStepInstructionCount = entry.InstructionCount;
         InstructionsExecuted    += entry.InstructionCount;

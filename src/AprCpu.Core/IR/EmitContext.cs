@@ -99,14 +99,44 @@ public sealed unsafe class EmitContext
     /// instruction in a block. Resets <see cref="Values"/> (per-instr
     /// local cache) but preserves <see cref="StatusShadowAllocas"/> +
     /// <see cref="EntryBlock"/> (block-wide).
+    ///
+    /// Phase 7 A.6.1 Strategy 2 — also captures the instruction's base
+    /// address (<paramref name="baseAddress"/>). Set by
+    /// <see cref="BlockFunctionBuilder"/> in block-JIT mode so PC reads
+    /// can be statically rewritten to constant <c>baseAddress + pcOffset</c>
+    /// (matches mGBA / Dynarmic dynarec patterns where R15 reads inside
+    /// the block become compile-time constants, eliminating the need for
+    /// the executor's per-step "pre-set R15" memory write). Per-instr
+    /// mode leaves it null so the legacy load-from-GPR[15] path runs.
     /// </summary>
-    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord)
+    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord, uint? baseAddress = null)
     {
         Format = format;
         Def = def;
         Instruction = instructionWord;
         Values.Clear();
+        CurrentInstructionBaseAddress = baseAddress;
     }
+
+    /// <summary>
+    /// Phase 7 A.6.1 — when set (block-JIT mode), this is the address of
+    /// the instruction currently being emitted (NOT the pipeline-offset
+    /// value — that's <see cref="PipelinePcConstant"/>). Null in per-instr
+    /// mode where the executor controls PC via real GPR[15] writes.
+    /// </summary>
+    public uint? CurrentInstructionBaseAddress { get; private set; }
+
+    /// <summary>
+    /// Phase 7 A.6.1 — the value an emitter should see when reading the
+    /// PC register inside this instruction's body (in block-JIT mode).
+    /// Equivalent to what <c>GPR[15]</c> would hold after the executor's
+    /// "pre-set R15" pipeline write in per-instr mode. Null in per-instr
+    /// mode (callers fall back to actually loading the GPR slot).
+    /// </summary>
+    public uint? PipelinePcConstant
+        => CurrentInstructionBaseAddress is uint pc
+           ? pc + (uint)InstructionSet.PcOffsetBytes
+           : null;
 }
 
 /// <summary>
