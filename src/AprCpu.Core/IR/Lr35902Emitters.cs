@@ -1128,6 +1128,23 @@ internal sealed class Lr35902ReadImm8Emitter : IMicroOpEmitter
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
         var outName = StandardEmitters.GetOut(step.Raw);
+
+        // Phase 7 GB block-JIT P0.3 — block-JIT mode bakes the immediate
+        // byte from the instruction-word constant (set by BlockDetector
+        // P0.1: 2-byte instr packs opcode | (imm8 << 8)). No bus call,
+        // no PC walk — the BlockFunctionBuilder advances PC for the whole
+        // block via Strategy 2 baked PC constants.
+        if (ctx.CurrentInstructionBaseAddress is not null)
+        {
+            // imm8 = (instruction_word >> 8) & 0xFF, then trunc to i8
+            var shifted = ctx.Builder.BuildLShr(ctx.Instruction,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, 8, false), $"{outName}_shr8");
+            var byteI8 = ctx.Builder.BuildTrunc(shifted, LLVMTypeRef.Int8, outName);
+            ctx.Values[outName] = byteI8;
+            return;
+        }
+
+        // Per-instr fallback: walk PC + bus.ReadByte (legacy JsonCpu path).
         var pcPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "PC");
         var pc16 = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "pc_for_imm8");
         var pc32 = ctx.Builder.BuildZExt(pc16, LLVMTypeRef.Int32, "pc_z32");
@@ -1148,6 +1165,20 @@ internal sealed class Lr35902ReadImm16Emitter : IMicroOpEmitter
         var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
 
+        // Phase 7 GB block-JIT P0.3 — block-JIT mode bakes the imm16 from
+        // the instruction-word constant (3-byte instr packs opcode |
+        // (imm_lo << 8) | (imm_hi << 16)). Extract bits 8..23 and trunc
+        // to i16 — LLVM constant-folds the whole chain.
+        if (ctx.CurrentInstructionBaseAddress is not null)
+        {
+            var shifted = ctx.Builder.BuildLShr(ctx.Instruction,
+                LLVMValueRef.CreateConstInt(i32, 8, false), $"{outName}_shr8");
+            var w16 = ctx.Builder.BuildTrunc(shifted, i16, outName);
+            ctx.Values[outName] = w16;
+            return;
+        }
+
+        // Per-instr fallback: walk PC + 2 bus.ReadByte calls.
         var pcPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "PC");
         var pc16 = ctx.Builder.BuildLoad2(i16, pcPtr, "pc_for_imm16");
         var pc32Lo = ctx.Builder.BuildZExt(pc16, i32, "pc_z32");
