@@ -354,6 +354,30 @@ static (CpuExecutor Cpu, Arm7tdmiBankSwapHandler Swap, HostRuntime Rt, IDisposab
         exec.IrDumpPath = irDumpPath;
         if (System.IO.File.Exists(irDumpPath)) System.IO.File.Delete(irDumpPath);
     }
+    var ioReadLog = Environment.GetEnvironmentVariable("APR_IO_READ_LOG");
+    if (!string.IsNullOrEmpty(ioReadLog))
+    {
+        if (System.IO.File.Exists(ioReadLog)) System.IO.File.Delete(ioReadLog);
+        var sb = new System.Text.StringBuilder();
+        long count = 0;
+        bus.DebugIoReadLog = (off, val, pc) =>
+        {
+            if (count++ > 5000) return;     // cap
+            sb.Append("io_read off=0x").Append(off.ToString("X3"))
+              .Append(" val=0x").Append(val.ToString("X4"))
+              .Append(" pc=0x").Append(pc.ToString("X8")).Append('\n');
+            if (count % 500 == 0)
+            {
+                System.IO.File.AppendAllText(ioReadLog, sb.ToString());
+                sb.Clear();
+            }
+        };
+        // flush at exit via simple AppDomain hook (best effort)
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            if (sb.Length > 0) System.IO.File.AppendAllText(ioReadLog, sb.ToString());
+        };
+    }
     return (exec, swap, rt, bindings);
 }
 
