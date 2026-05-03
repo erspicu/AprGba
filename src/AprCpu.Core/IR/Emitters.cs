@@ -282,23 +282,36 @@ internal sealed class WriteReg : IMicroOpEmitter
         }
         if (indexExpr.ValueKind != System.Text.Json.JsonValueKind.String) return;
 
-        // Field-name index: check if Instruction word is a constant.
-        // LLVM.IsAConstantInt returns the value cast to ConstantInt iff
-        // the operand is a constant integer; null otherwise. In per-instr
-        // mode the instruction word is a function PARAMETER (runtime),
-        // so this returns null and we skip — per-instr executor's backup
-        // check handles those cases.
-        var instrConst = LLVM.IsAConstantInt(ctx.Instruction);
-        if (instrConst == null) return;
-
-        var instrWord = (uint)LLVM.ConstIntGetZExtValue(instrConst);
         var name = indexExpr.GetString()!;
-        if (!ctx.Format.Fields.TryGetValue(name, out var range)) return;
-
-        // Extract field bits from constant instruction word at JIT time.
         var maskBits = NextPowerOfTwoMinusOne(ctx.Layout.GprCount);
-        var idxValue = ((instrWord >> range.Low) & range.LowMask) & maskBits;
-        if (idxValue == (uint)pc) MarkPcWritten(ctx);
+
+        // Path A: name is a format field — static decode of constant
+        // instruction word.
+        if (ctx.Format.Fields.TryGetValue(name, out var range))
+        {
+            var instrConst = LLVM.IsAConstantInt(ctx.Instruction);
+            if (instrConst == null) return;
+            var instrWord = (uint)LLVM.ConstIntGetZExtValue(instrConst);
+            var idxValue = ((instrWord >> range.Low) & range.LowMask) & maskBits;
+            if (idxValue == (uint)pc) MarkPcWritten(ctx);
+            return;
+        }
+
+        // Path B: name is a step output (e.g. Thumb f5 hi-reg ops'
+        // eff_rd computed via shl+or of constant fields). LLVM IRBuilder
+        // const-folds shl/or chains, so the resolved Value can be a
+        // ConstantInt — check that. Without this, Thumb f5 ADD/MOV with
+        // dest=R15 (e.g. `MOV PC, Rs` for indirect branch) silently
+        // drops the PC write under Strategy 2 because no marker fires.
+        if (ctx.Values.TryGetValue(name, out var resolvedVal))
+        {
+            var valConst = LLVM.IsAConstantInt(resolvedVal);
+            if (valConst != null)
+            {
+                var idxValue = ((uint)LLVM.ConstIntGetZExtValue(valConst)) & maskBits;
+                if (idxValue == (uint)pc) MarkPcWritten(ctx);
+            }
+        }
     }
 
     private static uint NextPowerOfTwoMinusOne(int count)
