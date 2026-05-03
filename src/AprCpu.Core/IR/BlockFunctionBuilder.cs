@@ -103,6 +103,75 @@ public sealed unsafe class BlockFunctionBuilder
             Layout, set,
             firstInsDef.Format, firstInsDef.Instruction);
 
+        // Phase 7 GB block-JIT P1 #5 — block-local register shadowing.
+        // For LR35902 (8-bit narrow GPRs) we allocate one alloca per GPR
+        // and selected status registers (F, SP), pre-load state→shadow at
+        // entry, and drain shadow→state at every exit. All emitter calls
+        // to ctx.GepGpr / ctx.GepStatusRegister transparently route to
+        // the shadow alloca, which mem2reg promotes to SSA values that
+        // the register allocator keeps in x86 GPRs across the entire
+        // block — eliminating reload-from-memory after every bus call.
+        //
+        // Gated on GprWidthBits==8 (LR35902 only) for V1 because:
+        // (1) ARM uses GepGprDynamic (runtime-computed register index)
+        //     which doesn't shadow cleanly without per-write drain+reload.
+        // (2) ARM perf (~10 MIPS) isn't the current bottleneck.
+        // PC is NOT shadowed: every PC write exits the block, so caching
+        // it has zero benefit and complicates the sync-emitter ret-void
+        // path (it writes nextPcConst directly to the state's PC slot).
+        var enableShadow = Environment.GetEnvironmentVariable("APR_DISABLE_SHADOW") is null
+                           && Layout.GprWidthBits == 8;
+        if (enableShadow)
+        {
+            // Phase 7 GB block-JIT P1 #5 V1 — allocate shadow allocas for
+            // ALL 7 LR35902 GPRs (A,B,C,D,E,H,L) + status regs F + SP.
+            // mem2reg promotes them to SSA values. For long blocks this
+            // wins; for small Blargg-style blocks (avg 3-5 instr) the
+            // entry-load + exit-drain overhead actually loses ~4% on
+            // cpu_instrs bench. V2 will add per-block live-range analysis
+            // (scan ops to find which regs are touched, only shadow those)
+            // — the framework here is the foundation that lets V2 prune
+            // without further code changes.
+            var gprShadows = new LLVMValueRef?[Layout.GprCount];
+            for (int r = 0; r < Layout.GprCount; r++)
+            {
+                var alloca = builder.BuildAlloca(Layout.GprType, $"r{r}_shadow");
+                var statePtrR = Layout.GepGpr(builder, statePtr, r);
+                var initial = builder.BuildLoad2(Layout.GprType, statePtrR, $"r{r}_init");
+                builder.BuildStore(initial, alloca);
+                gprShadows[r] = alloca;
+            }
+            ctx.GprShadowSlots = gprShadows;
+
+            // Status register shadows: F (flag byte) + SP (stack pointer).
+            // PC excluded — every PC write is terminal (block exits via
+            // PcWritten=1, so caching PC has no benefit and complicates
+            // the sync-emitter ret-void path).
+            var statusShadows = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
+            foreach (var statusName in new[] { "F", "SP" })
+            {
+                bool present = false;
+                foreach (var s in Layout.RegisterFile.Status)
+                    if (s.Name == statusName) { present = true; break; }
+                if (!present) continue;
+
+                var def = Layout.GetStatusRegisterDef(statusName);
+                var t = def.WidthBits switch
+                {
+                    8 => LLVMTypeRef.Int8,
+                    16 => LLVMTypeRef.Int16,
+                    32 => LLVMTypeRef.Int32,
+                    _ => throw new NotSupportedException($"Status reg {statusName} width {def.WidthBits}"),
+                };
+                var alloca = builder.BuildAlloca(t, $"{statusName.ToLowerInvariant()}_shadow");
+                var statePtrS = Layout.GepStatusRegister(builder, statePtr, statusName);
+                var initial = builder.BuildLoad2(t, statePtrS, $"{statusName.ToLowerInvariant()}_init");
+                builder.BuildStore(initial, alloca);
+                statusShadows[statusName] = alloca;
+            }
+            ctx.StatusShadowSlots = statusShadows;
+        }
+
         // The block-exit BB is the only "ret void" point. Pre-create it
         // so per-instr post-blocks can branch to it.
         var blockExit = fn.AppendBasicBlock("block_exit");
@@ -364,6 +433,10 @@ public sealed unsafe class BlockFunctionBuilder
                         Registry.EmitStep(ctx, step);
             }
         }
+        // P1 #5 — drain block-local register shadows back to state struct
+        // so the host runtime sees the latest values. No-op when shadowing
+        // disabled (ARM path).
+        ctx.DrainShadowsToState();
         builder.BuildRetVoid();
 
         return fn;

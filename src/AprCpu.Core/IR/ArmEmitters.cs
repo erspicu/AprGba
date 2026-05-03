@@ -441,7 +441,7 @@ internal sealed class ReadPsr : IMicroOpEmitter
         // SPSR is mode-banked; banked-PSR support lands later. Route SPSR
         // reads through CPSR slot for now.
         var target = which == "SPSR" ? "CPSR" : (which ?? "CPSR");
-        var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, target);
+        var ptr = ctx.GepStatusRegister(target);
         var v = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, ptr, outName);
         ctx.Values[outName] = v;
     }
@@ -459,7 +459,7 @@ internal sealed class WritePsr : IMicroOpEmitter
 
         // Capture old CPSR mode bits BEFORE write so we can detect mode
         // change after the masked store completes.
-        var cpsrPtrEarly = isCpsr ? ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR") : default;
+        var cpsrPtrEarly = isCpsr ? ctx.GepStatusRegister("CPSR") : default;
         LLVMValueRef oldMode = default;
         if (isCpsr)
         {
@@ -518,7 +518,7 @@ internal sealed class WritePsr : IMicroOpEmitter
         }
 
         var target = which == "SPSR" ? "CPSR" : (which ?? "CPSR");
-        var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, target);
+        var ptr = ctx.GepStatusRegister(target);
 
         if (runtimeMask is { } rm)
         {
@@ -583,7 +583,7 @@ internal sealed class BranchIndirectArm : IMicroOpEmitter
         var armAligned   = ctx.Builder.BuildAnd(target, ctx.ConstU32(0xFFFFFFFCu), "bx_arm_aligned");
         var aligned = ctx.Builder.BuildSelect(bit0IsSet, thumbAligned, armAligned, "bx_aligned");
 
-        var pcSlot = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
+        var pcSlot = ctx.GepGpr(15);
         ctx.Builder.BuildStore(aligned, pcSlot);
 
         // Phase 7 A.6.1 Strategy 2 — BX always writes PC. Mark
@@ -663,7 +663,7 @@ internal sealed class RestoreCpsrFromSpsr : IMicroOpEmitter
             throw new InvalidOperationException(
                 "restore_cpsr_from_spsr requires SPSR to be declared as banked_per_mode.");
 
-        var cpsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR");
+        var cpsrPtr = ctx.GepStatusRegister("CPSR");
         var oldCpsr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "old_cpsr_for_restore");
         const uint modeMask = 0x1F;
         var oldMode = ctx.Builder.BuildAnd(oldCpsr, ctx.ConstU32(modeMask), "restore_old_mode");
@@ -695,7 +695,7 @@ internal sealed class RestoreCpsrFromSpsr : IMicroOpEmitter
             sw.AddCase(ctx.ConstU32(modeEnc), armBB);
 
             ctx.Builder.PositionAtEnd(armBB);
-            var spsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SPSR", modeId);
+            var spsrPtr = ctx.GepStatusRegister("SPSR", modeId);
             var spsrVal = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, spsrPtr, $"spsr_{modeId.ToLowerInvariant()}");
             armResults.Add((spsrVal, armBB));
             ctx.Builder.BuildBr(mergeBB);
@@ -764,7 +764,7 @@ internal sealed class RaiseExceptionEmitter : IMicroOpEmitter
         uint newModeEnc = Convert.ToUInt32(modeEntry.Encoding, 2);
 
         // 1. Read current CPSR.
-        var cpsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "CPSR");
+        var cpsrPtr = ctx.GepStatusRegister("CPSR");
         var oldCpsr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, cpsrPtr, "old_cpsr");
 
         // 2. Save CPSR -> SPSR_<enterMode> (only if SPSR is banked AND
@@ -772,7 +772,7 @@ internal sealed class RaiseExceptionEmitter : IMicroOpEmitter
         if (ctx.Layout.IsStatusRegisterBanked("SPSR") &&
             ctx.Layout.GetStatusBankedModes("SPSR").Contains(enterMode))
         {
-            var spsrPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SPSR", enterMode);
+            var spsrPtr = ctx.GepStatusRegister("SPSR", enterMode);
             ctx.Builder.BuildStore(oldCpsr, spsrPtr);
         }
 
@@ -790,7 +790,7 @@ internal sealed class RaiseExceptionEmitter : IMicroOpEmitter
         // back to PC=0 (reset vector) → infinite re-init loop.
         var widthBytes  = ctx.InstructionSet.WidthBits.Fixed!.Value / 8;
         var pcDelta     = ctx.InstructionSet.PcOffsetBytes - widthBytes;
-        var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
+        var r15Ptr = ctx.GepGpr(15);
         LLVMValueRef nextPc;
         if (ctx.PipelinePcConstant is uint pipelineValue)
         {

@@ -187,7 +187,7 @@ public static class Lr35902Emitters
     /// </summary>
     internal static void StoreFlags(EmitContext ctx, LLVMValueRef z, LLVMValueRef n, LLVMValueRef h, LLVMValueRef c)
     {
-        var fPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "F");
+        var fPtr = ctx.GepStatusRegister("F");
         var i8 = LLVMTypeRef.Int8;
         var zSh = ctx.Builder.BuildShl(z, LLVMValueRef.CreateConstInt(i8, 7, false), "z_sh");
         var nSh = ctx.Builder.BuildShl(n, LLVMValueRef.CreateConstInt(i8, 6, false), "n_sh");
@@ -204,7 +204,7 @@ public static class Lr35902Emitters
     /// </summary>
     internal static LLVMValueRef ReadCarry(EmitContext ctx)
     {
-        var fPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "F");
+        var fPtr = ctx.GepStatusRegister("F");
         var f = ctx.Builder.BuildLoad2(LLVMTypeRef.Int8, fPtr, "f_for_c");
         var sh = ctx.Builder.BuildLShr(f, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 4, false), "c_sh");
         return ctx.Builder.BuildAnd(sh, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), "c_in");
@@ -299,7 +299,7 @@ public static class Lr35902Emitters
         for (int i = 0; i < gpr.Count; i++)
         {
             if (string.Equals(gpr.Names[i], name, StringComparison.Ordinal))
-                return (ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i), ctx.Layout.GprType);
+                return (ctx.GepGpr(i), ctx.Layout.GprType);
         }
         // Status register fallback (F / SP / PC for LR35902).
         foreach (var status in ctx.Layout.RegisterFile.Status)
@@ -307,7 +307,7 @@ public static class Lr35902Emitters
             if (status.BankedPerMode.Count != 0) continue;
             if (string.Equals(status.Name, name, StringComparison.Ordinal))
             {
-                var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, status.Name);
+                var ptr = ctx.GepStatusRegister(status.Name);
                 var elem = LlvmIntTypeForBits(status.WidthBits);
                 return (ptr, elem);
             }
@@ -544,7 +544,7 @@ internal sealed class Lr35902ReadR8Emitter : IMicroOpEmitter
                 values[sss] = LLVMValueRef.CreateConstInt(i8, 0, false);
                 continue;
             }
-            var ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, gprIdx);
+            var ptr = ctx.GepGpr(gprIdx);
             values[sss] = ctx.Builder.BuildLoad2(i8, ptr, $"r8_{Lr35902GprName(gprIdx)}");
         }
 
@@ -600,7 +600,7 @@ internal sealed class Lr35902WriteR8Emitter : IMicroOpEmitter
             int gprIdx = Lr35902Emitters.Sss3BitToGprIndex(ddd);
             if (gprIdx < 0) continue;     // (HL) — placeholder, no store
 
-            var ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, gprIdx);
+            var ptr = ctx.GepGpr(gprIdx);
             var prev = ctx.Builder.BuildLoad2(i8, ptr, $"r8_w_old_{gprIdx}");
             var cmp = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
                 field32,
@@ -753,7 +753,7 @@ internal sealed class Lr35902Alu8Emitter : IMicroOpEmitter
                 values[sss] = LLVMValueRef.CreateConstInt(i8, 0, false);   // (HL) placeholder
                 continue;
             }
-            var ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, gprIdx);
+            var ptr = ctx.GepGpr(gprIdx);
             values[sss] = ctx.Builder.BuildLoad2(i8, ptr, $"alu_src_{gprIdx}");
         }
         var current = values[7];
@@ -806,7 +806,7 @@ internal sealed class Lr35902Alu8Emitter : IMicroOpEmitter
         }
 
         // Per-instr fallback: walk PC + bus.ReadByte (legacy JsonCpu path).
-        var pcPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "PC");
+        var pcPtr = ctx.GepStatusRegister("PC");
         var pc16 = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "alu_pc");
         var pc32 = ctx.Builder.BuildZExt(pc16, LLVMTypeRef.Int32, "alu_pc32");
         var imm = Lr35902MemoryHelpers.CallRead8(ctx, pc32, "alu_imm");
@@ -940,7 +940,7 @@ internal sealed class Lr35902AddHlRrEmitter : IMicroOpEmitter
         Lr35902Emitters.DecomposePairValue(ctx, hlPair, newHl);
 
         // Z preserved, N=0.
-        var fPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "F");
+        var fPtr = ctx.GepStatusRegister("F");
         var fOld = ctx.Builder.BuildLoad2(i8, fPtr, "f_old");
         var z = ctx.Builder.BuildAnd(
                     ctx.Builder.BuildLShr(fOld, LLVMValueRef.CreateConstInt(i8, 7, false), "z_sh"),
@@ -980,7 +980,7 @@ internal sealed class Lr35902AddSpE8Emitter : IMicroOpEmitter
             : ctx.Builder.BuildTrunc(off8, i8, $"{offsetName}_t8");
         var off16 = ctx.Builder.BuildSExt(off8AsI8, i16, $"{offsetName}_sx16");
 
-        var (spPtr, _) = (ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SP"), i16);
+        var (spPtr, _) = (ctx.GepStatusRegister("SP"), i16);
         var sp = ctx.Builder.BuildLoad2(i16, spPtr, "sp_pre");
         var newSp = ctx.Builder.BuildAdd(sp, off16, "sp_plus_e8");
         ctx.Builder.BuildStore(newSp, spPtr);
@@ -1031,7 +1031,7 @@ internal sealed class Lr35902LdHlSpE8Emitter : IMicroOpEmitter
             : ctx.Builder.BuildTrunc(off8, i8, $"{offsetName}_t8");
         var off16 = ctx.Builder.BuildSExt(off8AsI8, i16, $"{offsetName}_sx16");
 
-        var spPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "SP");
+        var spPtr = ctx.GepStatusRegister("SP");
         var sp = ctx.Builder.BuildLoad2(i16, spPtr, "sp_for_hl");
         var newHl = ctx.Builder.BuildAdd(sp, off16, "hl_from_sp");
 
@@ -1284,6 +1284,11 @@ internal sealed class Lr35902StoreByteEmitter : IMicroOpEmitter
             var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
             ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), pcwSlot);
         }
+        // P1 #5 — drain block-local register shadows before mid-block ret
+        // so the host runtime + the next block's entry-load see latest
+        // GPR/F/SP values. Without this, sync exits would leave shadows
+        // in alloca slots, host reads stale state, divergence.
+        ctx.DrainShadowsToState();
         ctx.Builder.BuildRetVoid();
 
         // Continue path resumes the next instruction.
@@ -1331,7 +1336,7 @@ internal sealed class Lr35902ReadImm8Emitter : IMicroOpEmitter
         }
 
         // Per-instr fallback: walk PC + bus.ReadByte (legacy JsonCpu path).
-        var pcPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "PC");
+        var pcPtr = ctx.GepStatusRegister("PC");
         var pc16 = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, pcPtr, "pc_for_imm8");
         var pc32 = ctx.Builder.BuildZExt(pc16, LLVMTypeRef.Int32, "pc_z32");
         var byteV = Lr35902MemoryHelpers.CallRead8(ctx, pc32, outName);
@@ -1365,7 +1370,7 @@ internal sealed class Lr35902ReadImm16Emitter : IMicroOpEmitter
         }
 
         // Per-instr fallback: walk PC + 2 bus.ReadByte calls.
-        var pcPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "PC");
+        var pcPtr = ctx.GepStatusRegister("PC");
         var pc16 = ctx.Builder.BuildLoad2(i16, pcPtr, "pc_for_imm16");
         var pc32Lo = ctx.Builder.BuildZExt(pc16, i32, "pc_z32");
         var lo8 = Lr35902MemoryHelpers.CallRead8(ctx, pc32Lo, $"{outName}_lo");
@@ -1536,7 +1541,7 @@ internal sealed class Lr35902DaaEmitter : IMicroOpEmitter
         var (aPtr, _) = Lr35902Emitters.LocateRegister(ctx, "A");
         var aOld = ctx.Builder.BuildLoad2(i8, aPtr, "a_pre_daa");
 
-        var fPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "F");
+        var fPtr = ctx.GepStatusRegister("F");
         var f = ctx.Builder.BuildLoad2(i8, fPtr, "f_pre_daa");
         var nBit = ctx.Builder.BuildAnd(
                        ctx.Builder.BuildLShr(f, LLVMValueRef.CreateConstInt(i8, 6, false), "f_n_sh"),

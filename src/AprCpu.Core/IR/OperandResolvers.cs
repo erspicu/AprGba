@@ -173,7 +173,7 @@ internal static class OperandResolverImpl
         }
         else
         {
-            var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
+            var r15Ptr = ctx.GepGpr(15);
             r15        = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "r15");
         }
         var addr   = ctx.Builder.BuildAdd(r15, scaled, "address");

@@ -29,6 +29,28 @@ public sealed unsafe class EmitContext
     /// <summary>Named values: field extractions, operand outputs, step `out`s.</summary>
     public Dictionary<string, LLVMValueRef> Values { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #5 — block-local GPR shadow slots. When non-null
+    /// for a given index, <see cref="GepGpr"/> returns the shadow alloca pointer
+    /// instead of the state-struct field. <see cref="BlockFunctionBuilder"/>
+    /// pre-loads state→shadow at block entry and drains shadow→state at every
+    /// exit point, so spec emitters are unaware of the shadowing — they just
+    /// see a stable pointer per register, but mem2reg can promote the
+    /// alloca-based loads/stores to SSA values that the register allocator
+    /// keeps in x86 GPRs across the entire block (no reload from memory
+    /// between uses, even across bus.Read/Write extern calls).
+    /// </summary>
+    public LLVMValueRef?[]? GprShadowSlots { get; set; }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #5 — block-local status-register shadow slots
+    /// (key = status register name, e.g. "F" / "SP"). Same role as
+    /// <see cref="GprShadowSlots"/> but for the named status registers
+    /// (LR35902 F flag byte, SP stack pointer). PC is intentionally NOT
+    /// shadowed — every PC write is terminal (block exits via PcWritten=1).
+    /// </summary>
+    public Dictionary<string, LLVMValueRef>? StatusShadowSlots { get; set; }
+
     public EmitContext(
         LLVMModuleRef module,
         LLVMBuilderRef builder,
@@ -196,6 +218,81 @@ public sealed unsafe class EmitContext
                 ? (uint)len                          // variable-width: pc + actual byte length
                 : (uint)InstructionSet.PcOffsetBytes) // fixed-width (ARM): spec's pipeline offset
            : null;
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #5 — return the GEP pointer for GPR <paramref name="idx"/>,
+    /// preferring the shadow alloca slot if one is registered. Falls back to
+    /// the state-struct field GEP otherwise. Spec emitters should call this
+    /// instead of <c>Layout.GepGpr</c> directly so block-local shadowing
+    /// transparently kicks in when enabled.
+    /// </summary>
+    public LLVMValueRef GepGpr(int idx)
+    {
+        if (GprShadowSlots is { } slots && idx >= 0 && idx < slots.Length && slots[idx] is { } shadow)
+            return shadow;
+        return Layout.GepGpr(Builder, StatePtr, idx);
+    }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #5 — return the GEP pointer for the named
+    /// status register, preferring the shadow alloca slot if one is registered.
+    /// Falls back to the state-struct field GEP otherwise. Banked status
+    /// registers (mode != null) are never shadowed because mode-banked SPSR
+    /// is rare in block-internal accesses; pass-through to Layout.
+    /// </summary>
+    public LLVMValueRef GepStatusRegister(string name, string? mode = null)
+    {
+        if (mode is null && StatusShadowSlots is { } slots && slots.TryGetValue(name, out var shadow))
+            return shadow;
+        return Layout.GepStatusRegister(Builder, StatePtr, name, mode);
+    }
+
+    /// <summary>
+    /// Phase 7 GB block-JIT P1 #5 — emit IR that writes every shadow slot's
+    /// current value back to its corresponding state-struct field. Called at
+    /// every block exit point (block_exit, pre-exit branch-taken, budget exit,
+    /// sync-emitter mid-block ret) so the host runtime sees up-to-date register
+    /// values. Drains in a fixed order (GPRs by index, then status by name)
+    /// for IR diff stability.
+    ///
+    /// Performance: each shadow writeback is one i8/i16 store; LLVM's
+    /// instcombine + DSE will eliminate writebacks for slots that the block
+    /// only read (no write). For a block that writes all 7 LR35902 GPRs,
+    /// this is 7 i8 stores at exit (~3 ns total) vs the savings of avoiding
+    /// reload-from-memory after every bus call (typically 4-12 ns saved per
+    /// memory op).
+    /// </summary>
+    public void DrainShadowsToState()
+    {
+        if (GprShadowSlots is { } gprSlots)
+        {
+            for (int i = 0; i < gprSlots.Length; i++)
+            {
+                if (gprSlots[i] is not { } shadow) continue;
+                var statePtr = Layout.GepGpr(Builder, StatePtr, i);
+                var v = Builder.BuildLoad2(Layout.GprType, shadow, $"r{i}_drain");
+                Builder.BuildStore(v, statePtr);
+            }
+        }
+        if (StatusShadowSlots is { } statusSlots)
+        {
+            foreach (var name in statusSlots.Keys.OrderBy(k => k, StringComparer.Ordinal))
+            {
+                var shadow = statusSlots[name];
+                var statePtr = Layout.GepStatusRegister(Builder, StatePtr, name);
+                var def = Layout.GetStatusRegisterDef(name);
+                var t = def.WidthBits switch
+                {
+                    8 => LLVMTypeRef.Int8,
+                    16 => LLVMTypeRef.Int16,
+                    32 => LLVMTypeRef.Int32,
+                    _ => throw new NotSupportedException($"Status reg {name} width {def.WidthBits}"),
+                };
+                var v = Builder.BuildLoad2(t, shadow, $"{name.ToLowerInvariant()}_drain");
+                Builder.BuildStore(v, statePtr);
+            }
+        }
+    }
 }
 
 /// <summary>

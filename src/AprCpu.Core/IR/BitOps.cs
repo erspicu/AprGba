@@ -158,7 +158,7 @@ internal static class BitOps
                 var regName = regEl.GetString()!;
                 var flagC   = fcEl.GetString()!;
                 var bitIdx  = ctx.Layout.GetStatusFlagBitIndex(regName, flagC);
-                var statusPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, regName);
+                var statusPtr = ctx.GepStatusRegister(regName);
                 var statusVal = ctx.Builder.BuildLoad2(i8, statusPtr, $"{outName}_f_in");
                 cIn = ctx.Builder.BuildAnd(
                           ctx.Builder.BuildLShr(statusVal,

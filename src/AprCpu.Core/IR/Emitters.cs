@@ -222,7 +222,7 @@ internal sealed class ReadReg : IMicroOpEmitter
         if (indexExpr.ValueKind == JsonValueKind.Number)
         {
             var lit = indexExpr.GetInt32();
-            return ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, lit);
+            return ctx.GepGpr(lit);
         }
         if (indexExpr.ValueKind == JsonValueKind.String)
         {
@@ -251,7 +251,7 @@ internal sealed class ReadReg : IMicroOpEmitter
             {
                 int litIdx = (int)LLVM.ConstIntGetSExtValue(maskedConst);
                 if (litIdx >= 0 && litIdx < ctx.Layout.GprCount)
-                    return ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, litIdx);
+                    return ctx.GepGpr(litIdx);
             }
             return ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, masked);
         }
@@ -487,7 +487,7 @@ internal static class CpsrHelpers
     public static LLVMValueRef ReadStatusFlag(EmitContext ctx, string register, string flag)
     {
         var bitIndex = ctx.Layout.GetStatusFlagBitIndex(register, flag);
-        var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
+        var ptr = ctx.GepStatusRegister(register);
         // Phase 7 C.a: load at the status register's actual width.
         // Pre-7.C.a always loaded i32; for LR35902 F (i8) that read 4 bytes
         // spanning F + adjacent SP/PC fields. Width-correct loads/stores
@@ -506,7 +506,7 @@ internal static class CpsrHelpers
 
     private static void SetStatusFlagAt(EmitContext ctx, string register, int bitIndex, LLVMValueRef boolValue, string label)
     {
-        var ptr  = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, register);
+        var ptr  = ctx.GepStatusRegister(register);
         // Phase 7 C.a: width-correct load+store (was always i32).
         var (statusType, allOnes) = StatusTypeAndAllOnes(ctx, register);
         var prev = ctx.Builder.BuildLoad2(statusType, ptr, $"{register.ToLowerInvariant()}_old");
@@ -883,11 +883,11 @@ internal sealed class Branch : IMicroOpEmitter
             }
             else
             {
-                var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
+                var r15Ptr = ctx.GepGpr(15);
                 var r15    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "r15");
                 nextPc = ctx.Builder.BuildAdd(r15, ctx.ConstU32(addend), "next_pc");
             }
-            var lrPtr  = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 14);
+            var lrPtr  = ctx.GepGpr(14);
             ctx.Builder.BuildStore(nextPc, lrPtr);
         }
 
@@ -1028,6 +1028,9 @@ internal sealed class SyncEmitter : IMicroOpEmitter
             var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
             ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), pcwSlot);
         }
+        // P1 #5 — drain block-local register shadows before mid-block ret
+        // (mirror of Lr35902StoreByteEmitter sync exit; same reasoning).
+        ctx.DrainShadowsToState();
         ctx.Builder.BuildRetVoid();
 
         // Position builder at a fresh dead BB so any subsequent step

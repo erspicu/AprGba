@@ -127,7 +127,7 @@ internal static class BlockTransferImpl
         if (step.Raw.TryGetProperty("base_index", out var biEl))
         {
             int idx = biEl.GetInt32();
-            basePtr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, idx);
+            basePtr = ctx.GepGpr(idx);
         }
         else
         {
@@ -272,7 +272,7 @@ internal sealed class BlockLoadEmitter : IMicroOpEmitter
             ctx.Builder.BuildBr(afterWriteBB);
 
             ctx.Builder.PositionAtEnd(visibleWriteBB);
-            var rPtr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
+            var rPtr = ctx.GepGpr(i);
             ctx.Builder.BuildStore(loaded, rPtr);
             // Phase 7 A.6.1 Strategy 2 — when LDM loads into PC (R15)
             // it's an indirect branch. Mark PcWritten so block-JIT's
@@ -353,7 +353,7 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
             }
             else
             {
-                var rPtr   = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
+                var rPtr   = ctx.GepGpr(i);
                 visibleVal = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, rPtr, $"blks_r{i}");
             }
             // User-mode R[i] read via host extern (only meaningful when S=1).

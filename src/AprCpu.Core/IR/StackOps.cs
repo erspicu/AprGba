@@ -53,14 +53,14 @@ internal static class StackOps
 
         if (spRef.GprIndex is int gprIdx)
         {
-            var ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, gprIdx);
+            var ptr = ctx.GepGpr(gprIdx);
             var bits = ctx.Layout.GprWidthBits;
             return (ptr, ctx.Layout.GprType, bits / 8);
         }
 
         if (spRef.StatusName is string statusName)
         {
-            var ptr  = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, statusName);
+            var ptr  = ctx.GepStatusRegister(statusName);
             var def  = ctx.Layout.GetStatusRegisterDef(statusName);
             var type = def.WidthBits switch
             {
@@ -78,9 +78,9 @@ internal static class StackOps
     internal static (LLVMValueRef Ptr, LLVMTypeRef Type) LocateProgramCounter(EmitContext ctx)
     {
         if (ctx.Layout.RegisterFile.GeneralPurpose.PcIndex is int pcIdx)
-            return (ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, pcIdx), ctx.Layout.GprType);
+            return (ctx.GepGpr(pcIdx), ctx.Layout.GprType);
 
-        var ptr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, "PC");
+        var ptr = ctx.GepStatusRegister("PC");
         var def = ctx.Layout.GetStatusRegisterDef("PC");
         var type = def.WidthBits switch
         {
@@ -176,12 +176,12 @@ internal static class StackOps
         var names = ctx.Layout.RegisterFile.GeneralPurpose.Names;
         for (int i = 0; i < names.Count; i++)
             if (string.Equals(names[i], name, StringComparison.Ordinal))
-                return ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
+                return ctx.GepGpr(i);
 
         // Fall back to status register lookup (e.g. LR35902 F is a status reg).
         try
         {
-            return ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, name);
+            return ctx.GepStatusRegister(name);
         }
         catch (InvalidOperationException)
         {
@@ -448,7 +448,7 @@ internal static class StackOps
         var expectedVal = condEl.GetProperty("value").GetInt32();
 
         var bitIdx = ctx.Layout.GetStatusFlagBitIndex(reg, flag);
-        var statusPtr = ctx.Layout.GepStatusRegister(ctx.Builder, ctx.StatePtr, reg);
+        var statusPtr = ctx.GepStatusRegister(reg);
         var statusDef = ctx.Layout.GetStatusRegisterDef(reg);
         var statusType = statusDef.WidthBits switch
         {
