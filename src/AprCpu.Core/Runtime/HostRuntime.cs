@@ -248,21 +248,25 @@ public sealed unsafe class HostRuntime : IDisposable
     ///   dse          — dead store elimination
     ///   simplifycfg  — basic block merging + branch simplification
     /// </summary>
+    /// <summary>DEBUG: when set (or APR_IR_BEFORE/APR_IR_AFTER env vars set),
+    /// dumps IR before+after RunPasses to two files.</summary>
+    public static string? DebugIrDumpBeforePath;
+    public static string? DebugIrDumpAfterPath;
+
     private void RunOptimizationPipeline(LLVMModuleRef module)
     {
+        var beforePath = DebugIrDumpBeforePath ?? Environment.GetEnvironmentVariable("APR_IR_BEFORE");
+        var afterPath  = DebugIrDumpAfterPath  ?? Environment.GetEnvironmentVariable("APR_IR_AFTER");
+        if (beforePath is not null)
+            System.IO.File.WriteAllText(beforePath, module.PrintToString());
         // instcombine&lt;no-verify-fixpoint&gt; instead of plain instcombine —
         // some emitter-generated IR (notably ARM Branch_Exchange BX with
         // its select-chain alignment logic) doesn't reach instcombine's
         // expected fixpoint in 1 iteration; the verify is a sanity check
         // that's safe to skip for our use case.
-        // Phase 7 H.a — pass list. instcombine is deliberately EXCLUDED:
-        // it miscompiles BlockFunctionBuilder direct-invocation tests
-        // (Block_ThreeMovs etc.) where R-register stores get eliminated.
-        // mem2reg/gvn/dse/simplifycfg alone give us ~5-10% perf on
-        // block-JIT IR (alloca→SSA + CSE + dead store elim) without
-        // breaking anything. instcombine investigation tracked
-        // separately as Phase 7 H.a-instcombine.
-        const string passes = "mem2reg,gvn,dse,simplifycfg";
+        // BISECT mode: APR_PASSES env can override
+        var passesEnv = Environment.GetEnvironmentVariable("APR_PASSES");
+        var passes = passesEnv ?? "mem2reg,gvn,dse,simplifycfg";
 
         var optionsHandle = LLVMPassBuilderOptionsRef.Create();
         try
@@ -278,6 +282,8 @@ public sealed unsafe class HostRuntime : IDisposable
                         $"HostRuntime: LLVM RunPasses('{passes}') failed: {msg}");
                 }
             }
+            if (afterPath is not null)
+                System.IO.File.WriteAllText(afterPath, module.PrintToString());
         }
         finally
         {
