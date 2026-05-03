@@ -390,22 +390,31 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     // ---------------- IO stub ----------------
 
+    /// <summary>DEBUG: when set, ReadIo* logs (offset, value, executingPc) here.</summary>
+    public Action<uint, uint, uint>? DebugIoReadLog { get; set; }
+
     private byte ReadIoByte(uint off)
     {
         OnMmioRead?.Invoke();
-        return Io[off];
+        var v = Io[off];
+        DebugIoReadLog?.Invoke(off, v, ExecutingPc);
+        return v;
     }
 
     private ushort ReadIoHalfword(uint off)
     {
         OnMmioRead?.Invoke();
-        return BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)off, 2));
+        var v = BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)off, 2));
+        DebugIoReadLog?.Invoke(off, v, ExecutingPc);
+        return v;
     }
 
     private uint ReadIoWord(uint off)
     {
         OnMmioRead?.Invoke();
-        return BinaryPrimitives.ReadUInt32LittleEndian(Io.AsSpan((int)off, 4));
+        var v = BinaryPrimitives.ReadUInt32LittleEndian(Io.AsSpan((int)off, 4));
+        DebugIoReadLog?.Invoke(off, v, ExecutingPc);
+        return v;
     }
 
     // ---------------- IO write helpers ----------------
