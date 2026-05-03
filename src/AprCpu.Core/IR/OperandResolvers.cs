@@ -162,8 +162,20 @@ internal static class OperandResolverImpl
         // (caught by Phase 3.2 CpuExecutor branch test). Same convention is used
         // by raise_exception (subtracts pc_offset−instr_size to get next-PC) and
         // by BL_HI (read_reg 15 → raw_pc → add scaled_offset directly).
-        var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
-        var r15    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "r15");
+        //
+        // Phase 7 A.6.1 Strategy 2 — in block-JIT mode use the pipeline
+        // PC constant directly. Per-instr mode reads GPR[15] (which the
+        // executor pre-set).
+        LLVMValueRef r15;
+        if (ctx.PipelinePcConstant is uint pipelineValue)
+        {
+            r15 = ctx.ConstU32(pipelineValue);
+        }
+        else
+        {
+            var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
+            r15        = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "r15");
+        }
         var addr   = ctx.Builder.BuildAdd(r15, scaled, "address");
         ctx.Values["address"] = addr;
     }

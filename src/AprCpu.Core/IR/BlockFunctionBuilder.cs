@@ -123,15 +123,25 @@ public sealed unsafe class BlockFunctionBuilder
         for (int i = 0; i < block.Instructions.Count; i++)
         {
             var bi = block.Instructions[i];
-            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord));
+            // Phase 7 A.6.1 Strategy 2 — pass bi.Pc so emitters can
+            // statically resolve "read R15" to a pipeline-PC constant
+            // instead of loading from GPR[15] (which is no longer
+            // pre-set per instruction).
+            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord), bi.Pc);
 
-            // 1. Pre block: pre-set PC and clear PcWritten, then cond gate.
+            // 1. Pre block: clear PcWritten, then cond gate.
+            //
+            // Phase 7 A.6.1 Strategy 2 — DROPPED the per-instruction PC
+            // pre-write. Previously this wrote PC = bi.Pc + pcOffsetBytes
+            // so emitter "read R15" sees the pipeline-offset value, but
+            // it also meant GPR[15] was constantly being overwritten,
+            // making it impossible to use "GPR[15] changed" as a branch
+            // signal. Emitters now read pipeline-PC as a constant via
+            // ctx.PipelinePcConstant, so GPR[15] in memory is ONLY
+            // touched by real branches. The advance block likewise no
+            // longer writes PC (the executor advances PC after block
+            // exit when PcWritten=0).
             builder.PositionAtEnd(preBBs[i]);
-            // PC = const(bi.Pc + pcOffsetBytes). The original CpuExecutor
-            // does this so emitter "read R15" sees the pipeline-offset
-            // value mid-execution. In block mode each instr does the same.
-            WritePcConst(builder, statePtr, bi.Pc + pcOffsetBytes);
-            // Clear PcWritten flag.
             builder.BuildStore(
                 LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false),
                 Layout.GepPcWritten(builder, statePtr));
@@ -169,10 +179,10 @@ public sealed unsafe class BlockFunctionBuilder
                 pcWritten, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false), $"i{i}_pcw_eq0");
             builder.BuildCondBr(pcNotWritten, advanceBBs[i], blockExit);
 
-            // 4. Advance block: PC = const(bi.Pc + instrSize), branch to
-            //    next instr's pre (or block_exit if last instr).
+            // 4. Advance block: just branch to next instr's pre (or
+            //    block_exit if last). NO PC write — executor advances
+            //    PC by total block size when PcWritten=0 at exit.
             builder.PositionAtEnd(advanceBBs[i]);
-            WritePcConst(builder, statePtr, bi.Pc + block.InstrSizeBytes);
             var next = (i + 1 < block.Instructions.Count) ? preBBs[i + 1] : blockExit;
             builder.BuildBr(next);
         }

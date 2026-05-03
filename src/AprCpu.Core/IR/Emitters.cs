@@ -108,14 +108,64 @@ public static class StandardEmitters
 internal sealed class ReadReg : IMicroOpEmitter
 {
     public string OpName => "read_reg";
-    public void Emit(EmitContext ctx, MicroOpStep step)
+    public unsafe void Emit(EmitContext ctx, MicroOpStep step)
     {
         var indexExpr = step.Raw.GetProperty("index");
         var outName   = StandardEmitters.GetOut(step.Raw);
 
+        // Phase 7 A.6.1 Strategy 2 — when the resolved index is statically
+        // known to be PC, return the pipeline PC constant instead of
+        // loading GPR[15]. This is what makes block-JIT correct without
+        // the executor's per-step pre-set R15 write: GPR[15] in memory
+        // is only ever touched by REAL branches.
+        if (TryGetStaticPcReadConstant(ctx, indexExpr, pcOffsetAddend: 0u, out var pcConst))
+        {
+            ctx.Values[outName] = pcConst;
+            return;
+        }
+
         var ptr = ResolveRegPtr(ctx, indexExpr);
         var v   = ctx.Builder.BuildLoad2(ctx.Layout.GprType, ptr, outName);
         ctx.Values[outName] = v;
+    }
+
+    /// <summary>
+    /// Phase 7 A.6.1 Strategy 2 — try to resolve the register index to
+    /// the PC index AT JIT TIME, and if so produce a constant LLVM value
+    /// equal to <c>PipelinePcConstant + pcOffsetAddend</c>. Returns false
+    /// when (a) we're in per-instr mode (no pipeline constant set), or
+    /// (b) the index can't be statically determined to be PC.
+    /// <paramref name="pcOffsetAddend"/> is for ARM ARM A5.1.5's "PC reads
+    /// as +12 in shift-by-register form": pass +4 to get +12 instead of +8.
+    /// </summary>
+    internal static unsafe bool TryGetStaticPcReadConstant(
+        EmitContext ctx, JsonElement indexExpr, uint pcOffsetAddend, out LLVMValueRef pcConst)
+    {
+        pcConst = default;
+        if (ctx.PipelinePcConstant is not uint pipelineValue) return false;
+        var pcIdx = ctx.Layout.RegisterFile.GeneralPurpose.PcIndex;
+        if (pcIdx is not int pc) return false;
+
+        // Literal index.
+        if (indexExpr.ValueKind == JsonValueKind.Number)
+        {
+            if (indexExpr.GetInt32() != pc) return false;
+            pcConst = ctx.ConstU32(pipelineValue + pcOffsetAddend);
+            return true;
+        }
+        if (indexExpr.ValueKind != JsonValueKind.String) return false;
+
+        // Field-name index — needs constant instruction word to decode.
+        var instrConst = LLVM.IsAConstantInt(ctx.Instruction);
+        if (instrConst == null) return false;
+        var instrWord = (uint)LLVM.ConstIntGetZExtValue(instrConst);
+        var name = indexExpr.GetString()!;
+        if (!ctx.Format.Fields.TryGetValue(name, out var range)) return false;
+        var maskBits = NextPowerOfTwoMinusOne(ctx.Layout.GprCount);
+        var idxValue = ((instrWord >> range.Low) & range.LowMask) & maskBits;
+        if (idxValue != (uint)pc) return false;
+        pcConst = ctx.ConstU32(pipelineValue + pcOffsetAddend);
+        return true;
     }
 
     internal static LLVMValueRef ResolveRegPtr(EmitContext ctx, JsonElement indexExpr)
@@ -240,10 +290,19 @@ internal sealed class WriteReg : IMicroOpEmitter
 internal sealed class ReadRegShiftByReg : IMicroOpEmitter
 {
     public string OpName => "read_reg_shift_by_reg";
-    public void Emit(EmitContext ctx, MicroOpStep step)
+    public unsafe void Emit(EmitContext ctx, MicroOpStep step)
     {
         var indexExpr = step.Raw.GetProperty("index");
         var outName   = StandardEmitters.GetOut(step.Raw);
+
+        // Phase 7 A.6.1 Strategy 2 — static PC redirection with the +4
+        // shift-by-reg adjustment (ARM ARM A5.1.5: PC reads as +12 in
+        // this form, vs +8 in normal data-processing).
+        if (ReadReg.TryGetStaticPcReadConstant(ctx, indexExpr, pcOffsetAddend: 4u, out var pcConst))
+        {
+            ctx.Values[outName] = pcConst;
+            return;
+        }
 
         // Resolve index (literal or runtime field).
         var raw = ctx.Builder.BuildLoad2(ctx.Layout.GprType,
@@ -695,11 +754,27 @@ internal sealed class Branch : IMicroOpEmitter
             // ARM-style link: read R15 (= pc + offset), write back-adjusted
             // to R14. Other CPUs that want a "link register" semantics
             // (none we currently support) need a different op.
-            var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
-            var r15    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "r15");
+            //
+            // Phase 7 A.6.1 Strategy 2 — in block-JIT mode use the
+            // pipeline PC constant directly instead of loading GPR[15]
+            // (which is no longer pre-set per instruction). Per-instr
+            // mode keeps the GPR[15] load (executor's pre-set R15 is
+            // valid). The arithmetic is the same: nextPc = r15 + (width
+            // - pcOffsetBytes), which for ARM = (pc + 8) + (4 - 8) =
+            // pc + 4 = next-instruction address.
             var width  = ctx.InstructionSet.WidthBits.Fixed!.Value / 8;
-            var nextPc = ctx.Builder.BuildAdd(
-                r15, ctx.ConstU32((uint)(width - ctx.InstructionSet.PcOffsetBytes)), "next_pc");
+            var addend = (uint)(width - ctx.InstructionSet.PcOffsetBytes);
+            LLVMValueRef nextPc;
+            if (ctx.PipelinePcConstant is uint pipelineValue)
+            {
+                nextPc = ctx.ConstU32(pipelineValue + addend);
+            }
+            else
+            {
+                var r15Ptr = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
+                var r15    = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, r15Ptr, "r15");
+                nextPc = ctx.Builder.BuildAdd(r15, ctx.ConstU32(addend), "next_pc");
+            }
             var lrPtr  = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 14);
             ctx.Builder.BuildStore(nextPc, lrPtr);
         }
@@ -772,8 +847,19 @@ internal sealed class ReadPc : IMicroOpEmitter
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
         var outName = StandardEmitters.GetOut(step.Raw);
-        var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
-        ctx.Values[outName] = ctx.Builder.BuildLoad2(pcType, pcPtr, outName);
+
+        // Phase 7 A.6.1 Strategy 2 — block-JIT mode uses pipeline constant.
+        if (ctx.PipelinePcConstant is uint pipelineValue)
+        {
+            // PC type is whatever LocateProgramCounter would return.
+            // For ARM that's i32 (GPR-resident PC); for LR35902 i16 (status reg).
+            var (_, pcType) = StackOps.LocateProgramCounter(ctx);
+            ctx.Values[outName] = LLVMValueRef.CreateConstInt(pcType, pipelineValue, false);
+            return;
+        }
+
+        var (pcPtr, pcTypeRt) = StackOps.LocateProgramCounter(ctx);
+        ctx.Values[outName] = ctx.Builder.BuildLoad2(pcTypeRt, pcPtr, outName);
     }
 }
 

@@ -585,6 +585,12 @@ internal sealed class BranchIndirectArm : IMicroOpEmitter
 
         var pcSlot = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, 15);
         ctx.Builder.BuildStore(aligned, pcSlot);
+
+        // Phase 7 A.6.1 Strategy 2 — BX always writes PC. Mark
+        // PcWritten=1 so block-JIT's post-instr check exits the block
+        // (otherwise the executor's "no branch → advance PC by N×size"
+        // path would overwrite the BX target).
+        WriteReg.MarkPcWritten(ctx);
     }
 }
 
