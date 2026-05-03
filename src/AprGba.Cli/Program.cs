@@ -318,7 +318,16 @@ static (CpuExecutor Cpu, Arm7tdmiBankSwapHandler Swap, HostRuntime Rt, IDisposab
     var dispatch = loaded.Cpu.InstructionSetDispatch
         ?? throw new InvalidOperationException("CPU spec missing instruction_set_dispatch");
     var exec = new CpuExecutor(rt, setsByName, dispatch, bus);
-    if (enableBlockJit) exec.EnableBlockJit(compileResult);
+    if (enableBlockJit)
+    {
+        exec.EnableBlockJit(compileResult);
+        var debugLog = Environment.GetEnvironmentVariable("APR_BLOCK_DEBUG_LOG");
+        if (!string.IsNullOrEmpty(debugLog))
+        {
+            exec.BlockDebugLogPath = debugLog;
+            if (System.IO.File.Exists(debugLog)) System.IO.File.Delete(debugLog);
+        }
+    }
     return (exec, swap, rt, bindings);
 }
 
