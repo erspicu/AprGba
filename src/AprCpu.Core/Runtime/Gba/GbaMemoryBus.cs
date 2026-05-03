@@ -164,6 +164,18 @@ public sealed class GbaMemoryBus : IMemoryBus
     /// </summary>
     public bool CpuHalted { get; set; }
 
+    /// <summary>
+    /// Phase 7 A.6.1 phase1b — MMIO sync callback. The system runner
+    /// (GbaSystemRunner) installs this; the bus calls it BEFORE every
+    /// IO-region read so the scheduler advances to "now" before BIOS/ROM
+    /// polling code reads VCOUNT, DISPSTAT, IF, etc. Without this, a
+    /// block-JIT block can run 20+ instructions while polling VCOUNT,
+    /// always seeing the same stale value because the scheduler hasn't
+    /// ticked, and BIOS init takes a wrong control-flow path. Per-instr
+    /// is unaffected (scheduler ticks every instruction anyway).
+    /// </summary>
+    public Action? OnMmioRead { get; set; }
+
     /// <summary>True iff IME is set AND any IE&amp;IF bit is pending.</summary>
     [System.Runtime.CompilerServices.MethodImpl(
         System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
@@ -378,13 +390,23 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     // ---------------- IO stub ----------------
 
-    private byte ReadIoByte(uint off)   => Io[off];
+    private byte ReadIoByte(uint off)
+    {
+        OnMmioRead?.Invoke();
+        return Io[off];
+    }
 
     private ushort ReadIoHalfword(uint off)
-        => BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)off, 2));
+    {
+        OnMmioRead?.Invoke();
+        return BinaryPrimitives.ReadUInt16LittleEndian(Io.AsSpan((int)off, 2));
+    }
 
     private uint ReadIoWord(uint off)
-        => BinaryPrimitives.ReadUInt32LittleEndian(Io.AsSpan((int)off, 4));
+    {
+        OnMmioRead?.Invoke();
+        return BinaryPrimitives.ReadUInt32LittleEndian(Io.AsSpan((int)off, 4));
+    }
 
     // ---------------- IO write helpers ----------------
 
