@@ -283,6 +283,9 @@ public sealed unsafe class CpuExecutor
     /// into fresh modules that get added to the live JIT via
     /// <see cref="HostRuntime.AddModule"/>.
     /// </summary>
+    /// <summary>DEBUG (A.6.1): when set, StepBlock writes mode-change events here.</summary>
+    public string? BlockDebugLogPath { get; set; }
+
     public void EnableBlockJit(SpecCompiler.CompileResult compileResult)
     {
         _compileResult = compileResult;
@@ -494,6 +497,15 @@ public sealed unsafe class CpuExecutor
         // and we advance PC by total block size; if PcWritten=1 the
         // branch already wrote PC to the target, leave it.
         _state[_pcWrittenOffset] = 0;
+        // DEBUG (A.6.1): track CPSR mode before/after block to find first
+        // divergence into UND/ABT. Remove once block-JIT BIOS LLE works.
+        uint cpsrBefore = 0, modeBefore = 0;
+        if (BlockDebugLogPath is not null)
+        {
+            var cpsrOff = (int)_rt.StatusOffset("CPSR");
+            cpsrBefore = (uint)System.Runtime.InteropServices.Marshal.ReadInt32((IntPtr)(_statePtr + cpsrOff));
+            modeBefore = cpsrBefore & 0x1Fu;
+        }
         var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
         fn(_statePtr);
         if (_state[_pcWrittenOffset] == 0)
@@ -506,6 +518,21 @@ public sealed unsafe class CpuExecutor
             // advance past it). For cycle counting see LastStepInstructionCount.
             var totalBytes = (uint)entry.InstructionCount * mode.InstrSizeBytes;
             WritePc(pc + totalBytes);
+        }
+        if (BlockDebugLogPath is not null)
+        {
+            var cpsrOff = (int)_rt.StatusOffset("CPSR");
+            uint cpsrAfter = (uint)System.Runtime.InteropServices.Marshal.ReadInt32((IntPtr)(_statePtr + cpsrOff));
+            uint modeAfter = cpsrAfter & 0x1Fu;
+            // Log mode change OR T-bit change (bit 5 of CPSR).
+            uint tBefore = (cpsrBefore >> 5) & 1u;
+            uint tAfter  = (cpsrAfter  >> 5) & 1u;
+            if (modeBefore != modeAfter || tBefore != tAfter)
+            {
+                var newPc = ReadPc();
+                System.IO.File.AppendAllText(BlockDebugLogPath,
+                    $"block#{BlocksExecuted} pc=0x{pc:X8}->0x{newPc:X8} N={entry.InstructionCount} cpsr 0x{cpsrBefore:X8}->0x{cpsrAfter:X8} mode 0x{modeBefore:X}->0x{modeAfter:X} T {tBefore}->{tAfter}\n");
+            }
         }
 
         LastStepInstructionCount = entry.InstructionCount;
