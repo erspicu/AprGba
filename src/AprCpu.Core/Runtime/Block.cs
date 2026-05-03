@@ -79,12 +79,28 @@ public sealed class Block
 
 /// <summary>
 /// One instruction in a <see cref="Block"/> — the runtime PC, raw
-/// instruction word, and the spec/decode result it produced.
+/// instruction word, byte length, and the spec/decode result it produced.
+///
+/// <para><b>LengthBytes</b> distinguishes per-instruction byte width for
+/// variable-width sets (LR35902 = 1/2/3 bytes per opcode). Fixed-width
+/// sets (ARM=4, Thumb=2) always have <see cref="LengthBytes"/> equal to
+/// the parent <see cref="Block.InstrSizeBytes"/>; for variable-width
+/// sets, <see cref="Block.InstrSizeBytes"/> is 0 (sentinel) and the
+/// per-instruction value here is authoritative.</para>
+///
+/// <para><b>InstructionWord</b> packs the entire instruction's bytes
+/// little-endian into a uint: 1-byte → opcode in LSB; 2-byte → opcode |
+/// (imm8 &lt;&lt; 8); 3-byte → opcode | (imm16 &lt;&lt; 8). For CB-prefix
+/// opcodes the packing is opcode (0xCB) | (sub_opcode &lt;&lt; 8). The
+/// emitter for <c>read_imm8</c>/<c>read_imm16</c> can statically extract
+/// the immediate via shift+mask in block-JIT mode without going through
+/// the bus (Strategy 2 extension — see roadmap §4.3).</para>
 /// </summary>
 public sealed record DecodedBlockInstruction(
     uint Pc,
     uint InstructionWord,
-    DecodedInstruction Decoded);
+    DecodedInstruction Decoded,
+    byte LengthBytes);
 
 /// <summary>Why <see cref="BlockDetector"/> stopped collecting instructions.</summary>
 public enum BlockEndReason

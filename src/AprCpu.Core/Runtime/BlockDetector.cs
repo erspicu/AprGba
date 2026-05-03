@@ -52,23 +52,63 @@ public sealed class BlockDetector
 
     private readonly DecoderTable _decoder;
     private readonly InstructionSetSpec _setSpec;
-    private readonly uint _instrSizeBytes;
+    private readonly uint _instrSizeBytes;          // 0 sentinel for variable-width
+    private readonly Func<byte, int>? _lengthOracle;// non-null only for variable-width sets
 
-    public BlockDetector(InstructionSetSpec setSpec, DecoderTable decoder)
+    /// <summary>
+    /// Construct a detector for a fixed-width or variable-width instruction
+    /// set. When the set is variable-width (LR35902 main + CB), supply a
+    /// <paramref name="lengthOracle"/> mapping first-byte → instruction
+    /// length in bytes (1, 2, or 3 for LR35902). For LR35902 the canonical
+    /// oracle is <see cref="Lr35902InstructionLengths.GetLength"/>.
+    ///
+    /// Phase 7 GB block-JIT P0.1 — see MD/design/12-gb-block-jit-roadmap.md.
+    /// </summary>
+    public BlockDetector(InstructionSetSpec setSpec, DecoderTable decoder, Func<byte, int>? lengthOracle = null)
     {
-        if (!setSpec.WidthBits.Fixed.HasValue)
-            throw new NotSupportedException(
-                $"BlockDetector requires fixed-width instruction set; '{setSpec.Name}' is variable-width.");
-        _setSpec        = setSpec;
-        _decoder        = decoder;
-        _instrSizeBytes = (uint)(setSpec.WidthBits.Fixed.Value / 8);
+        if (lengthOracle is not null)
+        {
+            // Variable-width path: explicit per-opcode length lookup. This
+            // wins over the spec's `width_bits` field because for sets like
+            // LR35902 main, `width_bits: 8` is the FETCH UNIT (1 byte) not
+            // the INSTRUCTION LENGTH (1-3 bytes). The oracle is
+            // authoritative for total instruction length.
+            _instrSizeBytes = 0;        // sentinel
+            _lengthOracle   = lengthOracle;
+        }
+        else if (setSpec.WidthBits.Fixed.HasValue)
+        {
+            // Fixed-width fast path (ARM=32, Thumb=16, LR35902 CB=8 — all
+            // every-instruction-same-width sets).
+            _instrSizeBytes = (uint)(setSpec.WidthBits.Fixed.Value / 8);
+            _lengthOracle   = null;
+        }
+        else
+        {
+            // Variable spec without oracle: refuse. We can't infer length
+            // at runtime safely (per Gemini's 2026-05-03 analysis: operand
+            // inference creates edge-case bugs).
+            throw new ArgumentException(
+                $"Variable-width instruction set '{setSpec.Name}' requires a lengthOracle " +
+                "(opcode → byte length). For LR35902 use Lr35902InstructionLengths.GetLength.",
+                nameof(lengthOracle));
+        }
+        _setSpec = setSpec;
+        _decoder = decoder;
     }
 
     /// <summary>The instruction-set this detector is bound to.</summary>
     public string SetName => _setSpec.Name;
 
-    /// <summary>Bytes per instruction in this set.</summary>
+    /// <summary>
+    /// Bytes per instruction in this set when fixed-width; 0 if variable-width
+    /// (consult <see cref="DecodedBlockInstruction.LengthBytes"/> per-instruction
+    /// instead).
+    /// </summary>
     public uint InstrSizeBytes => _instrSizeBytes;
+
+    /// <summary>True if instruction length depends on opcode (LR35902).</summary>
+    public bool IsVariableWidth => _lengthOracle is not null;
 
     /// <summary>
     /// Walk memory starting at <paramref name="startPc"/>, decode instructions,
@@ -86,7 +126,33 @@ public sealed class BlockDetector
 
         for (int i = 0; i < maxInstructions; i++)
         {
-            uint word = ReadInstructionWord(bus, pc);
+            // 1. Determine this instruction's byte length.
+            //    Fixed-width: constant from spec.
+            //    Variable-width: peek first byte → length oracle.
+            uint thisLength;
+            uint word;
+            if (_lengthOracle is null)
+            {
+                // Fixed-width fast path (ARM / Thumb): single bus read of
+                // the full instruction word.
+                thisLength = _instrSizeBytes;
+                word       = ReadFixedWidthWord(bus, pc, _instrSizeBytes);
+            }
+            else
+            {
+                // Variable-width sequential crawl (LR35902): fetch first
+                // byte, look up length, then pack the full instruction
+                // bytes into an LE-packed uint for the emitter (Strategy 2
+                // immediate baking, see roadmap §4.3).
+                byte first = bus.ReadByte(pc);
+                int  lenInt = _lengthOracle(first);
+                if (lenInt is < 1 or > 4)
+                    throw new InvalidOperationException(
+                        $"BlockDetector lengthOracle returned {lenInt} for opcode 0x{first:X2} in set '{_setSpec.Name}'; expected 1..4.");
+                thisLength = (uint)lenInt;
+                word       = PackVariableWidthBytes(bus, pc, thisLength);
+            }
+
             var decoded = _decoder.Decode(word);
             if (decoded is null)
             {
@@ -107,8 +173,8 @@ public sealed class BlockDetector
                     Array.Empty<DecodedBlockInstruction>(), BlockEndReason.Undecodable);
             }
 
-            instrs.Add(new DecodedBlockInstruction(pc, word, decoded));
-            pc += _instrSizeBytes;
+            instrs.Add(new DecodedBlockInstruction(pc, word, decoded, (byte)thisLength));
+            pc += thisLength;
 
             // Block-end checks on this instruction (POST-add — the boundary
             // instruction IS in the block; control transfer happens AS
@@ -136,12 +202,28 @@ public sealed class BlockDetector
         return new Block(startPc, pc, _setSpec.Name, _instrSizeBytes, instrs, endReason);
     }
 
-    private uint ReadInstructionWord(IMemoryBus bus, uint pc) =>
-        _instrSizeBytes switch
+    private static uint ReadFixedWidthWord(IMemoryBus bus, uint pc, uint sizeBytes) =>
+        sizeBytes switch
         {
             4 => bus.ReadWord(pc),
             2 => bus.ReadHalfword(pc),
             1 => bus.ReadByte(pc),
-            _ => throw new NotSupportedException($"instruction size {_instrSizeBytes}-byte unsupported by BlockDetector.")
+            _ => throw new NotSupportedException($"instruction size {sizeBytes}-byte unsupported by BlockDetector.")
         };
+
+    /// <summary>
+    /// Pack the consecutive bytes of a variable-width instruction into a
+    /// little-endian uint: byte at PC in LSB, byte at PC+1 in next byte
+    /// position, etc. 1-byte → just the opcode; 2-byte → opcode | (op2 &lt;&lt; 8);
+    /// 3-byte → opcode | (op2 &lt;&lt; 8) | (op3 &lt;&lt; 16). Caller can extract
+    /// imm8/imm16 via shift+mask without needing extra bus reads at IR
+    /// emission time (Strategy 2 immediate baking).
+    /// </summary>
+    private static uint PackVariableWidthBytes(IMemoryBus bus, uint pc, uint lengthBytes)
+    {
+        uint word = 0;
+        for (uint i = 0; i < lengthBytes; i++)
+            word |= (uint)bus.ReadByte(pc + i) << (int)(i * 8);
+        return word;
+    }
 }
