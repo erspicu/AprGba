@@ -341,8 +341,21 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
 
             var curAddr = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, addrSlot, $"blks_a{i}");
             // Visible R[i] read.
-            var rPtr        = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
-            var visibleVal  = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, rPtr, $"blks_r{i}");
+            // Phase 7 A.6.1 Strategy 2 — for i=15 (PC), block-JIT must NOT
+            // load GPR[15] from memory because Strategy 2 doesn't pre-set
+            // it (memory holds the prior block's branch target). Use the
+            // pipeline PC constant directly. Per-instr falls back to the
+            // memory load (executor's pre-set R15 is valid there).
+            LLVMValueRef visibleVal;
+            if (i == 15 && ctx.PipelinePcConstant is uint pipelineValue)
+            {
+                visibleVal = ctx.ConstU32(pipelineValue);
+            }
+            else
+            {
+                var rPtr   = ctx.Layout.GepGpr(ctx.Builder, ctx.StatePtr, i);
+                visibleVal = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, rPtr, $"blks_r{i}");
+            }
             // User-mode R[i] read via host extern (only meaningful when S=1).
             var userReadFn  = ctx.Builder.BuildLoad2(userReadPtrType, userReadSlot, $"blks_uread_{i}");
             var userVal     = ctx.Builder.BuildCall2(userReadType, userReadFn,
