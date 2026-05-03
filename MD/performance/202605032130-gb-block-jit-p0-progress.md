@@ -99,11 +99,33 @@ regression。
 
 ---
 
-## 6. 下一步（P0.5 預計）
+## 6. 下一步（P0.5 / P0.5b 已 ship）
 
-1. 抓 `JR negative` bug — 必須先解才能把 P0 收乾淨
-2. P0 收尾：寫完整 T3 bench（多 ROM、多 frame budget），紀錄到單獨檔
-3. 進 P1：block-local state caching + detector 跨 unconditional B（roadmap §3 P1 tier）
+### P0.5 進度更新（2026-05-03 後續）
+
+| Commit | 修了啥 | 結果 |
+|---|---|---|
+| `a10a718` | HALT/STOP 加為 block boundary（detector 看 step `op:"halt"` / `"stop"`）| minimal repro `temp/jr-neg-repro.gb` per-instr/bjit 一致 |
+| `6a86005` | EI delay：detector 在 `lr35902_ime_delayed` 後再多一條才切 block | T1 全綠、Blargg 仍掛（partial fix） |
+
+### 還沒解的 bug
+
+| Bug | 觀察 | hypothesis |
+|---|---|---|
+| Blargg 01-special "JR negative" 子測試 fail | block-JIT 跑到 60000 frames 仍卡 → infinite loop（test 自己的 fail-loop）| 跑出錯誤狀態觸發 test 失敗檢查；某條 JR 路徑與 per-instr 不一致；可能是 (a) 還有 stale-PC site (b) flag 計算偏 (c) memory write ordering |
+| Blargg 02-interrupts "EI" 子測試 fail | EI fix 只把 block 切短到 EI+1；後續 block 內若多條，那些指令仍 IME=0 | 完整修需把 eiDelay countdown 寫進 IR 或 force EI 之後第二 block 也 1-instr |
+
+### Debug 進度有限的原因
+
+- 無 ROM source — 無法直接讀 Blargg "JR negative" 子測試在做啥
+- block-JIT 跟 per-instr 的 lockstep 比對需 instrumentation（block-JIT 不能精確 1-instr step）
+- 簡單 minimal repro 一個一個寫太花時間且難命中 Blargg corner case
+
+### 三個下一步選項
+
+- **(A) 繼續抓 JR negative bug**：寫個 lockstep 比對 harness（CpuDiff 擴充支援 bjit），跑 Blargg 找第一個 register 分岐的 PC。預估 1-2 天
+- **(B) 完整修 EI delay**：把 `_eiDelay` 邏輯搬進 IR — 加新 micro-op 或 host extern call。預估 0.5-1 天
+- **(C) 接受 P0 partial、進 P1**：roadmap §3 P1 tier — block-local state caching 跟 detector 跨 unconditional B。預期再撈 30-50% perf。已知 Blargg pass-rate partial 是 documented limitation。預估 3-4 天
 
 ---
 
