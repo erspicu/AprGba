@@ -179,6 +179,76 @@ public class BlockDetectorTests
         Assert.Equal(1u, det.InstrSizeBytes);
     }
 
+    // -------------------------------------------------------------------
+    // Phase 7 GB block-JIT P0.2 — 0xCB prefix as 2-byte atomic
+    // -------------------------------------------------------------------
+
+    private static (BlockDetector det, FakeBus bus) BuildLr35902WithCbDispatch()
+    {
+        var mainSpec = SpecLoader.LoadInstructionSet(
+            Path.Combine(TestPaths.SpecRoot, "lr35902", "main.json"));
+        var cbSpec = SpecLoader.LoadInstructionSet(
+            Path.Combine(TestPaths.SpecRoot, "lr35902", "cb.json"));
+        var mainDec = new DecoderTable(mainSpec);
+        var cbDec   = new DecoderTable(cbSpec);
+        var prefixDispatch = new Dictionary<byte, DecoderTable> { [0xCB] = cbDec };
+        return (
+            new BlockDetector(mainSpec, mainDec, Lr35902InstructionLengths.GetLength, prefixDispatch),
+            new FakeBus());
+    }
+
+    /// <summary>
+    /// With prefixSubDecoders set for 0xCB, a CB-prefix instruction
+    /// (e.g. BIT 7,A = 0xCB 0x7F) becomes one atomic 2-byte instruction
+    /// in the block instead of ending it.
+    /// </summary>
+    [Fact]
+    public void Lr35902_CbPrefix_IsAtomicTwoByteInstruction_NotBlockBoundary()
+    {
+        var (det, bus) = BuildLr35902WithCbDispatch();
+        // NOP (1 byte) / BIT 7,A = CB 7F (2 bytes) / SET 0,B = CB C0 (2 bytes) / RET (1 byte, ends block)
+        bus.WriteByte(0x0000, 0x00);                                       // NOP
+        bus.WriteByte(0x0001, 0xCB); bus.WriteByte(0x0002, 0x7F);          // BIT 7,A
+        bus.WriteByte(0x0003, 0xCB); bus.WriteByte(0x0004, 0xC0);          // SET 0,B
+        bus.WriteByte(0x0005, 0xC9);                                       // RET (writes_pc=always)
+
+        var blk = det.Detect(bus, 0x0000u);
+
+        Assert.Equal(4, blk.Instructions.Count);
+        Assert.Equal((byte)1, blk.Instructions[0].LengthBytes);            // NOP
+        Assert.Equal((byte)2, blk.Instructions[1].LengthBytes);            // CB 7F
+        Assert.Equal((byte)2, blk.Instructions[2].LengthBytes);            // CB C0
+        Assert.Equal((byte)1, blk.Instructions[3].LengthBytes);            // RET
+        Assert.Equal(BlockEndReason.WritesPc, blk.EndReason);              // RET ends, NOT CB
+        Assert.Equal(0x0006u, blk.EndPc);                                  // 1+2+2+1 = 6 bytes
+
+        // CB-prefix instruction word should be sub_opcode in LSB so the
+        // sub-decoder's 8-bit field extractors work natively.
+        Assert.Equal(0x0000_007Fu, blk.Instructions[1].InstructionWord);   // BIT 7,A's sub-opcode
+        Assert.Equal(0x0000_00C0u, blk.Instructions[2].InstructionWord);   // SET 0,B's sub-opcode
+        Assert.Equal("BIT", blk.Instructions[1].Decoded.Instruction.Mnemonic);
+        Assert.Equal("SET", blk.Instructions[2].Decoded.Instruction.Mnemonic);
+    }
+
+    /// <summary>
+    /// Without prefixSubDecoders, CB still ends the block (legacy behaviour).
+    /// Documents that wiring is opt-in per detector; CpuExecutor (P0.4) decides.
+    /// </summary>
+    [Fact]
+    public void Lr35902_CbPrefix_WithoutSubDecoder_StillEndsBlock()
+    {
+        var (det, bus) = BuildLr35902Main();    // no prefix dispatch
+        bus.WriteByte(0x0000, 0x00);                                       // NOP
+        bus.WriteByte(0x0001, 0xCB); bus.WriteByte(0x0002, 0x7F);          // CB 7F (BIT 7,A)
+        bus.WriteByte(0x0003, 0x00);                                       // NOP
+
+        var blk = det.Detect(bus, 0x0000u);
+        // NOP + CB-prefix (decoded as CB_PREFIX format with switches_instruction_set=true)
+        // → block ends at CB.
+        Assert.Equal(2, blk.Instructions.Count);
+        Assert.Equal(BlockEndReason.SwitchesInstructionSet, blk.EndReason);
+    }
+
     // Minimal in-memory bus for tests — implements just the read/write
     // helpers the BlockDetector calls (ReadWord for ARM 4-byte fetch).
     // Backed by a flat 64KB byte array.

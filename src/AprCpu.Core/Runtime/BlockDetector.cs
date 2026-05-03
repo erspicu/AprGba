@@ -54,6 +54,7 @@ public sealed class BlockDetector
     private readonly InstructionSetSpec _setSpec;
     private readonly uint _instrSizeBytes;          // 0 sentinel for variable-width
     private readonly Func<byte, int>? _lengthOracle;// non-null only for variable-width sets
+    private readonly IReadOnlyDictionary<byte, DecoderTable>? _prefixSubDecoders; // P0.2
 
     /// <summary>
     /// Construct a detector for a fixed-width or variable-width instruction
@@ -62,9 +63,20 @@ public sealed class BlockDetector
     /// length in bytes (1, 2, or 3 for LR35902). For LR35902 the canonical
     /// oracle is <see cref="Lr35902InstructionLengths.GetLength"/>.
     ///
-    /// Phase 7 GB block-JIT P0.1 — see MD/design/12-gb-block-jit-roadmap.md.
+    /// <paramref name="prefixSubDecoders"/> is the P0.2 prefix-byte mechanism:
+    /// when the detector reads a first byte equal to a key in this dict, it
+    /// treats the byte as a 1-byte prefix and decodes the NEXT byte against
+    /// the mapped sub-decoder. The whole 2-byte sequence becomes one atomic
+    /// instruction in the block (no boundary). For LR35902, pass
+    /// <c>{ 0xCB → cbDecoder }</c>.
+    ///
+    /// Phase 7 GB block-JIT P0.1 + P0.2 — see MD/design/12-gb-block-jit-roadmap.md.
     /// </summary>
-    public BlockDetector(InstructionSetSpec setSpec, DecoderTable decoder, Func<byte, int>? lengthOracle = null)
+    public BlockDetector(
+        InstructionSetSpec setSpec,
+        DecoderTable decoder,
+        Func<byte, int>? lengthOracle = null,
+        IReadOnlyDictionary<byte, DecoderTable>? prefixSubDecoders = null)
     {
         if (lengthOracle is not null)
         {
@@ -95,6 +107,7 @@ public sealed class BlockDetector
         }
         _setSpec = setSpec;
         _decoder = decoder;
+        _prefixSubDecoders = prefixSubDecoders;
     }
 
     /// <summary>The instruction-set this detector is bound to.</summary>
@@ -126,34 +139,54 @@ public sealed class BlockDetector
 
         for (int i = 0; i < maxInstructions; i++)
         {
-            // 1. Determine this instruction's byte length.
-            //    Fixed-width: constant from spec.
-            //    Variable-width: peek first byte → length oracle.
+            // 1. Determine this instruction's byte length + decode result.
+            //    - Fixed-width: constant length from spec.
+            //    - Variable-width without prefix: peek first byte → length
+            //      oracle → pack LE.
+            //    - Variable-width WITH prefix match (P0.2): treat first
+            //      byte as 1-byte prefix, fetch sub-byte, decode against
+            //      sub-decoder, length = 2, instruction_word = sub_opcode
+            //      (LSB only, so the sub-decoder's mask/match/field
+            //      extractors work natively against the 8-bit sub-opcode
+            //      encoding — no "shift by 8" gymnastics needed).
             uint thisLength;
             uint word;
+            DecodedInstruction? decoded;
+
             if (_lengthOracle is null)
             {
                 // Fixed-width fast path (ARM / Thumb): single bus read of
                 // the full instruction word.
                 thisLength = _instrSizeBytes;
                 word       = ReadFixedWidthWord(bus, pc, _instrSizeBytes);
+                decoded    = _decoder.Decode(word);
             }
             else
             {
-                // Variable-width sequential crawl (LR35902): fetch first
-                // byte, look up length, then pack the full instruction
-                // bytes into an LE-packed uint for the emitter (Strategy 2
-                // immediate baking, see roadmap §4.3).
                 byte first = bus.ReadByte(pc);
-                int  lenInt = _lengthOracle(first);
-                if (lenInt is < 1 or > 4)
-                    throw new InvalidOperationException(
-                        $"BlockDetector lengthOracle returned {lenInt} for opcode 0x{first:X2} in set '{_setSpec.Name}'; expected 1..4.");
-                thisLength = (uint)lenInt;
-                word       = PackVariableWidthBytes(bus, pc, thisLength);
+
+                // P0.2: prefix-byte dispatch. Only triggered when caller
+                // configured _prefixSubDecoders for this primary set.
+                if (_prefixSubDecoders is not null
+                    && _prefixSubDecoders.TryGetValue(first, out var subDec))
+                {
+                    byte subOpcode = bus.ReadByte(pc + 1);
+                    thisLength = 2;
+                    word       = subOpcode;          // LSB-only — sub-decoder owns it
+                    decoded    = subDec.Decode(word);
+                }
+                else
+                {
+                    int lenInt = _lengthOracle(first);
+                    if (lenInt is < 1 or > 4)
+                        throw new InvalidOperationException(
+                            $"BlockDetector lengthOracle returned {lenInt} for opcode 0x{first:X2} in set '{_setSpec.Name}'; expected 1..4.");
+                    thisLength = (uint)lenInt;
+                    word       = PackVariableWidthBytes(bus, pc, thisLength);
+                    decoded    = _decoder.Decode(word);
+                }
             }
 
-            var decoded = _decoder.Decode(word);
             if (decoded is null)
             {
                 // Undecodable. If we've already collected something, stop
