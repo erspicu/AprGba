@@ -35,12 +35,40 @@ public sealed unsafe class GbaSystemRunner
 
     public long IrqsDelivered { get; private set; }
 
+    /// <summary>Phase 7 A.6.1 phase1b — original budget assigned to Cpu.CyclesLeft
+    /// at the start of the current Step(). Used by MMIO catch-up to figure out
+    /// "how many cycles consumed since Step entry".</summary>
+    private int _budgetAtStep;
+
     public GbaSystemRunner(CpuExecutor cpu, GbaMemoryBus bus, Arm7tdmiBankSwapHandler swap)
     {
         Cpu  = cpu;
         Bus  = bus;
         Swap = swap;
         Scheduler = new GbaScheduler(bus);
+        // Phase 7 A.6.1 phase1b — bus calls this before any IO read so the
+        // scheduler advances to "now" for accurate VCOUNT/DISPSTAT/IF reads
+        // by polling code inside a block-JIT block.
+        Bus.OnMmioRead = SyncSchedulerForMmio;
+    }
+
+    /// <summary>
+    /// Called by the bus before MMIO reads. Computes cycles consumed since
+    /// the current Step started, ticks the scheduler, delivers IRQs, and
+    /// rebases the budget so the rest of the block doesn't double-count.
+    /// </summary>
+    private void SyncSchedulerForMmio()
+    {
+        var consumed = _budgetAtStep - Cpu.CyclesLeft;
+        if (consumed <= 0) return;
+        Scheduler.Tick(consumed);
+        // Note: don't deliver IRQ here — block IR is in the middle of an
+        // instruction that just called us. Delivering an IRQ would corrupt
+        // PC/CPSR mid-instruction. IRQ delivery happens in the outer loop
+        // after Cpu.Step() returns. We just need MMIO reads to see updated
+        // hardware state (VCOUNT, DISPSTAT, IF flags) — which they will,
+        // because the scheduler tick above already updated those bytes.
+        _budgetAtStep = Cpu.CyclesLeft;   // rebase so we don't re-tick.
     }
 
     /// <summary>Run for at least <paramref name="cycleBudget"/> CPU cycles.</summary>
@@ -71,13 +99,18 @@ public sealed unsafe class GbaSystemRunner
             int budget = (int)Math.Min(cycleBudget - consumed, Scheduler.CyclesUntilNextEvent());
             if (budget < cyclesPerInstr) budget = cyclesPerInstr;   // never set zero/negative
             Cpu.CyclesLeft = budget;
+            _budgetAtStep  = budget;   // phase1b: MMIO catch-up reference point
 
             Cpu.Step();
-            // Use the actually-consumed cycles from the executor (block-JIT
-            // reads it from the cycles_left delta; per-instr always sets 4).
-            var ticks = Cpu.LastStepCycles;
-            Scheduler.Tick(ticks);
-            consumed += ticks;
+            // Phase 7 A.6.1 phase1b — total cycles consumed in this Step =
+            // budget - CyclesLeft. SOME of those may have been ticked by
+            // MMIO catch-up callbacks already (which advance _budgetAtStep
+            // to CyclesLeft at callback time). The REMAINING un-ticked
+            // delta = _budgetAtStep - CyclesLeft (now).
+            var totalConsumed = budget - Cpu.CyclesLeft;
+            var remainingTicks = _budgetAtStep - Cpu.CyclesLeft;
+            if (remainingTicks > 0) Scheduler.Tick(remainingTicks);
+            consumed += totalConsumed;
             DeliverIrqIfPending();
         }
         return consumed;
