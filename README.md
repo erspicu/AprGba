@@ -4,7 +4,7 @@
 > *generated* from a machine-readable specification — and whether the
 > generated code can run fast enough to be practical.
 
-**Last updated:** 2026-05-04 21:31 (Asia/Taipei)
+**Last updated:** 2026-05-05 (Asia/Taipei)
 **License:** [WTFPL v2](LICENSE) — do what the fuck you want to.
 **Status:** Active research. ARM7TDMI (GBA) and LR35902 (Game Boy) running through the same framework. Block-JIT path live for both ISAs.
 
@@ -50,6 +50,75 @@ What if the entire ISA — encoding patterns, register file layout, condition co
 - **Not** a competitor to mGBA. mGBA is a polished end-user emulator; we are a research framework.
 - **Not** chasing maximum cycle accuracy. We are deliberately at "instruction-grained timing accuracy with sync exits at HW-relevant moments" — enough for commercial ROMs, not enough for cycle-perfect demoscene work.
 - **Not** trying to be the fastest emulator. The current LLVM block-JIT path runs Blargg cpu_instrs at ~21 MIPS (10k frames) / ~27 MIPS (60k frames amortised). The hand-coded `AprGb` legacy interpreter (imported from a previous project — see §3) still beats this. We know. **Performance optimisation is a downstream concern after the framework design is sound.**
+
+#### Proof of execution — test ROM screenshots
+
+Visual evidence the framework actually runs correctness-grade workloads end-to-end:
+
+##### Game Boy — Blargg `cpu_instrs.gb` (JSON-LLVM block-JIT path)
+
+![Blargg cpu_instrs all 11 sub-tests pass](result/gb/json-llvm/cpu_instrs.png)
+
+Run command: `apr-gb --rom=test-roms/gb-test-roms-master/cpu_instrs/cpu_instrs.gb --cpu=json-llvm --block-jit --frames=10000`. The serial output ends with **"Passed all tests"**. All 11 sub-tests pass through the JSON-driven LR35902 spec compiled to LLVM IR and run via ORC LLJIT block-JIT:
+
+| # | Sub-test | What it covers |
+|---|---|---|
+| 01 | special | CPU edge-case behaviours (DAA quirks, halted-state transitions) |
+| 02 | interrupts | IME / IE / IF interaction, EI delayed-effect, HALT-with-interrupts |
+| 03 | op sp,hl | Stack pointer / HL register-pair arithmetic (`ADD SP,e`, `LD HL,SP+e`) |
+| 04 | op r,imm | Register × immediate ALU (`ADD A,n`, `SUB A,n`, `CP n`, …) |
+| 05 | op rp | 16-bit register-pair operations (`INC BC`, `ADD HL,DE`, `LD BC,nn`, …) |
+| 06 | ld r,r | All 64 register-to-register loads (`LD A,B`, `LD H,(HL)`, …) |
+| 07 | jr,jp,call,ret,rst | Full control-flow set: relative jump, absolute jump, call, return, restart |
+| 08 | misc instrs | CCF / SCF / CPL / DAA edge cases + flag interactions |
+| 09 | op r,r | Register-to-register ALU (`ADD A,B`, `XOR C`, `CP H`, …) |
+| 10 | bit ops | 0xCB-prefix BIT / SET / RES across all 256 sub-opcodes |
+| 11 | op a,(hl) | A × memory[HL] ALU operations |
+
+##### Game Boy Advance — jsmolka `arm.gba` (BIOS LLE path)
+
+![jsmolka arm tests pass under real GBA BIOS](result/gba/bios_lle_arm.png)
+
+Run command: `apr-gba --rom=test-roms/gba-tests/arm/arm.gba --bios=BIOS/gba_bios.bin --block-jit`. **LLE** = *Low-Level Emulation* — instead of HLE-stubbing the BIOS calls, we execute the actual Nintendo GBA BIOS (`gba_bios.bin`) through our ARM7TDMI emulation; the BIOS bootloader runs the Nintendo logo intro, scrambles VRAM, then jumps to the cart entry-point where the test framework takes over. This exercises the framework on **real production-grade ARM7TDMI code paths** that homebrew tests would otherwise skip.
+
+The screenshot shows **all ARM-mode test groups passing** — covering ~5000+ individual test vectors across every ARM7TDMI ARM-mode (32-bit) instruction class:
+- Data-processing (ADD/SUB/AND/OR/EOR/MOV/MVN/CMP/CMN/TST/TEQ × all addressing modes × S/non-S flag variants)
+- Multiply / multiply-long (MUL / MLA / UMULL / SMULL / UMLAL / SMLAL)
+- Single-data-transfer (LDR/STR with byte/halfword/sign-extension and pre/post-indexed offsets)
+- Block-data-transfer (LDM/STM with all four addressing modes IA/IB/DA/DB and writeback)
+- Branch (B / BL / BX with cond-code matrix)
+- PSR transfer (MRS / MSR with field masks)
+- Software interrupt (SWI to BIOS)
+- Mode switches (USER / FIQ / IRQ / SVC / ABT / UND banking)
+
+##### Game Boy Advance — jsmolka `thumb.gba` (BIOS LLE path)
+
+![jsmolka thumb tests pass under real GBA BIOS](result/gba/bios_lle_thumb.png)
+
+Run command: `apr-gba --rom=test-roms/gba-tests/thumb/thumb.gba --bios=BIOS/gba_bios.bin --block-jit`. Same BIOS LLE setup as the ARM test, but now running Thumb-mode (16-bit) test vectors. ARM7TDMI's Thumb mode is a re-encoding of a subset of ARM with tighter instruction format — porting the spec correctly requires both ARM and Thumb to compile through the same emitter pipeline using the per-mode encoding table.
+
+The screenshot shows **all Thumb test groups passing**, covering:
+- Format 1 / 2: shift / immediate-value
+- Format 3: move/compare/add/subtract immediate
+- Format 4: ALU operations (AND/EOR/LSL/LSR/ASR/ADC/SBC/ROR/TST/NEG/CMP/CMN/ORR/MUL/BIC/MVN)
+- Format 5: Hi-register operations & branch-exchange
+- Format 6: PC-relative load
+- Formats 7-11: load/store with register/immediate offsets, halfword, sign-extended, SP-relative
+- Format 12: load address (PC / SP relative)
+- Format 13: SP arithmetic
+- Format 14: PUSH/POP with optional LR/PC
+- Format 15: multiple load/store
+- Format 16: conditional branch
+- Format 17: software interrupt
+- Format 18: unconditional branch
+- Format 19: long-branch-with-link (BL pair encoding)
+
+These three screenshots together demonstrate that the **same `AprCpu` framework**, with **the same `BlockFunctionBuilder` / `EmitContext` / micro-op registry**, compiles and correctly executes:
+1. A variable-width 8-bit CPU (LR35902) with prefix-byte sub-decoding
+2. ARM-mode 32-bit fixed-width with 16-condition-code dispatch
+3. Thumb-mode 16-bit fixed-width with 19 distinct encoding formats
+
+— without any per-CPU C# code in the emit pipeline. **This is the core claim of the project, and these images are the proof.**
 
 ### 3. Honest acknowledgement: the `AprGb` legacy interpreter
 
@@ -272,6 +341,75 @@ repo 名字叫 **AprGba**，內容裡也有完整的 Game Boy Advance 模擬器�
 - **不是** 要跟 mGBA 競爭。mGBA 是成熟的終端使用者 emulator，我們是研究框架。
 - **不是** 在追求極致 cycle accuracy。我們刻意停在「instruction-grained timing accuracy + HW-relevant 時刻 sync exit」 — 對 commercial ROM 夠用，對 cycle-perfect demoscene 不夠。
 - **不是** 要當最快的 emulator。現在 LLVM block-JIT 在 Blargg cpu_instrs 跑 ~21 MIPS (10k frames) / ~27 MIPS (60k frames amortised)。我們從舊專案 import 的 `AprGb` 手寫 interpreter (見 §3) 還是比這快。我們知道。**Performance 優化是框架設計穩定後的下游問題。**
+
+#### 執行驗證 — test ROM 通過截圖
+
+下面三張截圖證明框架不只是「理論上跑得起來」，而是真的把 correctness-grade 的 test ROM 端到端跑完：
+
+##### Game Boy — Blargg `cpu_instrs.gb` (JSON-LLVM block-JIT 路徑)
+
+![Blargg cpu_instrs 全 11 個 sub-test PASS](result/gb/json-llvm/cpu_instrs.png)
+
+執行指令：`apr-gb --rom=test-roms/gb-test-roms-master/cpu_instrs/cpu_instrs.gb --cpu=json-llvm --block-jit --frames=10000`。Serial output 收尾是 **"Passed all tests"**。整套走 JSON-driven LR35902 spec 編譯到 LLVM IR、由 ORC LLJIT block-JIT 執行：
+
+| # | Sub-test | 涵蓋內容 |
+|---|---|---|
+| 01 | special | CPU 邊緣行為（DAA 怪招、halt 狀態切換） |
+| 02 | interrupts | IME / IE / IF 互動、EI 延遲生效、HALT-with-interrupts |
+| 03 | op sp,hl | Stack pointer / HL pair 算術（`ADD SP,e`、`LD HL,SP+e`） |
+| 04 | op r,imm | Register × immediate ALU（`ADD A,n`、`SUB A,n`、`CP n` …） |
+| 05 | op rp | 16-bit pair operations（`INC BC`、`ADD HL,DE`、`LD BC,nn` …） |
+| 06 | ld r,r | 全部 64 種 register-to-register load（`LD A,B`、`LD H,(HL)` …） |
+| 07 | jr,jp,call,ret,rst | 完整 control-flow：相對 jump、絕對 jump、call、return、restart |
+| 08 | misc instrs | CCF / SCF / CPL / DAA 邊緣 case + flag 互動 |
+| 09 | op r,r | Register-to-register ALU（`ADD A,B`、`XOR C`、`CP H` …） |
+| 10 | bit ops | 0xCB-prefix BIT / SET / RES 全 256 個 sub-opcode |
+| 11 | op a,(hl) | A × memory[HL] ALU 操作 |
+
+##### Game Boy Advance — jsmolka `arm.gba` (BIOS LLE 路徑)
+
+![jsmolka arm test 在 real GBA BIOS 下 PASS](result/gba/bios_lle_arm.png)
+
+執行指令：`apr-gba --rom=test-roms/gba-tests/arm/arm.gba --bios=BIOS/gba_bios.bin --block-jit`。**LLE** = *Low-Level Emulation* — 不是 HLE-stub 掉 BIOS call，而是把真的 Nintendo GBA BIOS (`gba_bios.bin`) 透過我們的 ARM7TDMI 模擬跑起來；BIOS bootloader 跑 Nintendo logo intro、洗 VRAM、然後跳 cart entry-point 給 test framework 接手。這個路徑會把框架推到**真正商業級 ARM7TDMI code path**——homebrew test 通常會跳過這層。
+
+截圖顯示**所有 ARM-mode test group 全 PASS** — 涵蓋 ~5000+ 個 test vector，每一個 ARM7TDMI ARM-mode (32-bit) 指令類別都有：
+- Data-processing（ADD/SUB/AND/OR/EOR/MOV/MVN/CMP/CMN/TST/TEQ × 所有 addressing mode × S/non-S flag 變體）
+- Multiply / multiply-long（MUL / MLA / UMULL / SMULL / UMLAL / SMLAL）
+- Single-data-transfer（LDR/STR with byte/halfword/sign-extension 跟 pre/post-indexed offset）
+- Block-data-transfer（LDM/STM 四種 addressing mode IA/IB/DA/DB + writeback）
+- Branch（B / BL / BX 配 cond-code matrix）
+- PSR transfer（MRS / MSR 含 field mask）
+- Software interrupt（SWI 進 BIOS）
+- Mode switches（USER / FIQ / IRQ / SVC / ABT / UND banking）
+
+##### Game Boy Advance — jsmolka `thumb.gba` (BIOS LLE 路徑)
+
+![jsmolka thumb test 在 real GBA BIOS 下 PASS](result/gba/bios_lle_thumb.png)
+
+執行指令：`apr-gba --rom=test-roms/gba-tests/thumb/thumb.gba --bios=BIOS/gba_bios.bin --block-jit`。同樣的 BIOS LLE setup，但跑 Thumb-mode (16-bit) test vector。ARM7TDMI 的 Thumb mode 是 ARM 的 re-encoded subset、用更緊湊的 instruction format；spec port 正確的話 ARM 跟 Thumb 應該透過同一個 emitter pipeline 編譯（差別在 per-mode encoding table）。
+
+截圖顯示**所有 Thumb test group 全 PASS**，涵蓋：
+- Format 1 / 2: shift / 立即值
+- Format 3: move/compare/add/subtract immediate
+- Format 4: ALU operations（AND/EOR/LSL/LSR/ASR/ADC/SBC/ROR/TST/NEG/CMP/CMN/ORR/MUL/BIC/MVN）
+- Format 5: Hi-register operations & branch-exchange
+- Format 6: PC-relative load
+- Formats 7-11: load/store with register/immediate offset、halfword、sign-extended、SP-relative
+- Format 12: load address（PC / SP relative）
+- Format 13: SP arithmetic
+- Format 14: PUSH/POP 含選用 LR/PC
+- Format 15: multiple load/store
+- Format 16: conditional branch
+- Format 17: software interrupt
+- Format 18: unconditional branch
+- Format 19: long-branch-with-link（BL pair 編碼）
+
+這三張截圖一起證明：**同一個 `AprCpu` 框架**、**同一個 `BlockFunctionBuilder` / `EmitContext` / micro-op registry**，能編譯且正確執行：
+1. 變寬 8-bit CPU (LR35902) 含 prefix-byte sub-decoding
+2. ARM-mode 32-bit 定寬 + 16 種 condition-code dispatch
+3. Thumb-mode 16-bit 定寬 + 19 種 distinct encoding format
+
+— emit pipeline 沒有任何 per-CPU C# code。**這是這個專案的 core claim，這三張圖就是證據。**
 
 ### 3. 老實交代：`AprGb` legacy interpreter
 
