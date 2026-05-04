@@ -82,11 +82,11 @@ clearly-marked L3 intrinsic 區段，分兩類：
 這個 floor 是否真的合理 — 這是 Phase 5.8/5.9 階段的工作。
 
 **Refactor 對 perf 的影響**：跑了 4-ROM 1200-frame loop100 bench
-（vs `MD/note/loop100-bench-2026-05.md` 5.7 baseline），主框架路徑
+（vs [`MD/note/loop100-bench-2026-05.md`](/MD/note/loop100-bench-2026-05.md) 5.7 baseline），主框架路徑
 (json-llvm) GBA 微幅進步、GB 微幅退步，整體在 measurement noise 內
 （±5%）。GB legacy 跌 −15% 但 single-run 量測 noise 比例高（~300ms
 total）— 不是 framework 主路徑。詳細數據見
-`MD/note/loop100-bench-2026-05-phase5.8.md`。「結構乾淨 vs 速度中性」
+[`MD/note/loop100-bench-2026-05-phase5.8.md`](/MD/note/loop100-bench-2026-05-phase5.8.md)。「結構乾淨 vs 速度中性」
 的 trade-off 站得住腳。
 
 ---

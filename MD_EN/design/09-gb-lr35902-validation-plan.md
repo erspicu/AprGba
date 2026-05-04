@@ -13,8 +13,8 @@
 > width fetch) were all implemented on the SpecLoader / Emitters side.
 >
 > Subsequent emitter structure optimisation (Phase 5.8 refactor) is
-> covered in `MD/design/11-emitter-library-refactor.md`. Spec structure
-> is in `MD/design/10-lr35902-bit-pattern-groups.md`. This document is
+> covered in [`MD_EN/design/11-emitter-library-refactor.md`](/MD_EN/design/11-emitter-library-refactor.md). Spec structure
+> is in [`MD_EN/design/10-lr35902-bit-pattern-groups.md`](/MD_EN/design/10-lr35902-bit-pattern-groups.md). This document is
 > preserved as a historical plan record.
 
 ---

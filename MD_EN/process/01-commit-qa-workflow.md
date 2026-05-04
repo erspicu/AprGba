@@ -108,7 +108,7 @@ T3 + add:
 
 2. If this change shifts the baseline significantly (e.g., +20% or more,
    new mode online), update the "results table" in
-   `MD/note/loop100-bench-2026-05.md` + add a footnote pointing to the new perf note
+   [`MD_EN/note/loop100-bench-2026-05.md`](/MD_EN/note/loop100-bench-2026-05.md) + add a footnote pointing to the new perf note
 
 3. The commit message should include the comparison table + benchmark log
    path for archaeology

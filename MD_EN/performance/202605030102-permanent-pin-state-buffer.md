@@ -165,9 +165,9 @@ Verification:
 
 ## 7. Related documents
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
-- `MD/performance/202605030025-optlevel-0-to-3.md` — Phase 7 B.a
-- `MD/performance/202605030036-fnptr-cache-by-instruction-def.md` — Phase 7 F.x
-- `MD/performance/202605030047-prebuilt-decoded-instruction.md` — Phase 7 F.y
-- `MD/performance/202605030054-cache-state-offsets-cpuexecutor.md` — Phase 7 B.e
-- `MD/design/03-roadmap.md` Phase 7 — B.f marked done
+- [`MD_EN/performance/202605030002-jit-optimisation-starting-point.md`](/MD_EN/performance/202605030002-jit-optimisation-starting-point.md) — baseline
+- [`MD_EN/performance/202605030025-optlevel-0-to-3.md`](/MD_EN/performance/202605030025-optlevel-0-to-3.md) — Phase 7 B.a
+- [`MD_EN/performance/202605030036-fnptr-cache-by-instruction-def.md`](/MD_EN/performance/202605030036-fnptr-cache-by-instruction-def.md) — Phase 7 F.x
+- [`MD_EN/performance/202605030047-prebuilt-decoded-instruction.md`](/MD_EN/performance/202605030047-prebuilt-decoded-instruction.md) — Phase 7 F.y
+- [`MD_EN/performance/202605030054-cache-state-offsets-cpuexecutor.md`](/MD_EN/performance/202605030054-cache-state-offsets-cpuexecutor.md) — Phase 7 B.e
+- [`MD_EN/design/03-roadmap.md`](/MD_EN/design/03-roadmap.md) Phase 7 — B.f marked done

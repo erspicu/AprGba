@@ -119,12 +119,12 @@ touch core C# code (BlockDetector / BlockFunctionBuilder), only the spec.**
 
 | Doc | Content |
 |---|---|
-| `MD/design/12-gb-block-jit-roadmap.md` | full P0/P1/P2/P3/P4 priority order |
-| `MD/design/13-defer-microop.md` | `defer` mechanism design |
-| `MD/design/14-irq-sync-fastslow.md` | Hybrid IRQ sync mechanism design |
-| `tools/knowledgebase/message/20260503_202431.txt` | Gemini consultation: variable-width + prefix + narrow-int |
-| `tools/knowledgebase/message/20260503_220938.txt` | Gemini consultation: generic delayed-effect mechanism |
-| `tools/knowledgebase/message/20260503_224732.txt` | Gemini consultation: IRQ delivery granularity |
+| [`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md) | full P0/P1/P2/P3/P4 priority order |
+| [`MD_EN/design/13-defer-microop.md`](/MD_EN/design/13-defer-microop.md) | `defer` mechanism design |
+| [`MD_EN/design/14-irq-sync-fastslow.md`](/MD_EN/design/14-irq-sync-fastslow.md) | Hybrid IRQ sync mechanism design |
+| [`tools/knowledgebase/message/20260503_202431.txt`](/tools/knowledgebase/message/20260503_202431.txt) | Gemini consultation: variable-width + prefix + narrow-int |
+| [`tools/knowledgebase/message/20260503_220938.txt`](/tools/knowledgebase/message/20260503_220938.txt) | Gemini consultation: generic delayed-effect mechanism |
+| [`tools/knowledgebase/message/20260503_224732.txt`](/tools/knowledgebase/message/20260503_224732.txt) | Gemini consultation: IRQ delivery granularity |
 
 ---
 

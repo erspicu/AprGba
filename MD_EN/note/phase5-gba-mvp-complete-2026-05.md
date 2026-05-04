@@ -8,7 +8,7 @@
 
 ## 1. Goal recap
 
-Phase 5's pre-launch scope decision (recorded in `MD/design/03-roadmap.md`):
+Phase 5's pre-launch scope decision (recorded in [`MD_EN/design/03-roadmap.md`](/MD_EN/design/03-roadmap.md)):
 
 - GBA-side goal = run jsmolka test ROMs + verify via PNG screenshot
 - **Not** chasing commercial games, **not** chasing more homebrew compatibility

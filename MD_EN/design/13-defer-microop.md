@@ -1,9 +1,9 @@
 # `defer` micro-op — generic delayed-effect mechanism
 
 > **Status**: design doc (2026-05-03). Implementation tracked as Phase 7
-> GB block-JIT P0.6 (see `MD/design/12-gb-block-jit-roadmap.md`).
+> GB block-JIT P0.6 (see [`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md)).
 >
-> **Origin**: Gemini consultation (`tools/knowledgebase/message/20260503_220938.txt`)
+> **Origin**: Gemini consultation ([`tools/knowledgebase/message/20260503_220938.txt`](/tools/knowledgebase/message/20260503_220938.txt))
 > on industry patterns for handling delayed-effect CPU quirks (LR35902 EI,
 > Z80 STI, x86 STI, SH-2 branch delay, RISC-V fence.i, MIPS load-use, etc.)
 > in a generic way — without hand-coding per-CPU logic in `BlockDetector`.

@@ -4,7 +4,7 @@
 >
 > The **real validation** of the R1-R5 promise — "swapping CPUs only
 > requires swapping JSON" — is moved to Phase 4.5 (GB LR35902 port).
-> See `MD/design/09-gb-lr35902-validation-plan.md`.
+> See [`MD_EN/design/09-gb-lr35902-validation-plan.md`](/MD_EN/design/09-gb-lr35902-validation-plan.md).
 >
 > The document below is preserved as a **historical plan doc**, kept for
 > reference structure for similar refactors in the future.

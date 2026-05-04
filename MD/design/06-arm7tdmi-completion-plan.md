@@ -130,7 +130,7 @@ commit + push，可獨立驗收。
 **目標**：在補大量 spec 之前，把寫法規範化，避免後面到處不一致。
 
 產出：
-- `MD/design/07-spec-authoring-conventions.md`：bit-pattern 字母慣例
+- [`MD/design/07-spec-authoring-conventions.md`](/MD/design/07-spec-authoring-conventions.md)：bit-pattern 字母慣例
   （`c` 統一給 cond、`o` 給 opcode、`d` 給 Rd、`n` 給 Rn、`m` 給 Rm…）、
   micro-op 命名習慣、cycle 表達式格式。
 - BitPatternCompiler / SpecLoader 強化 lint：

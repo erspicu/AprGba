@@ -1,9 +1,9 @@
 # IRQ delivery granularity — Hybrid Fast-Path / Slow-Path Sync
 
 > **Status**: design doc (2026-05-03). Implementation tracked as Phase 7
-> GB block-JIT P0.7 (see `MD/design/12-gb-block-jit-roadmap.md`).
+> GB block-JIT P0.7 (see [`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md)).
 >
-> **Origin**: Gemini consultation (`tools/knowledgebase/message/20260503_224732.txt`)
+> **Origin**: Gemini consultation ([`tools/knowledgebase/message/20260503_224732.txt`](/tools/knowledgebase/message/20260503_224732.txt))
 > on industry patterns for matching per-instruction IRQ delivery
 > granularity inside a block-JIT, without sacrificing throughput.
 >

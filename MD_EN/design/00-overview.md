@@ -33,9 +33,9 @@ Differentiators of this project:
 - Windows platform first ✅
 
 Completion snapshot: 360 unit tests all green; arm/thumb/bios.gba all PASS within 6 GBA-seconds via real BIOS LLE; on the GB side, BIOS LLE + DMG Nintendo® logo screenshot captured. Full closing notes:
-- `MD/note/phase5-gba-mvp-complete-2026-05.md` (5.1–5.4)
-- `MD/note/phase5.7-bios-lle-and-ppu-2026-05.md` (5.5–5.7 + Phase 8)
-- `MD/note/loop100-bench-2026-05.md` (**canonical performance baseline**
+- [`MD_EN/note/phase5-gba-mvp-complete-2026-05.md`](/MD_EN/note/phase5-gba-mvp-complete-2026-05.md) (5.1–5.4)
+- [`MD_EN/note/phase5.7-bios-lle-and-ppu-2026-05.md`](/MD_EN/note/phase5.7-bios-lle-and-ppu-2026-05.md) (5.5–5.7 + Phase 8)
+- [`MD_EN/note/loop100-bench-2026-05.md`](/MD_EN/note/loop100-bench-2026-05.md) (**canonical performance baseline**
   — pre-Phase-7 reference, 1200-frame loop100 ROM measurement)
 
 ### Extension of the Primary Goal: framework generality validation ✅ Complete (2026-05-02)
@@ -45,9 +45,9 @@ Completion snapshot: 360 unit tests all green; arm/thumb/bios.gba all PASS withi
   spec, runs on the same host runtime, and **passes Blargg cpu_instrs 11/11 + master
   "Passed all tests"**, with screenshots fully matching LegacyCpu. The core promise
   of "swap CPUs by swapping JSON" is now validated. Details in
-  `MD/design/09-gb-lr35902-validation-plan.md`,
-  `MD/design/10-lr35902-bit-pattern-groups.md`,
-  `MD/note/framework-emitter-architecture.md`.
+  [`MD_EN/design/09-gb-lr35902-validation-plan.md`](/MD_EN/design/09-gb-lr35902-validation-plan.md),
+  [`MD_EN/design/10-lr35902-bit-pattern-groups.md`](/MD_EN/design/10-lr35902-bit-pattern-groups.md),
+  [`MD_EN/note/framework-emitter-architecture.md`](/MD_EN/note/framework-emitter-architecture.md).
 
 ### Explicit exclusions (not in v1, 2026-05 scope decisions)
 
@@ -114,4 +114,4 @@ Completion snapshot: 360 unit tests all green; arm/thumb/bios.gba all PASS withi
 - `11-emitter-library-refactor.md` — Phase 5.8 emitter library refactor design and progress
 
 Cross-phase processes:
-- `MD/process/01-commit-qa-workflow.md` — Tier 0-4 commit QA workflow (decide which tier to run before any commit, based on the nature of the change)
+- [`MD_EN/process/01-commit-qa-workflow.md`](/MD_EN/process/01-commit-qa-workflow.md) — Tier 0-4 commit QA workflow (decide which tier to run before any commit, based on the nature of the change)

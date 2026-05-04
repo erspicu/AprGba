@@ -124,7 +124,7 @@ Per-instr flat (~8.0).
 
 ## 6. Related docs
 
-- `MD/process/01-commit-qa-workflow.md` — this round used Tier 4 workflow
-- `MD/performance/202605030148-lazy-flag-attempt-postmortem.md` — first C.b attempt failure record
+- [`MD_EN/process/01-commit-qa-workflow.md`](/MD_EN/process/01-commit-qa-workflow.md) — this round used Tier 4 workflow
+- [`MD_EN/performance/202605030148-lazy-flag-attempt-postmortem.md`](/MD_EN/performance/202605030148-lazy-flag-attempt-postmortem.md) — first C.b attempt failure record
 - Original H.a commit `d929532` (main branch, replaced by recovery)
 - TODO: Phase 7 H.a-instcombine — bisect which instcombine sub-pass is broken

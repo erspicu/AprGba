@@ -207,6 +207,6 @@ not repeated here.
 
 ## 7. Related documents
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
-- `MD/performance/202605030025-optlevel-0-to-3.md` — previous (perf-neutral)
-- `MD/design/03-roadmap.md` Phase 7 — F.x marked done
+- [`MD_EN/performance/202605030002-jit-optimisation-starting-point.md`](/MD_EN/performance/202605030002-jit-optimisation-starting-point.md) — baseline
+- [`MD_EN/performance/202605030025-optlevel-0-to-3.md`](/MD_EN/performance/202605030025-optlevel-0-to-3.md) — previous (perf-neutral)
+- [`MD_EN/design/03-roadmap.md`](/MD_EN/design/03-roadmap.md) Phase 7 — F.x marked done

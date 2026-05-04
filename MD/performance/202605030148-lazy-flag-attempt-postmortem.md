@@ -229,6 +229,6 @@ git checkout -- 恢復 working tree。 345/345 unit tests 重綠。
 
 ## 8. 相關文件
 
-- `MD/performance/202605030135-width-correct-flag-access.md` — C.a (有 commit)
+- [`MD/performance/202605030135-width-correct-flag-access.md`](/MD/performance/202605030135-width-correct-flag-access.md) — C.a (有 commit)
 - 其他 Phase 7 perf notes
-- `MD/design/03-roadmap.md` Phase 7 — C 區段保留為「未完成 — 真 lazy flag」
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) Phase 7 — C 區段保留為「未完成 — 真 lazy flag」

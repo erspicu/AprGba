@@ -168,7 +168,7 @@ suffix 避開 ORC LLJIT "Duplicate definition"。
 
 ### 未做的 P2 / P3 / P4
 
-詳見 `MD/design/12-gb-block-jit-roadmap.md` §3。下一步建議 pick：
+詳見 [`MD/design/12-gb-block-jit-roadmap.md`](/MD/design/12-gb-block-jit-roadmap.md) §3。下一步建議 pick：
 
 - **P2 #9 A.9 profiling tool** (S/L/diagnostic) — 投資少回報高，後續任何
   perf 工作的 prerequisite

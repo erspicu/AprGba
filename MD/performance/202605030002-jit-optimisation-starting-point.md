@@ -23,7 +23,7 @@
 | GB 09-loop100.gb        | json-llvm   |  3.681 s  | 5.5×        | **2.66** |
 
 > 數據都是 3-run 平均；個別 run + 詳細解讀見
-> `MD/note/loop100-bench-2026-05-phase5.8.md`。
+> [`MD/note/loop100-bench-2026-05-phase5.8.md`](/MD/note/loop100-bench-2026-05-phase5.8.md)。
 
 ---
 
@@ -155,8 +155,8 @@ dotnet run --project src/AprGb.Cli -c Release -- \
 
 ## 6. 相關文件
 
-- `MD/note/loop100-bench-2026-05.md` — Phase 5.7 原始 baseline
-- `MD/note/loop100-bench-2026-05-phase5.8.md` — Phase 5.8 refactor
+- [`MD/note/loop100-bench-2026-05.md`](/MD/note/loop100-bench-2026-05.md) — Phase 5.7 原始 baseline
+- [`MD/note/loop100-bench-2026-05-phase5.8.md`](/MD/note/loop100-bench-2026-05-phase5.8.md) — Phase 5.8 refactor
   完工後對照（refactor 影響：基本 perf-neutral）
-- `MD/design/03-roadmap.md` — Phase 進度，Phase 7 已標「不做」
-- `MD/design/11-emitter-library-refactor.md` — emitter 通用化設計
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) — Phase 進度，Phase 7 已標「不做」
+- [`MD/design/11-emitter-library-refactor.md`](/MD/design/11-emitter-library-refactor.md) — emitter 通用化設計

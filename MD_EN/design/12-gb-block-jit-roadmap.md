@@ -9,7 +9,7 @@
 >
 > Design basis:
 > 1. Gemini consultation (QEMU TCG / FEX-Emu / Dynarmic / mGBA / x86 backend
->    internals), recorded in `tools/knowledgebase/message/20260503_202431.txt`
+>    internals), recorded in [`tools/knowledgebase/message/20260503_202431.txt`](/tools/knowledgebase/message/20260503_202431.txt)
 > 2. Existing codebase structure scan (`BlockDetector.cs:57-65` ctor throw,
 >    `BlockFunctionBuilder.cs` already per-instr PC tracked, `Lr35902Emitters`
 >    `read_imm8/imm16` runtime PC walk)
@@ -100,7 +100,7 @@ follow-ups**; **P4 = speculative + may not do**.
 
 ### Tier P0 — Foundation (✅ **completed 2026-05-04**)
 
-Completion record: `MD/performance/202605040000-gb-block-jit-p0-complete.md`.
+Completion record: [`MD_EN/performance/202605040000-gb-block-jit-p0-complete.md`](/MD_EN/performance/202605040000-gb-block-jit-p0-complete.md).
 All 11 Blargg cpu_instrs sub-tests PASS (including BIOS LLE); GB block-JIT
 MIPS went from 0 → 22.64 (+150% over per-instr 9).
 
@@ -123,8 +123,8 @@ improvement).
 | **P0.5** | HALT/STOP block boundary | ✅ | `c47d849` | detector watches step `op:"halt"`/`"stop"` and auto-splits the block |
 | **P0.5b** | EI delay band-aid (block ends at EI+1) | ✅ partial | `771d170` | hardcoded LR35902-specific; superseded by P0.6 |
 | **P0.5c** | `Lr35902Alu8Emitter.FetchImmediate` Strategy 2 baking | ✅ | `3617240` | + `--diff-bjit=N` lockstep harness; Blargg 01-special PASSED |
-| **P0.6** | Generic `defer` micro-op + AST pre-pass | ✅ | `51c2921` | Phantom-instruction-injection pattern; replaces P0.5b hardcode; details in `MD/design/13-defer-microop.md` |
-| **P0.7** | **Hybrid IRQ delivery — fast/slow split + `sync` micro-op** | ✅ | `0c001fc` + `999f9eb` | Per-instr-grained IRQ correctness in block-JIT; MMIO write callback returns sync flag, JIT exits block on sync; details in `MD/design/14-irq-sync-fastslow.md` |
+| **P0.6** | Generic `defer` micro-op + AST pre-pass | ✅ | `51c2921` | Phantom-instruction-injection pattern; replaces P0.5b hardcode; details in [`MD_EN/design/13-defer-microop.md`](/MD_EN/design/13-defer-microop.md) |
+| **P0.7** | **Hybrid IRQ delivery — fast/slow split + `sync` micro-op** | ✅ | `0c001fc` + `999f9eb` | Per-instr-grained IRQ correctness in block-JIT; MMIO write callback returns sync flag, JIT exits block on sync; details in [`MD_EN/design/14-irq-sync-fastslow.md`](/MD_EN/design/14-irq-sync-fastslow.md) |
 | **P0.7b** | Conditional branch taken-cycle accounting fix | ✅ | `f27450f` + `7dd1e04` | pre-exit BB for taken-branch cycle deduct (revised for smaller GBA perf hit). **Known regression**: GBA bjit -16% from this commit; pending (C) fix |
 
 ### Tier P1 — Big-win extensions (✅ **main body completed 2026-05-04**)
@@ -285,7 +285,7 @@ auto-derive from group files + build the table at SpecCompiler stage)
 
 ## 5. Completion criteria
 
-P0 complete (✅ 2026-05-04) = `MD/performance/202605040000-gb-block-jit-p0-complete.md`
+P0 complete (✅ 2026-05-04) = [`MD_EN/performance/202605040000-gb-block-jit-p0-complete.md`](/MD_EN/performance/202605040000-gb-block-jit-p0-complete.md)
 records:
 - T1 all green (including new variable-width detector unit tests)
 - T2 8-combo screenshot matrix (GBA path canonical hashes unchanged)

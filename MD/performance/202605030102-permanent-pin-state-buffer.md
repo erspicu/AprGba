@@ -156,9 +156,9 @@ src/AprGb.Cli/Cpu/JsonCpu.cs:
 
 ## 7. 相關文件
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
-- `MD/performance/202605030025-optlevel-0-to-3.md` — Phase 7 B.a
-- `MD/performance/202605030036-fnptr-cache-by-instruction-def.md` — Phase 7 F.x
-- `MD/performance/202605030047-prebuilt-decoded-instruction.md` — Phase 7 F.y
-- `MD/performance/202605030054-cache-state-offsets-cpuexecutor.md` — Phase 7 B.e
-- `MD/design/03-roadmap.md` Phase 7 — B.f 標 done
+- [`MD/performance/202605030002-jit-optimisation-starting-point.md`](/MD/performance/202605030002-jit-optimisation-starting-point.md) — baseline
+- [`MD/performance/202605030025-optlevel-0-to-3.md`](/MD/performance/202605030025-optlevel-0-to-3.md) — Phase 7 B.a
+- [`MD/performance/202605030036-fnptr-cache-by-instruction-def.md`](/MD/performance/202605030036-fnptr-cache-by-instruction-def.md) — Phase 7 F.x
+- [`MD/performance/202605030047-prebuilt-decoded-instruction.md`](/MD/performance/202605030047-prebuilt-decoded-instruction.md) — Phase 7 F.y
+- [`MD/performance/202605030054-cache-state-offsets-cpuexecutor.md`](/MD/performance/202605030054-cache-state-offsets-cpuexecutor.md) — Phase 7 B.e
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) Phase 7 — B.f 標 done

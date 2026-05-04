@@ -3,7 +3,7 @@
 > **狀態：✅ 完成**（R1–R5 全部實作於 Phase 2.5 期間）
 >
 > R1–R5 的承諾——「換 CPU 只要換 JSON」——的**真正驗證**移到 Phase 4.5
-> （GB LR35902 移植）。見 `MD/design/09-gb-lr35902-validation-plan.md`。
+> （GB LR35902 移植）。見 [`MD/design/09-gb-lr35902-validation-plan.md`](/MD/design/09-gb-lr35902-validation-plan.md)。
 >
 > 下方文件保留為**歷史 plan doc**，供日後類似 refactor 參考結構。
 

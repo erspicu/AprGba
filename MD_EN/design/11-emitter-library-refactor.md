@@ -91,12 +91,12 @@ before validating whether this floor is reasonable — that's the work of
 the Phase 5.8/5.9 stage.
 
 **Refactor's perf impact**: ran a 4-ROM 1200-frame loop100 bench (vs
-`MD/note/loop100-bench-2026-05.md` 5.7 baseline). The main framework
+[`MD_EN/note/loop100-bench-2026-05.md`](/MD_EN/note/loop100-bench-2026-05.md) 5.7 baseline). The main framework
 path (json-llvm) GBA improved slightly, GB regressed slightly; overall
 within measurement noise (+/-5%). GB legacy dropped -15% but the
 single-run measurement noise ratio is high (~300ms total) — it's not
 the framework main path. Detailed numbers in
-`MD/note/loop100-bench-2026-05-phase5.8.md`. The trade-off "structural
+[`MD_EN/note/loop100-bench-2026-05-phase5.8.md`](/MD_EN/note/loop100-bench-2026-05-phase5.8.md). The trade-off "structural
 clean vs speed-neutral" stands.
 
 ---

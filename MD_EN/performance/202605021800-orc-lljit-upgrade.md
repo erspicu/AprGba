@@ -170,6 +170,6 @@ dispatcher uses PC to look up cache.
 ## 7. Related documents
 
 - `src/AprCpu.Core/Runtime/HostRuntime.cs` — rewritten source
-- `MD/design/03-roadmap.md` Phase 7 A.3 — marked done
-- `MD/performance/202605030241-cb-alloca-shadow-retry.md` — last MCJIT-era
+- [`MD_EN/design/03-roadmap.md`](/MD_EN/design/03-roadmap.md) Phase 7 A.3 — marked done
+- [`MD_EN/performance/202605030241-cb-alloca-shadow-retry.md`](/MD_EN/performance/202605030241-cb-alloca-shadow-retry.md) — last MCJIT-era
   perf change (A.3's baseline)

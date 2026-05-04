@@ -118,12 +118,12 @@ P0 期間累積的 generic framework 機制（不限 GB / LR35902）：
 
 | Doc | 內容 |
 |---|---|
-| `MD/design/12-gb-block-jit-roadmap.md` | P0/P1/P2/P3/P4 完整 priority 排序 |
-| `MD/design/13-defer-microop.md` | `defer` 機制 design |
-| `MD/design/14-irq-sync-fastslow.md` | Hybrid IRQ sync 機制 design |
-| `tools/knowledgebase/message/20260503_202431.txt` | Gemini 諮詢: variable-width + prefix + narrow-int |
-| `tools/knowledgebase/message/20260503_220938.txt` | Gemini 諮詢: generic delayed-effect mechanism |
-| `tools/knowledgebase/message/20260503_224732.txt` | Gemini 諮詢: IRQ delivery granularity |
+| [`MD/design/12-gb-block-jit-roadmap.md`](/MD/design/12-gb-block-jit-roadmap.md) | P0/P1/P2/P3/P4 完整 priority 排序 |
+| [`MD/design/13-defer-microop.md`](/MD/design/13-defer-microop.md) | `defer` 機制 design |
+| [`MD/design/14-irq-sync-fastslow.md`](/MD/design/14-irq-sync-fastslow.md) | Hybrid IRQ sync 機制 design |
+| [`tools/knowledgebase/message/20260503_202431.txt`](/tools/knowledgebase/message/20260503_202431.txt) | Gemini 諮詢: variable-width + prefix + narrow-int |
+| [`tools/knowledgebase/message/20260503_220938.txt`](/tools/knowledgebase/message/20260503_220938.txt) | Gemini 諮詢: generic delayed-effect mechanism |
+| [`tools/knowledgebase/message/20260503_224732.txt`](/tools/knowledgebase/message/20260503_224732.txt) | Gemini 諮詢: IRQ delivery granularity |
 
 ---
 

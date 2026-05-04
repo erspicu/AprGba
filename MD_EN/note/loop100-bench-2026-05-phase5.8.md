@@ -2,7 +2,7 @@
 
 > **Comparison data after Phase 5.8 emitter-refactor.**
 >
-> Same 4 ROMs x backend matrix as `MD/note/loop100-bench-2026-05.md`
+> Same 4 ROMs x backend matrix as [`MD_EN/note/loop100-bench-2026-05.md`](/MD_EN/note/loop100-bench-2026-05.md)
 > (Phase 5.7 baseline), same 1200 frames, same machine, same .NET 10
 > Release build, same LLVM 20 MCJIT — measuring the impact of the
 > emitter library refactor on MIPS / real-time.
@@ -10,7 +10,7 @@
 > Refactor scope: Phase 5.8 Steps 5.1-5.7 (27 LR35902-specific ops
 > generalised into common ops; `Lr35902Emitters.cs` shrunk from ~2620
 > to 1346 lines, -49%; details in
-> `MD/design/11-emitter-library-refactor.md`).
+> [`MD_EN/design/11-emitter-library-refactor.md`](/MD_EN/design/11-emitter-library-refactor.md)).
 >
 > Source commits: `3c88ea9` (refactor wrap-up + docs).
 
@@ -136,7 +136,7 @@ numbers will be redrawn anyway, and we'll re-verify then.
 
 ## 4. Bench reproduction steps
 
-Identical to the 5.7 baseline (see `MD/note/loop100-bench-2026-05.md` §6):
+Identical to the 5.7 baseline (see [`MD_EN/note/loop100-bench-2026-05.md`](/MD_EN/note/loop100-bench-2026-05.md) §6):
 
 ```bash
 dotnet build -c Release AprGba.slnx

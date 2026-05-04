@@ -94,6 +94,6 @@ Both GBA paths slowly inch toward 8.4. GBA thumb cumulative +124% from baseline.
 
 ## 5. Related docs
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
+- [`MD_EN/performance/202605030002-jit-optimisation-starting-point.md`](/MD_EN/performance/202605030002-jit-optimisation-starting-point.md) — baseline
 - Previous 9 Phase 7 perf notes
-- `MD/design/03-roadmap.md` Phase 7 — B.h marked done
+- [`MD_EN/design/03-roadmap.md`](/MD_EN/design/03-roadmap.md) Phase 7 — B.h marked done

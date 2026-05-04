@@ -136,11 +136,11 @@ the redesign.
 
 ## 6. Related docs
 
-- `MD/performance/202605030148-lazy-flag-attempt-postmortem.md` — first
+- [`MD_EN/performance/202605030148-lazy-flag-attempt-postmortem.md`](/MD_EN/performance/202605030148-lazy-flag-attempt-postmortem.md) — first
   C.b attempt (deferred-batch + SSA dominance crash)
-- `MD/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md` — H.a
+- [`MD_EN/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md`](/MD_EN/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md) — H.a
   4-pass set re-enabled, current baseline
 - main `c5d32c6` — main branch's C.b retry, **structure not suitable for
   direct cherry-pick to recovery branch**
-- `MD/process/01-commit-qa-workflow.md` — this round used Tier 3 workflow,
+- [`MD_EN/process/01-commit-qa-workflow.md`](/MD_EN/process/01-commit-qa-workflow.md) — this round used Tier 3 workflow,
   T2 fail aborted + reverted per rule

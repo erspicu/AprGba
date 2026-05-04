@@ -169,6 +169,6 @@ dispatcher 拿 PC 查 cache。
 ## 7. 相關文件
 
 - `src/AprCpu.Core/Runtime/HostRuntime.cs` — 重寫後源碼
-- `MD/design/03-roadmap.md` Phase 7 A.3 — 標 done
-- `MD/performance/202605030241-cb-alloca-shadow-retry.md` — MCJIT
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) Phase 7 A.3 — 標 done
+- [`MD/performance/202605030241-cb-alloca-shadow-retry.md`](/MD/performance/202605030241-cb-alloca-shadow-retry.md) — MCJIT
   時代最後一個 perf 改動（A.3 的 baseline）

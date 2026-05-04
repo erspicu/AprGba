@@ -1,6 +1,6 @@
 # Performance Baseline — Phase 4.5 完工後 (2026-05-02)
 
-> ⚠ **SUPERSEDED by `MD/note/loop100-bench-2026-05.md`** — 該檔是
+> ⚠ **SUPERSEDED by [`MD/note/loop100-bench-2026-05.md`](/MD/note/loop100-bench-2026-05.md)** — 該檔是
 > Phase 5.7 完工後（含 GB scheduler、PPU 完整化、BIOS open-bus、
 > 5 個 ARM bug fix 等正確性改動之後）的正式 baseline，方法統一為
 > 「跑 1200 frames stress-test ROM (loop100)」可重現。
@@ -48,7 +48,7 @@ step 後才開計時。
 - LLVMSharp.Interop 20.x，MCJIT，OptLevel=0
 - 都加了 `nounwind` + `no-jump-tables` function attribute（避開 Windows
   COFF section-ordering 的 relocation crash，見
-  `MD/note/framework-emitter-architecture.md`）
+  [`MD/note/framework-emitter-architecture.md`](/MD/note/framework-emitter-architecture.md)）
 
 ---
 

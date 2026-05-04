@@ -177,8 +177,8 @@ Verification:
 
 ## 6. Related documents
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
-- `MD/performance/202605030025-optlevel-0-to-3.md` — Phase 7 B.a (perf-neutral)
-- `MD/performance/202605030036-fnptr-cache-by-instruction-def.md` — Phase 7 F.x (+82%)
-- `MD/design/03-roadmap.md` Phase 7 — F.y marked done
-- `MD/note/framework-emitter-architecture.md` §8.4 — Phase 7 cumulative summary
+- [`MD_EN/performance/202605030002-jit-optimisation-starting-point.md`](/MD_EN/performance/202605030002-jit-optimisation-starting-point.md) — baseline
+- [`MD_EN/performance/202605030025-optlevel-0-to-3.md`](/MD_EN/performance/202605030025-optlevel-0-to-3.md) — Phase 7 B.a (perf-neutral)
+- [`MD_EN/performance/202605030036-fnptr-cache-by-instruction-def.md`](/MD_EN/performance/202605030036-fnptr-cache-by-instruction-def.md) — Phase 7 F.x (+82%)
+- [`MD_EN/design/03-roadmap.md`](/MD_EN/design/03-roadmap.md) Phase 7 — F.y marked done
+- [`MD_EN/note/framework-emitter-architecture.md`](/MD_EN/note/framework-emitter-architecture.md) §8.4 — Phase 7 cumulative summary

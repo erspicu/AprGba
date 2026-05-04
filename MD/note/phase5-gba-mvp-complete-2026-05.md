@@ -7,7 +7,7 @@
 
 ## 1. 目標回顧
 
-Phase 5 開工前的 scope decision（記錄在 `MD/design/03-roadmap.md`）：
+Phase 5 開工前的 scope decision（記錄在 [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md)）：
 
 - GBA 端目標 = 跑 jsmolka test ROM + PNG 截圖驗證
 - **不**追商業遊戲、**不**追更多 homebrew 相容

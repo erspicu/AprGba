@@ -117,7 +117,7 @@ Per-instr 持平 (~8.0)。
 
 ## 6. 相關文件
 
-- `MD/process/01-commit-qa-workflow.md` — 本次走 Tier 4 流程
-- `MD/performance/202605030148-lazy-flag-attempt-postmortem.md` — C.b 第一次失敗紀錄
+- [`MD/process/01-commit-qa-workflow.md`](/MD/process/01-commit-qa-workflow.md) — 本次走 Tier 4 流程
+- [`MD/performance/202605030148-lazy-flag-attempt-postmortem.md`](/MD/performance/202605030148-lazy-flag-attempt-postmortem.md) — C.b 第一次失敗紀錄
 - 原 H.a commit `d929532`（main 分支，被 recovery 取代）
 - 待辦：Phase 7 H.a-instcombine — bisect 哪個 instcombine sub-pass 出包

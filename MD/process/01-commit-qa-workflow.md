@@ -106,7 +106,7 @@ T3 + 補：
    兩邊 IRQ count 應該一致（drift = scheduler timing bug 的訊號）
 
 2. 如果這次改動讓 baseline 大幅變動（例如 +20% 以上、新模式上線），更新
-   `MD/note/loop100-bench-2026-05.md` 的「結果表」 + 加註腳指向新 perf note
+   [`MD/note/loop100-bench-2026-05.md`](/MD/note/loop100-bench-2026-05.md) 的「結果表」 + 加註腳指向新 perf note
 
 3. commit message 寫對比表 + benchmark log 路徑，方便 archaeology
 

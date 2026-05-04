@@ -473,10 +473,10 @@ LR35902 是 1-3 byte LE-packed (含 imm baking)。
 
 ## 10. Reference
 
-- `MD/design/12-gb-block-jit-roadmap.md` — GB block-JIT 整體 roadmap
-- `MD/design/13-defer-microop.md` — defer micro-op 設計
-- `MD/design/14-irq-sync-fastslow.md` — sync micro-op + bus extern split
-- `MD/performance/202605040000-gb-block-jit-p0-complete.md` — P0 完工
-- `MD/performance/202605041800-gb-block-jit-p1-complete.md` — P1 完工
+- [`MD/design/12-gb-block-jit-roadmap.md`](/MD/design/12-gb-block-jit-roadmap.md) — GB block-JIT 整體 roadmap
+- [`MD/design/13-defer-microop.md`](/MD/design/13-defer-microop.md) — defer micro-op 設計
+- [`MD/design/14-irq-sync-fastslow.md`](/MD/design/14-irq-sync-fastslow.md) — sync micro-op + bus extern split
+- [`MD/performance/202605040000-gb-block-jit-p0-complete.md`](/MD/performance/202605040000-gb-block-jit-p0-complete.md) — P0 完工
+- [`MD/performance/202605041800-gb-block-jit-p1-complete.md`](/MD/performance/202605041800-gb-block-jit-p1-complete.md) — P1 完工
 - `tools/knowledgebase/message/20260503_*.txt` — Gemini 諮詢紀錄
   （QEMU TCG / FEX-Emu / Dynarmic / mGBA / Dolphin 設計參考）

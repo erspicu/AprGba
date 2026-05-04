@@ -532,11 +532,11 @@ Summarize everything above in 4 points:
 
 ## 10. References
 
-- `MD/design/12-gb-block-jit-roadmap.md` — overall GB block-JIT roadmap
-- `MD/design/13-defer-microop.md` — defer micro-op design
-- `MD/design/14-irq-sync-fastslow.md` — sync micro-op + bus extern split
-- `MD/performance/202605040000-gb-block-jit-p0-complete.md` — P0 completion
-- `MD/performance/202605041800-gb-block-jit-p1-complete.md` — P1 completion
+- [`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md) — overall GB block-JIT roadmap
+- [`MD_EN/design/13-defer-microop.md`](/MD_EN/design/13-defer-microop.md) — defer micro-op design
+- [`MD_EN/design/14-irq-sync-fastslow.md`](/MD_EN/design/14-irq-sync-fastslow.md) — sync micro-op + bus extern split
+- [`MD_EN/performance/202605040000-gb-block-jit-p0-complete.md`](/MD_EN/performance/202605040000-gb-block-jit-p0-complete.md) — P0 completion
+- [`MD_EN/performance/202605041800-gb-block-jit-p1-complete.md`](/MD_EN/performance/202605041800-gb-block-jit-p1-complete.md) — P1 completion
 - `tools/knowledgebase/message/20260503_*.txt` — Gemini consultation
   records (QEMU TCG / FEX-Emu / Dynarmic / mGBA / Dolphin design
   references)

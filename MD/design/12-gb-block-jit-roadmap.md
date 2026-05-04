@@ -8,7 +8,7 @@
 >
 > 設計依據來自：
 > 1. Gemini 諮詢（QEMU TCG / FEX-Emu / Dynarmic / mGBA / x86 backend
->    內部行為），紀錄在 `tools/knowledgebase/message/20260503_202431.txt`
+>    內部行為），紀錄在 [`tools/knowledgebase/message/20260503_202431.txt`](/tools/knowledgebase/message/20260503_202431.txt)
 > 2. 現有 codebase 結構掃描（`BlockDetector.cs:57-65` ctor throw、
 >    `BlockFunctionBuilder.cs` 已 per-instr PC tracked、`Lr35902Emitters`
 >    `read_imm8/imm16` runtime PC walk）
@@ -90,7 +90,7 @@ LR35902 length **完全由第一 byte 決定**（256-entry static table）：
 
 ### Tier P0 — Foundation（✅ **完工 2026-05-04**）
 
-完工紀錄：`MD/performance/202605040000-gb-block-jit-p0-complete.md`。
+完工紀錄：[`MD/performance/202605040000-gb-block-jit-p0-complete.md`](/MD/performance/202605040000-gb-block-jit-p0-complete.md)。
 Blargg cpu_instrs 全 11 子測試 PASS（含 BIOS LLE）；GB block-JIT MIPS
 從 0 → 22.64（per-instr 9 的 +150%）。
 
@@ -112,8 +112,8 @@ GB 09-loop100 從 6.5 → ≥10 MIPS（保守目標 ~50% 進步）。
 | **P0.5** | HALT/STOP block boundary | ✅ | `c47d849` | detector 看 step `op:"halt"`/`"stop"` 自動切 block |
 | **P0.5b** | EI delay band-aid (block ends at EI+1) | ✅ partial | `771d170` | hardcoded LR35902-specific；P0.6 取代 |
 | **P0.5c** | `Lr35902Alu8Emitter.FetchImmediate` Strategy 2 baking | ✅ | `3617240` | + `--diff-bjit=N` lockstep harness；Blargg 01-special PASSED |
-| **P0.6** | Generic `defer` micro-op + AST pre-pass | ✅ | `51c2921` | Phantom-instruction-injection pattern；replaced P0.5b hardcode；details in `MD/design/13-defer-microop.md` |
-| **P0.7** | **Hybrid IRQ delivery — fast/slow split + `sync` micro-op** | ✅ | `0c001fc` + `999f9eb` | Per-instr-grained IRQ correctness in block-JIT；MMIO write callback returns sync flag, JIT exits block on sync；details in `MD/design/14-irq-sync-fastslow.md` |
+| **P0.6** | Generic `defer` micro-op + AST pre-pass | ✅ | `51c2921` | Phantom-instruction-injection pattern；replaced P0.5b hardcode；details in [`MD/design/13-defer-microop.md`](/MD/design/13-defer-microop.md) |
+| **P0.7** | **Hybrid IRQ delivery — fast/slow split + `sync` micro-op** | ✅ | `0c001fc` + `999f9eb` | Per-instr-grained IRQ correctness in block-JIT；MMIO write callback returns sync flag, JIT exits block on sync；details in [`MD/design/14-irq-sync-fastslow.md`](/MD/design/14-irq-sync-fastslow.md) |
 | **P0.7b** | Conditional branch taken-cycle accounting fix | ✅ | `f27450f` + `7dd1e04` | pre-exit BB for taken-branch cycle deduct (smaller GBA perf hit revision)。**Known regression**：GBA bjit -16% 自此 commit；待 (C) 修復 |
 
 ### Tier P1 — Big-win 延伸（✅ **主體完工 2026-05-04**）
@@ -265,7 +265,7 @@ GB 09-loop100 從 6.5 → ≥10 MIPS（保守目標 ~50% 進步）。
 
 ## 5. 完成判定
 
-P0 完成（✅ 2026-05-04）= `MD/performance/202605040000-gb-block-jit-p0-complete.md`
+P0 完成（✅ 2026-05-04）= [`MD/performance/202605040000-gb-block-jit-p0-complete.md`](/MD/performance/202605040000-gb-block-jit-p0-complete.md)
 紀錄：
 - T1 全綠（含新 variable-width detector 單元 test）
 - T2 8-combo screenshot matrix（GBA 路徑全部 canonical hash 不退步）

@@ -131,6 +131,6 @@ src/AprCpu.Core/Runtime/Gba/GbaMemoryBus.cs:
 
 ## 7. 相關文件
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
+- [`MD/performance/202605030002-jit-optimisation-starting-point.md`](/MD/performance/202605030002-jit-optimisation-starting-point.md) — baseline
 - 前 5 個 Phase 7 perf notes (B.a / F.x / F.y / B.e / B.f)
-- `MD/design/03-roadmap.md` Phase 7 — B.g 標 done
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) Phase 7 — B.g 標 done

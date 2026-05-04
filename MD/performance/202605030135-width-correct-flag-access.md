@@ -139,6 +139,6 @@ src/AprCpu.Core/IR/Emitters.cs CpsrHelpers:
 
 ## 7. 相關文件
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
+- [`MD/performance/202605030002-jit-optimisation-starting-point.md`](/MD/performance/202605030002-jit-optimisation-starting-point.md) — baseline
 - 前 8 個 Phase 7 perf notes
-- `MD/design/03-roadmap.md` Phase 7 — C.a 標 done
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) Phase 7 — C.a 標 done

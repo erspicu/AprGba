@@ -139,7 +139,7 @@ work).
 style to avoid inconsistencies later.
 
 Deliverables:
-- `MD/design/07-spec-authoring-conventions.md`: bit-pattern letter
+- [`MD_EN/design/07-spec-authoring-conventions.md`](/MD_EN/design/07-spec-authoring-conventions.md): bit-pattern letter
   conventions (`c` always for cond, `o` for opcode, `d` for Rd, `n` for
   Rn, `m` for Rm...), micro-op naming convention, cycle expression
   format.

@@ -157,6 +157,6 @@ Verification:
 
 ## 7. Related documents
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
+- [`MD_EN/performance/202605030002-jit-optimisation-starting-point.md`](/MD_EN/performance/202605030002-jit-optimisation-starting-point.md) — baseline
 - Previous 6 Phase 7 perf notes (B.a / F.x / F.y / B.e / B.f / B.g)
-- `MD/design/03-roadmap.md` Phase 7 — E.a marked done
+- [`MD_EN/design/03-roadmap.md`](/MD_EN/design/03-roadmap.md) Phase 7 — E.a marked done

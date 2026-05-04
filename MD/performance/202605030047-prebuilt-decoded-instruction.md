@@ -175,8 +175,8 @@ src/AprCpu.Core/Decoder/DecoderTable.cs:
 
 ## 6. 相關文件
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
-- `MD/performance/202605030025-optlevel-0-to-3.md` — Phase 7 B.a (perf-neutral)
-- `MD/performance/202605030036-fnptr-cache-by-instruction-def.md` — Phase 7 F.x (+82%)
-- `MD/design/03-roadmap.md` Phase 7 — F.y 標 done
-- `MD/note/framework-emitter-architecture.md` §8.4 — Phase 7 累計成果摘要
+- [`MD/performance/202605030002-jit-optimisation-starting-point.md`](/MD/performance/202605030002-jit-optimisation-starting-point.md) — baseline
+- [`MD/performance/202605030025-optlevel-0-to-3.md`](/MD/performance/202605030025-optlevel-0-to-3.md) — Phase 7 B.a (perf-neutral)
+- [`MD/performance/202605030036-fnptr-cache-by-instruction-def.md`](/MD/performance/202605030036-fnptr-cache-by-instruction-def.md) — Phase 7 F.x (+82%)
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) Phase 7 — F.y 標 done
+- [`MD/note/framework-emitter-architecture.md`](/MD/note/framework-emitter-architecture.md) §8.4 — Phase 7 累計成果摘要

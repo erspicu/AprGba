@@ -1,6 +1,6 @@
 # GB block-JIT P0 progress — infrastructure landed, +70% perf, Blargg partial
 
-> **Phase**: 7 GB block-JIT P0 (foundation tier per `MD/design/12-gb-block-jit-roadmap.md`)
+> **Phase**: 7 GB block-JIT P0 (foundation tier per [`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md))
 > **Date**: 2026-05-03
 > **Status**: P0.1-P0.4 shipped. GB block-JIT runs end-to-end with
 > partial Blargg pass; one residual bug (`JR negative` subtest fail).
@@ -136,8 +136,8 @@ GBA regression.
 
 ## 7. Related files
 
-- `MD/design/12-gb-block-jit-roadmap.md` — full priority roadmap
-- `tools/knowledgebase/message/20260503_202431.txt` — full Gemini consultation (variable-width / 0xCB prefix / narrow-int RA three questions)
+- [`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md) — full priority roadmap
+- [`tools/knowledgebase/message/20260503_202431.txt`](/tools/knowledgebase/message/20260503_202431.txt) — full Gemini consultation (variable-width / 0xCB prefix / narrow-int RA three questions)
 - `src/AprCpu.Core/Runtime/Lr35902InstructionLengths.cs` — 256-entry length table (P0.1)
 - `src/AprCpu.Core/Runtime/BlockDetector.cs` — sequential crawl + prefix dispatch (P0.1+P0.2)
 - `src/AprCpu.Core/IR/Lr35902Emitters.cs` line 1125-1180 — read_imm8/16 baking (P0.3)

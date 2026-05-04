@@ -25,7 +25,7 @@ Hobby-time estimate: 8–15 hours per week.
 >   C.b lazy flag deferred (correctness regression in BJIT/BIOS-LLE; the
 >   main-branch version doesn't fit the recovery branch's structure).
 > - **QA workflow**: every commit runs the corresponding tier based on the
->   change profile, see `MD/process/01-commit-qa-workflow.md` (T0 docs /
+>   change profile, see [`MD_EN/process/01-commit-qa-workflow.md`](/MD_EN/process/01-commit-qa-workflow.md) (T0 docs /
 >   T1 360 unit tests / T2 8-combo screenshot matrix / T3 3-run loop100
 >   bench / T4 baseline update).
 >
@@ -33,8 +33,8 @@ Hobby-time estimate: 8–15 hours per week.
 > (`--bios` / `--cycles` / `--frames` / `--seconds` / `--screenshot` /
 > `--block-jit`).
 >
-> Full closeout notes: `MD/note/phase5.7-bios-lle-and-ppu-2026-05.md`;
-> refactor progress: `MD/design/11-emitter-library-refactor.md`; Phase 7
+> Full closeout notes: [`MD_EN/note/phase5.7-bios-lle-and-ppu-2026-05.md`](/MD_EN/note/phase5.7-bios-lle-and-ppu-2026-05.md);
+> refactor progress: [`MD_EN/design/11-emitter-library-refactor.md`](/MD_EN/design/11-emitter-library-refactor.md); Phase 7
 > perf records: `MD/performance/`.
 >
 > Possible next steps: (a) Phase 5.8/5.9 third-CPU validation
@@ -64,8 +64,8 @@ runs end-to-end. LLVM 20 + .NET 10 + LLVMSharp 20.x combination is stable.
 
 **Goal**: define a JSON format capable of expressing ARM7TDMI.
 
-Completed; see `MD/design/04-json-schema-spec.md`,
-`MD/design/05-microops-vocabulary.md`,
+Completed; see [`MD_EN/design/04-json-schema-spec.md`](/MD_EN/design/04-json-schema-spec.md),
+[`MD_EN/design/05-microops-vocabulary.md`](/MD_EN/design/05-microops-vocabulary.md),
 `spec/schema/cpu-spec.schema.json`.
 
 ---
@@ -97,7 +97,7 @@ Phase 2.5 below.
 **Goal**: extend the spec to a **complete ARM7TDMI ISA**, with the
 parser/emitter brought up to match.
 
-Detailed sub-phases in `MD/design/06-arm7tdmi-completion-plan.md`.
+Detailed sub-phases in [`MD_EN/design/06-arm7tdmi-completion-plan.md`](/MD_EN/design/06-arm7tdmi-completion-plan.md).
 
 Sub-phases:
 - [x] 2.5.1 Spec authoring guidelines + lint hardening
@@ -124,7 +124,7 @@ Sub-phases:
 **Insertion point**: after Phase 2.5.2, before 2.5.3 begins.
 **Status: R1–R5 all completed during Phase 2.5.**
 
-Details in `MD/design/08-portability-refactor.md`.
+Details in [`MD_EN/design/08-portability-refactor.md`](/MD_EN/design/08-portability-refactor.md).
 
 5 refactors:
 - [x] R1: build CpuStateLayout dynamically from `register_file`
@@ -211,7 +211,7 @@ test.
 reference, write the GB CPU as a JSON spec, and **prove the framework
 really can swap CPUs**.
 
-Details in `MD/design/09-gb-lr35902-validation-plan.md`.
+Details in [`MD_EN/design/09-gb-lr35902-validation-plan.md`](/MD_EN/design/09-gb-lr35902-validation-plan.md).
 
 **Why here**:
 - Phase 3 done → host runtime can already run IR
@@ -253,15 +253,15 @@ vs Blargg subset) decided when we actually get there.
 The **"swap CPU = swap JSON" claim is validated** (two completely
 different CPUs, ARM7TDMI + LR35902, both run end-to-end through the
 framework's spec→IR→JIT pipeline). Phase 4.5 closeout notes:
-`MD/note/framework-emitter-architecture.md` and
-`MD/note/performance-baseline-2026-05.md`.
+[`MD_EN/note/framework-emitter-architecture.md`](/MD_EN/note/framework-emitter-architecture.md) and
+[`MD_EN/note/performance-baseline-2026-05.md`](/MD_EN/note/performance-baseline-2026-05.md).
 
 ---
 
 ## Phase 5: Memory Bus + BIOS LLE + PPU Completion — Done (2026-05-02)
 
-> **Closeout notes**: `MD/note/phase5-gba-mvp-complete-2026-05.md` (5.1–5.4)
-> + `MD/note/phase5.7-bios-lle-and-ppu-2026-05.md` (5.5–5.7).
+> **Closeout notes**: [`MD_EN/note/phase5-gba-mvp-complete-2026-05.md`](/MD_EN/note/phase5-gba-mvp-complete-2026-05.md) (5.1–5.4)
+> + [`MD_EN/note/phase5.7-bios-lle-and-ppu-2026-05.md`](/MD_EN/note/phase5.7-bios-lle-and-ppu-2026-05.md) (5.5–5.7).
 >
 > Phase 5 grew from "memory bus + minimal IRQ" all the way to **real
 > BIOS LLE + full PPU**:
@@ -347,7 +347,7 @@ pushing forward.
 json-llvm slightly regressed (−3%), GB legacy down −15% (still off
 baseline after multiple runs, but each run is only ~300ms so
 measurement noise dominates). Detailed numbers in
-`MD/note/loop100-bench-2026-05-phase5.8.md`. **Conclusion: the refactor
+[`MD_EN/note/loop100-bench-2026-05-phase5.8.md`](/MD_EN/note/loop100-bench-2026-05-phase5.8.md). **Conclusion: the refactor
 is perf-neutral on the main framework path (json-llvm)**, accomplishing
 the "clean structure vs neutral speed" trade-off.
 
@@ -444,7 +444,7 @@ Reasons to keep pushing:
 - Future CPU ports won't suffer from per-instruction dispatch overhead
 
 **Current canonical baseline (2026-05-02, post-Phase-5.7,
-instruction-level JIT) in `MD/note/loop100-bench-2026-05.md`**.
+instruction-level JIT) in [`MD_EN/note/loop100-bench-2026-05.md`](/MD_EN/note/loop100-bench-2026-05.md)**.
 1200-frame stress-test ROM (`*-loop100.gba` / `09-loop100.gb`),
 unified measurement, 4 reference numbers:
 
@@ -457,7 +457,7 @@ unified measurement, 4 reference numbers:
 
 After Phase 7 closes, rerun these 4 cases to see speedups (expecting
 json-llvm to climb to 25-50 MIPS = 8-13× speedup). The earlier
-Phase-4.5-era baseline (`MD/note/performance-baseline-2026-05.md`) is
+Phase-4.5-era baseline ([`MD_EN/note/performance-baseline-2026-05.md`](/MD_EN/note/performance-baseline-2026-05.md)) is
 **superseded** — measurement methodology and ROMs differ; kept only as
 historical record.
 
@@ -467,7 +467,7 @@ Full list. After the Phase 5.8 emitter refactor cleaned up the
 structure, this section enumerates every optimisation angle that
 "really pushing the JIT to the limit" hits. Do them one at a time, run
 the canonical loop100 bench
-(`MD/performance/202605030002-jit-optimisation-starting-point.md`)
+([`MD_EN/performance/202605030002-jit-optimisation-starting-point.md`](/MD_EN/performance/202605030002-jit-optimisation-starting-point.md))
 after each, log before/after.
 
 Roughly low-risk-high-reward → high-risk-unverified order.
@@ -501,11 +501,11 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 #### Progress snapshot (2026-05-04 update — GB block-JIT P0+P1 shipped)
 
 GB block-JIT from scratch; sub-roadmap in
-`MD/design/12-gb-block-jit-roadmap.md`. P0 4 steps + P0.5/P0.6/P0.7/P0.7b
+[`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md). P0 4 steps + P0.5/P0.6/P0.7/P0.7b
 follow-ups, P1 #5/#5b/#6/#7 main bodies all shipped.
 
 **P0 4 steps** (full detail in
-`MD/performance/202605040000-gb-block-jit-p0-complete.md`):
+[`MD_EN/performance/202605040000-gb-block-jit-p0-complete.md`](/MD_EN/performance/202605040000-gb-block-jit-p0-complete.md)):
 1. Variable-width `BlockDetector` (`fdce42c`) — `lengthOracle` callback
 2. 0xCB prefix as 2-byte atomic (`381595b`) — `prefix_to_set: "CB"` +
    sub-decoder
@@ -517,7 +517,7 @@ micro-op (`51c2921`), hybrid IRQ delivery sync micro-op
 (`0c001fc`+`999f9eb`), conditional branch taken-cycle accounting
 (`f27450f`+`7dd1e04`).
 
-**P1 main body** (`MD/design/12-gb-block-jit-roadmap.md` §3 Tier P1):
+**P1 main body** ([`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md) §3 Tier P1):
 - **P1 #5 V1 block-local register shadowing** (`db9375c`) — EmitContext
   shadow slot infra + ctx.GepGpr/GepStatusRegister + DrainShadowsToState;
   7 GPR + F + SP alloca shadows; mem2reg promotes to SSA. V1 -4% perf
@@ -549,13 +549,13 @@ micro-op (`51c2921`), hybrid IRQ delivery sync micro-op
 commit `7dd1e04`); correctness OK but perf still pending. HLE arm went
 from 10.3 → 8.7 MIPS.
 
-**Remaining P2/P3/P4**: see `MD/design/12-gb-block-jit-roadmap.md` §3.
+**Remaining P2/P3/P4**: see [`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md) §3.
 Suggested next pick: A.9 profiling tool (S/L/diagnostic, prerequisite
 for further perf work) → choose between P1 #5 V2 / P1 #5b V3 / GBA bjit
 P0.7b regression.
 
 **Known characteristic — BIOS LLE bjit slower**: full detail in
-`MD/performance/202605032030-bios-loop100-bench.md`. The detector
+[`MD_EN/performance/202605032030-bios-loop100-bench.md`](/MD_EN/performance/202605032030-bios-loop100-bench.md). The detector
 splits unconditional `B`/`BL`/`BX` into block boundaries; on the BIOS
 path, the loop100 ROM averages **1.0-1.1 instr per block** → block-fn
 call overhead can't amortise. HLE path also averages ~1.0 per block,
@@ -588,7 +588,7 @@ should beat per-instr by 50%+).
   the same work already taken by GVN+DSE. Deferred until a future perf
   measurement confirms ReadFlag/SetFlag is on the hot path — at which
   point we redesign with explicit per-BB PHI rather than alloca. Detail
-  in `MD/performance/202605031930-Cb-lazy-flag-deferred.md`.
+  in [`MD_EN/performance/202605031930-Cb-lazy-flag-deferred.md`](/MD_EN/performance/202605031930-Cb-lazy-flag-deferred.md).
 
 **Quick wins on dispatcher / mem-bus / bus inline are saturated.**
 Pushing Phase 7 further now requires either architectural changes
@@ -652,7 +652,7 @@ pipeline work (H.b/c).
   V1 (`24a58d1`) per-byte coverage counter + bus-extern path notify;
   V2 (`377379c`) IR-level inline notify (env `APR_SMC_INLINE_NOTIFY`
   gated) + precise per-instr coverage (always-on). Detail in
-  `MD/design/12-gb-block-jit-roadmap.md` P1 #5b table. Followup: V3
+  [`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md) P1 #5b table. Followup: V3
   deferred-invalidation pattern fixes cycle drift.
 - [x] **A.6 Indirect branch dispatch + CpuExecutor block-JIT
   integration** (done 2026-05-02) — `CpuExecutor` adds
@@ -728,7 +728,7 @@ pipeline work (H.b/c).
   enable because GepGprDynamic. V1 unconditionally allocs 7 GPR + F +
   SP, costing -4% on small cpu_instrs blocks (entry/exit overhead
   exceeds internal savings); V2 with per-block live-range pending.
-  Detail in `MD/design/12-gb-block-jit-roadmap.md` P1 #5.
+  Detail in [`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md) P1 #5.
 - [ ] **A.9 Performance profiling tool**: host-side records block
   compile count / execution count / total-time share, cli flag
   `--bench-blocks` dumps a report. **Why not done**: profiling is
@@ -740,7 +740,7 @@ pipeline work (H.b/c).
 - [x] **OptLevel set to O3** ~~+ extra LLVM passes added (instcombine,
   gvn, simplifycfg, mem2reg, reassociate)~~ — done 2026-05-03.
   perf-neutral (±3%, see
-  `MD/performance/202605030025-optlevel-0-to-3.md`). Reason:
+  [`MD_EN/performance/202605030025-optlevel-0-to-3.md`](/MD_EN/performance/202605030025-optlevel-0-to-3.md)). Reason:
   per-instruction functions are too small for LLVM to do much; the
   bottleneck is dispatcher overhead. O3 is kept for future block-JIT
   use; subsequent strategy should skip B.b/c/d and attack A
@@ -777,7 +777,7 @@ pipeline work (H.b/c).
   **When to revisit**: after block-JIT (A) lands, blocks containing
   loops would make nuw/nsw start to matter.
 - [x] **B.e Cache state-buffer offsets in CpuExecutor** (2026-05-03,
-  perf note `MD/performance/202605030054-cache-state-offsets-cpuexecutor.md`)
+  perf note [`MD_EN/performance/202605030054-cache-state-offsets-cpuexecutor.md`](/MD_EN/performance/202605030054-cache-state-offsets-cpuexecutor.md))
   — before, every instruction in Step() called `_rt.PcWrittenOffset` /
   `_rt.GprOffset(_pcRegIndex)` cascading into LLVM.OffsetOfElement
   P/Invoke (4-5 times/instr); cache in ctor, use cached
@@ -787,13 +787,13 @@ pipeline work (H.b/c).
   GB json-llvm +1.7% (JsonCpu already has its own cache, doesn't
   benefit).
 - [x] **B.f Permanent pin of state buffer** (2026-05-03, perf note
-  `MD/performance/202605030102-permanent-pin-state-buffer.md`) —
+  [`MD_EN/performance/202605030102-permanent-pin-state-buffer.md`](/MD_EN/performance/202605030102-permanent-pin-state-buffer.md)) —
   removed `fixed (byte* p = _state) fn(p, ...)` from the hot path,
   changed to a single GCHandle.Alloc(_state, Pinned) in ctor, caching
   byte* for JIT use. **GBA thumb +27% (6.26 → 7.97 MIPS, stable 1.9×
   real-time)**, GBA arm flat (plateau), GB both paths flat (noise).
 - [x] **B.g AggressiveInlining for GBA bus methods** (2026-05-03,
-  perf note `MD/performance/202605030108-aggressive-inlining-bus-methods.md`)
+  perf note [`MD_EN/performance/202605030108-aggressive-inlining-bus-methods.md`](/MD_EN/performance/202605030108-aggressive-inlining-bus-methods.md))
   — added `[MethodImpl(AggressiveInlining)]` to GbaMemoryBus's Locate
   / ReadWord / ReadHalfword / NotifyExecutingPc /
   HasPendingInterrupt, letting .NET JIT inline the entire fetch path
@@ -801,7 +801,7 @@ pipeline work (H.b/c).
   2.0× real-time, run-to-run noise dropped from ~30% to ~5%)**, GBA
   thumb flat (8.10, plateau). GB path untouched.
 - [x] **B.h Scheduler.Tick + DeliverIrqIfPending AggressiveInlining**
-  (2026-05-03, perf note `MD/performance/202605030209-scheduler-irq-inline.md`)
+  (2026-05-03, perf note [`MD_EN/performance/202605030209-scheduler-irq-inline.md`](/MD_EN/performance/202605030209-scheduler-irq-inline.md))
   — added inline hints to both methods called per-instruction inside
   GbaSystemRunner.RunCycles. NotifyExecutingPc was already inlined in
   B.g. **GBA arm +0.8% (8.26 → 8.33), GBA thumb +1.8% (8.24 → 8.39)**.
@@ -823,7 +823,7 @@ pipeline work (H.b/c).
 #### C. Lazy flag computation (Gemini suggestion #2)
 
 - [x] **C.a Width-correct status flag access** (2026-05-03, perf note
-  `MD/performance/202605030135-width-correct-flag-access.md`) —
+  [`MD_EN/performance/202605030135-width-correct-flag-access.md`](/MD_EN/performance/202605030135-width-correct-flag-access.md)) —
   CpsrHelpers's SetStatusFlagAt / ReadStatusFlag previously always
   used i32 read/write regardless of status reg's actual width. For
   LR35902 F (i8) that's a 4-byte read straddling adjacent SP/PC,
@@ -853,7 +853,7 @@ pipeline work (H.b/c).
     - recovery branch's IR structure (Phase 1a budget BB + multi-instr
       block) differs from main; main's alloca-shadow design isn't
       directly cherry-pickable
-  Detail in `MD/performance/202605031930-Cb-lazy-flag-deferred.md`.
+  Detail in [`MD_EN/performance/202605031930-Cb-lazy-flag-deferred.md`](/MD_EN/performance/202605031930-Cb-lazy-flag-deferred.md).
   **When to revisit**: when future perf measurement confirms
   ReadFlag/SetFlag is on the hot path, redesign with per-BB PHI.
 - [revised hypothesis] **True ARM CPSR NZCV lazy** — defer compute
@@ -917,7 +917,7 @@ pipeline work (H.b/c).
 
 - [x] **E.a Instruction-fetch fast path** (CpuExecutor side)
   (2026-05-03, perf note
-  `MD/performance/202605030120-instruction-fetch-fast-path.md`) —
+  [`MD_EN/performance/202605030120-instruction-fetch-fast-path.md`](/MD_EN/performance/202605030120-instruction-fetch-fast-path.md)) —
   CpuExecutor's instruction fetch gains a typed cache
   (`bus as GbaMemoryBus`) + cart-ROM range check directly array
   index, skipping bus's interface dispatch + region switch. **GBA arm
@@ -926,7 +926,7 @@ pipeline work (H.b/c).
   little switch overhead.
 - [x] **E.b JIT-side data load/store fast path** (extern trampoline
   side) (2026-05-03, perf note
-  `MD/performance/202605030125-jit-mem-trampoline-fast-path.md`) —
+  [`MD_EN/performance/202605030125-jit-mem-trampoline-fast-path.md`](/MD_EN/performance/202605030125-jit-mem-trampoline-fast-path.md)) —
   MemoryBusBindings adds a typed cache `_currentGba` + 3 fast-path
   helpers for ROM/IWRAM/EWRAM reads. Reads' 3 trampolines get fast
   lanes; writes stay on slow path (IO/Palette/VRAM/OAM writes have
@@ -989,12 +989,12 @@ pipeline work (H.b/c).
 
 - [x] **F.x InstructionDef-keyed fn pointer cache** (2026-05-03,
   commit `caf939b` + perf note
-  `MD/performance/202605030036-fnptr-cache-by-instruction-def.md`) —
+  [`MD_EN/performance/202605030036-fnptr-cache-by-instruction-def.md`](/MD_EN/performance/202605030036-fnptr-cache-by-instruction-def.md)) —
   dispatcher switched to reference identity rather than string-keyed
   cache. **GB json-llvm +82% (2.66 → 4.83 MIPS), GBA Thumb +25%**,
   GBA ARM +2% (noisy).
 - [x] **F.y Pre-built DecodedInstruction cache** (2026-05-03, perf
-  note `MD/performance/202605030047-prebuilt-decoded-instruction.md`)
+  note [`MD_EN/performance/202605030047-prebuilt-decoded-instruction.md`](/MD_EN/performance/202605030047-prebuilt-decoded-instruction.md))
   — DecoderTable.Decode now returns a pre-built instance, eliminating
   per-decode `new DecodedInstruction(...)` heap alloc + foreach
   IEnumerator alloc. **GBA arm +55% (3.82 → 5.94), GBA thumb +67%
@@ -1039,8 +1039,8 @@ they don't affect the framework's JSON-driven core thesis; ROI vs risk
 is poor.
 
 - [x] **H.a LLVM pass pipeline tuning** (2026-05-03, perf notes
-  `MD/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md` +
-  `MD/performance/202605031940-Ha-instcombine-fix.md`) —
+  [`MD_EN/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md`](/MD_EN/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md) +
+  [`MD_EN/performance/202605031940-Ha-instcombine-fix.md`](/MD_EN/performance/202605031940-Ha-instcombine-fix.md)) —
   HostRuntime.Compile, before handing the module to ORC LLJIT,
   explicitly runs (new pass-manager API) `LLVM.RunPasses` with
   `mem2reg,instcombine<no-verify-fixpoint>,gvn,dse,simplifycfg`.
@@ -1131,13 +1131,13 @@ If LLVM compilation is too slow causing unacceptable stutter:
 For each item implemented, run the canonical loop100 bench, write a
 new file in `MD/performance/`, file name
 `YYYYMMDDHHMM-<strategy>.md`, reference the starting baseline
-`MD/performance/202605030002-jit-optimisation-starting-point.md`,
+[`MD_EN/performance/202605030002-jit-optimisation-starting-point.md`](/MD_EN/performance/202605030002-jit-optimisation-starting-point.md),
 record before/after delta + that strategy's hypothesis. **Don't
 batch several items into one run** — you won't be able to tell which
 brought the gain.
 
 **Pre-commit QA**: run the appropriate tier based on the change type,
-defined in `MD/process/01-commit-qa-workflow.md`:
+defined in [`MD_EN/process/01-commit-qa-workflow.md`](/MD_EN/process/01-commit-qa-workflow.md):
 - T0 = pure docs / comments → no QA
 - T1 = refactor / debug helper → 360 unit tests
 - T2 = bug fix / new emitter / spec change → T1 + 8-combo screenshot
@@ -1159,7 +1159,7 @@ deciding ship/revert.
 > Actual delivery covers more — Mode 0/1/2/3/4 + full OBJ + BLDCNT
 > alpha/brighten/darken + WININ/WINOUT/OBJ Window. BIOS startup logo
 > visually equivalent to mGBA. Detail in
-> `MD/note/phase5.7-bios-lle-and-ppu-2026-05.md` section 5.
+> [`MD_EN/note/phase5.7-bios-lle-and-ppu-2026-05.md`](/MD_EN/note/phase5.7-bios-lle-and-ppu-2026-05.md) section 5.
 >
 > Still not done: Mode 5 (rare), Mosaic (rare).
 >

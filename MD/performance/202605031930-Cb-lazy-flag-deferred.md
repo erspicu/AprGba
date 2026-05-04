@@ -133,11 +133,11 @@ ReadStatusFlag 是 hot path（目前不是），再考慮重新設計。
 
 ## 6. 相關文件
 
-- `MD/performance/202605030148-lazy-flag-attempt-postmortem.md` — 第一次
+- [`MD/performance/202605030148-lazy-flag-attempt-postmortem.md`](/MD/performance/202605030148-lazy-flag-attempt-postmortem.md) — 第一次
   C.b 嘗試 (deferred-batch + SSA dominance crash)
-- `MD/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md` — H.a
+- [`MD/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md`](/MD/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md) — H.a
   4-pass set re-enabled，目前 baseline
 - main `c5d32c6` — main 分支的 C.b retry，**結構不適合直接 cherry-pick
   到 recovery 分支**
-- `MD/process/01-commit-qa-workflow.md` — 本次走 Tier 3 流程，T2 fail
+- [`MD/process/01-commit-qa-workflow.md`](/MD/process/01-commit-qa-workflow.md) — 本次走 Tier 3 流程，T2 fail
   按規則 abort + revert

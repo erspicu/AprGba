@@ -90,6 +90,6 @@ GBA 兩條 path 慢慢往 8.4 推進。GBA thumb 累計 +124% from baseline。
 
 ## 5. 相關文件
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
+- [`MD/performance/202605030002-jit-optimisation-starting-point.md`](/MD/performance/202605030002-jit-optimisation-starting-point.md) — baseline
 - 前 9 個 Phase 7 perf notes
-- `MD/design/03-roadmap.md` Phase 7 — B.h 標 done
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) Phase 7 — B.h 標 done

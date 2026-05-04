@@ -18,7 +18,7 @@ checks the enforced items; everything else falls under code review.
 | `spec/<arch_id>/groups/*.json`         | (Optional) encoding-group split files, included via `$include` |
 | `spec/<arch_id>/formats/*.json`        | (Optional) finer-grained format / instruction split |
 | `spec/schema/cpu-spec.schema.json`     | JSON Schema validator |
-| `MD/design/0X-...md`                   | Design documents |
+| [`MD_EN/design/0X-...md`](/MD_EN/design/0X-...md)                   | Design documents |
 
 `<arch_id>` uses lowercase with version numbers stripped (`arm7tdmi`,
 `mos6502`). `<set_name>` matches the JSON `name` field exactly (`ARM`,

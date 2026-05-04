@@ -2,14 +2,14 @@
 
 > 🎯 **Phase 5.8 emitter-refactor 完成後的對照數據。**
 >
-> 跟 `MD/note/loop100-bench-2026-05.md` (Phase 5.7 baseline) 一樣的 4
+> 跟 [`MD/note/loop100-bench-2026-05.md`](/MD/note/loop100-bench-2026-05.md) (Phase 5.7 baseline) 一樣的 4
 > 個 ROM × backend，跑同 1200 frames，同台機器、同 .NET 10 Release
 > build、同 LLVM 20 MCJIT，量 emitter library refactor 對 MIPS / real-time
 > 的衝擊。
 >
 > Refactor 範圍：Phase 5.8 Steps 5.1–5.7（27 個 LR35902-specific ops 收
 > 成 generic 通用 ops；`Lr35902Emitters.cs` 從 ~2620 → 1346 行 −49%；
-> 詳情見 `MD/design/11-emitter-library-refactor.md`）。
+> 詳情見 [`MD/design/11-emitter-library-refactor.md`](/MD/design/11-emitter-library-refactor.md)）。
 >
 > 來源 commits：`3c88ea9` (refactor 收工 + docs).
 
@@ -125,7 +125,7 @@ Refactor 沒改 per-instruction cycle accounting；數字精準對得上。
 
 ## 4. Bench 重現方法
 
-跟 5.7 baseline 完全一樣（見 `MD/note/loop100-bench-2026-05.md` §6）：
+跟 5.7 baseline 完全一樣（見 [`MD/note/loop100-bench-2026-05.md`](/MD/note/loop100-bench-2026-05.md) §6）：
 
 ```bash
 dotnet build -c Release AprGba.slnx

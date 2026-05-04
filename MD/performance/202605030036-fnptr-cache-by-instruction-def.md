@@ -202,6 +202,6 @@ src/AprGb.Cli/Cpu/JsonCpu.cs
 
 ## 7. 相關文件
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
-- `MD/performance/202605030025-optlevel-0-to-3.md` — 前一次（perf-neutral）
-- `MD/design/03-roadmap.md` Phase 7 — 改 F.x 標 done
+- [`MD/performance/202605030002-jit-optimisation-starting-point.md`](/MD/performance/202605030002-jit-optimisation-starting-point.md) — baseline
+- [`MD/performance/202605030025-optlevel-0-to-3.md`](/MD/performance/202605030025-optlevel-0-to-3.md) — 前一次（perf-neutral）
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) Phase 7 — 改 F.x 標 done

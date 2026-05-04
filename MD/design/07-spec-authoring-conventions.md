@@ -16,7 +16,7 @@
 | `spec/<arch_id>/groups/*.json`         | （可選）encoding-group 分割檔，用 `$include` 引入 |
 | `spec/<arch_id>/formats/*.json`        | （可選）更細顆粒的 format / instruction 分割 |
 | `spec/schema/cpu-spec.schema.json`     | JSON Schema validator |
-| `MD/design/0X-...md`                   | 設計文件 |
+| [`MD/design/0X-...md`](/MD/design/0X-...md)                   | 設計文件 |
 
 `<arch_id>` 用小寫去掉版本號（`arm7tdmi`、`mos6502`）。`<set_name>` 與
 JSON `name` 欄位完全一致（`ARM`、`Thumb`）。

@@ -1,6 +1,6 @@
 # Performance Baseline — Post Phase 4.5 wrap-up (2026-05-02)
 
-> **SUPERSEDED by `MD/note/loop100-bench-2026-05.md`** — that file is
+> **SUPERSEDED by [`MD_EN/note/loop100-bench-2026-05.md`](/MD_EN/note/loop100-bench-2026-05.md)** — that file is
 > the official baseline post-Phase-5.7 wrap-up (after GB scheduler,
 > PPU completion, BIOS open-bus, 5 ARM bug fixes and other correctness
 > changes), with unified methodology of "running 1200 frames of
@@ -55,7 +55,7 @@ runs before the timer starts.
 - LLVMSharp.Interop 20.x, MCJIT, OptLevel=0
 - Both add `nounwind` + `no-jump-tables` function attributes (avoiding
   the Windows COFF section-ordering relocation crash, see
-  `MD/note/framework-emitter-architecture.md`)
+  [`MD_EN/note/framework-emitter-architecture.md`](/MD_EN/note/framework-emitter-architecture.md))
 
 ---
 

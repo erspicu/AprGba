@@ -172,7 +172,7 @@ suffix to dodge ORC LLJIT "Duplicate definition".
 
 ### P2 / P3 / P4 not yet done
 
-See `MD/design/12-gb-block-jit-roadmap.md` §3. Suggested next picks:
+See [`MD_EN/design/12-gb-block-jit-roadmap.md`](/MD_EN/design/12-gb-block-jit-roadmap.md) §3. Suggested next picks:
 
 - **P2 #9 A.9 profiling tool** (S/L/diagnostic) — small investment high
   return, prerequisite for any subsequent perf work

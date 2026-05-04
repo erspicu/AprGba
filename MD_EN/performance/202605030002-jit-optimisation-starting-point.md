@@ -24,7 +24,7 @@
 | GB 09-loop100.gb        | json-llvm   |  3.681 s  | 5.5×        | **2.66** |
 
 > All numbers are 3-run averages; per-run details + interpretation in
-> `MD/note/loop100-bench-2026-05-phase5.8.md`.
+> [`MD_EN/note/loop100-bench-2026-05-phase5.8.md`](/MD_EN/note/loop100-bench-2026-05-phase5.8.md).
 
 ---
 
@@ -158,8 +158,8 @@ into the new file's table.
 
 ## 6. Related documents
 
-- `MD/note/loop100-bench-2026-05.md` — Phase 5.7 raw baseline
-- `MD/note/loop100-bench-2026-05-phase5.8.md` — comparison after Phase 5.8
+- [`MD_EN/note/loop100-bench-2026-05.md`](/MD_EN/note/loop100-bench-2026-05.md) — Phase 5.7 raw baseline
+- [`MD_EN/note/loop100-bench-2026-05-phase5.8.md`](/MD_EN/note/loop100-bench-2026-05-phase5.8.md) — comparison after Phase 5.8
   refactor (refactor impact: basically perf-neutral)
-- `MD/design/03-roadmap.md` — Phase progress, Phase 7 marked "won't do"
-- `MD/design/11-emitter-library-refactor.md` — emitter generalization design
+- [`MD_EN/design/03-roadmap.md`](/MD_EN/design/03-roadmap.md) — Phase progress, Phase 7 marked "won't do"
+- [`MD_EN/design/11-emitter-library-refactor.md`](/MD_EN/design/11-emitter-library-refactor.md) — emitter generalization design

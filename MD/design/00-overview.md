@@ -35,9 +35,9 @@
 完工狀態快照：360 unit tests 全綠；arm/thumb/bios.gba 三 ROM 透過
 真 BIOS LLE 6 GBA-秒內全 PASS；GB 端拿到 BIOS LLE + DMG Nintendo®
 logo 截圖。完整收工筆記：
-- `MD/note/phase5-gba-mvp-complete-2026-05.md`（5.1–5.4）
-- `MD/note/phase5.7-bios-lle-and-ppu-2026-05.md`（5.5–5.7 + Phase 8）
-- `MD/note/loop100-bench-2026-05.md`（**canonical performance baseline**
+- [`MD/note/phase5-gba-mvp-complete-2026-05.md`](/MD/note/phase5-gba-mvp-complete-2026-05.md)（5.1–5.4）
+- [`MD/note/phase5.7-bios-lle-and-ppu-2026-05.md`](/MD/note/phase5.7-bios-lle-and-ppu-2026-05.md)（5.5–5.7 + Phase 8）
+- [`MD/note/loop100-bench-2026-05.md`](/MD/note/loop100-bench-2026-05.md)（**canonical performance baseline**
   — pre-Phase-7 對照基準，1200-frame loop100 ROM 量法）
 
 ### 第一目標的延伸：framework 通用性驗證 ✅ 完成 (2026-05-02)
@@ -47,9 +47,9 @@ logo 截圖。完整收工筆記：
   spec、跑通同一套 host runtime，**通過 Blargg cpu_instrs 11/11 + master
   "Passed all tests"**，跟 LegacyCpu 截圖完全一致。「換 CPU 只要換 JSON」
   這個核心承諾驗證完成。詳見
-  `MD/design/09-gb-lr35902-validation-plan.md`、
-  `MD/design/10-lr35902-bit-pattern-groups.md`、
-  `MD/note/framework-emitter-architecture.md`。
+  [`MD/design/09-gb-lr35902-validation-plan.md`](/MD/design/09-gb-lr35902-validation-plan.md)、
+  [`MD/design/10-lr35902-bit-pattern-groups.md`](/MD/design/10-lr35902-bit-pattern-groups.md)、
+  [`MD/note/framework-emitter-architecture.md`](/MD/note/framework-emitter-architecture.md)。
 
 ### 明確排除（第一版不做，2026-05 scope decisions）
 
@@ -114,4 +114,4 @@ logo 截圖。完整收工筆記：
 - `11-emitter-library-refactor.md` — Phase 5.8 emitter library refactor 設計與進度
 
 跨 phase 流程：
-- `MD/process/01-commit-qa-workflow.md` — Tier 0-4 commit QA workflow（任何 commit 前依改動性質決定要跑哪一 tier）
+- [`MD/process/01-commit-qa-workflow.md`](/MD/process/01-commit-qa-workflow.md) — Tier 0-4 commit QA workflow（任何 commit 前依改動性質決定要跑哪一 tier）

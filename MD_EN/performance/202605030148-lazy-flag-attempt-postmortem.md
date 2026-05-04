@@ -238,6 +238,6 @@ git checkout -- restored working tree. 345/345 unit tests green again.
 
 ## 8. Related docs
 
-- `MD/performance/202605030135-width-correct-flag-access.md` — C.a (committed)
+- [`MD_EN/performance/202605030135-width-correct-flag-access.md`](/MD_EN/performance/202605030135-width-correct-flag-access.md) — C.a (committed)
 - Other Phase 7 perf notes
-- `MD/design/03-roadmap.md` Phase 7 — C section kept as "incomplete — true lazy flag"
+- [`MD_EN/design/03-roadmap.md`](/MD_EN/design/03-roadmap.md) Phase 7 — C section kept as "incomplete — true lazy flag"

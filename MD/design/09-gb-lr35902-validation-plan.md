@@ -11,8 +11,8 @@
 > width fetch）全都在 SpecLoader / Emitters 端實作完成。
 >
 > 後續 emitter 結構優化（Phase 5.8 refactor）見
-> `MD/design/11-emitter-library-refactor.md`。spec 結構見
-> `MD/design/10-lr35902-bit-pattern-groups.md`。本檔保留為歷史計畫紀錄。
+> [`MD/design/11-emitter-library-refactor.md`](/MD/design/11-emitter-library-refactor.md)。spec 結構見
+> [`MD/design/10-lr35902-bit-pattern-groups.md`](/MD/design/10-lr35902-bit-pattern-groups.md)。本檔保留為歷史計畫紀錄。
 
 ---
 

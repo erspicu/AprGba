@@ -246,6 +246,6 @@ GBA 從 Phase 5.7 baseline 3.6 MIPS → block-JIT 85+ MIPS = **23× total**.
 - `src/AprCpu.Core/Runtime/CpuExecutor.cs` — A.6 dispatch
 - `src/AprCpu.Core/Runtime/Gba/GbaSystemRunner.cs` — cycle scaling
 - `src/AprGba.Cli/Program.cs` — `--block-jit` flag
-- `MD/design/03-roadmap.md` Phase 7 A.4 + A.6 — 標 done
-- `MD/performance/202605021800-orc-lljit-upgrade.md` — A.3 (前置 infra)
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) Phase 7 A.4 + A.6 — 標 done
+- [`MD/performance/202605021800-orc-lljit-upgrade.md`](/MD/performance/202605021800-orc-lljit-upgrade.md) — A.3 (前置 infra)
 - 上一筆 perf note: `202605030241-cb-alloca-shadow-retry.md` (per-instr 8.49 MIPS baseline)

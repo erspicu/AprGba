@@ -153,6 +153,6 @@ src/AprCpu.Core/Runtime/CpuExecutor.cs:
 
 ## 7. 相關文件
 
-- `MD/performance/202605030002-jit-optimisation-starting-point.md` — baseline
+- [`MD/performance/202605030002-jit-optimisation-starting-point.md`](/MD/performance/202605030002-jit-optimisation-starting-point.md) — baseline
 - 前 6 個 Phase 7 perf notes (B.a / F.x / F.y / B.e / B.f / B.g)
-- `MD/design/03-roadmap.md` Phase 7 — E.a 標 done
+- [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) Phase 7 — E.a 標 done

@@ -1,6 +1,6 @@
 # GB block-JIT P0 progress — infrastructure landed, +70% perf, Blargg partial
 
-> **Phase**: 7 GB block-JIT P0 (foundation tier per `MD/design/12-gb-block-jit-roadmap.md`)
+> **Phase**: 7 GB block-JIT P0 (foundation tier per [`MD/design/12-gb-block-jit-roadmap.md`](/MD/design/12-gb-block-jit-roadmap.md))
 > **Date**: 2026-05-03
 > **Status**: P0.1-P0.4 shipped. GB block-JIT runs end-to-end with
 > partial Blargg pass; one residual bug (`JR negative` subtest fail).
@@ -131,8 +131,8 @@ regression。
 
 ## 7. 相關檔案
 
-- `MD/design/12-gb-block-jit-roadmap.md` — 完整優先順序 roadmap
-- `tools/knowledgebase/message/20260503_202431.txt` — Gemini 諮詢全文
+- [`MD/design/12-gb-block-jit-roadmap.md`](/MD/design/12-gb-block-jit-roadmap.md) — 完整優先順序 roadmap
+- [`tools/knowledgebase/message/20260503_202431.txt`](/tools/knowledgebase/message/20260503_202431.txt) — Gemini 諮詢全文
   （variable-width / 0xCB prefix / narrow-int RA 三題）
 - `src/AprCpu.Core/Runtime/Lr35902InstructionLengths.cs` — 256-entry length table（P0.1）
 - `src/AprCpu.Core/Runtime/BlockDetector.cs` — sequential crawl + prefix dispatch（P0.1+P0.2）
