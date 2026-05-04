@@ -343,7 +343,7 @@ step) on both backends. Any regression triggers stop-the-line — no
 pushing forward.
 
 **Refactor's perf impact**: ran the same 1200-frame loop100 bench
-(commit `cdf04ce`); GBA json-llvm slightly improved (+1-4%), GB
+(commit `3c88ea9`); GBA json-llvm slightly improved (+1-4%), GB
 json-llvm slightly regressed (−3%), GB legacy down −15% (still off
 baseline after multiple runs, but each run is only ~300ms so
 measurement noise dominates). Detailed numbers in
@@ -506,35 +506,35 @@ follow-ups, P1 #5/#5b/#6/#7 main bodies all shipped.
 
 **P0 4 steps** (full detail in
 `MD/performance/202605040000-gb-block-jit-p0-complete.md`):
-1. Variable-width `BlockDetector` (`3024100`) — `lengthOracle` callback
-2. 0xCB prefix as 2-byte atomic (`0cb93a8`) — `prefix_to_set: "CB"` +
+1. Variable-width `BlockDetector` (`fdce42c`) — `lengthOracle` callback
+2. 0xCB prefix as 2-byte atomic (`381595b`) — `prefix_to_set: "CB"` +
    sub-decoder
-3. Immediate baking via instruction_word packing (`7a8305a`)
-4. GB CLI `--block-jit` + Strategy 2 PC fixes (`adddade`)
+3. Immediate baking via instruction_word packing (`da8cf91`)
+4. GB CLI `--block-jit` + Strategy 2 PC fixes (`5b4092f`)
 
-**P0 follow-ups**: HALT/STOP boundary (`a10a718`), generic defer
-micro-op (`ca248e8`), hybrid IRQ delivery sync micro-op
-(`2a1de15`+`674316f`), conditional branch taken-cycle accounting
-(`34f9f4b`+`d7314a8`).
+**P0 follow-ups**: HALT/STOP boundary (`c47d849`), generic defer
+micro-op (`51c2921`), hybrid IRQ delivery sync micro-op
+(`0c001fc`+`999f9eb`), conditional branch taken-cycle accounting
+(`f27450f`+`7dd1e04`).
 
 **P1 main body** (`MD/design/12-gb-block-jit-roadmap.md` §3 Tier P1):
-- **P1 #5 V1 block-local register shadowing** (`0e1e280`) — EmitContext
+- **P1 #5 V1 block-local register shadowing** (`db9375c`) — EmitContext
   shadow slot infra + ctx.GepGpr/GepStatusRegister + DrainShadowsToState;
   7 GPR + F + SP alloca shadows; mem2reg promotes to SSA. V1 -4% perf
   cost (entry/exit overhead exceeds savings on small blocks); V2 with
   per-block live-range analysis pending to flip the sign.
-- **P1 #5b SMC V2** (`6c04422`) — IR-level inline notify (env
+- **P1 #5b SMC V2** (`377379c`) — IR-level inline notify (env
   `APR_SMC_INLINE_NOTIFY`) + precise per-instr coverage (always-on) +
   cross-jump-into-RAM unlock (env `APR_CROSS_JUMP_RAM`). Both env vars
   default OFF preserving V1 behaviour; with them ON, cpu_instrs sub-test
   03 livelocks due to invalidation cycle drift — pending V3
   deferred-invalidation fix.
-- **P1 #6 cross-jump follow** (`dd99c98`) — JR/JP unconditional follow,
+- **P1 #6 cross-jump follow** (`b9dd0dd`) — JR/JP unconditional follow,
   ROM-only V1; V2 (P1 #5b unlock) env-gated.
-- **P1 #7 IR-level WRAM/HRAM inline write** (`15f913f`) — bypasses bus
+- **P1 #7 IR-level WRAM/HRAM inline write** (`787a8e5`) — bypasses bus
   extern; per-CPU pinned base pointers (lr35902_wram_base /
   hram_base).
-- **P2 #8 A.5 SMC V1 infrastructure** (`8ce66ac`) — per-byte coverage
+- **P2 #8 A.5 SMC V1 infrastructure** (`24a58d1`) — per-byte coverage
   counter + bus-extern path notify. Evolved into V2 by P1 #5b; merged
   into P1 scope.
 
@@ -546,7 +546,7 @@ micro-op (`ca248e8`), hybrid IRQ delivery sync micro-op
 | @ 60k frames (compile amortised) | — | **~27 MIPS** | -13% |
 
 **GBA-path known regression**: P0.7b left a -16% on GBA bjit (after
-commit `d7314a8`); correctness OK but perf still pending. HLE arm went
+commit `7dd1e04`); correctness OK but perf still pending. HLE arm went
 from 10.3 → 8.7 MIPS.
 
 **Remaining P2/P3/P4**: see `MD/design/12-gb-block-jit-roadmap.md` §3.
@@ -649,8 +649,8 @@ pipeline work (H.b/c).
   (round-trip / miss / capacity / MRU promotion / invalidate / clear /
   ctor guard).
 - [x] **A.5 SMC detection + invalidation** (done 2026-05-04, V1+V2) —
-  V1 (`8ce66ac`) per-byte coverage counter + bus-extern path notify;
-  V2 (`6c04422`) IR-level inline notify (env `APR_SMC_INLINE_NOTIFY`
+  V1 (`24a58d1`) per-byte coverage counter + bus-extern path notify;
+  V2 (`377379c`) IR-level inline notify (env `APR_SMC_INLINE_NOTIFY`
   gated) + precise per-instr coverage (always-on). Detail in
   `MD/design/12-gb-block-jit-roadmap.md` P1 #5b table. Followup: V3
   deferred-invalidation pattern fixes cycle drift.
@@ -691,26 +691,26 @@ pipeline work (H.b/c).
   (`bi.Pc + offset`); only real branches write GPR[15]. Cleanup
   follow-ups:
     - `read_reg(15)` after PC-write reverts to memory load (commit
-      260cbb0)
+      5af9d36)
     - `block_store STM` containing R15 uses Strategy 2 constant
-      (0fa2153)
-    - `IfStep` constant-cond fold reduces dead-BB IR (1a9b908)
-    - `OperandResolvers` stale-PC reads patched (3fa5b17)
-    - LDM with PC in rlist must `MarkPcWritten` (ea7f1c8)
-    - `RaiseException` emitter Strategy 2 awareness (9e7a77c)
+      (ab1204e)
+    - `IfStep` constant-cond fold reduces dead-BB IR (227a436)
+    - `OperandResolvers` stale-PC reads patched (cf03e30)
+    - LDM with PC in rlist must `MarkPcWritten` (051edaf)
+    - `RaiseException` emitter Strategy 2 awareness (def5226)
     - `RestoreCpsrFromSpsr` PHI alignment patched
   **Validation**: 8-combo screenshot matrix (arm/thumb × HLE/BIOS ×
   pi/bjit) all produce the canonical "All tests passed" md5
   (`7e829e9e837418c0f48c038341440bcb`).
 - [x] **Phase 1a — predictive cycle downcounting in block-JIT IR**
-  (2026-05-03, commit 738c90e) — block fn now uses an "entry computes
+  (2026-05-03, commit 77396ca) — block fn now uses an "entry computes
   budget, decrement per-instruction, on hitting 0 exit early + write
   next-PC + PcWritten=1" pattern, letting the caller
   (`CpuExecutor.StepBlock`) compute actual cycles consumed from a
   `cycles_left` snapshot diff, instead of the caller passing
   instruction count and multiplying.
 - [x] **Phase 1b — MMIO catch-up callback + double-tick fix**
-  (2026-05-03, commit 3252165 + 8290cb1) — bus invokes `OnMmioRead`/
+  (2026-05-03, commit 860d7fe + 05c285a) — bus invokes `OnMmioRead`/
   `OnMmioWrite` callbacks on MMIO writes; the scheduler does a
   catch-up tick to sync external hardware (PPU / Timer / IRQ
   delivery). Fixed BIOS LLE path's IRQ-skip-frame MMIO sync re-entry
@@ -721,7 +721,7 @@ pipeline work (H.b/c).
   provides stub-rewriting. **Estimate**: 3-4 days + Windows / Linux
   patching mechanisms each need validation.
 - [x] **A.8 State→register caching** (V1 done 2026-05-04, overlaps
-  with P1 #5) — mechanism in commit `0e1e280` (P1 #5 V1): EmitContext
+  with P1 #5) — mechanism in commit `db9375c` (P1 #5 V1): EmitContext
   gains GprShadowSlots / StatusShadowSlots; block entry alloca + load
   state→shadow, exit drain shadow→state; mem2reg promotes to SSA.
   LR35902 path is always-on (gated GprWidthBits==8); ARM path doesn't
@@ -833,7 +833,7 @@ pipeline work (H.b/c).
   MIPS)**, GBA unaffected (CPSR already i32). Also fixes a potential
   unaligned i32 access issue.
 - [paused-deferred — 2026-05-03 retry failed] **C.b Alloca-based
-  shadow lazy flag** — the main branch (`18051f6`) implementation was
+  shadow lazy flag** — the main branch (`c5d32c6`) implementation was
   done on the morning of 2026-05-03 (+0.5%), but the retry on the
   recovery branch failed: T1 (360 unit tests) passed, but T2 8-combo
   screenshot failed 5/8 (HLE bjit blank screen + 4 BIOS LLE crashes
@@ -934,7 +934,7 @@ pipeline work (H.b/c).
   not mem-heavy; change is correct but mem-heavy bench needed to see
   real gain.
 - [x] **E.c Mem-bus region table inline check (IR layer)** (LR35902
-  WRAM/HRAM portion done 2026-05-04, commit `15f913f`): inside JIT'd
+  WRAM/HRAM portion done 2026-05-04, commit `787a8e5`): inside JIT'd
   code, emit "if addr ∈ WRAM (0xC000-0xDFFF) / HRAM (0xFF80-0xFFFE),
   GEP-store directly; else call sync-flag extern" branches. LR35902
   write path implements WRAM/HRAM only; MMIO/cart-RAM still goes
@@ -988,7 +988,7 @@ pipeline work (H.b/c).
 #### F. Dispatcher / cycle-accounting simplification
 
 - [x] **F.x InstructionDef-keyed fn pointer cache** (2026-05-03,
-  commit `9fcf511` + perf note
+  commit `caf939b` + perf note
   `MD/performance/202605030036-fnptr-cache-by-instruction-def.md`) —
   dispatcher switched to reference identity rather than string-keyed
   cache. **GB json-llvm +82% (2.66 → 4.83 MIPS), GBA Thumb +25%**,
@@ -1046,7 +1046,7 @@ is poor.
   `mem2reg,instcombine<no-verify-fixpoint>,gvn,dse,simplifycfg`.
   **Process**: instcombine initially broke 3 BlockFunctionBuilderTests
   (R1=0 expected 2); first shipped a stable 4-pass version
-  (mem2reg/gvn/dse/simplifycfg), then later (commit ea08d17) found
+  (mem2reg/gvn/dse/simplifycfg), then later (commit 5efebcc) found
   the root cause — module didn't set `target datalayout`, so
   instcombine canonicalised struct GEP into byte GEP using the
   default layout and computed a wrong 4-byte offset (i64 alignment

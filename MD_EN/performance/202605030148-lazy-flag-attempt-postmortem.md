@@ -211,7 +211,7 @@ stop-the-line.
 ## 6. Conclusion
 
 C.a (width-correct flag access) is the baby step of lazy flag, already
-committed (`fd8c15f`), gave GB JIT +2.7%.
+committed (`d1f1a1d`), gave GB JIT +2.7%.
 
 C.b (full lazy flag via deferred batch) **attempt failed**, reverted.
 Working tree restored to C.a state.

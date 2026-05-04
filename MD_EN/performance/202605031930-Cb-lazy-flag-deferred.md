@@ -1,6 +1,6 @@
 # Phase 7 C.b lazy flag retry — **deferred** (correctness regression in BJIT/BIOS-LLE)
 
-> **Strategy**: Use the alloca-shadow design from main `18051f6` as a
+> **Strategy**: Use the alloca-shadow design from main `c5d32c6` as a
 > blueprint and re-implement on the recovery branch. Expected gain:
 > +0.5-0.6% MIPS (per main note).
 >
@@ -90,7 +90,7 @@ uses wrong instruction-set decoder → gets undecodable bytes.
 
 ---
 
-## 3. Why doesn't main branch (`18051f6`) have this issue?
+## 3. Why doesn't main branch (`c5d32c6`) have this issue?
 
 Possible differences:
 1. main does not have the Phase 1a/1b cycles_left + budget exit mechanism
@@ -129,7 +129,7 @@ the redesign.
 | T2 8-combo screenshot | ❌ 5/8 fail (HLE BJIT 1 blank, 4 BIOS LLE crash) |
 | T3 3-run loop100 bench | (not run — T2 fail aborted directly) |
 
-**Post-revert state (HEAD = 1a9b908)**: T1 + T2 + T3 all green (per
+**Post-revert state (HEAD = 227a436)**: T1 + T2 + T3 all green (per
 202605031900-Ha-llvm-pass-pipeline-reenabled.md)
 
 ---
@@ -140,7 +140,7 @@ the redesign.
   C.b attempt (deferred-batch + SSA dominance crash)
 - `MD/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md` — H.a
   4-pass set re-enabled, current baseline
-- main `18051f6` — main branch's C.b retry, **structure not suitable for
+- main `c5d32c6` — main branch's C.b retry, **structure not suitable for
   direct cherry-pick to recovery branch**
 - `MD/process/01-commit-qa-workflow.md` — this round used Tier 3 workflow,
   T2 fail aborted + reverted per rule

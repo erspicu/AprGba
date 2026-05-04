@@ -33,7 +33,7 @@ Per-instruction backend handles these via host-side counters (`_eiDelay`)
 because the outer loop checks counters once per instruction. Block-JIT
 runs N instructions per call, breaking instruction-grained granularity.
 
-Current band-aid in our codebase (P0.5b commit `6a86005`):
+Current band-aid in our codebase (P0.5b commit `771d170`):
 hardcoded `BlockDetector.HasEiDelayStep` checks for LR35902-specific
 `lr35902_ime_delayed` step name and forces block to end at EI+1. This is:
 - LR35902-specific (doesn't generalise to Z80 / x86)

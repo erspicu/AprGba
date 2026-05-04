@@ -11,18 +11,18 @@
 
 | Step | Subject | Commit | Result |
 |---|---|---|---|
-| **P0.1** | Variable-width `BlockDetector` + LR35902 length oracle | `3024100` | ✅ |
-| **P0.2** | 0xCB prefix as 2-byte atomic instruction | `0cb93a8` | ✅ |
-| **P0.3** | Immediate baking via instruction_word packing | `7a8305a` | ✅ |
-| **P0.4** | GB CLI `--block-jit` + Strategy 2 PC fixes | `adddade` | ✅ |
-| **P0.5** | HALT/STOP block boundary | `a10a718` | ✅ |
-| **P0.5b** | EI delay band-aid (deprecated by P0.6) | `6a86005` | ✅ |
-| **P0.5c** | `Lr35902Alu8Emitter.FetchImmediate` baking + `--diff-bjit` lockstep harness | `d760b08` | ✅ |
-| **P0.6** | Generic `defer` micro-op + AST pre-pass | `ca248e8` | ✅ |
-| **P0.6** step 3 | Cross-block defer body emit at block exit + per-instance JsonCpu state + Io[] diff check | `794ba73` | ✅ |
-| **P0.7** step 1+2 | Bus sync extern (Write*WithSync) + Lr35902StoreByte sync exit | `2a1de15` | ✅ |
-| **P0.7** step 3 | Generic `sync` micro-op + EI defer integration + cycle-deduct fix | `674316f` | ✅ |
-| **P0.7b** | Conditional branch taken-cycle accounting | `34f9f4b` `d7314a8` | ✅ |
+| **P0.1** | Variable-width `BlockDetector` + LR35902 length oracle | `fdce42c` | ✅ |
+| **P0.2** | 0xCB prefix as 2-byte atomic instruction | `381595b` | ✅ |
+| **P0.3** | Immediate baking via instruction_word packing | `da8cf91` | ✅ |
+| **P0.4** | GB CLI `--block-jit` + Strategy 2 PC fixes | `5b4092f` | ✅ |
+| **P0.5** | HALT/STOP block boundary | `c47d849` | ✅ |
+| **P0.5b** | EI delay band-aid (deprecated by P0.6) | `771d170` | ✅ |
+| **P0.5c** | `Lr35902Alu8Emitter.FetchImmediate` baking + `--diff-bjit` lockstep harness | `3617240` | ✅ |
+| **P0.6** | Generic `defer` micro-op + AST pre-pass | `51c2921` | ✅ |
+| **P0.6** step 3 | Cross-block defer body emit at block exit + per-instance JsonCpu state + Io[] diff check | `1268f12` | ✅ |
+| **P0.7** step 1+2 | Bus sync extern (Write*WithSync) + Lr35902StoreByte sync exit | `0c001fc` | ✅ |
+| **P0.7** step 3 | Generic `sync` micro-op + EI defer integration + cycle-deduct fix | `999f9eb` | ✅ |
+| **P0.7b** | Conditional branch taken-cycle accounting | `f27450f` `7dd1e04` | ✅ |
 
 ---
 

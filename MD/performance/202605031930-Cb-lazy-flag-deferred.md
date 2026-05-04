@@ -1,6 +1,6 @@
 # Phase 7 C.b lazy flag retry — **deferred** (correctness regression in BJIT/BIOS-LLE)
 
-> **策略**：以 main `18051f6` 的 alloca-shadow 設計為藍本，在 recovery
+> **策略**：以 main `c5d32c6` 的 alloca-shadow 設計為藍本，在 recovery
 > 分支重新實作。預期收益：+0.5-0.6% MIPS（per main 紀錄）。
 >
 > **結果**：實作了完整 4 處改動（`EmitContext.StatusShadowAllocas`/
@@ -89,7 +89,7 @@ undecodable byte。
 
 ---
 
-## 3. 為何主分支 (`18051f6`) 沒這個問題？
+## 3. 為何主分支 (`c5d32c6`) 沒這個問題？
 
 可能差異：
 1. main 沒 Phase 1a/1b 的 cycles_left + budget exit 機制（額外 BB 增加
@@ -126,7 +126,7 @@ ReadStatusFlag 是 hot path（目前不是），再考慮重新設計。
 | T2 8-combo screenshot | ❌ 5/8 fail (HLE BJIT 1 個空白、4 個 BIOS LLE crash) |
 | T3 3-run loop100 bench | (沒跑 — T2 fail 直接 abort) |
 
-**revert 後狀態 (HEAD = 1a9b908)**：T1 + T2 + T3 全綠 (per
+**revert 後狀態 (HEAD = 227a436)**：T1 + T2 + T3 全綠 (per
 202605031900-Ha-llvm-pass-pipeline-reenabled.md)
 
 ---
@@ -137,7 +137,7 @@ ReadStatusFlag 是 hot path（目前不是），再考慮重新設計。
   C.b 嘗試 (deferred-batch + SSA dominance crash)
 - `MD/performance/202605031900-Ha-llvm-pass-pipeline-reenabled.md` — H.a
   4-pass set re-enabled，目前 baseline
-- main `18051f6` — main 分支的 C.b retry，**結構不適合直接 cherry-pick
+- main `c5d32c6` — main 分支的 C.b retry，**結構不適合直接 cherry-pick
   到 recovery 分支**
 - `MD/process/01-commit-qa-workflow.md` — 本次走 Tier 3 流程，T2 fail
   按規則 abort + revert

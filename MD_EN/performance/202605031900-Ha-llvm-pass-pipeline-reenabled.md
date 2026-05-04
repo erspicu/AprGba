@@ -1,10 +1,10 @@
 # Phase 7 H.a re-enabled — explicit LLVM new-pass-manager pipeline (no instcombine yet)
 
-> **Strategy**: The original H.a (`4d05bd4`) was disabled in the recovery
+> **Strategy**: The original H.a (`d929532`) was disabled in the recovery
 > branch because instcombine miscompiled the BIOS LLE path. After the
-> recovery branch finished a series of A.6.1 Strategy 2 fixes (`260cbb0`
-> read_reg(15) after PC-write, `0fa2153` block_store STM with R15,
-> `8290cb1` MMIO sync re-entry guard, etc.), RunPasses is re-enabled to
+> recovery branch finished a series of A.6.1 Strategy 2 fixes (`5af9d36`
+> read_reg(15) after PC-write, `ab1204e` block_store STM with R15,
+> `05c285a` MMIO sync re-entry guard, etc.), RunPasses is re-enabled to
 > recover the alloca→SSA + DSE + GVN optimisation gains.
 >
 > **Hypothesis**: After A.6.1 fixes, the IR pattern is cleaner and
@@ -113,8 +113,8 @@ Real gains await:
 
 | Stage | GBA arm pi | GBA arm bjit | GBA thumb pi | GBA thumb bjit |
 |---|---:|---:|---:|---:|
-| 7.B.h (recovery baseline 239f76a) | 8.33 | (broken) | 8.39 | (broken) |
-| 7.A.6.1 BIOS LLE complete + STM PC fix (0fa2153) | 8.15 | 10.35 | 8.14 | 11.30 |
+| 7.B.h (recovery baseline f304376) | 8.33 | (broken) | 8.39 | (broken) |
+| 7.A.6.1 BIOS LLE complete + STM PC fix (ab1204e) | 8.15 | 10.35 | 8.14 | 11.30 |
 | **7.H.a re-enabled (this)** | **7.98** | **10.22** | **8.14** | **11.54** |
 
 Block-JIT from broken → working → 11.54 MIPS / 2.8x real-time.
@@ -126,5 +126,5 @@ Per-instr flat (~8.0).
 
 - `MD/process/01-commit-qa-workflow.md` — this round used Tier 4 workflow
 - `MD/performance/202605030148-lazy-flag-attempt-postmortem.md` — first C.b attempt failure record
-- Original H.a commit `4d05bd4` (main branch, replaced by recovery)
+- Original H.a commit `d929532` (main branch, replaced by recovery)
 - TODO: Phase 7 H.a-instcombine — bisect which instcombine sub-pass is broken

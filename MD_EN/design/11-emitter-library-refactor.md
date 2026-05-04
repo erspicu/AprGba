@@ -18,15 +18,15 @@
 
 | Step | Status | Commits | File / op delta |
 |---|---|---|---|
-| 5.1 stack ops generalisation | Done | `29b0351` | +`StackOps.cs` 4 new ops (`push_pair`/`pop_pair`/`call`/`ret`) + spec `stack_pointer` metadata |
-| 5.2 flag setters generalisation | Done | `6c377ec` | +`FlagOps.cs` 3 new ops (`set_flag`/`update_h_add`/`update_h_sub`); LR35902 SCF migration |
-| 5.3 branch / call_cc / ret_cc unification | Done | `7c0f486` `bd8f46d` `afe5dad` | 5 new ops (`branch_cc`/`call_cc`/`ret_cc`/`read_pc`/`sext`) + `target_const`; LR35902 JP/JR/CALL/RET/RST all cc variants; cleanup `-408 lines` |
-| 5.4 bit ops + shift unification | Done | `1c1f6a5` `0e23ad7` `390eb7e` | +`BitOps.cs` 4 new ops (`bit_test`/`bit_set`/`bit_clear`/`shift`); LR35902 BIT/SET/RES + 8 CB shifts + 4 A-rotates; cleanup `-485 lines` |
-| 5.5 memory IO region unified | Done | `28eab8e` | Binary adds width auto-coerce; LR35902 LDH/LD-(C) switched to `or` + load_byte/store_byte; deleted LdhIoLoad/Store emitters |
-| 5.6 IME / cb_dispatch cleanup | Done | `3661bbf` | Deleted `cb_dispatch` no-op (empty steps); IME/HALT/DAA marked L3 intrinsics with divider |
-| 5.7.A flag micro-ops cleanup | Done | `f6eede5` | `mvn` width-aware; new `toggle_flag`; LR35902 CCF/CPL/SCF migration complete |
-| 5.7.B inc/dec migration | Done | `7695858` | New `update_zero`/`update_h_inc`/`update_h_dec`/`trunc`; LR35902 INC/DEC r/(HL) + named-pair inc/dec |
-| 5.7.C/D 16-bit selectors + L3 marker | Done | `2b277d1` | INC/DEC rr switched to 4 selector variants; remaining 13 LR35902 ops marked L3 intrinsics with reasons |
+| 5.1 stack ops generalisation | Done | `a6f8f61` | +`StackOps.cs` 4 new ops (`push_pair`/`pop_pair`/`call`/`ret`) + spec `stack_pointer` metadata |
+| 5.2 flag setters generalisation | Done | `93d0772` | +`FlagOps.cs` 3 new ops (`set_flag`/`update_h_add`/`update_h_sub`); LR35902 SCF migration |
+| 5.3 branch / call_cc / ret_cc unification | Done | `61b73ca` `1684cae` `9758cca` | 5 new ops (`branch_cc`/`call_cc`/`ret_cc`/`read_pc`/`sext`) + `target_const`; LR35902 JP/JR/CALL/RET/RST all cc variants; cleanup `-408 lines` |
+| 5.4 bit ops + shift unification | Done | `6e14512` `d218c04` `2d7f71a` | +`BitOps.cs` 4 new ops (`bit_test`/`bit_set`/`bit_clear`/`shift`); LR35902 BIT/SET/RES + 8 CB shifts + 4 A-rotates; cleanup `-485 lines` |
+| 5.5 memory IO region unified | Done | `bf7fd77` | Binary adds width auto-coerce; LR35902 LDH/LD-(C) switched to `or` + load_byte/store_byte; deleted LdhIoLoad/Store emitters |
+| 5.6 IME / cb_dispatch cleanup | Done | `5dd8c34` | Deleted `cb_dispatch` no-op (empty steps); IME/HALT/DAA marked L3 intrinsics with divider |
+| 5.7.A flag micro-ops cleanup | Done | `b463590` | `mvn` width-aware; new `toggle_flag`; LR35902 CCF/CPL/SCF migration complete |
+| 5.7.B inc/dec migration | Done | `e850ee3` | New `update_zero`/`update_h_inc`/`update_h_dec`/`trunc`; LR35902 INC/DEC r/(HL) + named-pair inc/dec |
+| 5.7.C/D 16-bit selectors + L3 marker | Done | `4668a83` | INC/DEC rr switched to 4 selector variants; remaining 13 LR35902 ops marked L3 intrinsics with reasons |
 | 5.8/5.9 third-CPU validation | Pending | — | RISC-V RV32I or MIPS R3000 |
 
 **5.7 wrap-up snapshot (2026-05-02)**:

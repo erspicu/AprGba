@@ -308,7 +308,7 @@ sub-test（含該 step 改到的 op 直接覆蓋的測試）在兩條後端 Pass
 任一掉測就 stop-the-line，不往下走。
 
 **Refactor 對效能的影響**：跑了同樣的 1200-frame loop100 bench
-（commit `cdf04ce`），結果 GBA json-llvm 微幅進步 (+1-4%)、GB
+（commit `3c88ea9`），結果 GBA json-llvm 微幅進步 (+1-4%)、GB
 json-llvm 微幅退步 (−3%)、GB legacy 退 −15%（多次 run 後仍偏離
 baseline，但 single run 只 ~300ms 量測 noise 比例高）。詳細數據見
 `MD/note/loop100-bench-2026-05-phase5.8.md`。**結論：refactor 對主
@@ -451,29 +451,29 @@ GB block-JIT 從無到有，子題 roadmap 在 `MD/design/12-gb-block-jit-roadma
 P0 4 步 + P0.5/P0.6/P0.7/P0.7b 後續、P1 #5/#5b/#6/#7 主體都已 ship。
 
 **P0 4 步**（`MD/performance/202605040000-gb-block-jit-p0-complete.md` 詳載）：
-1. Variable-width `BlockDetector` (`3024100`) — `lengthOracle` callback
-2. 0xCB prefix as 2-byte atomic (`0cb93a8`) — `prefix_to_set: "CB"` + sub-decoder
-3. Immediate baking via instruction_word packing (`7a8305a`)
-4. GB CLI `--block-jit` + Strategy 2 PC fixes (`adddade`)
+1. Variable-width `BlockDetector` (`fdce42c`) — `lengthOracle` callback
+2. 0xCB prefix as 2-byte atomic (`381595b`) — `prefix_to_set: "CB"` + sub-decoder
+3. Immediate baking via instruction_word packing (`da8cf91`)
+4. GB CLI `--block-jit` + Strategy 2 PC fixes (`5b4092f`)
 
-**P0 後續**：HALT/STOP boundary (`a10a718`)、generic defer micro-op (`ca248e8`)、
-hybrid IRQ delivery sync micro-op (`2a1de15`+`674316f`)、conditional branch
-taken-cycle accounting (`34f9f4b`+`d7314a8`)。
+**P0 後續**：HALT/STOP boundary (`c47d849`)、generic defer micro-op (`51c2921`)、
+hybrid IRQ delivery sync micro-op (`0c001fc`+`999f9eb`)、conditional branch
+taken-cycle accounting (`f27450f`+`7dd1e04`)。
 
 **P1 主體**（`MD/design/12-gb-block-jit-roadmap.md` §3 Tier P1）：
-- **P1 #5 V1 block-local register shadowing** (`0e1e280`) — EmitContext shadow
+- **P1 #5 V1 block-local register shadowing** (`db9375c`) — EmitContext shadow
   slot infra + ctx.GepGpr/GepStatusRegister + DrainShadowsToState；7 GPR + F + SP
   alloca shadows；mem2reg promote 到 SSA。V1 -4% perf cost (block 太小 entry/exit
   開銷大於內部節省)；V2 待做 per-block live-range analysis 翻成正向。
-- **P1 #5b SMC V2** (`6c04422`) — IR-level inline notify (env `APR_SMC_INLINE_NOTIFY`)
+- **P1 #5b SMC V2** (`377379c`) — IR-level inline notify (env `APR_SMC_INLINE_NOTIFY`)
   + 精確 per-instr coverage (always-on) + cross-jump-into-RAM 解禁 (env
   `APR_CROSS_JUMP_RAM`)。預設兩 env OFF 保 V1 行為；ON 後 cpu_instrs sub-test
   03 livelock 因 invalidation cycle drift，待 V3 deferred-invalidation 解。
-- **P1 #6 cross-jump follow** (`dd99c98`) — JR/JP unconditional follow，ROM-only
+- **P1 #6 cross-jump follow** (`b9dd0dd`) — JR/JP unconditional follow，ROM-only
   V1；V2 (P1 #5b 解禁) env-gated。
-- **P1 #7 IR-level WRAM/HRAM inline write** (`15f913f`) — 跳過 bus extern；
+- **P1 #7 IR-level WRAM/HRAM inline write** (`787a8e5`) — 跳過 bus extern；
   per-CPU pinned base pointer (lr35902_wram_base / hram_base)。
-- **P2 #8 A.5 SMC V1 infrastructure** (`8ce66ac`) — per-byte coverage counter
+- **P2 #8 A.5 SMC V1 infrastructure** (`24a58d1`) — per-byte coverage counter
   + bus-extern path notify。被 P1 #5b 進化為 V2；併入 P1 範疇。
 
 **累計成果**（GB block-JIT 路徑，cpu_instrs master）：
@@ -483,7 +483,7 @@ taken-cycle accounting (`34f9f4b`+`d7314a8`)。
 | @ 10k frames | ~9 MIPS | **~21 MIPS** | -32% (legacy 31) |
 | @ 60k frames (compile amortised) | — | **~27 MIPS** | -13% |
 
-**GBA 路徑 known regression**：P0.7b 留下 GBA bjit -16%（commit `d7314a8` 後）；
+**GBA 路徑 known regression**：P0.7b 留下 GBA bjit -16%（commit `7dd1e04` 後）；
 正確性 OK 但 perf 待修。原 HLE arm 10.3 → 8.7 MIPS。
 
 **剩餘 P2/P3/P4**：詳見 `MD/design/12-gb-block-jit-roadmap.md` §3。下一步建議
@@ -504,7 +504,7 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
   或 A.7 block linking）
 - **[⊘ skipped]** = 經評估 ROI 太低 / 已被其他 step cover / LLVM 自己會做
 - **[ ]** = doable 但還沒做（**2026-05-04 update**：A.5 SMC ✅、A.8 state→reg
-  caching ✅ (跟 P1 #5 重疊)、E.c IR-level region check ✅ (`15f913f` LR35902
+  caching ✅ (跟 P1 #5 重疊)、E.c IR-level region check ✅ (`787a8e5` LR35902
   WRAM/HRAM inline write)。剩 A.7 block linking、A.9 profiling、G.a/b host
   runtime 優化、H.b-i 各種未做）
 
@@ -570,8 +570,8 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
   (round-trip / miss / capacity / MRU promotion / invalidate / clear /
   ctor 防呆)。
 - [x] **A.5 SMC 偵測 + invalidation**（2026-05-04 完成，V1+V2）— V1
-  (`8ce66ac`) per-byte coverage counter + bus-extern path notify；V2
-  (`6c04422`) IR-level inline notify (env `APR_SMC_INLINE_NOTIFY` gated)
+  (`24a58d1`) per-byte coverage counter + bus-extern path notify；V2
+  (`377379c`) IR-level inline notify (env `APR_SMC_INLINE_NOTIFY` gated)
   + 精確 per-instr coverage (always-on)。詳見 `MD/design/12-gb-block-jit-roadmap.md`
   P1 #5b 表。Followup: V3 deferred-invalidation pattern 解 cycle drift。
 - [x] **A.6 Indirect branch dispatch + CpuExecutor block-JIT 整合**
@@ -602,22 +602,22 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
   block fn 不 pre-set PC、不在末尾 advance PC；pipeline-PC 讀取在 emit
   時 resolve 成 baked-in 常數 (`bi.Pc + offset`)；只有真分支才寫
   GPR[15]。後續 cleanup 包含：
-    - `read_reg(15)` after PC-write 改回讀記憶體（commit 260cbb0）
-    - `block_store STM` 含 R15 用 Strategy 2 常數（0fa2153）
-    - `IfStep` constant-cond fold 減少 dead BB IR (1a9b908)
-    - `OperandResolvers` stale-PC reads 修補 (3fa5b17)
-    - LDM with PC in rlist 必 `MarkPcWritten` (ea7f1c8)
-    - `RaiseException` emitter Strategy 2 awareness (9e7a77c)
+    - `read_reg(15)` after PC-write 改回讀記憶體（commit 5af9d36）
+    - `block_store STM` 含 R15 用 Strategy 2 常數（ab1204e）
+    - `IfStep` constant-cond fold 減少 dead BB IR (227a436)
+    - `OperandResolvers` stale-PC reads 修補 (cf03e30)
+    - LDM with PC in rlist 必 `MarkPcWritten` (051edaf)
+    - `RaiseException` emitter Strategy 2 awareness (def5226)
     - `RestoreCpsrFromSpsr` PHI alignment 修補
   **驗證**：8-combo screenshot matrix（arm/thumb × HLE/BIOS × pi/bjit）
   全部產生 canonical "All tests passed" md5 (`7e829e9e837418c0f48c038341440bcb`)。
 - [x] **Phase 1a — predictive cycle downcounting in block-JIT IR**
-  （2026-05-03，commit 738c90e）— Block fn 改用「entry 算 budget 後遞減
+  （2026-05-03，commit 77396ca）— Block fn 改用「entry 算 budget 後遞減
    per-instruction、達 0 時提早退出 + 寫 next-PC + PcWritten=1」的模式，
    讓 caller (`CpuExecutor.StepBlock`) 從 `cycles_left` snapshot diff
    算實際消耗 cycles，不用 caller 傳 instruction count 進去再乘。
 - [x] **Phase 1b — MMIO catch-up callback + double-tick fix**（2026-05-03，
-  commit 3252165 + 8290cb1）— Bus 寫 MMIO 時 invoke `OnMmioRead`/
+  commit 860d7fe + 05c285a）— Bus 寫 MMIO 時 invoke `OnMmioRead`/
   `OnMmioWrite` callback，scheduler 端做 catch-up tick 同步外部硬體
   (PPU / Timer / IRQ delivery)。修了 BIOS LLE 路徑下 IRQ 跳過 frame
   的 MMIO sync re-entry guard 跟 per-instr cycle 雙倍累計問題。
@@ -626,7 +626,7 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
   code patching；ORC LLJIT 提供 stub-rewriting 機制。**估時**：3-4 天 +
   Windows / Linux 各自 patching mechanism 都要驗。
 - [x] **A.8 State→register caching**（2026-05-04 完成 V1，與 P1 #5
-  重疊）— 機制 commit `0e1e280` (P1 #5 V1)：EmitContext 加 GprShadowSlots
+  重疊）— 機制 commit `db9375c` (P1 #5 V1)：EmitContext 加 GprShadowSlots
   / StatusShadowSlots，block entry alloca + load state→shadow，exit
   drain shadow→state；mem2reg promote 到 SSA。LR35902 路徑 always-on
   (gated GprWidthBits==8)；ARM 路徑因 GepGprDynamic 不啟用。V1 unconditional
@@ -718,7 +718,7 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
   (6.31 → 6.48 MIPS)**, GBA 不受影響 (CPSR 已 i32)。順便修了潛在的
   unaligned i32 access 問題。
 - [⏸ deferred — 2026-05-03 retry 失敗] **C.b Alloca-based shadow lazy flag**
-  — main 分支 (`18051f6`) 在 2026-05-03 上午有實作完成 (+0.5%) 但 recovery
+  — main 分支 (`c5d32c6`) 在 2026-05-03 上午有實作完成 (+0.5%) 但 recovery
   分支 retry 失敗：T1 (360 unit tests) 通過，但 T2 8-combo screenshot 5/8
   fail（HLE bjit 空白畫面 + 4 個 BIOS LLE crash「Undecodable instruction
   at PC=0x...」CPSR.T mismatch）。Root cause hypothesis：shadow alloca init
@@ -795,7 +795,7 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
   **loop100 上 +0.6% noise** — 這 ROM ALU-heavy 不是 mem-heavy；改動正確
   但要 mem-heavy bench 才看得出實際收益。
 - [x] **E.c Mem-bus region table inline check (IR 層)**（2026-05-04 完成
-  LR35902 WRAM/HRAM 部分，commit `15f913f`）：JIT'd code 內 emit「addr ∈
+  LR35902 WRAM/HRAM 部分，commit `787a8e5`）：JIT'd code 內 emit「addr ∈
   WRAM (0xC000-0xDFFF) / HRAM (0xFF80-0xFFFE) 直接 GEP-store；else call
   sync-flag extern」分支。LR35902 寫入路徑只實作 WRAM/HRAM；MMIO/cart-RAM
   仍走 sync extern (有 side effects)。讀取路徑、ARM/GBA 端、cart ROM 區
@@ -837,7 +837,7 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
 #### F. Dispatcher / cycle-accounting 簡化
 
 - [x] **F.x InstructionDef-keyed fn pointer cache**（2026-05-03，commit
-  `9fcf511` + perf note `MD/performance/202605030036-fnptr-cache-by-instruction-def.md`）
+  `caf939b` + perf note `MD/performance/202605030036-fnptr-cache-by-instruction-def.md`）
   — dispatcher 改用 reference identity 而非 string-keyed cache。**GB
   json-llvm +82% (2.66 → 4.83 MIPS), GBA Thumb +25%**, GBA ARM +2%（noisy）。
 - [x] **F.y Pre-built DecodedInstruction cache**（2026-05-03，perf
@@ -882,7 +882,7 @@ JSON-driven 核心命題；ROI 跟風險比偏低。
   顯式跑 `mem2reg,instcombine<no-verify-fixpoint>,gvn,dse,simplifycfg`。
   **過程**：原本 instcombine 開了 3 個 BlockFunctionBuilderTests 掛 (R1=0
   expected 2)，先 disable 跑 4-pass 版 (mem2reg/gvn/dse/simplifycfg)
-  穩定上線；後續 (commit ea08d17) 找到 root cause — module 沒設
+  穩定上線；後續 (commit 5efebcc) 找到 root cause — module 沒設
   `target datalayout`，instcombine canonicalise struct GEP 成 byte GEP
   時用預設 layout 算錯 4-byte offset (i64 alignment 處理不同)。修法：
   Compile() 重排序，先建 LLJIT 拿 datalayout、`LLVM.SetDataLayout`

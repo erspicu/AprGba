@@ -14,11 +14,11 @@
 
 | Step | Subject | Commit | Status |
 |---|---|---|---|
-| **P1 #5** | Native i8/i16 + block-local register shadowing V1 | `0e1e280` | ✅ 機制 (perf -4%) |
-| **P1 #5b** | SMC V2: IR-level inline notify + 精確 per-instr coverage + cross-jump-into-RAM 解禁 | `6c04422` | ✅ 機制 (env-gated OFF) |
-| **P1 #6** | Detector cross unconditional B/JR/JP follow (ROM-only) | `dd99c98` | ✅ V1 |
-| **P1 #7** | E.c IR-level WRAM/HRAM inline write fast path | `15f913f` | ✅ |
-| **P2 #8** | A.5 SMC detection V1 (per-byte coverage + bus-extern path notify) | `8ce66ac` | ✅ (升至 P1 範疇) |
+| **P1 #5** | Native i8/i16 + block-local register shadowing V1 | `db9375c` | ✅ 機制 (perf -4%) |
+| **P1 #5b** | SMC V2: IR-level inline notify + 精確 per-instr coverage + cross-jump-into-RAM 解禁 | `377379c` | ✅ 機制 (env-gated OFF) |
+| **P1 #6** | Detector cross unconditional B/JR/JP follow (ROM-only) | `b9dd0dd` | ✅ V1 |
+| **P1 #7** | E.c IR-level WRAM/HRAM inline write fast path | `787a8e5` | ✅ |
+| **P2 #8** | A.5 SMC detection V1 (per-byte coverage + bus-extern path notify) | `24a58d1` | ✅ (升至 P1 範疇) |
 
 ---
 
@@ -162,7 +162,7 @@ suffix 避開 ORC LLJIT "Duplicate definition"。
 
 | 問題 | 描述 | 候選解 |
 |---|---|---|
-| **GBA bjit -16% regression** | P0.7b commit `d7314a8` 留下；ARM HLE loop100 10.3→8.7 | 檢查 pre-exit BB 的 cycle deduct path 是否有冗餘 IR |
+| **GBA bjit -16% regression** | P0.7b commit `7dd1e04` 留下；ARM HLE loop100 10.3→8.7 | 檢查 pre-exit BB 的 cycle deduct path 是否有冗餘 IR |
 | **SMC inline notify cycle drift** | `APR_SMC_INLINE_NOTIFY=1` ON 時 cpu_instrs sub-test 03 livelock | Deferred invalidation pattern (mGBA / Dolphin) |
 | **P1 #5 V1 shadow -4%** | unconditional alloc 7 GPR + F + SP 對小 block overhead 大 | Per-block live-range analysis (V2) |
 

@@ -8,7 +8,7 @@
 > `YYYYMMDDHHMM-` prefix.
 >
 > **Timing**: After Phase 5.8 emitter library refactor 5.1–5.7 was done
-> (commit `ce57b35`, 2026-05-03).
+> (commit `8e0b703`, 2026-05-03).
 > **How run**: 4-ROM × 1200 frame, Release build (.NET 10) + LLVM 20
 > MCJIT + Windows 11 + same dev machine.
 

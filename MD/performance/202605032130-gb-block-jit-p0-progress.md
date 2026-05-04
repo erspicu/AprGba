@@ -11,10 +11,10 @@
 
 | Step | Commit | Status |
 |---|---|---|
-| **P0.1** Variable-width `BlockDetector` + LR35902 length oracle | `3024100` | ✅ |
-| **P0.2** 0xCB prefix as 2-byte atomic instruction | `0cb93a8` | ✅ |
-| **P0.3** Immediate baking via `instruction_word` packing | `7a8305a` | ✅ |
-| **P0.4** GB CLI `--block-jit` + JsonCpu wiring + Strategy 2 PC fixes | `adddade` | ⚠️ partial |
+| **P0.1** Variable-width `BlockDetector` + LR35902 length oracle | `fdce42c` | ✅ |
+| **P0.2** 0xCB prefix as 2-byte atomic instruction | `381595b` | ✅ |
+| **P0.3** Immediate baking via `instruction_word` packing | `da8cf91` | ✅ |
+| **P0.4** GB CLI `--block-jit` + JsonCpu wiring + Strategy 2 PC fixes | `5b4092f` | ⚠️ partial |
 
 每步 T1 全綠 + T2 8-combo screenshot canonical hash 不變（GBA path 沒
 regression）。
@@ -105,8 +105,8 @@ regression。
 
 | Commit | 修了啥 | 結果 |
 |---|---|---|
-| `a10a718` | HALT/STOP 加為 block boundary（detector 看 step `op:"halt"` / `"stop"`）| minimal repro `temp/jr-neg-repro.gb` per-instr/bjit 一致 |
-| `6a86005` | EI delay：detector 在 `lr35902_ime_delayed` 後再多一條才切 block | T1 全綠、Blargg 仍掛（partial fix） |
+| `c47d849` | HALT/STOP 加為 block boundary（detector 看 step `op:"halt"` / `"stop"`）| minimal repro `temp/jr-neg-repro.gb` per-instr/bjit 一致 |
+| `771d170` | EI delay：detector 在 `lr35902_ime_delayed` 後再多一條才切 block | T1 全綠、Blargg 仍掛（partial fix） |
 
 ### 還沒解的 bug
 

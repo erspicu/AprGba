@@ -15,11 +15,11 @@
 
 | Step | Subject | Commit | Status |
 |---|---|---|---|
-| **P1 #5** | Native i8/i16 + block-local register shadowing V1 | `0e1e280` | ✅ mechanism (perf -4%) |
-| **P1 #5b** | SMC V2: IR-level inline notify + precise per-instr coverage + cross-jump-into-RAM unlock | `6c04422` | ✅ mechanism (env-gated OFF) |
-| **P1 #6** | Detector cross unconditional B/JR/JP follow (ROM-only) | `dd99c98` | ✅ V1 |
-| **P1 #7** | E.c IR-level WRAM/HRAM inline write fast path | `15f913f` | ✅ |
-| **P2 #8** | A.5 SMC detection V1 (per-byte coverage + bus-extern path notify) | `8ce66ac` | ✅ (promoted to P1 scope) |
+| **P1 #5** | Native i8/i16 + block-local register shadowing V1 | `db9375c` | ✅ mechanism (perf -4%) |
+| **P1 #5b** | SMC V2: IR-level inline notify + precise per-instr coverage + cross-jump-into-RAM unlock | `377379c` | ✅ mechanism (env-gated OFF) |
+| **P1 #6** | Detector cross unconditional B/JR/JP follow (ROM-only) | `b9dd0dd` | ✅ V1 |
+| **P1 #7** | E.c IR-level WRAM/HRAM inline write fast path | `787a8e5` | ✅ |
+| **P2 #8** | A.5 SMC detection V1 (per-byte coverage + bus-extern path notify) | `24a58d1` | ✅ (promoted to P1 scope) |
 
 ---
 
@@ -166,7 +166,7 @@ suffix to dodge ORC LLJIT "Duplicate definition".
 
 | Issue | Description | Candidate fix |
 |---|---|---|
-| **GBA bjit -16% regression** | Left by P0.7b commit `d7314a8`; ARM HLE loop100 10.3→8.7 | Check whether pre-exit BB cycle deduct path has redundant IR |
+| **GBA bjit -16% regression** | Left by P0.7b commit `7dd1e04`; ARM HLE loop100 10.3→8.7 | Check whether pre-exit BB cycle deduct path has redundant IR |
 | **SMC inline notify cycle drift** | When `APR_SMC_INLINE_NOTIFY=1` ON, cpu_instrs sub-test 03 livelock | Deferred invalidation pattern (mGBA / Dolphin) |
 | **P1 #5 V1 shadow -4%** | Unconditional alloc 7 GPR + F + SP has high overhead for small blocks | Per-block live-range analysis (V2) |
 

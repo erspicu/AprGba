@@ -12,7 +12,7 @@
 > to 1346 lines, -49%; details in
 > `MD/design/11-emitter-library-refactor.md`).
 >
-> Source commits: `cdf04ce` (refactor wrap-up + docs).
+> Source commits: `3c88ea9` (refactor wrap-up + docs).
 
 ---
 

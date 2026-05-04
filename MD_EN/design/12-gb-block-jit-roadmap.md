@@ -106,10 +106,10 @@ MIPS went from 0 → 22.64 (+150% over per-instr 9).
 
 | # | Item | Status | Commit |
 |---|---|---|---|
-| **1** | Variable-width `BlockDetector` | ✅ | `3024100` |
-| **2** | 0xCB prefix as 2-byte atomic | ✅ | `0cb93a8` |
-| **3** | Immediate baking via instruction_word packing | ✅ | `7a8305a` |
-| **4** | GB CLI `--block-jit` + Strategy 2 PC fixes | ✅ | `adddade` |
+| **1** | Variable-width `BlockDetector` | ✅ | `fdce42c` |
+| **2** | 0xCB prefix as 2-byte atomic | ✅ | `381595b` |
+| **3** | Immediate baking via instruction_word packing | ✅ | `da8cf91` |
+| **4** | GB CLI `--block-jit` + Strategy 2 PC fixes | ✅ | `5b4092f` |
 
 **P0 completion milestone**: T1 360+ tests / T2 8-combo screenshot matrix
 (GBA path must not regress) / GB Blargg cpu_instrs passes in block-JIT mode /
@@ -120,21 +120,21 @@ improvement).
 
 | # | Item | Status | Commit | Notes |
 |---|---|---|---|---|
-| **P0.5** | HALT/STOP block boundary | ✅ | `a10a718` | detector watches step `op:"halt"`/`"stop"` and auto-splits the block |
-| **P0.5b** | EI delay band-aid (block ends at EI+1) | ✅ partial | `6a86005` | hardcoded LR35902-specific; superseded by P0.6 |
-| **P0.5c** | `Lr35902Alu8Emitter.FetchImmediate` Strategy 2 baking | ✅ | `d760b08` | + `--diff-bjit=N` lockstep harness; Blargg 01-special PASSED |
-| **P0.6** | Generic `defer` micro-op + AST pre-pass | ✅ | `ca248e8` | Phantom-instruction-injection pattern; replaces P0.5b hardcode; details in `MD/design/13-defer-microop.md` |
-| **P0.7** | **Hybrid IRQ delivery — fast/slow split + `sync` micro-op** | ✅ | `2a1de15` + `674316f` | Per-instr-grained IRQ correctness in block-JIT; MMIO write callback returns sync flag, JIT exits block on sync; details in `MD/design/14-irq-sync-fastslow.md` |
-| **P0.7b** | Conditional branch taken-cycle accounting fix | ✅ | `34f9f4b` + `d7314a8` | pre-exit BB for taken-branch cycle deduct (revised for smaller GBA perf hit). **Known regression**: GBA bjit -16% from this commit; pending (C) fix |
+| **P0.5** | HALT/STOP block boundary | ✅ | `c47d849` | detector watches step `op:"halt"`/`"stop"` and auto-splits the block |
+| **P0.5b** | EI delay band-aid (block ends at EI+1) | ✅ partial | `771d170` | hardcoded LR35902-specific; superseded by P0.6 |
+| **P0.5c** | `Lr35902Alu8Emitter.FetchImmediate` Strategy 2 baking | ✅ | `3617240` | + `--diff-bjit=N` lockstep harness; Blargg 01-special PASSED |
+| **P0.6** | Generic `defer` micro-op + AST pre-pass | ✅ | `51c2921` | Phantom-instruction-injection pattern; replaces P0.5b hardcode; details in `MD/design/13-defer-microop.md` |
+| **P0.7** | **Hybrid IRQ delivery — fast/slow split + `sync` micro-op** | ✅ | `0c001fc` + `999f9eb` | Per-instr-grained IRQ correctness in block-JIT; MMIO write callback returns sync flag, JIT exits block on sync; details in `MD/design/14-irq-sync-fastslow.md` |
+| **P0.7b** | Conditional branch taken-cycle accounting fix | ✅ | `f27450f` + `7dd1e04` | pre-exit BB for taken-branch cycle deduct (revised for smaller GBA perf hit). **Known regression**: GBA bjit -16% from this commit; pending (C) fix |
 
 ### Tier P1 — Big-win extensions (✅ **main body completed 2026-05-04**)
 
 | # | Item | Status | Commit | Notes |
 |---|---|---|---|---|
-| **5** | **Native i8/i16 + block-local state caching** | ✅ V1 mechanism | `0e1e280` | EmitContext.GprShadowSlots/StatusShadowSlots + ctx.GepGpr/GepStatusRegister + ctx.DrainShadowsToState; 7 GPR + F + SP shadow allocas; mem2reg promotes to SSA. V1 unconditionally allocates; small blocks in cpu_instrs actually go -4% because entry-load + exit-drain costs exceed internal savings. **V2 pending**: per-block live-range analysis to alloc only the registers actually used. `APR_DISABLE_SHADOW=1` env disables it for A/B benching. |
-| **5b** | **SMC V2: IR-level inline notify + precise per-instr coverage + cross-jump-into-RAM** | ✅ mechanism (env-gated) | `6c04422` | Three pieces: (a) `EmitSmcCoverageNotify` adds a 1-byte cov check + cold-path notify call after each WRAM/HRAM inline write (gated by `APR_SMC_INLINE_NOTIFY=1`); (b) CachedBlock adds `CoverageInstrPcs/Lens` for precise per-instr range (always-on); (c) BlockDetector unblocks cross-jump-into-RAM (gated by `APR_CROSS_JUMP_RAM=1`). Both env vars OFF by default to preserve V1 behaviour (cpu_instrs 11/11 PASS); when ON, cpu_instrs sub-test 03 livelocks due to cycle accounting drift under invalidation. Bonus: added illegal-opcode (0xDD/...) NOP fallback to avoid crash when cross-jump hits an illegal byte. |
-| **6** | **Detector cross unconditional B/JR/JP** | ✅ ROM-only | `dd99c98` | LR35902 0x18 (JR e8) + 0xC3 (JP nn) cross-follow; CALL/RET/JP HL (dynamic) not followed. V1 limited to ROM-to-ROM (source ≤ 0x7FFF AND target ≤ 0x7FFF); V2 (P1 #5b unblock) exists but is env-gated. |
-| **7** | **E.c IR-level memory region inline check** | ✅ | `15f913f` | WRAM (0xC000-0xDFFF) / HRAM (0xFF80-0xFFFE) inline GEP-store skips the bus extern; still routes through sync-flag extern for MMIO/cart-RAM. Two extern globals Lr35902WramBase/HramBase are bound at JsonCpu.Reset to pinned pointers. |
+| **5** | **Native i8/i16 + block-local state caching** | ✅ V1 mechanism | `db9375c` | EmitContext.GprShadowSlots/StatusShadowSlots + ctx.GepGpr/GepStatusRegister + ctx.DrainShadowsToState; 7 GPR + F + SP shadow allocas; mem2reg promotes to SSA. V1 unconditionally allocates; small blocks in cpu_instrs actually go -4% because entry-load + exit-drain costs exceed internal savings. **V2 pending**: per-block live-range analysis to alloc only the registers actually used. `APR_DISABLE_SHADOW=1` env disables it for A/B benching. |
+| **5b** | **SMC V2: IR-level inline notify + precise per-instr coverage + cross-jump-into-RAM** | ✅ mechanism (env-gated) | `377379c` | Three pieces: (a) `EmitSmcCoverageNotify` adds a 1-byte cov check + cold-path notify call after each WRAM/HRAM inline write (gated by `APR_SMC_INLINE_NOTIFY=1`); (b) CachedBlock adds `CoverageInstrPcs/Lens` for precise per-instr range (always-on); (c) BlockDetector unblocks cross-jump-into-RAM (gated by `APR_CROSS_JUMP_RAM=1`). Both env vars OFF by default to preserve V1 behaviour (cpu_instrs 11/11 PASS); when ON, cpu_instrs sub-test 03 livelocks due to cycle accounting drift under invalidation. Bonus: added illegal-opcode (0xDD/...) NOP fallback to avoid crash when cross-jump hits an illegal byte. |
+| **6** | **Detector cross unconditional B/JR/JP** | ✅ ROM-only | `b9dd0dd` | LR35902 0x18 (JR e8) + 0xC3 (JP nn) cross-follow; CALL/RET/JP HL (dynamic) not followed. V1 limited to ROM-to-ROM (source ≤ 0x7FFF AND target ≤ 0x7FFF); V2 (P1 #5b unblock) exists but is env-gated. |
+| **7** | **E.c IR-level memory region inline check** | ✅ | `787a8e5` | WRAM (0xC000-0xDFFF) / HRAM (0xFF80-0xFFFE) inline GEP-store skips the bus extern; still routes through sync-flag extern for MMIO/cart-RAM. Two extern globals Lr35902WramBase/HramBase are bound at JsonCpu.Reset to pinned pointers. |
 
 **P1 completion milestone (achieved)**:
 - T1 365/365 + T2 8-combo GBA canonical hash unchanged (ARM path P1 #5
@@ -158,7 +158,7 @@ improvement).
 
 | # | Item | Status | Cost | Risk | Value | Notes |
 |---|---|---|---|---|---|---|
-| 8 | **A.5 SMC detection + invalidation** | ✅ V1+V2 | M | L | (correctness) | V1 (`8ce66ac`) per-byte coverage + bus-extern path notify; V2 (`6c04422`) IR-level inline notify + precise per-instr coverage + cross-jump-into-RAM unblock (env-gated). See P1 table #5b. **Overlaps with P1 #5/#5b** — promoted from P2 to P1 scope. |
+| 8 | **A.5 SMC detection + invalidation** | ✅ V1+V2 | M | L | (correctness) | V1 (`24a58d1`) per-byte coverage + bus-extern path notify; V2 (`377379c`) IR-level inline notify + precise per-instr coverage + cross-jump-into-RAM unblock (env-gated). See P1 table #5b. **Overlaps with P1 #5/#5b** — promoted from P2 to P1 scope. |
 | 9 | **A.9 Performance profiling tool** | ⏳ pending | S | L | (diagnostic) | `--bench-blocks` prints per-block compile counts / execution counts; only meaningful after P1 #5 V1 is done. **Recommended next pick** — low-investment high-return reconnaissance tool, prerequisite for any subsequent perf work (PGO). |
 | 10 | **A.8 State→register caching aggressive** | ✅ overlaps with P1 #5 | M | M | M | P1 #5 V1 has shipped the same mechanism (block entry load shadow, exit drain); this was A.8's original target. Mark done. |
 | 11 | **H.b Spec-time IR pre-processing** (dead-flag elim) | ⏳ pending | L | M | M | At SpecCompiler stage, do def-use analysis and eliminate cross-instruction dead flag writes. Continuous LR35902 ALU sequences (ADD-ADC-ADC) often overwrite intermediate H/N flags — eliminable. |
@@ -308,7 +308,7 @@ P2/P3/P4 — profile-driven trigger. Suggested next pick:
   analysis)
 - **P1 #5b V3** — fix cycle drift with SMC inline notify enabled
   (mGBA/Dolphin deferred-invalidation pattern as reference)
-- **GBA bjit P0.7b regression -16% fix** (left by commit `d7314a8`)
+- **GBA bjit P0.7b regression -16% fix** (left by commit `7dd1e04`)
 
 ---
 
@@ -337,4 +337,4 @@ After P0 + P1 completion, `03-roadmap.md` Phase 7 progress snapshot needs a
 | Detector cross unconditional B hits ROM bank switch / SMC | ✅ **mitigated** — P1 #6 V1 limited to ROM-to-ROM; V2 (P1 #5b) adds SMC inline notify unblock. |
 | GB block-JIT once landed slower than per-instr | ✅ **avoided** — at P0 completion 22.6 MIPS vs per-instr 6.5 MIPS = 3.5× speedup; subsequent P1 advances to 27 MIPS. |
 | **New risk (surfaced after P1): cycle accounting drift triggered by SMC invalidation** | ⏳ **active** — when `APR_SMC_INLINE_NOTIFY=1` is ON, cpu_instrs sub-test 03 livelocks; pending V3 deferred-invalidation pattern fix. |
-| **New risk: GBA bjit perf -16% regression** (`d7314a8`) | ⏳ **active** — left by P0.7b conditional branch taken-cycle accounting fix; pending (C) fix |
+| **New risk: GBA bjit perf -16% regression** (`7dd1e04`) | ⏳ **active** — left by P0.7b conditional branch taken-cycle accounting fix; pending (C) fix |

@@ -11,7 +11,7 @@
 > 成 generic 通用 ops；`Lr35902Emitters.cs` 從 ~2620 → 1346 行 −49%；
 > 詳情見 `MD/design/11-emitter-library-refactor.md`）。
 >
-> 來源 commits：`cdf04ce` (refactor 收工 + docs).
+> 來源 commits：`3c88ea9` (refactor 收工 + docs).
 
 ---
 

@@ -332,7 +332,7 @@ fn a second time throws "Duplicate definition".
 state; diff register file + WRAM every N instructions. Stop the moment
 divergence is found.
 
-**Example**: `apr-gb --diff-bjit=N` (added by commit `d760b08`)
+**Example**: `apr-gb --diff-bjit=N` (added by commit `3617240`)
 
 **Why**: bjit behaviour is subtle; T1 unit tests can't cover every
 (PC × state × instr) combination; T2 screenshot tests are slow and only
@@ -351,23 +351,23 @@ Map the three patterns + nine methods above to actual mechanisms:
 
 | Mechanism (commit) | Timing problem | Pattern | Methods used |
 |---|---|---|---|
-| Predictive cycle downcounting (`738c90e`) | Block can't instruction-grain tick HW | A | spec-driven cycle.form |
-| MMIO catch-up callback (`3252165`+`8290cb1`) | Mid-block MMIO read after write reads stale value | B | bus interface |
-| Generic `sync` micro-op (`674316f`) | Mid-block IRQ-relevant change → should deliver immediately | C | 4.1 generic micro-op |
-| Bus sync extern variant (`2a1de15`) | Block-JIT distinguishes IRQ-relevant write | C | 4.5 cold-path inlining |
-| `defer` micro-op (`ca248e8`) | LR35902 EI / Z80 STI delayed-effect | (compile-time) | 4.1 + 4.3 AST pre-pass |
-| Conditional branch taken-cycle (`34f9f4b`+`d7314a8`) | JR cc taken vs not-taken differ in cycle count | A reinforcement | per-instr pre-exit BB |
-| HALT/STOP block boundary (`a10a718`) | HALT wake-up time on IRQ varies | (block boundary) | 4.4 spec step boundary |
-| SMC V1 (per-byte coverage) (`8ce66ac`) | Self-modifying code stales cached IR | (cache invalidation) | per-byte counter + bus path notify |
-| SMC V2 inline notify + precise coverage (`6c04422`) | P1 #7 inline write bypasses bus path → SMC miss | C | 4.5 inline check + 4.4 callback notify |
-| Strategy 2 PC handling (`adddade`) | PC pre-set inside block-JIT creates noise | (compile-time const) | 4.7 |
-| Variable-width detector (`3024100`) | Variable-width ISA can't fixed-stride decode | (per-set callback) | 4.4 lengthOracle |
-| 0xCB prefix as atomic (`0cb93a8`) | CB-prefix is ISA-level atomic, not switch | (sub-decoder) | 4.4 spec prefix_to_set |
-| Immediate baking (`7a8305a`) | block-JIT doesn't need runtime read_imm bus call | (compile-time const) | instruction_word packing |
-| WRAM/HRAM inline write (`15f913f`) | 99% RAM writes pay extern cost they shouldn't | (region inline) | 4.6 + 4.5 |
-| Cross-jump follow (`dd99c98`) | Block average 1.0-1.1 instr → dispatch can't amortize | (compile-time block extension) | detector follow + IsFollowedBranch flag |
-| Block-local register shadowing V1 (`0e1e280`) | state-struct access blocks mem2reg | (alloca + drain) | 4.2 EmitContext routing |
-| Cross-jump-into-RAM unblock (`6c04422`) | RAM regions can also be block targets, but need SMC support | (cross-region block) | env-gated; bundled with SMC V2 |
+| Predictive cycle downcounting (`77396ca`) | Block can't instruction-grain tick HW | A | spec-driven cycle.form |
+| MMIO catch-up callback (`860d7fe`+`05c285a`) | Mid-block MMIO read after write reads stale value | B | bus interface |
+| Generic `sync` micro-op (`999f9eb`) | Mid-block IRQ-relevant change → should deliver immediately | C | 4.1 generic micro-op |
+| Bus sync extern variant (`0c001fc`) | Block-JIT distinguishes IRQ-relevant write | C | 4.5 cold-path inlining |
+| `defer` micro-op (`51c2921`) | LR35902 EI / Z80 STI delayed-effect | (compile-time) | 4.1 + 4.3 AST pre-pass |
+| Conditional branch taken-cycle (`f27450f`+`7dd1e04`) | JR cc taken vs not-taken differ in cycle count | A reinforcement | per-instr pre-exit BB |
+| HALT/STOP block boundary (`c47d849`) | HALT wake-up time on IRQ varies | (block boundary) | 4.4 spec step boundary |
+| SMC V1 (per-byte coverage) (`24a58d1`) | Self-modifying code stales cached IR | (cache invalidation) | per-byte counter + bus path notify |
+| SMC V2 inline notify + precise coverage (`377379c`) | P1 #7 inline write bypasses bus path → SMC miss | C | 4.5 inline check + 4.4 callback notify |
+| Strategy 2 PC handling (`5b4092f`) | PC pre-set inside block-JIT creates noise | (compile-time const) | 4.7 |
+| Variable-width detector (`fdce42c`) | Variable-width ISA can't fixed-stride decode | (per-set callback) | 4.4 lengthOracle |
+| 0xCB prefix as atomic (`381595b`) | CB-prefix is ISA-level atomic, not switch | (sub-decoder) | 4.4 spec prefix_to_set |
+| Immediate baking (`da8cf91`) | block-JIT doesn't need runtime read_imm bus call | (compile-time const) | instruction_word packing |
+| WRAM/HRAM inline write (`787a8e5`) | 99% RAM writes pay extern cost they shouldn't | (region inline) | 4.6 + 4.5 |
+| Cross-jump follow (`b9dd0dd`) | Block average 1.0-1.1 instr → dispatch can't amortize | (compile-time block extension) | detector follow + IsFollowedBranch flag |
+| Block-local register shadowing V1 (`db9375c`) | state-struct access blocks mem2reg | (alloca + drain) | 4.2 EmitContext routing |
+| Cross-jump-into-RAM unblock (`377379c`) | RAM regions can also be block targets, but need SMC support | (cross-region block) | env-gated; bundled with SMC V2 |
 
 ---
 

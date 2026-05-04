@@ -1,9 +1,9 @@
 # Phase 7 H.a re-enabled — explicit LLVM new-pass-manager pipeline (no instcombine yet)
 
-> **策略**：原 H.a (`4d05bd4`) 在 recovery branch 因 instcombine miscompile
+> **策略**：原 H.a (`d929532`) 在 recovery branch 因 instcombine miscompile
 > BIOS LLE 路徑被禁用。Recovery 分支完成 A.6.1 一系列 Strategy 2 修復後
-> （`260cbb0` read_reg(15) after PC-write、`0fa2153` block_store STM with
-> R15、`8290cb1` MMIO sync re-entry guard 等），重新啟用 RunPasses 嘗試
+> （`5af9d36` read_reg(15) after PC-write、`ab1204e` block_store STM with
+> R15、`05c285a` MMIO sync re-entry guard 等），重新啟用 RunPasses 嘗試
 > 取回 alloca→SSA + DSE + GVN 的優化收益。
 >
 > **Hypothesis**：A.6.1 修復後 IR pattern 較乾淨，instcombine 可能也修了；
@@ -106,8 +106,8 @@ DSE/GVN 找不到太多消除機會。
 
 | 階段 | GBA arm pi | GBA arm bjit | GBA thumb pi | GBA thumb bjit |
 |---|---:|---:|---:|---:|
-| 7.B.h (recovery baseline 239f76a) | 8.33 | (broken) | 8.39 | (broken) |
-| 7.A.6.1 BIOS LLE complete + STM PC fix (0fa2153) | 8.15 | 10.35 | 8.14 | 11.30 |
+| 7.B.h (recovery baseline f304376) | 8.33 | (broken) | 8.39 | (broken) |
+| 7.A.6.1 BIOS LLE complete + STM PC fix (ab1204e) | 8.15 | 10.35 | 8.14 | 11.30 |
 | **7.H.a re-enabled (this)** | **7.98** | **10.22** | **8.14** | **11.54** |
 
 Block-JIT 從 broken → working → 11.54 MIPS / 2.8× real-time。
@@ -119,5 +119,5 @@ Per-instr 持平 (~8.0)。
 
 - `MD/process/01-commit-qa-workflow.md` — 本次走 Tier 4 流程
 - `MD/performance/202605030148-lazy-flag-attempt-postmortem.md` — C.b 第一次失敗紀錄
-- 原 H.a commit `4d05bd4`（main 分支，被 recovery 取代）
+- 原 H.a commit `d929532`（main 分支，被 recovery 取代）
 - 待辦：Phase 7 H.a-instcombine — bisect 哪個 instcombine sub-pass 出包

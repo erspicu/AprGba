@@ -96,10 +96,10 @@ Blargg cpu_instrs 全 11 子測試 PASS（含 BIOS LLE）；GB block-JIT MIPS
 
 | # | Item | Status | Commit |
 |---|---|---|---|
-| **1** | Variable-width `BlockDetector` | ✅ | `3024100` |
-| **2** | 0xCB prefix as 2-byte atomic | ✅ | `0cb93a8` |
-| **3** | Immediate baking via instruction_word packing | ✅ | `7a8305a` |
-| **4** | GB CLI `--block-jit` + Strategy 2 PC fixes | ✅ | `adddade` |
+| **1** | Variable-width `BlockDetector` | ✅ | `fdce42c` |
+| **2** | 0xCB prefix as 2-byte atomic | ✅ | `381595b` |
+| **3** | Immediate baking via instruction_word packing | ✅ | `da8cf91` |
+| **4** | GB CLI `--block-jit` + Strategy 2 PC fixes | ✅ | `5b4092f` |
 
 **P0 完工 milestone**：T1 360+ tests / T2 8-combo screenshot matrix（GBA
 路徑不能退步）/ GB Blargg cpu_instrs 在 block-JIT mode 通過 / T3 bench
@@ -109,21 +109,21 @@ GB 09-loop100 從 6.5 → ≥10 MIPS（保守目標 ~50% 進步）。
 
 | # | Item | Status | Commit | 備註 |
 |---|---|---|---|---|
-| **P0.5** | HALT/STOP block boundary | ✅ | `a10a718` | detector 看 step `op:"halt"`/`"stop"` 自動切 block |
-| **P0.5b** | EI delay band-aid (block ends at EI+1) | ✅ partial | `6a86005` | hardcoded LR35902-specific；P0.6 取代 |
-| **P0.5c** | `Lr35902Alu8Emitter.FetchImmediate` Strategy 2 baking | ✅ | `d760b08` | + `--diff-bjit=N` lockstep harness；Blargg 01-special PASSED |
-| **P0.6** | Generic `defer` micro-op + AST pre-pass | ✅ | `ca248e8` | Phantom-instruction-injection pattern；replaced P0.5b hardcode；details in `MD/design/13-defer-microop.md` |
-| **P0.7** | **Hybrid IRQ delivery — fast/slow split + `sync` micro-op** | ✅ | `2a1de15` + `674316f` | Per-instr-grained IRQ correctness in block-JIT；MMIO write callback returns sync flag, JIT exits block on sync；details in `MD/design/14-irq-sync-fastslow.md` |
-| **P0.7b** | Conditional branch taken-cycle accounting fix | ✅ | `34f9f4b` + `d7314a8` | pre-exit BB for taken-branch cycle deduct (smaller GBA perf hit revision)。**Known regression**：GBA bjit -16% 自此 commit；待 (C) 修復 |
+| **P0.5** | HALT/STOP block boundary | ✅ | `c47d849` | detector 看 step `op:"halt"`/`"stop"` 自動切 block |
+| **P0.5b** | EI delay band-aid (block ends at EI+1) | ✅ partial | `771d170` | hardcoded LR35902-specific；P0.6 取代 |
+| **P0.5c** | `Lr35902Alu8Emitter.FetchImmediate` Strategy 2 baking | ✅ | `3617240` | + `--diff-bjit=N` lockstep harness；Blargg 01-special PASSED |
+| **P0.6** | Generic `defer` micro-op + AST pre-pass | ✅ | `51c2921` | Phantom-instruction-injection pattern；replaced P0.5b hardcode；details in `MD/design/13-defer-microop.md` |
+| **P0.7** | **Hybrid IRQ delivery — fast/slow split + `sync` micro-op** | ✅ | `0c001fc` + `999f9eb` | Per-instr-grained IRQ correctness in block-JIT；MMIO write callback returns sync flag, JIT exits block on sync；details in `MD/design/14-irq-sync-fastslow.md` |
+| **P0.7b** | Conditional branch taken-cycle accounting fix | ✅ | `f27450f` + `7dd1e04` | pre-exit BB for taken-branch cycle deduct (smaller GBA perf hit revision)。**Known regression**：GBA bjit -16% 自此 commit；待 (C) 修復 |
 
 ### Tier P1 — Big-win 延伸（✅ **主體完工 2026-05-04**）
 
 | # | Item | Status | Commit | 備註 |
 |---|---|---|---|---|
-| **5** | **Native i8/i16 + block-local state caching** | ✅ V1 機制 | `0e1e280` | EmitContext.GprShadowSlots/StatusShadowSlots + ctx.GepGpr/GepStatusRegister + ctx.DrainShadowsToState；7 GPR + F + SP shadow allocas；mem2reg promote 到 SSA。V1 unconditional allocate，cpu_instrs 小 block 反而 -4% 因 entry-load + exit-drain 開銷大於內部節省。**V2 待做**：per-block live-range analysis 只 alloc 真正用到的 reg。`APR_DISABLE_SHADOW=1` env 可關掉做 A/B bench。 |
-| **5b** | **SMC V2: IR-level inline notify + 精確 per-instr coverage + cross-jump-into-RAM** | ✅ 機制 (env-gated) | `6c04422` | 三個 piece：(a) `EmitSmcCoverageNotify` 在每個 WRAM/HRAM inline 寫後加 1-byte cov check + cold-path notify call (gate `APR_SMC_INLINE_NOTIFY=1`)、(b) CachedBlock 加 `CoverageInstrPcs/Lens` 精確 per-instr 範圍 (always-on)、(c) BlockDetector 解禁 cross-jump-into-RAM (gate `APR_CROSS_JUMP_RAM=1`)。預設兩 env OFF 保 V1 行為（cpu_instrs 11/11 PASS）；ON 後 cpu_instrs sub-test 03 livelock 因 invalidation 下 cycle accounting drift。Bonus: 加 illegal-opcode (0xDD/...) NOP fallback 避免 cross-jump 撞 illegal byte 時 crash。 |
-| **6** | **Detector cross unconditional B/JR/JP** | ✅ ROM-only | `dd99c98` | LR35902 0x18 (JR e8) + 0xC3 (JP nn) 跨 follow；CALL/RET/JP HL (dynamic) 不 follow。V1 限制 ROM-to-ROM (source ≤ 0x7FFF AND target ≤ 0x7FFF)；V2 (P1 #5b 解禁) 已有但 env-gated。 |
-| **7** | **E.c IR-level memory region inline check** | ✅ | `15f913f` | WRAM (0xC000-0xDFFF) / HRAM (0xFF80-0xFFFE) inline GEP-store 略 bus extern；仍走 sync-flag extern 對 MMIO/cart-RAM。Lr35902WramBase/HramBase 兩個 extern global 由 JsonCpu.Reset pinned bind。 |
+| **5** | **Native i8/i16 + block-local state caching** | ✅ V1 機制 | `db9375c` | EmitContext.GprShadowSlots/StatusShadowSlots + ctx.GepGpr/GepStatusRegister + ctx.DrainShadowsToState；7 GPR + F + SP shadow allocas；mem2reg promote 到 SSA。V1 unconditional allocate，cpu_instrs 小 block 反而 -4% 因 entry-load + exit-drain 開銷大於內部節省。**V2 待做**：per-block live-range analysis 只 alloc 真正用到的 reg。`APR_DISABLE_SHADOW=1` env 可關掉做 A/B bench。 |
+| **5b** | **SMC V2: IR-level inline notify + 精確 per-instr coverage + cross-jump-into-RAM** | ✅ 機制 (env-gated) | `377379c` | 三個 piece：(a) `EmitSmcCoverageNotify` 在每個 WRAM/HRAM inline 寫後加 1-byte cov check + cold-path notify call (gate `APR_SMC_INLINE_NOTIFY=1`)、(b) CachedBlock 加 `CoverageInstrPcs/Lens` 精確 per-instr 範圍 (always-on)、(c) BlockDetector 解禁 cross-jump-into-RAM (gate `APR_CROSS_JUMP_RAM=1`)。預設兩 env OFF 保 V1 行為（cpu_instrs 11/11 PASS）；ON 後 cpu_instrs sub-test 03 livelock 因 invalidation 下 cycle accounting drift。Bonus: 加 illegal-opcode (0xDD/...) NOP fallback 避免 cross-jump 撞 illegal byte 時 crash。 |
+| **6** | **Detector cross unconditional B/JR/JP** | ✅ ROM-only | `b9dd0dd` | LR35902 0x18 (JR e8) + 0xC3 (JP nn) 跨 follow；CALL/RET/JP HL (dynamic) 不 follow。V1 限制 ROM-to-ROM (source ≤ 0x7FFF AND target ≤ 0x7FFF)；V2 (P1 #5b 解禁) 已有但 env-gated。 |
+| **7** | **E.c IR-level memory region inline check** | ✅ | `787a8e5` | WRAM (0xC000-0xDFFF) / HRAM (0xFF80-0xFFFE) inline GEP-store 略 bus extern；仍走 sync-flag extern 對 MMIO/cart-RAM。Lr35902WramBase/HramBase 兩個 extern global 由 JsonCpu.Reset pinned bind。 |
 
 **P1 完工 milestone（已達）**：
 - T1 365/365 + T2 8-combo GBA canonical hash 不變（ARM 路徑 P1 #5 shadow gated 在 LR35902）
@@ -141,7 +141,7 @@ GB 09-loop100 從 6.5 → ≥10 MIPS（保守目標 ~50% 進步）。
 
 | # | Item | Status | Cost | Risk | Value | 備註 |
 |---|---|---|---|---|---|---|
-| 8 | **A.5 SMC detection + invalidation** | ✅ V1+V2 | M | L | (correctness) | V1 (`8ce66ac`) per-byte coverage + bus-extern path notify；V2 (`6c04422`) IR-level inline notify + per-instr 精確 coverage + cross-jump-into-RAM 解禁（env-gated）。詳見 P1 表 #5b。**P1 #5/#5b 重疊** — 從 P2 升到 P1 範疇。 |
+| 8 | **A.5 SMC detection + invalidation** | ✅ V1+V2 | M | L | (correctness) | V1 (`24a58d1`) per-byte coverage + bus-extern path notify；V2 (`377379c`) IR-level inline notify + per-instr 精確 coverage + cross-jump-into-RAM 解禁（env-gated）。詳見 P1 表 #5b。**P1 #5/#5b 重疊** — 從 P2 升到 P1 範疇。 |
 | 9 | **A.9 Performance profiling tool** | ⏳ pending | S | L | (diagnostic) | `--bench-blocks` 印 per-block 編譯次數 / 執行次數；做完 P1 #5 V1 後做才有意義。**推薦下一個 pick** — 投資少回報高的偵察工具，後續任何 perf 工作都需要它做 PGO。 |
 | 10 | **A.8 State→register caching aggressive** | ✅ 跟 P1 #5 重疊 | M | M | M | P1 #5 V1 已 ship 同樣機制（block entry load shadow，exit drain）；A.8 原本標的就是這個。標 done。 |
 | 11 | **H.b Spec-time IR pre-processing** (dead-flag elim) | ⏳ pending | L | M | M | SpecCompiler 階段做 def-use analysis，跨指令 dead flag write 省掉。LR35902 連續 ALU (ADD-ADC-ADC) 中間 H/N flag 多半被覆寫——可省。 |
@@ -288,7 +288,7 @@ P2/P3/P4 — profile-driven 觸發。下一步建議 pick：
   analysis）
 - **P1 #5b V3** — 解 SMC inline notify 開啟下的 cycle drift（mGBA/Dolphin
   deferred-invalidation pattern 可參考）
-- **GBA bjit P0.7b regression -16% 修復**（commit `d7314a8` 留下）
+- **GBA bjit P0.7b regression -16% 修復**（commit `7dd1e04` 留下）
 
 ---
 
@@ -315,4 +315,4 @@ P0+P1 ship 紀錄 + 對應 perf 數字」。**TODO**：把這條當 housekeeping
 | Detector 跨 unconditional B 撞到 ROM bank switch / SMC | ✅ **mitigated** — P1 #6 V1 限制 ROM-to-ROM；V2 (P1 #5b) 加 SMC inline notify 解禁。 |
 | GB block-JIT 一上線比 per-instr 慢 | ✅ **避過** — P0 完工時 22.6 MIPS vs per-instr 6.5 MIPS = 3.5× 加速；後續 P1 進步到 27 MIPS。 |
 | **新風險（P1 後浮出）：SMC invalidation 觸發的 cycle accounting drift** | ⏳ **active** — `APR_SMC_INLINE_NOTIFY=1` ON 時 cpu_instrs sub-test 03 livelock；待 V3 deferred-invalidation pattern 解。 |
-| **新風險：GBA bjit perf -16% regression** (`d7314a8`) | ⏳ **active** — P0.7b conditional branch taken-cycle accounting fix 留下；待 (C) 修復 |
+| **新風險：GBA bjit perf -16% regression** (`7dd1e04`) | ⏳ **active** — P0.7b conditional branch taken-cycle accounting fix 留下；待 (C) 修復 |

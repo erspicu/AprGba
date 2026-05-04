@@ -202,7 +202,7 @@ jsmolka thumb.gba + jsmolka bios.gba。任一掉測 stop-the-line。
 ## 6. 結論
 
 C.a (width-correct flag access) 是 lazy flag 的 baby step，已 commit
-(`fd8c15f`) 帶來 GB JIT +2.7%。
+(`d1f1a1d`) 帶來 GB JIT +2.7%。
 
 C.b (full lazy flag via deferred batch) **嘗試失敗**，revert。檔案 working
 tree 已恢復 C.a 狀態。

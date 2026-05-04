@@ -287,7 +287,7 @@ JsonCpu 維護 monotonic `_blockGeneration` counter。
 **做法**：把 per-instr 跟 bjit 兩 backend 跑同一 ROM 同一狀態，每 N 條
 instr 比對 register file + WRAM diff。發現分歧立刻停。
 
-**例子**：`apr-gb --diff-bjit=N`（commit `d760b08` 加上）
+**例子**：`apr-gb --diff-bjit=N`（commit `3617240` 加上）
 
 **為何**：bjit 行為微妙；T1 unit test 沒法覆蓋所有 (PC × state × instr)
 組合；T2 screenshot test 慢且只看 final state。Lockstep diff 是「bjit 應該
@@ -304,23 +304,23 @@ spec-driven (RegisterFile + status registers)；新 CPU 不用改 harness 邏輯
 
 | 機制 (commit) | Timing 問題 | Pattern | 用到的 method |
 |---|---|---|---|
-| Predictive cycle downcounting (`738c90e`) | Block 內無法 instruction-grain tick HW | A | spec-driven cycle.form |
-| MMIO catch-up callback (`3252165`+`8290cb1`) | mid-block MMIO 寫後讀讀到 stale value | B | bus interface |
-| Generic `sync` micro-op (`674316f`) | mid-block IRQ relevant change → 該立刻 deliver | C | 4.1 generic micro-op |
-| Bus sync extern variant (`2a1de15`) | block-JIT 區分 IRQ-relevant write | C | 4.5 cold-path inlining |
-| `defer` micro-op (`ca248e8`) | LR35902 EI / Z80 STI 等延遲生效 | (compile-time) | 4.1 + 4.3 AST pre-pass |
-| Conditional branch taken-cycle (`34f9f4b`+`d7314a8`) | JR cc taken vs not-taken 不同 cycle 數 | A 補強 | per-instr pre-exit BB |
-| HALT/STOP block boundary (`a10a718`) | HALT 等 IRQ 醒來時間不固定 | (block 邊界) | 4.4 spec step boundary |
-| SMC V1 (per-byte coverage) (`8ce66ac`) | Self-modifying code 後 cached IR 過時 | (cache invalidation) | per-byte counter + bus path notify |
-| SMC V2 inline notify + 精確 coverage (`6c04422`) | P1 #7 inline write bypass bus path → SMC miss | C | 4.5 inline check + 4.4 callback notify |
-| Strategy 2 PC handling (`adddade`) | block-JIT 內 PC pre-set 製造干擾 | (compile-time const) | 4.7 |
-| Variable-width detector (`3024100`) | 變寬 ISA 沒法 fixed-stride decode | (per-set callback) | 4.4 lengthOracle |
-| 0xCB prefix as atomic (`0cb93a8`) | CB-prefix 是 ISA-level atomic 不是 switch | (sub-decoder) | 4.4 spec prefix_to_set |
-| Immediate baking (`7a8305a`) | block-JIT 不需要 runtime read_imm bus call | (compile-time const) | instruction_word packing |
-| WRAM/HRAM inline write (`15f913f`) | 99% RAM 寫付不該付的 extern cost | (region inline) | 4.6 + 4.5 |
-| Cross-jump follow (`dd99c98`) | block 平均 1.0-1.1 instr → dispatch 攤不平 | (compile-time block extension) | detector follow + IsFollowedBranch flag |
-| Block-local register shadowing V1 (`0e1e280`) | state-struct access 阻擋 mem2reg | (alloca + drain) | 4.2 EmitContext routing |
-| Cross-jump-into-RAM 解禁 (`6c04422`) | RAM 區也可以是 block target，但要 SMC 配合 | (cross-region block) | env-gated；跟 SMC V2 一起 |
+| Predictive cycle downcounting (`77396ca`) | Block 內無法 instruction-grain tick HW | A | spec-driven cycle.form |
+| MMIO catch-up callback (`860d7fe`+`05c285a`) | mid-block MMIO 寫後讀讀到 stale value | B | bus interface |
+| Generic `sync` micro-op (`999f9eb`) | mid-block IRQ relevant change → 該立刻 deliver | C | 4.1 generic micro-op |
+| Bus sync extern variant (`0c001fc`) | block-JIT 區分 IRQ-relevant write | C | 4.5 cold-path inlining |
+| `defer` micro-op (`51c2921`) | LR35902 EI / Z80 STI 等延遲生效 | (compile-time) | 4.1 + 4.3 AST pre-pass |
+| Conditional branch taken-cycle (`f27450f`+`7dd1e04`) | JR cc taken vs not-taken 不同 cycle 數 | A 補強 | per-instr pre-exit BB |
+| HALT/STOP block boundary (`c47d849`) | HALT 等 IRQ 醒來時間不固定 | (block 邊界) | 4.4 spec step boundary |
+| SMC V1 (per-byte coverage) (`24a58d1`) | Self-modifying code 後 cached IR 過時 | (cache invalidation) | per-byte counter + bus path notify |
+| SMC V2 inline notify + 精確 coverage (`377379c`) | P1 #7 inline write bypass bus path → SMC miss | C | 4.5 inline check + 4.4 callback notify |
+| Strategy 2 PC handling (`5b4092f`) | block-JIT 內 PC pre-set 製造干擾 | (compile-time const) | 4.7 |
+| Variable-width detector (`fdce42c`) | 變寬 ISA 沒法 fixed-stride decode | (per-set callback) | 4.4 lengthOracle |
+| 0xCB prefix as atomic (`381595b`) | CB-prefix 是 ISA-level atomic 不是 switch | (sub-decoder) | 4.4 spec prefix_to_set |
+| Immediate baking (`da8cf91`) | block-JIT 不需要 runtime read_imm bus call | (compile-time const) | instruction_word packing |
+| WRAM/HRAM inline write (`787a8e5`) | 99% RAM 寫付不該付的 extern cost | (region inline) | 4.6 + 4.5 |
+| Cross-jump follow (`b9dd0dd`) | block 平均 1.0-1.1 instr → dispatch 攤不平 | (compile-time block extension) | detector follow + IsFollowedBranch flag |
+| Block-local register shadowing V1 (`db9375c`) | state-struct access 阻擋 mem2reg | (alloca + drain) | 4.2 EmitContext routing |
+| Cross-jump-into-RAM 解禁 (`377379c`) | RAM 區也可以是 block target，但要 SMC 配合 | (cross-region block) | env-gated；跟 SMC V2 一起 |
 
 ---
 

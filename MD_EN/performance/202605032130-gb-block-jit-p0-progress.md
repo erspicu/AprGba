@@ -11,10 +11,10 @@
 
 | Step | Commit | Status |
 |---|---|---|
-| **P0.1** Variable-width `BlockDetector` + LR35902 length oracle | `3024100` | ✅ |
-| **P0.2** 0xCB prefix as 2-byte atomic instruction | `0cb93a8` | ✅ |
-| **P0.3** Immediate baking via `instruction_word` packing | `7a8305a` | ✅ |
-| **P0.4** GB CLI `--block-jit` + JsonCpu wiring + Strategy 2 PC fixes | `adddade` | ⚠️ partial |
+| **P0.1** Variable-width `BlockDetector` + LR35902 length oracle | `fdce42c` | ✅ |
+| **P0.2** 0xCB prefix as 2-byte atomic instruction | `381595b` | ✅ |
+| **P0.3** Immediate baking via `instruction_word` packing | `da8cf91` | ✅ |
+| **P0.4** GB CLI `--block-jit` + JsonCpu wiring + Strategy 2 PC fixes | `5b4092f` | ⚠️ partial |
 
 Each step T1 all-green + T2 8-combo screenshot canonical hash unchanged
 (GBA path has no regression).
@@ -110,8 +110,8 @@ GBA regression.
 
 | Commit | What was fixed | Result |
 |---|---|---|
-| `a10a718` | HALT/STOP added as block boundary (detector watches step `op:"halt"` / `"stop"`) | minimal repro `temp/jr-neg-repro.gb` per-instr/bjit consistent |
-| `6a86005` | EI delay: detector adds one more instr after `lr35902_ime_delayed` before splitting block | T1 all-green, Blargg still failing (partial fix) |
+| `c47d849` | HALT/STOP added as block boundary (detector watches step `op:"halt"` / `"stop"`) | minimal repro `temp/jr-neg-repro.gb` per-instr/bjit consistent |
+| `771d170` | EI delay: detector adds one more instr after `lr35902_ime_delayed` before splitting block | T1 all-green, Blargg still failing (partial fix) |
 
 ### Unresolved bugs
 

@@ -16,15 +16,15 @@
 
 | Step | 狀態 | Commits | 檔案/op 變化 |
 |---|---|---|---|
-| 5.1 stack ops generalisation | ✅ 完成 | `29b0351` | +`StackOps.cs` 新 4 ops (`push_pair`/`pop_pair`/`call`/`ret`) + spec `stack_pointer` metadata |
-| 5.2 flag setters generalisation | ✅ 完成 | `6c377ec` | +`FlagOps.cs` 新 3 ops (`set_flag`/`update_h_add`/`update_h_sub`)；LR35902 SCF migration |
-| 5.3 branch / call_cc / ret_cc unification | ✅ 完成 | `7c0f486` `bd8f46d` `afe5dad` | 新 5 ops (`branch_cc`/`call_cc`/`ret_cc`/`read_pc`/`sext`) + `target_const`；LR35902 JP/JR/CALL/RET/RST 全 cc 變體；cleanup `-408 lines` |
-| 5.4 bit ops + shift unification | ✅ 完成 | `1c1f6a5` `0e23ad7` `390eb7e` | +`BitOps.cs` 新 4 ops (`bit_test`/`bit_set`/`bit_clear`/`shift`)；LR35902 BIT/SET/RES + 8 種 CB shift + 4 個 A-rotate；cleanup `-485 lines` |
-| 5.5 memory IO region 統一 | ✅ 完成 | `28eab8e` | Binary 加 width auto-coerce；LR35902 LDH/LD-(C) 改用 `or` + load_byte/store_byte；刪 LdhIoLoad/Store emitter |
-| 5.6 IME / cb_dispatch cleanup | ✅ 完成 | `3661bbf` | 刪 `cb_dispatch` no-op (空 steps)；IME/HALT/DAA 標 L3 intrinsics 帶 divider |
-| 5.7.A flag micro-ops cleanup | ✅ 完成 | `f6eede5` | `mvn` width-aware；新 `toggle_flag`；LR35902 CCF/CPL/SCF 完成 migration |
-| 5.7.B inc/dec migration | ✅ 完成 | `7695858` | 新 `update_zero`/`update_h_inc`/`update_h_dec`/`trunc`；LR35902 INC/DEC r/(HL) + named-pair inc/dec |
-| 5.7.C/D 16-bit selectors + L3 marker | ✅ 完成 | `2b277d1` | INC/DEC rr 改 4 selector variants；剩餘 13 個 LR35902 ops 標 L3 intrinsics with reasons |
+| 5.1 stack ops generalisation | ✅ 完成 | `a6f8f61` | +`StackOps.cs` 新 4 ops (`push_pair`/`pop_pair`/`call`/`ret`) + spec `stack_pointer` metadata |
+| 5.2 flag setters generalisation | ✅ 完成 | `93d0772` | +`FlagOps.cs` 新 3 ops (`set_flag`/`update_h_add`/`update_h_sub`)；LR35902 SCF migration |
+| 5.3 branch / call_cc / ret_cc unification | ✅ 完成 | `61b73ca` `1684cae` `9758cca` | 新 5 ops (`branch_cc`/`call_cc`/`ret_cc`/`read_pc`/`sext`) + `target_const`；LR35902 JP/JR/CALL/RET/RST 全 cc 變體；cleanup `-408 lines` |
+| 5.4 bit ops + shift unification | ✅ 完成 | `6e14512` `d218c04` `2d7f71a` | +`BitOps.cs` 新 4 ops (`bit_test`/`bit_set`/`bit_clear`/`shift`)；LR35902 BIT/SET/RES + 8 種 CB shift + 4 個 A-rotate；cleanup `-485 lines` |
+| 5.5 memory IO region 統一 | ✅ 完成 | `bf7fd77` | Binary 加 width auto-coerce；LR35902 LDH/LD-(C) 改用 `or` + load_byte/store_byte；刪 LdhIoLoad/Store emitter |
+| 5.6 IME / cb_dispatch cleanup | ✅ 完成 | `5dd8c34` | 刪 `cb_dispatch` no-op (空 steps)；IME/HALT/DAA 標 L3 intrinsics 帶 divider |
+| 5.7.A flag micro-ops cleanup | ✅ 完成 | `b463590` | `mvn` width-aware；新 `toggle_flag`；LR35902 CCF/CPL/SCF 完成 migration |
+| 5.7.B inc/dec migration | ✅ 完成 | `e850ee3` | 新 `update_zero`/`update_h_inc`/`update_h_dec`/`trunc`；LR35902 INC/DEC r/(HL) + named-pair inc/dec |
+| 5.7.C/D 16-bit selectors + L3 marker | ✅ 完成 | `4668a83` | INC/DEC rr 改 4 selector variants；剩餘 13 個 LR35902 ops 標 L3 intrinsics with reasons |
 | 5.8/5.9 第三 CPU 驗證 | ⏳ 待做 | — | RISC-V RV32I 或 MIPS R3000 |
 
 **5.7 收工 snapshot (2026-05-02)**：
