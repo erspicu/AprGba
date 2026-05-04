@@ -5,7 +5,7 @@
 > generated code can run fast enough to be practical.
 
 **Last updated:** 2026-05-04 21:31 (Asia/Taipei)
-**License:** MIT
+**License:** [WTFPL v2](LICENSE) — do what the fuck you want to.
 **Status:** Active research. ARM7TDMI (GBA) and LR35902 (Game Boy) running through the same framework. Block-JIT path live for both ISAs.
 
 ---
