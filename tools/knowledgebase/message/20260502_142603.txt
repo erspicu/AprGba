@@ -1,0 +1,92 @@
+Timestamp: 2026-05-02T14:26:03
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+GBA BIOS LLE boot hang — diagnostic question.
+
+Setup:
+- Custom GBA emulator written in C# / .NET 10. CPU is ARM7TDMI, driven by a JSON-defined instruction spec compiled to LLVM IR + MCJIT.
+- ARM7TDMI emulator passes 100% of jsmolka's gba-tests (arm.gba ~535 subtests, thumb.gba ~230 subtests). All ARM data processing, multiply, single/halfword/block transfers, branches, condition codes, PSR transfers, SWI, mode switches verified.
+- Memory bus has correct address-space layout (BIOS / EWRAM / IWRAM / IO / PRAM / VRAM / OAM / GamePak ROM). DMA controller (4 channels, immediate + VBlank/HBlank latched start) implemented. Cycle scheduler tracks scanline + position, fires VBlank/HBlank/VCount IRQs with proper DISPSTAT bit maintenance. ARM-style IRQ entry sequence (SPSR_irq save, mode switch, banked R13/R14 swap, vector to 0x18) implemented.
+- HALTCNT (0x04000301) write detection: when written, sets a CpuHalted flag; SystemRunner stops stepping the CPU and only ticks the scheduler until IE & IF != 0.
+
+Loaded a real GBA BIOS (gba_bios.bin, 16384 bytes — the standard size). Started CPU in Supervisor mode (CPSR = 0xD3 = SVC | I=1 | F=1) at PC=0x00000000. Loaded jsmolka's bios.gba (a 1908-byte test ROM that verifies BIOS open-bus quirks) into the cart slot at 0x08000000.
+
+Observed state after running for 80,000,000 cycles (~5 seconds emulated, ~284 emulated frames):
+- PC = 0x000019BA (in BIOS region, Thumb mode based on CPSR.T)
+- CPSR = 0x2000007F  (mode = 0x1F System, T=1, F=1 disabled, I=0 IRQs ENABLED at CPSR level, C flag set)
+- DISPCNT = 0x0080 (forced blank, mode 0)
+- DISPSTAT = 0x0009 (VBLANK_FLG=1 + VBLANK_IE=1, IRQ enable in DISPSTAT is configured)
+- VCOUNT = 0xB7 (scanline 183, currently in VBlank period)
+- IE = 0x0001 (VBlank only)
+- IF = 0x0001 (VBlank pending — scheduler raised it, BIOS hasn't acked)
+- IME = 0x00000000 (master disabled — IRQs would not deliver even if CPSR.I=0)
+- HALTCNT writes since boot: 0 (BIOS never executed SWI 02h Halt)
+- IRQs delivered: 0
+- Registers: R0=6, R1=0xFFFFFFA0, R3=0x07000000 (OAM base), R4=0x06C07098, R5=0xFFF80E12, R12=0, R13=0x03007EB8, R14=0x00001AC3
+
+Disassembling around PC (Thumb):
+- 0x19BA: MOV R0, #6
+- 0x19BC: ADD R0, R0, R2  (R2 = 0)
+- 0x19BE: LSL R0, R2, #2
+
+Final R0=6 matches MOV R0,#6 having just executed. PC=0x19BA suggests we're cycling back into this (probably via a backward branch elsewhere).
+
+What we know BIOS DID achieve before getting stuck:
+- Switched out of Supervisor mode into System mode (CPSR.M = 0x1F)
+- Cleared the I bit (CPSR.I = 0)
+- Switched to Thumb mode (CPSR.T = 1)
+- Configured DISPCNT for forced blank (Nintendo logo display state)
+- Set DISPSTAT.VBLANK_IE
+- Set IE.VBlank
+- Set up R13_sys = 0x03007EB8 (correct user/system stack location)
+
+What BIOS DID NOT do:
+- Set IME = 1 (so VBlank IRQ never delivers)
+- Use SWI 02h Halt (HALTCNT writes = 0)
+- Jump to ROM @ 0x08000000
+
+The cart ROM (jsmolka bios.gba, 1908 bytes) does NOT contain a valid Nintendo logo header — it's a test ROM with arbitrary bytes at 0x80000A4 (where the BIOS expects the Nintendo logo).
+
+Questions:
+1. The standard GBA BIOS (Nintendo) is known to loop forever if the cart's Nintendo logo (156 bytes at ROM offset 0xA4) doesn't match the canonical logo sequence. Is THIS the most likely cause of the hang at PC=0x19BA? Specifically, is BIOS code around 0x19BA related to logo verification?
+2. If yes, what's the standard emulator-side workaround? Patch the cart ROM's logo bytes at startup? Patch the BIOS image? Bypass the comparison instruction with a code patch?
+3. The boot sequence going through 'set DISPSTAT IE → set IE → NOT setting IME' looks like 'about to issue SWI 05h VBlankIntrWait but waiting for something first.' Does the BIOS verify ROM logo BEFORE that point?
+4. Are there known emulator implementation details where a real BIOS hangs because of CPU emulation bug rather than logo failure? Anything specific about ARMv4T emulation that BIOS startup specifically exercises that jsmolka tests don't cover?
+
+Brief technical answer please — I have ARM background, just need to triage whether it's logo check or CPU bug. Cite specific BIOS addresses or known patterns where possible.
+
+========================================================================
+RESPONSE
+========================================================================
+Based on your detailed state dump, you have run into a **CPU emulation bug or memory bus issue, not the expected logo verification loop.** 
+
+Here is the technical breakdown answering your questions:
+
+### 1. Is this the logo verification infinite loop?
+**No.** The standard BIOS behavior for a bad Nintendo logo is to lock up *after* the boot intro animation finishes. 
+* Because `HALTCNT` was never written, the BIOS never called `SWI 0x05` (VBlankIntrWait). This means the 2-3 second intro animation **never played**. 
+* Look closely at the disassembly at `0x19BA`:
+  `MOV R0, #6`
+  `ADD R0, R0, R2`
+  `LSL R0, R2, #2`  *(Note: this is `R0 = R2 << 2`)*
+  This calculates `6 + R2` into `R0` and immediately overwrites it with `R2 << 2`. Compilers do not emit dead code like this. This strongly implies the CPU has derailed and is **executing data** (like compressed graphics or audio) as instructions. 
+* Furthermore, `R4 = 0x06C07098` points way outside the 96KB VRAM (`0x06000000`–`0x06017FFF`), meaning a pointer math loop ran wildly out of bounds.
+
+### 2. What is the standard emulator workaround for logo checks?
+Even though it's not the cause of *this specific hang*, real BIOS LLE will eventually refuse to jump to `0x08000000` without a valid logo. 
+* **The standard workaround:** Immediately after loading the cart ROM into your emulated memory buffer, check if the logo is missing. If so, hard-patch `0x080000A4` to `0x080000DF` (156 bytes) with the correct, canonical Nintendo logo byte array. (Optionally, correct the header checksum byte at `0x080000BD`).
+
+### 3. Does BIOS verify the logo BEFORE waiting for VBlank?
+**Yes and No.** The BIOS reads and calculates the checksum of the cart logo *before* the animation to decide whether to drop the "Nintendo" text or just show "Game Boy". However, it **does not** enter its infinite failure loop at this stage. It will still use VBlank interrupts (`SWI 0x05`) to play the base "Game Boy" fade-in animation regardless of cart validity. Since you haven't seen a single `HALTCNT` write, it crashed before or during the initial memory clearing/decompression phase.
+
+### 4. Are there known CPU/Bus bugs that pass js_molka but crash the BIOS?
+Yes. Instruction-level tests like js_molka are fantastic but often miss architectural pipeline quirks and memory-bus edge cases that the BIOS boot sequence specifically hits:
+
+* **Thumb PC-Relative Loads (`LDR Rd, [PC, #imm]`):** In Thumb mode, `PC` reads as `InstructionAddress + 4`, but for PC-relative loads, the base address **must be forced to be word-aligned** (`(PC & ~3)`). If you don't align the PC before adding the offset, the BIOS reads the wrong literal pool data, corrupts a branch target, and jumps into a data block (which perfectly matches your symptoms).
+* **Open-Bus Reads:** The BIOS intentionally reads from unused memory areas. If your bus returns `0x00` or `0xFF` instead of true GBA open-bus behavior (which usually returns the last fetched instruction from the prefetch buffer), the BIOS can misinterpret it as an infinite loop counter or a bad size header.
+* **Empty `LDM/STM` Lists:** An `LDM` with an empty register list (`0x0000`) in ARMv4 actually loads `PC`. JS_Molka doesn't perfectly test all weird `LDM/STM` edge cases (like base-register writeback when the base register is also in the list, or empty lists).
+* **BIOS Read Protection:** The real BIOS protects itself. If the CPU PC is `> 0x00003FFF`, data reads (`LDR`) to the BIOS region (`0x00000000` - `0x00003FFF`) must return open bus, not the BIOS data. If you implemented this loosely, ensure you aren't accidentally blocking the BIOS from reading its *own* data while executing from inside itself.
+
+**Triage Recommendation:** Put a breakpoint on branches (`BX`, `POP {PC}`) right before `PC` hits `0x1AC3` (where `R14` indicates it came from). You likely have a corrupted literal load or a loop counter that didn't terminate properly during the `0x06000000` clearing phase.

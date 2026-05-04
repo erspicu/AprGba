@@ -1,0 +1,107 @@
+Timestamp: 2026-05-02T14:49:49
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+GBA BIOS LLE hangs in a tight loop in a custom ARM7TDMI emulator. I've narrowed the bug down significantly and need help identifying the most likely instruction-level cause.
+
+CONTEXT:
+- Custom ARM7TDMI emulator (JSON-spec → LLVM IR → MCJIT, .NET 10 + LLVMSharp 20.x).
+- Passes ALL of jsmolka/gba-tests: arm.gba, thumb.gba, memory.gba, irq.gba (each prints "All tests passed").
+- Real GBA BIOS image (gba_bios.bin, 16KB, MD5 a860e8c0b6d573d191e4ec7db1b1e4f6) hangs forever in BIOS region (PC < 0x4000) and never reaches a HALT (SWI 02h) or jumps to ROM (PC=0x08000000).
+
+TRACE EVIDENCE (sampled every 100 BIOS-region instructions over 2.5M instructions):
+- Early phase (steps 100-400): BIOS at PC ~0x0120-0x0124, ARM mode, CPSR=0x8000007F, IE/IF=0, IME=0. Initial setup.
+- Late phase (steps 2.49M-2.5M): BIOS at PC bouncing between ~12 distinct addresses in the range 0x19BC..0x1B0E, all in Thumb mode.
+- R14 = 0x1AC3 STABLE throughout (function entered via BL at 0x1ABE, never returns).
+- R5 = 0xFFEBB2F9 (a deeply negative -1,331,207). Looks like a loop counter that's decreasing but the BMI/BHI exit conditions never fire.
+- IF=0x0001 (VBlank pending), IME=0, IE=0x0001. BIOS never reaches its main IRQ-wait loop.
+- HALTCNT writes = 0 throughout.
+
+DISASSEMBLY OF THE LOOPING FUNCTION (Thumb halfwords from real BIOS, addresses where trace shows execution):
+0x19BC: 0x0090  LSL R0, R2, #2
+0x19BE: 0x1880  ADD R0, R0, R2  (or similar add)
+0x19C0: 0x3008  ADD R0, #0x08
+0x19C2: 0x42B8  CMP R0, R7
+0x19C4: 0x920C  STR R2, [SP, #0x30]
+0x19C6: 0xDC04  BGT +8 → 0x19D2
+0x19C8: 0x4BE2  LDR R3, [PC, #0x388]
+0x19CA: 0x00A9  LSL R1, R5, #2
+0x19CC: 0x585A  LDR R2, [R3, R1]
+0x19CE: 0x3201  ADD R2, #1
+0x19D0: 0x505A  STR R2, [R3, R1]
+0x19D2: 0x4BE0  LDR R3, [PC, #0x380]
+0x19D4: 0x00A9  LSL R1, R5, #2
+0x19D6: 0x585A  LDR R2, [R3, R1]
+... continues with lots of math/loads/stores ...
+0x1AC2: 0x9A07  LDR R2, [SP, #0x1C]
+0x1AC4: 0x1FD0  SUB R0, R2, #7
+0x1AC6: 0x3838  SUB R0, #0x38
+0x1AC8: 0x2822  CMP R0, #0x22
+0x1ACA: 0xD80C  BHI +0x18 → 0x1AE6
+0x1ACE: 0x9A07  LDR R2, [SP, #0x1C]
+... 
+0x1AEE: 0xD80C  BHI +0x18 → 0x1B0A
+0x1AF8: 0xF7FE FC50  BL <somewhere earlier>
+0x1AFC: 0x9A0C  LDR R2, [SP, #0x30]
+0x1AFE: 0x0081  LSL R1, R0, #2
+0x1B00: 0x0090  LSL R0, R2, #2
+0x1B02: 0x1C42  ADD R2, R0, #1
+0x1B04: 0x2000  MOV R0, #0
+0x1B06: 0xF7FE FE59  BL <somewhere>
+0x1B0A: 0x3D01  SUB R5, #1
+0x1B0C: 0xD400  BMI +0  (effectively no-op?)
+0x1B0E: 0xE753  B -346 → 0x19B8 (back to loop start)
+
+ALREADY RULED OUT:
+1. Nintendo logo verification — cart has valid logo (RomPatcher confirmed no changes needed).
+2. Thumb LDR PC-relative alignment — `& ~3` correctly applied per ARM ARM.
+3. ARM7TDMI empty LDM/STM rlist quirk — implemented and tested (loads PC, writeback +0x40).
+4. HALT semantics — BIOS never gets to write HALTCNT.
+5. Basic Thumb arithmetic — covered by jsmolka.
+
+QUESTION: Given the location (BIOS 0x19BC..0x1B0E in Thumb mode, ~350 bytes of code with multiple BL calls and a backward branch loop) and the symptom (function called via BL at 0x1ABE never returns, R5 counter goes deeply negative without triggering BMI exit), what is this function MOST LIKELY doing in real GBA BIOS? My hypothesis is the LZ77 decompression routine that unpacks the boot intro logo bitmap into VRAM. If so, what specific Thumb instruction edge cases does LZ77 unpacking stress that simple test ROMs (jsmolka) wouldn't? Specifically thinking about: shifted-register operands, carry flag from RSB/SBC, signed-vs-unsigned comparison flags, BIC/EOR with high bits, or memory access patterns to specific GBA regions (VRAM mirror, OAM, palette RAM)?
+
+I'm looking for the MOST PROBABLE class of bug to investigate next, not a complete answer. One specific instruction class to focus on, with reasoning.
+
+========================================================================
+RESPONSE
+========================================================================
+Based on the detailed trace and the symptoms you described, the most probable class of bug lies in **Thumb PC-relative branch target calculation**, specifically an edge case involving conditional branches with an **offset of `+0`**. 
+
+You left a crucial clue in your disassembly notes that likely reveals the exact bug in your JIT/emulator:
+> `0x1B0C: D400 BMI +0 (effectively no-op?)`
+
+**`BMI +0` is NOT a no-op.** This single misunderstanding is almost certainly the root cause of the infinite loop.
+
+### The Architectural Rule
+In Thumb mode, the PC used for branch calculations is always **Instruction Address + 4** (to account for the pipeline), not `+2`. 
+
+When the CPU evaluates `0x1B0C: D400 BMI +0`:
+1. The base `PC` for the calculation is `0x1B0C + 4 = 0x1B10`.
+2. The offset is `+0` (0 halfwords = 0 bytes).
+3. The branch target is exactly **`0x1B10`**.
+
+Notice what is at `0x1B0E` (the instruction immediately following the `BMI`):
+`0x1B0E: E753 B -346 -> 0x19B8`
+
+A `B<cond> +0` instruction is a standard ARM compiler idiom used to conditionally **skip the next 16-bit instruction**. 
+If `R5` is negative (N=1), the `BMI` should branch to `0x1B10`, perfectly jumping *over* the unconditional backward branch at `0x1B0E` and successfully exiting the loop!
+
+### The Likely Bug in Your Emulator
+Because you annotated it as `(effectively no-op?)`, it is highly probable that your LLVM translation layer explicitly optimizes out branches with an offset of `0` (e.g., `if (offset == 0) return; /* skip emitting jump */`), or your JIT incorrectly calculates the Thumb `PC` base as `Address + 2` in some branch evaluation contexts.
+
+If your emulator treats `BMI +0` as a no-op, execution will blindly fall through to `0x1B0E` regardless of the condition flags. 
+
+**This perfectly explains all of your symptoms:**
+1. **The Infinite Loop:** The exit condition is evaluated correctly (`SUB R5, #1` does set N=1 when R5 is negative), but because the emulator treats the branch as a no-op, it falls through to `B -346`. The loop loops forever.
+2. **R5 going deeply negative:** R5 decremented past `-1` and just kept going to `-1,331,207` because the `BMI` branch that was supposed to break it out was effectively ignored.
+3. **R14 is STABLE at `0x1AC3`:** The `BHI +0x18` forward branch at `0x1AEE` is properly skipping the `BL` instructions inside the loop, preserving R14. 
+4. **jsmolka passes:** Standard test ROMs (like jsmolka) test conditional branching via jumps to explicit `pass`/`fail` labels (non-zero offsets). They rarely test the compiler-specific `+0` instruction-skip idiom, allowing a `0`-offset optimization or off-by-2 bug to slip through undetected.
+
+### What is the function doing?
+You are right to suspect decompression. This function is likely **SWI 0x11 (LZ77UnCompReadNormalWrite8bit)** or **SWI 0x12 (16-bit)**. 
+During the GBA boot sequence, the BIOS decompresses the animated Nintendo logo using a tight LZ77 loop. `R5` is the remaining uncompressed size counter. It counts down to 0, hits `-1`, triggers the `BMI` flag, and is supposed to skip the loop back-edge to return. Because it couldn't skip the back-edge, the BIOS never finishes drawing the logo, never reaches the `HALT` (SWI 02h), and never boots the cart.
+
+**Next Step to Fix:**
+Check your LLVM IR generation for `B<cond>` (Thumb format 16). Ensure `offset == 0` is NOT being discarded, and explicitly verify that your branch target calculation strictly uses `Target = (InstructionAddr + 4) + (SignedImm8 * 2)`.

@@ -1,0 +1,141 @@
+Timestamp: 2026-05-03T15:40:36
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+We're building an ARM7TDMI emulator with LLVM block-JIT (Phase 7 A.6 of our project). Per-instruction JIT works correctly: GBA BIOS LLE boots, hands off to ROM, ROM enables IME, IRQs flow normally (263 IRQs delivered in our 5-second test run). Block-JIT (compiles consecutive instructions into one LLVM function, up to 64 instrs/block) diverges from per-instr inside BIOS init, never reaches ROM, and delivers 0 IRQs.
+
+Detailed diagnosis:
+- Both modes execute the SAME instructions starting from cold reset (CPSR=0xD3, all GPRs=0).
+- We instrumented PC=0xB96 watch + stack memory dump. At HIT#1 in both modes, state is byte-identical: same R0..R15, same CPSR (0x6000007F), same memory at SP+0..12 ([0x04000000, 0x08020200, 0x00000895, 0x00000000]).
+- Block-JIT executes the next instructions (POP {R4,R5}; POP {R3}; BX R3) and correctly jumps to PC=0x894 (Thumb), R3=0x895. Verified by IR dump + AFTER-block snapshot.
+- Block-JIT's HIT#3 of 0xB96 has stack memory at SP+8=0x00000000 (genuinely zero — confirmed by direct memory read). POP {R3} loads 0, BX R3=0 → PC=0, T=0 → CPU enters BIOS reset path → eventually fetches ARM at 0xB50 (mis-aligned PC=0xB53 with T=0) where the word has cond=0xF (UND in ARMv4T) → enters Undefined-instruction handler → permanent loop.
+- Per-instr never reaches HIT#3 with this stack state because PI's stack trajectory differs (PI hits 0xB96 12 times, BJIT only 3, with totally different SP values per hit).
+- BJIT never delivers IRQs because IME stays 0 (BIOS never reaches the code that enables it). Per-instr does deliver IRQs.
+
+Suspected root cause: IRQ delivery granularity mismatch.
+- Per-instr: GbaSystemRunner.RunCycles loop calls Cpu.Step(); Scheduler.Tick(4); DeliverIrqIfPending(); per instruction. IRQ check granularity ≈ 4 cycles (1 instruction).
+- Block-JIT: same loop, but Cpu.Step() runs an entire block (1..64 instructions) atomically. Scheduler.Tick(N×4) advances scheduler in one batch (the scheduler's internal loop correctly subdivides scanline boundaries, so VBlank/HBlank IRQs ARE raised in IF). But DeliverIrqIfPending only runs once per block. Granularity ≈ N×4 cycles (1..256 cycles).
+- BIOS init sequences (cold-boot sequence at 0x68 onward) appear to be sensitive to this granularity — they take a different control-flow path because IRQs that "should" have fired mid-block fire late or not at all, causing different stack growth, eventually pushing 0 to a stack slot that gets popped into R3 → BX 0 → wrong path.
+
+We've verified:
+- Block IR is correct (struct GEP / array GEP fixed for register read aliasing).
+- Scheduler internal cycle-batch handling is correct (subdivides scanlines properly).
+- IRQ delivery code itself is correct (per-instr uses same code and delivers 263 IRQs).
+- The arithmetic for individual block emitters is correct (verified POP/BX produce expected values).
+
+Three approaches we're considering:
+
+(A) **Coarse fallback**: dynamically fall back to per-instruction execution when PC is in BIOS region (0x00000000..0x07FFFFFF). Simple, but defeats block-JIT for BIOS code.
+
+(B) **IRQ-friendly block boundaries**: have BlockDetector terminate blocks at instructions that can affect IRQ state (MSR CPSR_c that can clear I-bit, SWI, stores to IME register, HALTCNT writes). We already tried adding `changes_mode: true` to MSR — block correctly terminates, but BIOS LLE still loops the same way.
+
+(C) **Inline cycle accounting**: emit Scheduler.Tick + DeliverIrqIfPending calls into the LLVM IR for each instruction (or every K instructions) within a block, so cycle accounting and IRQ delivery happen at finer granularity without losing the JIT win.
+
+Question: For production-quality emulator block-JIT (e.g. mGBA, Dolphin, RPCS3, PCSX2, Mednafen with HW-level cores), what's the canonical approach to this exact problem? Is it (A), (B), (C), or something else? Specifically: does mGBA's "Block-IR" backend fully inline the scheduler, or does it use block-end coarse delivery? If (C), how do you avoid making the IR call extern Scheduler.Tick per instruction (which would kill the JIT throughput win — equivalent to per-instr mode)? Is there a sweet spot like "IRQ check at every backwards branch" or "compile-time analysis of the maximum cycles a block can consume and only check IRQs if exceeded"?
+
+If you have a specific recommendation for OUR architecture (LLVM IR, JSON-driven CPU spec, ORC LLJIT), please be concrete.
+
+========================================================================
+RESPONSE
+========================================================================
+Your diagnosis is excellent, and you have hit the exact wall that every high-performance emulator developer eventually hits when moving from an Interpreter/Per-Instruction JIT to a Block-JIT. 
+
+To answer your core question: **Production emulators (Dolphin, mGBA, PCSX2, RPCS3) use a highly optimized variant of (C) known as "Predictive Scheduling" combined with a "Cycle Downcounter".**
+
+They **never** call C++ `Scheduler.Tick()` or `DeliverIrq()` from inside the JIT. Doing so forces a context switch out of the JIT, causing LLVM to spill registers to the stack, destroying the performance win of Block-JIT. 
+
+Furthermore, your observation that **IME stays 0** reveals a crucial detail: the BIOS isn't crashing because it missed an IRQ (it hasn't enabled them yet). It is crashing because of **stale MMIO reads in a polling loop**. The BIOS heavily polls hardware registers (like `VCOUNT` or Timer registers). In Block-JIT, 256 cycles of instructions execute instantly without the scheduler ticking. When the CPU reads an MMIO register mid-block, it receives a stale value, takes a different conditional branch, corrupts its stack, and eventually attempts to execute `BX 0`.
+
+Here is the canonical architecture to solve this, tailored specifically for your LLVM ORC JIT.
+
+---
+
+### The Canonical Approach: Predictive Downcounting
+
+Instead of running the JIT and then advancing the scheduler to "catch up", you ask the scheduler to predict the future, and you give the JIT a budget.
+
+#### 1. The C++ Run Loop (The Setup)
+Your scheduler should be able to answer the question: *"How many cycles until the next hardware event (VBlank, Timer tick, DMA, etc.)?"* 
+
+```cpp
+// In your Emulator Main Loop:
+while (running) {
+    // 1. Predict how long the CPU can run safely without an event.
+    int cycles_to_next_event = Scheduler.GetCyclesUntilNextEvent();
+    
+    // 2. Set the global/thread-local budget.
+    Cpu.CyclesLeft = cycles_to_next_event; 
+    
+    // 3. Enter JIT. The JIT will mutate Cpu.CyclesLeft and Cpu.PC.
+    Jit.ExecuteBlock(Cpu.PC); 
+    
+    // 4. Calculate how many cycles were ACTUALLY executed.
+    int cycles_executed = cycles_to_next_event - Cpu.CyclesLeft;
+    
+    // 5. Advance the scheduler by the exact amount executed.
+    Scheduler.Tick(cycles_executed);
+    DeliverIrqIfPending();
+}
+```
+
+#### 2. Inside the LLVM IR (The JIT Budget)
+You do not call C++ functions in the block. Instead, you subtract cycles from `Cpu.CyclesLeft` using LLVM IR arithmetic. Because LLVM's optimization passes (`-O2` / `-O3`) are incredibly smart, if you inject this subtraction into the IR, LLVM will hoist `Cpu.CyclesLeft` into a native host register (like `rcx` or `r8` on x86_64) for the duration of the block.
+
+**Where to inject cycle accounting?**
+Because ARM7TDMI features heavily conditionally-executed instructions, static block analysis is tricky (a skipped instruction takes 1S cycle, an executed one might take more). Therefore, the "sweet spot" is batching cycle deductions between branches, or—simplest to implement first—deducting the instruction's cycle cost immediately *before* executing its IR logic.
+
+```llvm
+; Pseudo-LLVM IR for a typical instruction execution
+; 1. Deduct cycles for this instruction (e.g., 4 cycles)
+%cycles_ptr = getelementptr %CpuState, %CpuState* %cpu, i32 0, i32 <CyclesLeftIndex>
+%current_cycles = load i32, i32* %cycles_ptr
+%new_cycles = sub i32 %current_cycles, 4
+store i32 %new_cycles, i32* %cycles_ptr
+
+; 2. Check for budget exhaustion
+%budget_empty = icmp sle i32 %new_cycles, 0
+br i1 %budget_empty, label %exit_block, label %continue_exec
+
+continue_exec:
+; ... execute the actual ARM instruction logic here ...
+```
+
+*Note: In practice, to keep IR size down, you don't do the `icmp` and `br` on every instruction. You accumulate cycles over a basic block (a sequence of instructions with no branches), subtract the total at the beginning of the block, and check the budget once.*
+
+#### 3. Handling MMIO Reads (The Missing Link for your BIOS Crash)
+Because the scheduler is no longer ticking during a JIT block, what happens if the CPU reads `VCOUNT` (0x04000006)? It will read a stale value because the video hardware hasn't been ticked.
+
+To fix this, **Memory Mapped IO reads/writes must sync the scheduler.**
+When your JIT compiles an `LDR` or `STR` to the `0x04000000` range (or if the address is unknown at compile time, your memory fallback function is called), you must:
+1. Temporarily exit the JIT, OR
+2. Do a mini-sync inside your C++ MMIO read/write handler.
+
+Most emulators do the latter in their C++ memory handler:
+```cpp
+uint32_t ReadMMIO(uint32_t address) {
+    // We are inside a JIT block, but calling into C++ memory handler.
+    // Sync the hardware up to the current cycle before reading!
+    int cycles_executed_so_far = cycles_to_next_event_at_block_start - Cpu.CyclesLeft;
+    Scheduler.CatchUp(cycles_executed_so_far); 
+    
+    return Hardware.Read(address);
+}
+```
+
+#### 4. Safe Block Boundaries (Approach B, perfected)
+You still need rules for when to terminate an LLVM JIT block. You should terminate a block (return to the C++ run loop) immediately after:
+1. **Any backward branch** (Prevents infinite loops from locking the emulator if `CyclesLeft` wasn't checked inside the loop).
+2. **Writes to CPSR** (`MSR`) that could unmask IRQs (I/F bits).
+3. **Writes to the MMIO region** (Specifically `REG_IME` or `REG_IE`), because enabling IRQs means an IRQ might instantly fire.
+4. **SWI / Undefined Instructions** (Because they change CPU modes and PC abruptly).
+
+### Summary of what to change in your Phase 7:
+
+1. **Add `int32_t cycles_left;`** to your CPU state struct that LLVM already accesses.
+2. **Implement Predictive Scheduling** in your C++ loop so you know how many cycles to load into `cycles_left` before entering LLVM.
+3. **Modify your Block Emitter:** As you iterate instructions to build the LLVM block, calculate their cycle costs. Emit IR to subtract those costs from `cycles_left`.
+4. **Emit an early-exit bailout** in the IR if `cycles_left <= 0`. It should save the next instruction's address to `Cpu.PC` and `ret void`.
+5. **Ensure Memory handlers are aware of `cycles_left`** so MMIO polling loops see hardware state changing over time, rather than seeing a frozen snapshot of hardware state for 64 instructions at a time.
+
+Implementing this will immediately resolve your BIOS control-flow divergence and allow the block-JIT to boot into the ROM with identical behavior to your per-instruction mode, while retaining the massive LLVM performance boost.

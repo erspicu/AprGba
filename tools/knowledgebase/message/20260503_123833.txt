@@ -1,0 +1,160 @@
+Timestamp: 2026-05-03T12:38:33
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+LLVM ORC LLJIT (LLVM 20.x via LLVMSharp.Interop, Windows x64, no explicit IR optimization passes) — block-JIT for ARM7TDMI emulator's BIOS Thumb loop produces wrong runtime behavior despite the IR looking semantically correct. Need help diagnosing whether this is an LLVM bug, a codegen issue, or something I'm missing.
+
+Setup: each block compiled into one LLVM function. Per-instruction "pre/exec/post/advance" basic block layout. Strategy 2 (mGBA-style): no dynamic PC pre-set inside block IR, R15 reads return baked compile-time constants, GPR[15] memory only written by real branches.
+
+The buggy loop is BIOS code at PC=0x120 (Thumb):
+  0x120: STR R0, [R1, R0]    ; store
+  0x122: ADD R1, R1, #4       ; R1 += 4, sets NZCV (Thumb format-2 ADD always sets flags)
+  0x124: BLT 0x120            ; branch if N != V (LT condition)
+
+R1 starts at 0xFFFFFE00 (-512 signed). Loop runs 128 iterations, R1 wraps from 0xFFFFFFFC + 4 = 0x00000000. At wrap iteration: result=0, N=0, Z=1, C=1, V=0. BLT cond LT = N!=V = 0!=0 = false, should NOT take branch, fall through to 0x126.
+
+Per-instruction execution path correctly exits the loop after 128 iterations. Block-JIT path takes BLT every iteration including the wrap iteration. Verified by snapshot: post-block CPSR=0x6000007F (N=0, Z=1, C=1, V=0 — correct), R1=0 (correct ADD), but PC=0x120 (BLT taken, wrong) and PcWritten=1 (BLT cond was true).
+
+Block IR for the BLT cond eval (excerpted, after Thumb f2 ADD's flag stores):
+
+  i2_exec:
+    %cpsr_for_n = load i32, ptr %cpsr_ptr16, align 4   ; cpsr_ptr16 = GEP %state, i32 0, i32 16
+    %n_shr = lshr i32 %cpsr_for_n, 31
+    %n_bit = and i32 %n_shr, 1
+    %cpsr_for_v = load i32, ptr %cpsr_ptr19, align 4   ; same struct field index 16 via different GEP SSA
+    %v_shr = lshr i32 %cpsr_for_v, 28
+    %v_bit = and i32 %v_shr, 1
+    %n_ne_v = icmp ne i32 %n_bit, %v_bit
+    ; cond field is constant 0xB (LT) baked from constant instruction word, so:
+    %chain_lt = select i1 true, i1 %n_ne_v, i1 %chain_ge   ; equivalent to %n_ne_v
+    ; subsequent chains: select i1 false, ..., %chain_lt
+    %chain_nv = ... = chain_lt = %n_ne_v
+    br i1 %chain_nv, label %ifcond_then, label %ifcond_end
+
+For CPSR=0x6000007F: n_bit=0, v_bit=0, n_ne_v=false, chain_nv=false, branch SHOULD go to ifcond_end (no branch). But empirically branch goes to ifcond_then (sets PC=288=0x120, sets PcWritten=1).
+
+The flag stores in i1_exec WROTE CPSR=0x6000007F (verified by reading state buffer post-fn). The loads in i2_exec should see this value. Cross-BB sequential program order from i1_exec → i1_post → i1_advance → i2_pre → i2_exec.
+
+What I tried that did NOT fix it:
+1. Marking all CPSR loads/stores as volatile — same outcome (so it's not a "load reordered before store" issue).
+2. Verified IR text matches my mental model — `select i1 true, %n_ne_v, %chain_ge` is the chain_lt instruction.
+3. Spec correctness — Thumb f16 BCond was originally tagged writes_pc='conditional_via_rd' which I fixed to 'always' (block boundary placement issue, but unrelated to this exec correctness).
+4. Static-analysis Rd-is-PC detection in write_reg → MarkPcWritten (mGBA pattern).
+5. BX explicit MarkPcWritten.
+
+Per-instr Step calls a per-instruction LLVM function `Execute_Thumb_F16_ConditionalBranch_B(state*, instructionWord)` where instructionWord is a runtime parameter, so the cond field comparison is a runtime icmp. Block-JIT bakes instructionWord as constant, so all the cond comparisons fold to i1 const select chain.
+
+Questions:
+
+A. Could ORC LLJIT (LLVM 20) have a bug or surprising codegen behavior with `select i1 true_const, x, y` in a long chain where most branches feed forward an i1 SSA value, when the immediately preceding stores write to memory that's loaded via different-SSA-but-same-address GEP pointers? 
+
+B. Is there a known failure mode where ORC LLJIT codegen materializes the load-from-cpsr_ptr earlier than IR program order suggests, despite no optimization pass being explicitly run on the module (just default LLJIT codegen)? My module has `nounwind` and `no-jump-tables` function attributes. I have NOT called LLVM.RunPasses with mem2reg/instcombine/gvn/dse/simplifycfg.
+
+C. What's the cleanest way to make the IR ROBUST against any such codegen-level surprise? Single GEP cached per block (so all CPSR access uses the same SSA pointer)? Write the cond eval as branch chain instead of select chain? Use `llvm.assume` on alias hints?
+
+D. Could there be a subtle issue where my IR has ub or ill-defined behavior that LLVM legally exploits (e.g. uninitialized read of pc_written_ptr from a previous block, or pointer aliasing via i32 vs i8 GEP on the same struct)?
+
+The CpuState struct in IR is `{ i32 x37, i64, i32, i8 }` — 37 i32 GPRs/banked/status, then a cycle counter (i64), padding i32, and PcWritten (i8). CPSR is at index 16.
+
+I can dump the full block IR (.ll file, ~180 lines) if helpful — it's a small repro.
+
+========================================================================
+RESPONSE
+========================================================================
+This is an excellent, highly detailed bug report. You have already isolated the issue to a very specific boundary condition, and your mental model of the ARM/Thumb architecture and execution flow is completely correct (the N and V flags are exactly as you calculated for that wrap iteration, so LT is false).
+
+Given that the runtime state matches your expectations *exactly* up until the branch evaluation, we are looking at either an incredibly subtle bug in your IR generation for the `select` chain, or an LLVM FastISel codegen anomaly caused by raw, unoptimized IR.
+
+Here is a breakdown of your questions and the most likely culprits, along with architectural recommendations to make this bulletproof.
+
+---
+
+### A & B: Could this be an LLVM Bug or Early Load Materialization?
+
+**It is highly unlikely to be early load materialization.** 
+Because you tested marking the CPSR loads/stores as `volatile` and it *still* failed, you effectively proved it is not a memory reordering issue. LLVM strictly respects `volatile` boundaries; it will not hoist a volatile load above a volatile store. 
+
+**However, it *could* be a FastISel anomaly.**
+Because you are not running explicit optimization passes, LLVM defaults to `-O0` codegen, which uses `FastISel` (or `GlobalISel`). FastISel is designed for compile speed, not optimal or even clever code generation. 
+When FastISel encounters a long chain of `select` instructions, it does not always fold them away gracefully, even if the condition is a constant `i1 true`. Instead, it frequently emits a physical chain of `cmp` and conditional moves (`cmov`) or, worse, expands them into a complex web of implicit basic blocks. FastISel is known to occasionally contain subtle bugs when handling long, chained boolean dataflow across large, unoptimized basic blocks.
+
+### D: Could there be a subtle issue in the IR logic?
+
+This is the most probable cause. If LLVM is generating a branch when it shouldn't, there are two common trapdoors in how `select` chains are generated dynamically:
+
+**Trapdoor 1: The "False" path of the Select Chain**
+Look closely at your IR generation for the `select` chain. If your JIT dynamically builds this chain by iterating over possible conditions:
+```llvm
+%chain_eq = select i1 %is_eq_const, i1 %z_set, i1 false
+%chain_ne = select i1 %is_ne_const, i1 %z_clear, i1 %chain_eq
+...
+%chain_lt = select i1 true, i1 %n_ne_v, i1 %chain_ge
+%chain_gt = select i1 false, i1 %... , i1 %chain_lt
+```
+If `%chain_lt` evaluates to `false` (because `n_ne_v` is false), it correctly passes `false` down the chain. 
+*However*, if there is a typo in your C# IR builder where the `true`/`false` arguments of the `select` are flipped for the subsequent instructions, or if the "default" fallback of the chain is somehow `true`, an `i1 false` from the LT check could be overwritten or ignored by the end of the chain.
+
+**Trapdoor 2: i1 Zero-Extension / Poison**
+In unoptimized IR, operations on `i1` are sometimes fragile at the ABI boundary or in register allocation. `icmp ne i32, i32` correctly yields an `i1`, but if any part of your chain implicitly casts, truncates, or interacts with memory improperly, `i1` values can be corrupted (e.g., an 8-bit register containing `0x02` evaluates to `true` in C#, but truncation to `i1` might act weirdly depending on the backend). 
+
+---
+
+### C: What's the cleanest way to make the IR ROBUST?
+
+Here are three architectural fixes, ordered from most impactful to least. 
+
+#### 1. (The Golden Fix) Evaluate Constant Instruction Flow in C#, not LLVM
+You mentioned: *"Block-JIT bakes instructionWord as constant, so all the cond comparisons fold to i1 const select chain."*
+
+If the instruction word is a constant at compile time, **your JIT should not emit a `select` chain into LLVM IR at all.** 
+
+Currently, you are passing a constant `LLVMValueRef` into a generic IR builder that generates the logic for *all* 14 ARM conditions, relying on LLVM to dead-code-eliminate the 13 unused ones. 
+Instead, extract the `cond` field in C# during block compilation. Use a C# `switch` statement to emit **only** the IR for the specific condition required by that specific BLT instruction.
+
+```csharp
+// In your C# LLVMSharp JIT compiler:
+int cond = (instructionWord >> 8) & 0xF; // Extract cond from Thumb branch
+LLVMValueRef conditionIR;
+
+switch (cond) {
+    case 0xB: // LT
+        // ONLY emit the IR to load CPSR, extract N and V, and do icmp ne.
+        conditionIR = builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, n_bit, v_bit, "n_ne_v");
+        break;
+    // ... other cases ...
+}
+
+// Directly branch on the single resulting i1. No select chain!
+builder.BuildCondBr(conditionIR, ifcond_then, ifcond_end);
+```
+**Why this works:** It completely bypasses the FastISel `select` chain bug, generates drastically smaller IR (speeding up JIT time), and removes any ambiguity about what the IR is doing.
+
+#### 2. Run `mem2reg` and `instcombine`
+If you are writing a JIT, running a minimal pass pipeline is highly recommended. Raw IR with heavy memory traffic (due to lack of SSA PHI nodes for CPU state) makes the LLVM backend struggle.
+*   **`mem2reg`** (Promote Memory to Register): Will lift your CPSR loads/stores entirely out of memory and into SSA registers for the duration of the block.
+*   **`instcombine`**: Will trivially fold your `select` chains and bitwise logic into optimal forms, stripping away the unoptimized cruft that confuses FastISel.
+
+In LLVM 20 via LLVMSharp, you can run these easily on your module before passing it to LLJIT:
+```csharp
+var passManager = LLVM.CreateFunctionPassManagerForModule(module);
+LLVM.AddPromoteMemoryToRegisterPass(passManager);
+LLVM.AddInstructionCombiningPass(passManager);
+LLVM.InitializeFunctionPassManager(passManager);
+// Run on your generated function...
+```
+
+#### 3. Single GEP Cached per Block
+Yes, doing a single GEP at the top of the block is best practice. 
+At the entry point of your LLVM function, emit the GEPs for all frequently accessed registers (R0-R15, CPSR, PcWritten).
+```llvm
+entry:
+  %cpsr_ptr = getelementptr inbounds %struct.CpuState, ptr %state, i32 0, i32 16
+  %pc_written_ptr = getelementptr inbounds %struct.CpuState, ptr %state, i32 0, i32 39
+```
+Store these `LLVMValueRef`s in a C# array/dictionary, and reuse them throughout the block. This guarantees LLVM understands that `i1_exec` and `i2_exec` are talking about the exact same memory address, preventing any obscure aliasing anomalies.
+
+### Summary of next steps:
+1. Try the "Golden Fix" (evaluating the switch in C#). This is the standard pattern for emulator Block JITs (like Dolphin, mGBA, Ryujinx) because it drastically simplifies the IR.
+2. If you must keep the generic generic builder, dump the unoptimized IR and trace the *entire* `select` chain by hand to ensure `i1 false` isn't being clobbered by a trailing condition.
+3. Turn on `mem2reg` and `instcombine`.

@@ -1,0 +1,109 @@
+Timestamp: 2026-05-03T20:24:31
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Context: I'm building a JSON-driven CPU emulator framework in C# (.NET 10) using LLVMSharp.Interop 20.x with ORC LLJIT. CPU specs are JSON files describing instruction encoding + micro-op sequences; the framework compiles spec → LLVM IR → native code per CPU instruction (per-instr dispatch) and per basic block (block-JIT) for hot paths.
+
+Already shipped: ARM7TDMI (ARM 32-bit + Thumb 16-bit, both fixed-width). Block-JIT with predictive cycle downcounting + Strategy 2 (PC reads inside block resolve to baked-in constants from block start address). 360 unit tests pass, 8-combo screenshot matrix all canonical hash. Current per-instr CpuExecutor MIPS ~7-8 (BIOS LLE), block-JIT ~10-11 MIPS (HLE).
+
+Now porting block-JIT to LR35902 (Game Boy DMG, Sharp variant of Z80). Three challenges I want your perspective on:
+
+(1) Variable-width instruction handling for block detection. LR35902 instruction length is 1, 2, or 3 bytes, determined entirely by the first byte (no displacement-mode complication like x86 ModR/M). My current BlockDetector throws on variable-width sets; it was built for ARM/Thumb where every instruction is the same fixed width. What is industry best practice for block-JIT detector design when instruction length is determined by first-byte lookup? Pre-decode the entire block at detection time and statically compute per-instruction PC offsets (so the emitter can bake them in like Strategy 2 does for ARM)? Or detect lazily and store partial decode info? Specifically: how do projects like Dynarmic, mGBA dynarec, NES emulators with JIT, or QEMU TCG handle this? Also: should the spec carry an explicit per-instruction `length` field with values 1, 2, or 3, or should the detector infer from the operand list (imm8 means +1 byte, imm16 means +2 bytes)?
+
+(2) Narrow-int register allocation in LLVM. LR35902 has 7 x i8 GPRs (A/B/C/D/E/H/L) + i8 F flag + 2 x i16 (SP/PC). Total CPU state is about 13 bytes excluding flags. On x86-64, will LLVM register allocator efficiently keep these in physical x86 registers across a block, or will it spill repeatedly because i8 has fewer "natural" registers than i32? Specifically: if I emit ALL GPR reads as load-from-state-struct at block entry into i8 SSA values, do all the arithmetic in i8, store back at exit — does instcombine plus register allocator handle this well, or should I promote to i32 internally (zero-extend on load, mask on store, truncate at use sites)? My ARM emitter uses i32 throughout; the LR35902 emitter currently uses i8/i16 for correctness (so flag bit positions match), but I worry x86 partial-register stalls on byte ops will hurt.
+
+(3) Prefix byte handling for block boundaries. 0xCB in LR35902 is a 1-byte prefix that says "next byte is a CB-prefix opcode" (256 sub-opcodes for BIT/SET/RES/RLC/RRC/RL/RR/SLA/SRA/SWAP/SRL across 8 registers). Currently my spec marks 0xCB as `switches_instruction_set: true` which makes my BlockDetector end the block at every CB-prefix instruction — bad for block-JIT because CB instructions are common. What's the cleanest way to model "prefix to sub-decoder" in a block-JIT detector that's general enough to also handle x86 (REX/VEX prefixes), Z80 (DD/FD/ED/CB prefixes), 65816 (long mode prefix), etc., without splitting the block? Should the detector do 2-level decode (first byte then sub-decoder then second byte) and treat the result as a single 2-byte instruction in the block? Or use a different boundary semantic?
+
+Please give specifics with references to real-world JIT designs (paper or source code where applicable), not just abstract advice. I'm comfortable reading C++/Rust/Go source. Around 800-1500 words.
+
+========================================================================
+RESPONSE
+========================================================================
+Porting a block-JIT from a fixed-width, RISC-like architecture (ARM) to a variable-width, CISC-like architecture (LR35902/Z80) requires a fundamental shift in how your frontend parses instructions. The assumptions of fixed-width code—easily computable block sizes, stateless decoding, and 1:1 PC-to-offset mapping—no longer apply. 
+
+Here is how industry-standard emulators and JITs handle these challenges.
+
+### 1. Variable-Width Instruction Handling
+
+**The Problem:** Your current `BlockDetector` assumes fixed strides. You need to know instruction boundaries to map PC offsets correctly for Strategy 2 (baking constants) and to find block terminators (branches).
+
+**Industry Practice:** 
+Projects like **QEMU (TCG)**, **FEX-Emu** (x86-on-ARM), and **Dynarmic** do *not* pre-decode a block to establish boundaries before translation. Instead, they fuse detection and translation into a single **sequential decode loop**. 
+
+In QEMU's TCG (see `target/i386/tcg/translate.c` or `target/avr/translate.c`), the frontend loop maintains a `DisasContext` which tracks the `guest_pc`. Inside the basic-block generation loop, the engine fetches the first byte, determines the instruction, fetches any subsequent operand bytes, emits the IR, and then increments the `guest_pc` by the consumed length. The block continues until a terminator instruction (branch/return) or a page boundary is hit. 
+
+If your framework requires a strict separation between "Detection" (building an AST/IR of the block) and "Emission" (LLVM IR generation), your Detector must perform a sequential crawl. 
+
+**JSON Spec Design:**
+Do *not* rely on operand inference at runtime. Inference makes edge cases (like undocumented opcodes or zero-operand instructions that span multiple bytes for alignment) a nightmare. 
+Instead, rely on an explicit length. However, you don't need to bloat your JSON. You should compute the lengths at **JSON compile-time**. When your C# framework compiles the spec, generate a fast static lookup array: `static ReadOnlySpan<byte> InstructionLengths = new byte[256] { ... };`. 
+
+At runtime, your Detector loop should look like this:
+1. Read byte at `PC`.
+2. Lookup length: `len = InstructionLengths[opcode]`.
+3. Read `len` bytes to form the instruction context.
+4. Record the instruction and its `PC` offset.
+5. Advance `PC` by `len`.
+6. Terminate block if instruction is a branch or `PC` hits a translation limit.
+
+By statically computing offsets during this sequential crawl, your LLVM emitter can seamlessly bake in PC reads as constants, preserving your Strategy 2 implementation.
+
+### 2. Narrow-Int LLVM Register Allocation
+
+**The Problem:** LR35902 state is ~13 bytes of mostly 8-bit registers. You are worried about LLVM's handling of `i8` on x86-64, specifically regarding partial-register stalls and spilling.
+
+**Industry Practice & LLVM Behavior:**
+You should **use `i8` and `i16` natively in your LLVM IR** and let LLVM handle the promotion. Do *not* manually promote to `i32` with explicit zero-extension/truncation masking in your IR.
+
+Here is why: LLVM's backend pipeline, specifically the **SelectionDAG LegalizeTypes** phase, is completely aware that x86-64 does not natively prefer 8-bit ALU operations. LLVM will automatically legalize your `i8` arithmetic by promoting it to `i32` natively during instruction selection (ISel). 
+
+Furthermore, if you manually emit `i32` with bitwise masks (e.g., `(a + b) & 0xFF`), you obfuscate the semantics. LLVM's `InstCombine` pass relies on explicit type bounds to recognize optimization patterns (like overflow detection for the Half-Carry flag, which is notoriously tricky in LR35902). Native `i8` types automatically enforce wrap-around semantics, yielding significantly cleaner LLVM IR.
+
+**Regarding Partial-Register Stalls:**
+Modern x86-64 processors (Intel Sandy Bridge and newer, AMD Zen architectures) have largely mitigated partial-register stalls via register renaming at the sub-register level or zero-idiom optimizations (e.g., `movzbl`). LLVM's x86 backend is tuned to emit `movzx` (move with zero-extend) when reading from memory or after byte-math to break false dependencies.
+
+**State Allocation Strategy:**
+Your proposed strategy—loading all GPRs from the CPU state struct into `i8` SSA values at block entry, doing all math in SSA, and storing back at block exit—is exactly correct. This is known as **block-local state caching**. 
+Since the LR35902 state is only 13 bytes, LLVM's register allocator will easily map these SSA values to physical x86-64 registers (`R8`-`R15`, `RAX`, `RCX`, etc.). 13 bytes easily fit into x86's available GPRs without spilling, provided your blocks don't contain excessive register pressure from complex memory access calculations. 
+
+### 3. Prefix Byte Handling (0xCB)
+
+**The Problem:** Marking `0xCB` as an ISA switch effectively breaks the block JIT, as `0xCB` instructions (bit shifts, tests) are incredibly common in LR35902 games.
+
+**Industry Practice:**
+A prefix byte is not an ISA switch; it is a **decoder state modifier**. Treating it as an ISA switch is a holdover from ARM/Thumb design where the *entire execution mode* changes until explicitly changed back (via `BX`). A prefix only modifies the *immediate next instruction*.
+
+In **QEMU x86**, prefixes (like REX, `0x66`, `0xF3`) are parsed in a `while` loop at the start of the instruction fetch cycle. They accumulate into a bitmask in the `DisasContext`. Once the primary opcode is hit, the accumulated prefixes dictate which sub-table or semantics to use. 
+
+In **mGBA**'s Z80/LR35902 core, `0xCB` is handled by consuming an extra byte and dispatching via a secondary switch statement, treating the sequence as a single instruction.
+
+**How to model this in your JSON / Framework:**
+Your detector needs a generic way to handle "multi-byte opcodes" or "sub-decoders" that scales to x86 (REX) and Z80 (DD/FD).
+
+Do not split the block. Instead, implement a **hierarchical/trie-based decoder**. 
+1. In your JSON spec, define `0xCB` not as `switches_instruction_set`, but as `prefix_to_table: "cb_table"`.
+2. When your JSON compiler builds the framework, it should generate a primary 256-entry table, and a secondary 256-entry table for `CB`.
+3. In the `BlockDetector` fetch loop:
+   ```csharp
+   byte opcode = ReadByte(PC);
+   if (IsPrefix(opcode, out var subTable)) {
+       byte subOpcode = ReadByte(PC + 1);
+       var instr = DecodeFromTable(subTable, subOpcode);
+       // Record instruction with length = 2
+       AdvancePC(2); 
+   }
+   ```
+
+For the JIT boundary semantic, the entire `CB xx` sequence must be treated as a **single, unbreakable AST node / LLVM IR unit**. If an interrupt fires, or a page fault occurs, the CPU's PC points to the `0xCB` byte, never to the `xx` byte. 
+
+By modeling prefixes as pointers to sub-decoders (a trie), you generalize perfectly:
+*   **LR35902:** `CB` points to a sub-table.
+*   **Z80:** `DD` points to a table where `HL` is replaced by `IX`. `DD CB` is a 3-byte sequence traversing two prefix nodes.
+*   **x86:** Prefixes accumulate in a state bitmask (since order rarely matters) until a non-prefix byte resolves the final instruction.
+
+### Summary of Recommendations
+
+1.  **Block Detection:** Abandon fixed-stride assumptions. Do a sequential, byte-by-byte decode crawl at block creation time. Derive instruction lengths statically at C# build time and inject them into a fast 256-entry array for the JIT to query.
+2.  **LLVM Types:** Stick to native `i8`/`i16` types in your LLVM IR. Load state to SSA at block entry, store at exit. LLVM's `LegalizeTypes` pass and modern x86 hardware will transparently handle promotion and dependency breaking without polluting your IR with manual bitwise masking.
+3.  **Prefixes:** Implement a multi-level table lookup (a trie) in your sequential decoder. Consume the `0xCB` and its operand as a single, indivisible 2-byte instruction in your JIT AST. Remove `switches_instruction_set` for prefixes entirely.

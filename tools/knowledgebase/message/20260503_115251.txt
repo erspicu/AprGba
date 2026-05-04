@@ -1,0 +1,189 @@
+Timestamp: 2026-05-03T11:52:51
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+我在做 JSON-driven CPU emulator framework，把 spec → LLVM IR → ORC LLJIT (LLVM 20.x via LLVMSharp.Interop)。
+ARM7TDMI target，per-instruction dispatch path 完全正常（jsmolka arm.gba 跑出 'All tests passed'，
+帶真 GBA BIOS LLE 也跑得通，VBlank IRQ 263 次傳遞）。
+
+現在在做 block-level JIT (textbook dynarec block compilation) 出問題：把連續多條 instruction
+編成一個 LLVM function，BIOS LLE 路徑卡死。具體症狀：
+
+Per-instruction executor pattern（works）：
+  while (running) {
+    pre_set_pc(pc + pipeline_offset);  // ARM=PC+8, Thumb=PC+4
+    state[PcWritten] = 0;
+    fn(state, instructionWord);  // instr fn 寫 GPR/CPSR/etc
+    bool branched = state[PcWritten] != 0
+                 || ReadPC() != (pc + pipeline_offset)   // ← critical backup
+                 || mode_selector_changed;
+    if (!branched) WritePC(pc + instr_size);
+  }
+
+那個「ReadPC() != pre_set_value」backup check 抓 emitter 寫 PC 但沒 set PcWritten 的 case，
+譬如 MOVS PC, LR (SWI return：data-processing MOV with Rd=R15, S=1)。
+write_reg emitter 只做 BuildStore(value, GPR[Rd_runtime]) — Rd 是 instruction word 的 4-bit 欄位 runtime 值，
+不知道 Rd==15。
+
+Block-JIT 把 N 條 instruction 編成一個 LLVM function，每條 instr 4 個 internal basic block：
+  pre[K]:    pc = bi.Pc + offset; PcWritten = 0; cond_gate → exec[K] or post[K]
+  exec[K]:   spec steps (write_reg, BuildStore, etc.)
+  post[K]:   if (PcWritten==0) → advance[K] else → block_exit
+  advance[K]: pc = bi.Pc + instr_size; → pre[K+1] or block_exit
+  block_exit: ret
+
+問題：MOVS PC, LR 的 write_reg(R15, lr_value) 把 GPR[15] 設對了，但 PcWritten 沒被設，
+post[K] 看 PcWritten==0 → 跳到 advance[K] → 把 PC 蓋成 bi.Pc+instr_size，整條 SWI return 失效。
+
+Specific GBA BIOS 在 0x188 是 MOVS PC, LR（SWI handler 結尾），block-JIT 跑過去 PC 沒回到 caller，
+繼續執行 0x18C 結果一路跑到 BIOS 沒對應 routine 卡死。Per-instr 因為 backup check 抓得到所以 OK。
+
+我試過兩個 fix 都失敗：
+
+(1) write_reg emitter 加 runtime check：
+    BuildStore(value, ptr);
+    // 然後比對 idx == 15
+    var prev = BuildLoad(PcWritten);
+    var isPc = BuildICmp(idx == 15);
+    BuildStore(BuildOr(prev, BuildZExt(isPc, i8)), PcWritten);
+
+  結果：block-JIT 從 451 instr 跳到 41M instr，但卡在不同的 BIOS Thumb loop (PC=0x120)。
+  Loop body 應該是 STR R0,[R1,R0]; ADD R1,R1,#4; BLT 0x120 (R1 init 0xFFFFFE00 應 wrap 到 0 退出)。
+  block-JIT 跑了 13.7M iterations 但 R1 final 只到 0xFFFFFF9C (=103 iter 的值)，數字湊不起來。
+
+(2) BlockFunctionBuilder post block 加 PC backup check（mirror per-instr executor）：
+    var pcWrittenBool = BuildICmp(NE, PcWritten, 0);
+    var pcChanged = BuildICmp(NE, ReadPC(), bi.Pc + offset);
+    var any = BuildOr(pcWrittenBool, pcChanged);
+    BuildCondBr(any, block_exit, advance[K]);
+
+  結果：執行幾步後 block detector 拿到 undecodable bytes（PC 跑進 garbage 區），exception throw。
+  推測 false positive：某條 instruction 在 exec 階段 PC 被 emitter 寫成不等於 bi.Pc+offset 但
+  又不是 branch 寫的（中間值），導致 block 早退、新 PC 是錯的。
+
+問題：
+
+A. 多 LLVM 用過的 textbook dynarec ARM block-JIT 怎麼處理「Rd 是 runtime 才知道是不是 PC」的
+   instruction？是在 IR 內 conditionally set PcWritten flag 嗎？我的 fix(1) 看似對方法但出 bug，
+   可能 LLVM ORC LLJIT 對 OR-load-store 序列做了什麼 reordering 導致 PcWritten 結果不可靠？
+
+B. Block fn IR 內某些 spec step 會把 PC 暫設成中間值（譬如為了 read R15 取 pipeline 值），
+   這種「合法的中間 PC 寫入」怎麼跟「真正的 branch PC 寫入」區分？business 是 emitter 自己
+   call 一個 helper 函式來 mark branch 嗎，還是用 sentinel value？
+
+C. ORC LLJIT (LLVM 20) 對於跨 basic block 的 store/load PcWritten flag 有沒有什麼已知的 reordering
+   gotcha（特別是當沒跑 mem2reg pass 的時候）？我們因為 instcombine miscompile 不能跑 H.a
+   pipeline，所以 ORC 只有 codegen passes。
+
+D. 有沒有 reference implementation（dolphin、mGBA 的 dynarec、QEMU、citra）的 ARM block-JIT
+   PC tracking 程式碼可以 study？特別是 SWI return / LDM with PC / data-processing with Rd=PC
+   這幾個 case 怎麼 handle 的。
+
+========================================================================
+RESPONSE
+========================================================================
+這是一個非常硬核且令人興奮的專案！把 JSON spec 動態轉譯成 LLVM IR 來跑 GBA LLE，並且能過 BIOS 和 VBlank IRQ，說明你的核心狀態機和 per-instruction 邏輯已經非常穩固。
+
+你在 Block JIT 遇到的問題，是典型的 **「Pipeline PC 模擬」與「靜態/動態分支預測」的衝突**。以下針對你的問題進行詳細的解答與架構建議：
+
+### 核心診斷：為什麼你的 Fix 都失敗了？
+
+1.  **Fix (1) 失敗原因 (Runtime write_reg check)：**
+    在 Thumb loop `0x120` 卡死且數字對不上，通常是因為在 ARM/Thumb 混合的指令集中，某些指令（例如 `LDM/STM` 或特定的 ALU 運算）在底層 spec 實作時，可能會有**非預期的暫存器寫入副作用**，或者你的 `PcWritten` 記憶體操作干擾了未優化的 LLVM stack frame。
+    更重要的是，將 `Rd == 15` 作為 runtime (`BuildICmp`) 判斷是反模式 (Anti-pattern)。在 Block JIT 中，**指令的機械碼在 JIT 編譯當下是已知的常數**。
+2.  **Fix (2) 失敗原因 (Post-block ReadPC backup check)：**
+    如同你推測的，這是 **False Positive**。很多 CPU 模擬器在執行階段（Spec Steps）會「暫時性」地修改 PC，以模擬 Pipeline 行為（例如為了讓接下來的讀取拿到 `PC+8`，先將 PC 寫為 `PC+8`，指令結束時再改回來或放著不管）。如果你的 spec step 中間修改了 PC，然後 post block 去讀，就會誤判為 Branch，拿著這個「中間狀態的 garbage PC」跳出去，導致 Crash。
+
+---
+
+### A & B. 業界/Textbook Block-JIT 是如何處理的？
+
+在 Dolphin、mGBA 或 Dynarmic (Yuzu/Citra) 等主流模擬器中，解決這個問題的核心心法是：**將「執行 PC」、「Pipeline PC」與「指令解碼」在 JIT 編譯期徹底分離。**
+
+#### 策略一：靜態解碼 `Rd` (Static Register Resolution)
+你提到「`Rd` 是 instruction word 的 4-bit 欄位 runtime 值」。在 Block JIT 中，這是不必要的。因為在編譯 `[K]` 這條指令時，你手上有這條指令的 `instructionWord`（它是 `uint` 常數）。
+
+**不要在 IR 裡做判斷，要在 C# 產生 IR 的當下做判斷：**
+當你的 JIT compiler 解析到 `write_reg` 操作時，直接從常數指令碼中取出 `Rd` 的值。
+
+```csharp
+// C# JIT Compiler Code
+uint instrWord = bi.InstructionWord;
+int rd = (int)((instrWord >> 12) & 0xF); // 假設是 ARM data-processing
+
+if (rd == 15) {
+    // 這是靜態確定的 PC Write!
+    BuildStore(value, GetGprPtr(15));
+    BuildStore(ConstantInt.Get(i8, 1), PcWritten); // 直接 Emit 寫入 1
+} else {
+    // 普通暫存器寫入
+    BuildStore(value, GetGprPtr(rd));
+}
+```
+對於 `MOVS PC, LR`，JIT 編譯器在產生 IR 時，就已經**明確知道**這是一條會寫入 PC 的指令，因此它會直接植入 `PcWritten = 1` 的 IR，完全不需要 runtime 比較。
+
+#### 策略二：Pipeline PC 常數化 (Constant Pipeline PC)
+為了解決 Fix (2) 的暫時寫入問題（也就是你的 Question B）。
+**絕對不要在 Block JIT 的執行期動態去寫 PC 來模擬 Pipeline。**
+
+因為在編譯 `[K]` 時，這條指令所在的位址 `bi.Pc` 是已知的！
+當 JSON spec 說「這裡要讀取 PC」時，你的 Emitter 不要去 Load `GPR[15]`，而是直接 **Emit 一個 LLVM 常數 (Constant)**。
+
+```csharp
+// 當 Spec 需要 ReadPC() 時：
+uint pipelineOffset = isThumb ? 4u : 8u;
+uint hardcodedPipelinePc = bi.Pc + pipelineOffset;
+
+// 直接把這個常數餵給接下來的 LLVM IR，完全不需要去讀記憶體裡的 PC
+Value pipelinePcVal = ConstantInt.Get(i32, hardcodedPipelinePc);
+```
+**這樣做的巨大好處：**
+1. 你的 `exec[K]` 內部再也沒有任何「合法的臨時 PC 寫入」。
+2. 只要 `GPR[15]` 被寫入，**它 100% 就是一個真正的 Branch (SWI return, BX, B 等)**。
+3. 你的 Interpreter loop `pre_set_pc` 邏輯在 JIT 中可以直接拔除，減少大量多餘的 Load/Store。
+
+---
+
+### C. ORC LLJIT (LLVM 20) 的 Reordering 問題
+
+由於你沒有跑 `mem2reg`，所有的變數都是存在 memory (`alloca` 或 state array) 裡面。
+在這種純 CodeGen 的情況下，LLVM **非常保守**，它 **「絕對不會」** 跨 Basic Block 去 reorder 有別名風險的 Store/Load（更何況是不同位址的 `PcWritten` 和 `GPR[15]`）。
+
+你 Fix 1 遇到的 Bug，99% 不是 LLVM reordering 引起的，而是：
+1. JIT 編譯出來的 IR 邏輯本身在 Thumb 模式下有瑕疵（例如 `BLT` 分支的 offset 計算錯誤，或是 Thumb 的 `ADD` 影響了不該影響的 flags）。
+2. 在某些多重暫存器操作（如 LDM/STM）中，你的 runtime check 提早 trigger 了 block exit，導致記憶體狀態沒有 commit 完整。
+
+---
+
+### D. Reference Implementation 參考
+
+以下是主流模擬器的作法對照：
+
+*   **mGBA (C語言, Dynarec):**
+    mGBA 在 JIT 階段有一整套的 static analyzer。它在發射 ARM 的 Data-Processing 指令碼時，會直接檢查 `rd == 15`。如果是，它會調用一個特別的發射器 `ARMEmulateDPPC` (Data-Processing to PC)，這個發射器除了寫入 PC，還會負責發射「強制退出 JIT Block」的邏輯。
+*   **Dynarmic (Yuzu/Citra 的 ARM JIT核心):**
+    它採用 Intermediate Representation (Microcode)。當它把 ARM 轉成 Microcode 時，`MOV PC, LR` 會被翻譯成兩條 Microcode：
+    1. `ALU_MOV Temp, LR`
+    2. `BRANCH_INDIRECT Temp`
+    它完全沒有「寫入 R15 暫存器」的概念，R15 在 JIT 中是不存在的，所有對 PC 的操作在轉譯期都被轉換成了明確的 Control Flow (Branch) 指令。
+
+---
+
+### 總結：你現在該怎麼改？
+
+為了讓你的 JSON-driven Framework 跑通 Block JIT，建議採取以下重構步驟：
+
+1.  **拔除 `pre_set_pc` 的動態行為：**
+    在 Block JIT 的 `pre[K]` 區塊中，**不要**發射 IR 去修改模擬器狀態裡的 PC。
+2.  **實作 `GetConstantPipelinePC()`：**
+    修改你的 Emitter，當 JSON spec 宣告讀取 `R15` 時，判斷當前是在 JIT 編譯期，如果是，直接返回 LLVM Constant `(bi.Pc + 8)`。
+3.  **把 `Rd == 15` 的判斷拉到 C# 編譯期 (Static check)：**
+    在處理 `write_reg` 邏輯時，解析 JIT compiler 手上的 JToken/JSON 或 `instructionWord`。如果是寫入 R15：
+    *   Emit IR 寫入 `GPR[15]` (作為下一個 Block 的起點)
+    *   Emit IR 寫入 `PcWritten = 1`
+    *   (如果是 `MOVS PC, LR`，還要 Emit 恢復 CPSR 的邏輯)
+4.  **簡化 Post[K] 邏輯：**
+    現在 `post[K]` 只需要檢查 `PcWritten == 1`。因為消除了臨時寫入，只要 `PcWritten` 是 1，就 100% 放心大膽地 `ret` 退出 Block，讓大迴圈從 `GPR[15]` 重新尋找下一個 Block 編譯執行。
+
+按照這個架構，`MOVS PC, LR` 會在編譯期被精準識別為 Branch 指令，並且不會干擾任何 Thumb 迴圈的暫存器運算！

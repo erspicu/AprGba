@@ -1,0 +1,61 @@
+Timestamp: 2026-05-03T15:41:34
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Follow-up to your previous answer about block-JIT IRQ granularity (predictive downcounting + MMIO catch-up). That answer is excellent and describes the canonical "downcount" approach used by Dolphin/mGBA/PCSX2.
+
+The user wants to know: beyond the three approaches I originally listed (A: per-instr fallback, B: more block boundaries, C: inline cycle accounting which you refined into predictive-downcount), are there other architectural patterns that production emulators use to solve the same "scheduler granularity vs JIT throughput" tradeoff? 
+
+Specifically interested in:
+
+1. Does Dolphin's "JIT IL" or "JITARM64" use anything different from PowerPC downcounting? Did newer emulators (e.g. Citra, Yuzu/Ryujinx for switch ARM) invent a different pattern?
+
+2. Is there a "lazy scheduler" pattern where instead of inlining cycle deductions, the JIT produces a side-table mapping IR positions to cycle costs, and the runtime queries that table only when needed?
+
+3. What about "speculative execution then rollback" — let the block run optimistically, and if a hardware event "should have" fired mid-block (detected post-hoc), rewind state and re-run with finer granularity? Practical or only theoretical?
+
+4. Region-based JIT (e.g., compile a whole "trace" instead of basic block) — does that change the scheduling story? E.g., does Mednafen-Hardcore or TwoMbit handle this differently?
+
+5. Anything from QEMU TCG's approach? QEMU has block chains; how does it handle interrupt delivery during a long chain?
+
+6. Any "co-routine" or "fibers" pattern where the JIT block can yield to scheduler at instruction boundaries with minimal cost?
+
+Looking for ideas beyond plain downcounting that might offer either better performance or simpler implementation. Brief comparison/recommendation appreciated. Under 800 words please.
+
+========================================================================
+RESPONSE
+========================================================================
+Beyond the canonical predictive downcounting approach, production emulators use several fascinating architectural patterns to balance JIT throughput and scheduling granularity. Here is how modern and complex emulators tackle your specific questions:
+
+### 1 & 6. Modern Emulators (Yuzu, Ryujinx) and Coroutines/Fibers
+Newer consoles (Nintendo Switch) run a modern OS (Horizon) across multiple ARM cores. Games rely on OS synchronization primitives (mutexes, condition variables) rather than precise hardware cycle counting. 
+* **The Pattern:** **Coarse HLE Threading / Fibers.** Instead of counting cycles strictly per block, the JIT executes roughly bound timeslices. When a guest OS thread makes an SVC (Supervisor Call) to wait on a lock, the emulator uses **Fibers (Coroutines)** to immediately yield the host thread back to the emulator’s OS scheduler. 
+* **Result:** Cycle counting takes a backseat. The emulator maps guest threads to host fibers, allowing incredibly fast context switching without needing to meticulously track cycles mid-block.
+
+### 2 & 5. Lazy Side-Tables and QEMU’s TCG
+QEMU uses a brilliant combination of asynchronous signaling and lazy side-tables. QEMU’s TCG (Tiny Code Generator) aggressively chains basic blocks together. 
+* **Handling Asynchronous Interrupts:** When an external IRQ occurs, the host thread catches it and simply clears the "next block" pointers (unchaining them) or sets a global `exit_request` flag. The JIT will naturally fall out of the chain at the next block boundary.
+* **Lazy Side-Tables:** For deterministic execution (QEMU’s `icount` mode), QEMU uses **Exception Recovery Metadata**. The JIT does *not* inline cycle updates per instruction. Instead, it generates a side-table mapping Host PC -> Guest PC -> Cycle Cost. If a memory fault or MMIO access happens mid-block, the runtime looks at the host instruction pointer, traverses the side-table, and accurately deducts the exact cycles spent *up to that exact instruction*.
+
+### 3. Speculative Execution & Rollback (`io_recompile`)
+Full speculative execution (run blindly, copy state, rollback on IRQ) is generally too expensive for emulators because maintaining the undo-buffer destroys memory throughput. However, **QEMU uses a restricted form of rollback called `io_recompile`**.
+* **The Pattern:** QEMU assumes blocks won't hit complex I/O. If a block *does* hit an MMIO access that alters device state mid-block, QEMU catches it. Because it hasn't committed the guest CPU state yet, it uses the lazy side-table (mentioned above) to **roll back** the CPU state to the start of the instruction. It then *throws away* the current execution, recompiles the block to end *exactly* at that I/O instruction, and re-runs it. 
+* **Result:** You get massive blocks for normal code, and exact precision only when an I/O boundary is struck.
+
+### 4. Trace-Based and Region-Based JITs
+Trace JITs (which compile hot paths across multiple branches, rather than single basic blocks) don't fundamentally change the scheduling *logic*, but they change the *scale*. 
+* **The Pattern:** Instead of a cycle budget per basic block, the downcounter is applied to the entire trace. 
+* **The Catch:** Because traces have multiple side-exits (guard failures), the JIT must patch cycle-compensation logic into every single exit stub. If a trace expected to run 50 instructions but exits early at instruction 10, the side-exit stub contains a hardcoded subtraction to refund the 40 unused cycles back to the scheduler before returning to the dispatcher.
+
+---
+
+### Summary and Recommendation
+
+If you are designing an emulator today, your approach should be dictated by the system you are emulating:
+
+1. **For Modern/OS-based Systems (Switch, PS3, PS4):** Use **Fibers/Coroutines** combined with coarse timeslicing. Ignore strict cycle-accurate block boundaries; yield entirely on guest OS syscalls.
+2. **For General Purpose/Complex Architectures (QEMU style):** Use **Asynchronous Unchaining** and **Lazy Side-Tables**. Let blocks run unhindered. If an MMIO access requires a scheduler sync, use the host return address to look up the exact cycle cost in a side-table.
+3. **For Legacy Consoles (GBA, SNES, GameCube, PS2):** Stick to **Predictive Downcounting**. Legacy games rely heavily on precise hardware timing (e.g., raster effects). Downcounting is the most proven, performant way to guarantee cycle-accurate event delivery without the insane complexity of QEMU's `io_recompile` rollback mechanisms. 
+
+**Best hybrid approach for a new project:** Use Predictive Downcounting, but implement **Lazy Side-Tables** for MMIO accesses. This removes cycle-syncing overhead from your JIT blocks entirely, letting the MMIO handler accurately calculate "cycles elapsed so far" only when the game actually touches hardware.

@@ -1,0 +1,159 @@
+Timestamp: 2026-05-03T14:09:15
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+LLVM ORC LLJIT (LLVM 20 via LLVMSharp.Interop) block-JIT for ARM7TDMI emulator. Per-instruction execution path is 100% correct (jsmolka arm.gba/thumb.gba "All tests passed" via real GBA BIOS LLE, 263 VBlank IRQs delivered). Block-JIT path runs into GBA BIOS infinite-reset loop at frame 1 (~280k cycles into execution).
+
+Architecture: each block compiled into one LLVM function. Per-instruction "pre/exec/post/advance" basic block layout. Strategy 2 (mGBA-like): no dynamic PC pre-set inside block IR. R15 reads return baked compile-time constants (pipeline PC = bi.Pc + 8 ARM, +4 Thumb). GPR[15] memory only written by real branches.
+
+Static-analysis fixes I've already applied:
+- write_reg with literal-numeric index 15 → MarkPcWritten=1 unconditionally
+- write_reg with format-field index whose decoded value (from constant InstructionWord) == 15 → MarkPcWritten=1
+- write_reg with step-output index whose resolved Value is constant int == 15 → MarkPcWritten=1 (Path B)
+- read_reg with literal/field/step-output index resolving to PC → return ConstU32(pipeline_pc) instead of GPR[15] load
+- ARM BX emitter explicitly calls MarkPcWritten (was relying on per-instr backup check)
+- Thumb f16 BCond writes_pc spec corrected from 'conditional_via_rd' to 'always'
+- ConditionEvaluator: when cond field is constant (block-JIT), emit ONLY the matching mnemonic's IR (mGBA-pattern), not 14-deep select chain
+
+Per-instr executor's backup signal: post-Step check `postR15 != pcReadValue` catches emitters that wrote PC without setting PcWritten flag. Block-JIT doesn't have a per-step executor; it relies SOLELY on PcWritten being set correctly by emitters.
+
+Bug: block-JIT and per-instr diverge by frame 1 (within first ~280k emulated cycles of BIOS startup).
+
+Trace evidence: at block #16190 (Thumb 0xB96), code is `POP {R3}; BX R3`. Trace shows pre-state R3=0x24, R13=0x03007E94, post-state R3=0x00000000 → BX R3 jumps to PC=0 → reset vector → infinite re-init loop.
+
+Stack analysis: R13=0x03007E94 is valid IWRAM. POP read from IWRAM 0x03007E94. The value at that address is 0 in block-JIT but per-instr would have a valid return address there. So an EARLIER PUSH wrote 0 instead of the actual R14 (LR) value.
+
+Block-data-transfer (Thumb PUSH delegates here) emitter for STM does:
+  for i in 0..15:
+    if list & (1 << i):
+      addr = (compute)
+      val = load i32 from GepGpr(state, i)        // direct GPR[i] read
+      // i==15 special: val += instr_size for R15-in-PUSH case
+      memory_write_32(addr, val)
+      addr += 4
+
+For i=14, no special case — just stores GPR[14] (current LR).
+
+So the question is: at some PUSH site between block #133 and block #16190, GPR[14] was 0 when read, and got written to stack. Per-instr's same code path has GPR[14] non-zero at the PUSH.
+
+What could cause GPR[14] to be 0 in block-JIT but non-zero in per-instr at the same logical execution point?
+
+Hypotheses I want to validate or rule out:
+
+1. ARM BL link-register write uses pipeline-PC constant (Strategy 2) — for instruction at bi.Pc, sets LR = bi.Pc + 4 (next instruction). This is an unconditional write_reg(R14, ...). The `write_reg` Path B sees the index=14 (literal), which is NOT 15, so doesn't mark PcWritten — correct. The value stored is computed by emitter — should be correct constant.
+
+   But wait — what if my read_reg static check is FALSE-POSITIVELY firing for some non-PC index? E.g., a step output that happens to evaluate to constant 15 but is meant to be a non-PC value. Then read_reg returns pipeline_pc instead of the actual register value, propagating wrong data.
+
+2. Per-instruction PC write was REMOVED in Strategy 2. So GPR[15] retains block-start PC throughout the block. If any spec step does a non-statically-resolved read_reg of "rd" field where rd happens to equal 15 at runtime (but I couldn't see this at JIT time), it reads stale GPR[15].
+
+3. Block fn's per-instruction post-block branch logic clears PcWritten=0 in pre[K], runs exec[K], checks post[K]. If exec[K] is an instruction that writes PC via a non-write_reg/non-branch path (e.g. internal IR direct GepGpr+Store to index 15) and doesn't MarkPcWritten, the block continues past it (post sees PcWritten=0, branches to advance, falls to next instr's pre). Next instr's pre clears PcWritten again. Block exits normally. Executor sees PcWritten=0, advances PC by N×size — overwriting the PC written mid-block.
+
+   Are there ARM emitters that write PC via direct GEP + Store WITHOUT MarkPcWritten? I added MarkPcWritten to BX explicitly. But what about LDM with PC in rlist (BlockLoadEmitter)? STMHI, MSREQ, etc.?
+
+4. Some PUSH (block_store) might internally call something that misreads R14. Let me check the i=14 case — it's just a plain GepGpr(state, 14) load. Direct memory access. Should be correct.
+
+5. MSR CPSR triggers bank-swap via host extern call. The bank swap shuffles R8-R14 between banked storage. If block-JIT's bank-swap interaction is wrong (e.g. wrong oldMode captured at JIT time when oldMode is computed dynamically), R14 could end up in wrong bank.
+
+Specific question:
+
+A. In a block-JIT design where GPR[15] is NOT pre-set per-instruction (Strategy 2), are there standard pitfalls for reading dynamically-indexed registers (e.g. `read_reg index=field_extracted_from_instruction_word` where the field could be ANY value 0-15 at runtime)? mGBA / Dynarmic / Dolphin's solutions?
+
+B. Specifically for ARM data-processing instructions where rd or rs/rm/rn fields can be any 0-15 — what's the canonical way to handle reads of R15 (which should return pipeline PC, not stored GPR[15] value) when the index isn't a JIT-time constant?
+
+C. For ARM block-data-transfer (LDM/STM), the rlist is bits 15:0 of the instruction word. In block-JIT with constant InstructionWord, rlist is constant. But the emitter walks all 16 register positions at IR-build time emitting `if (list & 1<<i) { transfer R[i] }`. With constant list, LLVM should DCE the false-condition branches. Could LLVM instead generate buggy code where it reads ALL 16 registers regardless of list bits, and only conditionally STORES the result?
+
+D. What's the cleanest way to verify "did block fn write PC mid-block but fail to set PcWritten"? Adding an IR-side assertion that PC == block-start at every instruction's pre block (since Strategy 2 doesn't pre-set PC, GPR[15] should remain at block-start until a real branch)?
+
+E. Have you seen documented LLVM bugs where IR with many small basic blocks (~5-10 BB per instruction × 5-15 instructions per block = 30-150 BBs in one function) interacts badly with FastISel default codegen?
+
+F. Any debug techniques for "find the IR instruction that's miscompiling" between two execution paths (per-instr vs block-JIT) where IR compares semantically equivalent but runtime behavior differs?
+
+Constraint: cannot enable mem2reg/instcombine/gvn passes (instcombine miscompiled BIOS LLE in earlier testing — bisected with block-JIT off).
+
+========================================================================
+RESPONSE
+========================================================================
+Here is a detailed analysis of your emulator's divergence and direct answers to your architectural questions. 
+
+The symptom you are seeing—`POP {R3}` reading a `0` because an earlier `PUSH {..., LR}` wrote a `0`—is a classic block-JIT bug. R14 (LR) was either incorrectly zeroed out, pulled from an uninitialized register bank, or loaded with a stale block-start PC.
+
+### Most Likely Culprits for LR == 0
+
+**1. The Bank-Swap Bug (Your Hypothesis 5)**
+If your `MSR CPSR` (or Exception entry) bank-swap logic captures `oldMode` at **JIT-compile time**, this is almost certainly your bug. The GBA BIOS switches modes dynamically (e.g., jumping from SYS to IRQ to SVC). If a block executes twice under different starting modes, or if the mode is modified by a register whose value is unknown until runtime, a JIT-time baked `oldMode` will swap the wrong register banks. 
+*   **Result**: R14 is read from an uninitialized bank (yielding `0`), which then gets pushed to the stack.
+*   **Fix**: Your host extern call should only take `newMode` (or `newCpsr`) and the `State*`. Inside the extern host function, read `oldMode = state->Cpsr & 0x1F` dynamically. 
+
+**2. Stale PC Read into LR (Hypothesis 1 & 2)**
+In Strategy 2, `GPR[15]` in memory contains the stale `block_start_pc`. If an instruction computes `LR = PC` (like a manual indirect call setup or `BL`) and it fails your static `read_reg` check, it will fallback to a dynamic IR load from `GPR[15]`.
+*   If your emulator uses LLVM IR instructions to extract register fields (e.g., `%rm = and %instr, 15`), LLVM's `Value` is an `Instruction`, not a `ConstantInt`. Your C# check `if (val is ConstantInt c && c == 15)` will fail! It will emit a dynamic load from memory, fetching the stale `block_start_pc`. If the block started near `0x00000000` (BIOS start), LR becomes `0`.
+
+**3. Direct Memory Store Bypassing `PcWritten` (Hypothesis 3)**
+If an ARM `LDM {..., PC}` or Thumb `POP {..., PC}` emitter writes to `GPR[15]` using a direct `GEP` + `Store` IR sequence, it bypasses the `MarkPcWritten` flag that your standard `write_reg` wrapper sets. 
+*   **Result**: The block doesn't terminate. Execution falls through to the next instruction sequentially. At the end of the block, the executor sees `PcWritten == 0` and overwrites `GPR[15]` with the linear advance, completely erasing the branch. 
+
+---
+
+### Answers to Your Specific Questions
+
+#### A. Standard pitfalls for reading dynamically-indexed registers?
+In ARM7TDMI, **register indices are never truly dynamic**—they are always fully encoded in the instruction word. Because you have a constant `InstructionWord` per block, you should **never use LLVM IR to extract register fields**. 
+*   **Pitfall**: Emitting LLVM IR to mask/shift the instruction word, resulting in an LLVM `Value` representing the index. Because you have disabled optimization passes, LLVM will not constant-fold this.
+*   **Solution**: Decode the register indices entirely in C# during JIT compilation (`int rd = (instr >> 12) & 0xF;`). Then pass the C# `int` to `read_reg(int index)`.
+
+#### B. Canonical way to handle reads of R15 when the index isn't a JIT-time constant?
+As established above, it *should* be a JIT-time constant. However, if you absolutely must emit a dynamic read (e.g., for unpredictable Coprocessor register transfers), the canonical mGBA/Dynarmic way is to emit an IR `select` or `br`:
+```llvm
+%is_r15 = icmp eq i32 %dynamic_index, 15
+%pipeline_pc = add i32 %current_instr_pc, 8 ; (Baked as constant)
+%mem_val = load i32, ptr %dynamic_gep
+%result = select i1 %is_r15, i32 %pipeline_pc, i32 %mem_val
+```
+
+#### C. LDM/STM rlist: Will LLVM DCE false-condition branches without passes?
+**No.** If `instcombine` and `mem2reg` are disabled, LLVM's FastISel / SelectionDAG will directly translate your IR. If you emit 16 `if (cond)` blocks in IR, it will emit 16 compare-and-branch sequences in machine code.
+*   **The Clean Fix**: Because `InstructionWord` is constant, evaluate the `rlist` in C# *before* emitting IR.
+```csharp
+uint rlist = InstructionWord & 0xFFFF;
+for (int i = 0; i < 16; i++) {
+    if ((rlist & (1 << i)) != 0) { // C# evaluation!
+        // Emit IR strictly for registers that are actually transferred.
+    }
+}
+```
+This entirely eliminates the dead code, avoids FastISel bloat, and prevents any speculative reads.
+
+#### D. Cleanest way to verify "did block fn write PC mid-block but fail to set PcWritten"?
+Inject an assertion snippet directly into your JIT builder's per-instruction `post` step, right before you check `PcWritten`. This will abort the emulator the instant a flag is missed:
+```llvm
+; In the post[K] block:
+%actual_pc = load i32, ptr %Gpr15_Address
+; %expected_pc is whatever the PC was at block_start (stale PC)
+%pc_changed = icmp ne i32 %actual_pc, %expected_pc 
+
+%flag = load i1, ptr %PcWritten_Address
+%missed_flag = and i1 %pc_changed, (not %flag)
+
+br i1 %missed_flag, %trap_miss, %continue_post
+
+trap_miss:
+; Call a host extern to throw a fatal C# exception with the instruction's PC
+call void @Host_TrapMissedPcWritten(i32 %current_instr_pc)
+unreachable
+```
+
+#### E. Documented LLVM bugs with many small basic blocks interacting with FastISel?
+Yes. FastISel is extremely naive and struggles heavily with register allocation across many small basic blocks (especially 100+ BBs with complex control flow). It can run out of registers, resulting in heavy stack spilling, or simply fail and fallback to SelectionDAG. 
+
+Furthermore, you noted that `instcombine` miscompiled your BIOS LLE. **`instcombine` does not miscompile valid IR.** If `instcombine` breaks your emulator, it guarantees your IR contains Undefined Behavior (UB). FastISel happens to generate machine code that masks the UB by coincidence.
+*   *Common UB in emulator IR*: ARM `LSL`/`LSR`/`ASR` instructions can shift by values `>= 32`. LLVM's `shl` and `lshr` instructions have UB if the shift amount is `>= bitwidth`. You must clamp or cleanly mask shift amounts in IR before applying them, otherwise `instcombine` turns the entire block into `poison` or `undef`.
+
+#### F. Debug techniques for finding the exact miscompiling IR instruction?
+Do not try to guess by looking at the endpoint crash; find the exact cycle of divergence using an **Instruction Execution Trace Diff**.
+1.  Inject an extern call at the `pre` block of every instruction in your JIT: `LogState(PC, R0...R14, CPSR)`.
+2.  Do the exact same in your per-instruction executor.
+3.  Run both for 1 frame, pipe to `block.log` and `per_instr.log`.
+4.  Use a diff tool (Beyond Compare, VSCode, KDiff3). Because the divergence is within 280k cycles, the logs will easily fit in memory.
+
+Scroll to the exact line where the diff shows `R14` (or any other state) changing in the block-JIT but not in the per-instr run. You will instantly know *exactly* which ARM/Thumb mnemonic caused the corruption, and you can dump the LLVM IR specifically for that single block to spot the error.

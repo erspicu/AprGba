@@ -438,8 +438,9 @@ FodyWeavers.xsd
 *.ll
 *.bc
 
-# Knowledgebase query logs — local-only Q&A history with Gemini
-/tools/knowledgebase/message/
+# Knowledgebase: keep message logs in repo (Q&A history with Gemini is
+# part of the design audit trail); only config.json (which holds the
+# API key) stays local.
 /tools/knowledgebase/config.json
 
 # AprGBemu reference clone — local-only for Phase 4.5 GB spec work

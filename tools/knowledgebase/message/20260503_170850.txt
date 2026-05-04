@@ -1,0 +1,76 @@
+Timestamp: 2026-05-03T17:08:50
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Block-JIT BIOS LLE divergence in our ARM7TDMI emulator. Per-instr works fine; block-JIT diverges at a specific point in BIOS init. We've narrowed it to a precise BIOS code-flow issue and need expert insight on what's happening.
+
+DEFINITIVE FINDINGS (from extensive instrumentation):
+- Per-instr (PI) and block-JIT (BJIT) execute IDENTICALLY for the first ~70K instructions of BIOS init (verified: 260 IO reads byte-identical; full register state at PC=0x1962 100% identical between modes).
+- Both modes call function at 0xB4C the same number of times initially. PI eventually does 12 calls/frame; BJIT only does 2 before failing.
+- The failure: block#16395 at PC=0xB96 (function 0xB4C epilogue: POP {R4,R5}; POP {R3}; BX R3) with R3=0 (popped from stack). BX 0 → PC=0 → BIOS reset → eventually triggers UND vector → permanent loop.
+
+THE EXACT CODE PATH (from block trace):
+- block#16385: PC=0x728 N=7 (Thumb subroutine — memory clear loop)
+- block#16386-16391: tight loop 0x72E→0x72E (5 iterations)
+- block#16392: PC=0x72E→0x736 (loop exits, falls into BX LR at 0x736)
+- block#16393: PC=0x736→0xB56 N=1 (BX LR with LR=0xB57 jumps to Thumb 0xB56)
+- block#16394: PC=0xB56→0xB96 N=1 (BEQ at 0xB56 taken because Z flag still set from CMP at 0x732)
+- block#16395: PC=0xB96 (POP/POP/BX) — POP {R3} reads stack at 0x03007E9C = 0 → BX 0 → PC=0
+
+KEY INSIGHT: Function 0xB4C was NEVER properly entered via PUSH for THIS execution. The CPU jumped INTO the function body at 0xB56 from 0x736 BX LR. So the function's saved-LR stack slot was never populated for this "call".
+
+The 0xB4C function structure:
+  0xB4C: PUSH {R4, R5, LR}      ← function entry (NOT executed for failing call)
+  0xB4E-0xB94: body (uses inner BL → 0xB9C → BX 0xBA4 → ARM thunk → BX LR back to 0xB56)
+  0xB96: POP {R4, R5}; POP {R3}; BX R3   ← epilogue treating saved LR as R3 then BX R3
+
+THE PUZZLE:
+- Why does PI handle this BIOS code-flow correctly but BJIT doesn't?
+- The chain is: outer BL calls some function with LR=0xB57 → that function's PUSH saves LR=0xB57 → body runs → POP {PC} loads 0x728 (set up by some intermediate caller) → 0x728 runs (Thumb memory-clear) without doing its own PUSH (it's a no-frame leaf function) → 0x736 BX LR (LR still 0xB57 from the OUTER chain) → returns to 0xB56 inside function 0xB4C body.
+- For the POP {R3} at 0xB98 to work, the stack at SP+8 (0x03007E9C in our case) must contain the proper return address.
+- Both PI and BJIT execute this exact instruction sequence (we verified IO reads + critical register state matches). So WHY does PI's stack at 0x03007E9C contain a valid return address while BJIT's contains 0?
+
+Our memory write trace shows:
+- 13 writes to 0x03007E9C from PC=0xBC4 (ARM PUSH at function entry, LR=0x9E7..0xAA5 saved)
+- 1 write of 0 to 0x03007E9C from PC=0x874 — this is function 0x874's STM at 0x87E (LDM R1,{R5,R7}; ADD R0,SP,#8; STM R0!,{R5,R7}) where R7 happens to be 0 from a BIOS data table — initializing local-var area
+
+If PI's 0x874 STM also writes 0 to that location, then PI's stack at 0x03007E9C should ALSO be 0 when the failing BX R3 fires. So PI should ALSO BX 0... unless PI takes a slightly different path that AVOIDS reaching 0xB96 with this specific stack frame.
+
+Question 1: Is this a known BIOS code pattern? Is the BIOS doing something subtle that depends on SOMETHING we haven't replicated correctly in BJIT?
+
+Question 2: We disabled LLVM's optimization pipeline (RunOptimizationPipeline) due to a prior instcombine miscompile. Could the ABSENCE of optimization cause LLVM/MCJIT to emit code that reorders memory accesses across block boundaries in a way that corrupts stack timing? (We use struct GEPs throughout for register/memory, no array-typed bitcast aliasing issues.)
+
+Question 3: Is there a specific BIOS init quirk we should look up — e.g., a Wait For VBlank SWI handler or similar that PI and BJIT might handle differently due to interrupt timing? Our BJIT IRQs delivered = 0 across the whole run (PI = 263). Could the difference in IRQ delivery mid-BIOS init explain this?
+
+Question 4: How might we instrument to pinpoint the EXACT instruction where state diverges between PI and BJIT, given they execute identical IO reads up to the very last moment before this failure? Specifically, what's a smart way to compare register/memory state at every PC=0xB54 (BL_LO entry) between the two modes — they share that PC many times during BIOS init?
+
+Brief answer please (under 600 words). We're particularly interested in BIOS-known-quirk explanations.
+
+========================================================================
+RESPONSE
+========================================================================
+Here is the expert insight into your divergence, addressing your questions directly.
+
+**The Smoking Gun (Question 3: IRQs)**
+Your finding that **BJIT delivered 0 IRQs while PI delivered 263** is the absolute root cause of this crash. 
+
+During the GBA/NDS BIOS initialization, the system uses `SWI 4` (IntrWait) or `SWI 5` (VBlankIntrWait) to halt the CPU until hardware sets specific flags in the BIOS data area (around `0x03007FF0`). 
+In your PI emulator, IRQs fire, the BIOS IRQ handler (which pushes context to the IRQ/SVC stack) executes, acknowledges the VBlank, updates the BIOS wait-flags, and gracefully resumes. 
+In your BJIT emulator, because IRQs are never delivered, the BIOS spin-loop eventually times out, or a fallback code path executes. The path jumping to `0xB56` and popping `0` from `0x03007E9C` is a **junk execution path** caused by the CPU missing the expected state change that the IRQ handler was supposed to perform. Function `0x874` correctly zeroed that memory block, but because the IRQ never fired, the expected return address was never written there. PI avoids `BX 0` because the IRQ *does* fire, altering the control flow before or at this critical junction.
+
+*Why do JITs miss IRQs?* Block-JITs typically only check for pending interrupts at block boundaries. If your emulator relies on a tight block loop (like the memory clear loop at `0x728`) and your block compiler doesn't embed cycle-counting and IRQ-polling *inside* backward branches or block exits, the CPU can get trapped in a block, missing edge-triggered IRQs or delaying them until the BIOS state machine breaks.
+
+**Question 1: BIOS Code Pattern**
+Jumping "into the middle" of functions is normal in the GBA BIOS. The BIOS heavily utilizes ARM/Thumb interworking and shared epilogues to save ROM space. Context switches, SWI unpacking, and IRQ returns frequently manipulate the stack and `LR` to return to shared cleanup routines. The sequence you see is the JIT dutifully executing a corrupted state machine (due to the missed IRQ), resulting in an underflow or misalignment of the expected call stack.
+
+**Question 2: LLVM Optimization Pipeline**
+Disabling LLVM optimizations (running at `-O0`) does **not** cause unsafe memory reordering. In fact, `-O0` is pedantically sequential: every LLVM IR load/store results in a direct memory access in the exact order written. If this were an LLVM reordering issue, it would happen *with* optimizations enabled. The stack timing corruption is purely logical, stemming from the missing IRQ handler execution.
+
+**Question 4: Instrumentation Strategy**
+To find the exact divergence point:
+1. **Log IRQ Checks:** The divergence happens exactly where PI acknowledges an IRQ and BJIT ignores it. Log every time the `CPSR.I` bit is unmasked AND the hardware IRQ line is high. 
+2. **State Hashing:** Instead of comparing every instruction, calculate a quick hash (e.g., FNV-1a) of `R0-R15` + `CPSR` at the end of every JIT block. Print `[Instruction Count] [PC] [State Hash]`.
+3. **Compare the Logs:** Run this in both PI (hashing only at block-equivalent boundaries) and BJIT. The logs will match perfectly until the specific block where PI branches to the IRQ vector (`PC=0x18`) and BJIT falls through.
+
+**Fix Action:** Ensure your BJIT compiles an "IRQ pending" check at the end of every block, and crucially, **before backward branches** (to prevent infinite looping without checking hardware state).

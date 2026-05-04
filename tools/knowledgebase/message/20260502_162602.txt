@@ -1,0 +1,98 @@
+Timestamp: 2026-05-02T16:26:02
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+GBA BIOS startup logo animation rendering — why do my emulator screenshots show MULTIPLE overlapping "GAME BOY" texts at different sizes/positions, when mGBA shows a single clean GAME BOY text at the same moment in time?
+
+Specifics:
+- 2.5 seconds into the BIOS intro animation, jsmolka arm.gba ROM
+- DISPCNT = 0x9802 (mode 2 affine + BG3 + OBJ + OBJ Window enable, NO forced blank)
+- 128 OAM entries are non-disabled at this moment, with: 9 mode-1 (semi-transparent), 9 mode-2 (OBJ window mask), 110 mode-0 (normal)
+- BLDCNT = 0x1F5F  →  Target1 = BG0/1/2/3/OBJ, blend mode = alpha (mode 1), Target2 = BG0/1/2/3/OBJ
+- BLDALPHA = 0x050B  →  EVA=0x0B (11/16), EVB=0x05 (5/16)
+- BLDY = 0
+- WINOUT = 0x3F27, WINIH/V = 0 (Win0/Win1 inactive), but OBJ Window IS active (DISPCNT bit 15)
+
+What I have implemented:
+- Per-layer buffers (BG0..BG3 + OBJ), composite at end with priority sorting
+- BLDCNT alpha blending across BG/OBJ layers (Target1 → Target2)
+- BLDY brighten/darken modes
+- OBJ semi-transparent (mode 1) sprites force alpha blend regardless of BLDCNT
+- OBJ Window mask from mode-2 sprites
+- WININ/WINOUT layer gating
+
+What I see vs what mGBA shows:
+- Mine: 3-4 distinct "GAME BOY" texts at different scales/positions overlapping, all visible simultaneously
+- mGBA: a single clean "GAME BOY" text at one position, smoothly animating
+
+My theory is the BIOS has 100+ OAM entries that are all visible simultaneously (each representing a different animation frame's sprite), and on real hardware some PPU mechanism hides all but the "current" one. Without that mechanism, all 110 normal-mode sprites get drawn at once → overlapping zoom states.
+
+QUESTION: What specific PPU mechanism in the GBA causes only ONE of these 100+ sprites to be visible at a given moment during the BIOS intro animation? Is it:
+(a) Mosaic (which I haven't implemented) hiding sprites with non-zero mosaic value?
+(b) An undocumented sprite-disable behavior?
+(c) The BIOS actually only enabling ONE sprite at a time and rapidly rewriting OAM each frame, with the other 100+ being marked disabled (bit 9 of attr0)?
+(d) OBJ Window mask + WINOUT preventing sprites outside the window — even though my OBJ Window mask covers ~3985 pixels (10% of screen), OBJ should be visible inside that mask only?
+(e) Affine matrix with all-zero entries causing the sprite to collapse to a single pixel?
+
+What's the most likely cause and how do I diagnose it from OAM dumps?
+
+========================================================================
+RESPONSE
+========================================================================
+Based on the precise hardware state you provided, **(d) is your primary culprit, highly likely combined with a misunderstanding of (e) or the OAM disable bit.**
+
+Here is exactly what is happening in the GBA PPU and why your emulator is displaying a kaleidoscope of "GAME BOY" texts while mGBA looks perfectly clean.
+
+### 1. The Smoking Gun: WINOUT and the OBJ Window Mask (Hypothesis D)
+You noted: `WINOUT = 0x3F27` and `DISPCNT` bit 15 is active. 
+
+Let's break down `WINOUT = 0x3F27` exactly as the GBA hardware reads it:
+*   **Outside Window (Bits 0-5) = `0x27` (Binary `0010 0111`)**
+    *   BG0=1, BG1=1, BG2=1, BG3=0, **OBJ=0**, Color Special=1
+*   **Inside OBJ Window (Bits 8-13) = `0x3F` (Binary `0011 1111`)**
+    *   BG0=1, BG1=1, BG2=1, BG3=1, **OBJ=1**, Color Special=1
+
+You asked: *"even though my OBJ Window mask covers ~3985 pixels (10% of screen), OBJ should be visible inside that mask only?"*
+
+**Absolutely, YES.** Because bit 4 of `WINOUT` is `0`, the OBJ layer is **strictly disabled** for any pixel on the screen that does not fall underneath an active OBJ Window mask pixel. 
+
+Many test ROMs (like the `jsmolka` tests or open-source BIOS clones) intentionally leave an absolute mess of sprites in OAM specifically to test if emulator developers have implemented Windowing layer-gating correctly. If your compositing logic is drawing those 110 sprites *outside* that 10% mask, your windowing implementation for the OBJ layer is failing, and you are seeing garbage that the ROM author intentionally left there.
+
+### 2. The "Non-Disabled" Sprites Trap (Hypotheses B & C)
+You mentioned that 128 OAM entries are "non-disabled". You must be incredibly careful about how you read the Disable bit in GBA OAM. 
+
+In `ATTR0`:
+*   **Bit 8** is the Affine (Rotation/Scaling) Flag.
+*   **Bit 9** changes its meaning based on Bit 8!
+    *   If `Bit 8 == 0`, Bit 9 is the **Disable Flag**.
+    *   If `Bit 8 == 1`, Bit 9 is the **Double-Size Flag** (and the sprite is ENABLED).
+
+If your emulator checks `if (attr0 & 0x0200)` to hide sprites without first checking if it's an affine sprite (`attr0 & 0x0100`), you will incorrectly hide affine double-size sprites, OR you will fail to hide sprites that the hardware considers disabled. 
+
+The correct check for a disabled sprite is:
+`bool disabled = (attr0 & 0x0300) == 0x0200;`
+
+### 3. The Affine Zero-Matrix Collapse (Hypothesis E)
+If those 110 sprites truly are enabled (perhaps they are Affine, so Bit 9 just means Double-Size), why does mGBA not show them even if Windowing was turned off? 
+
+Look at the Affine Matrices (`PA, PB, PC, PD`) for those extra sprites. 
+The GBA maps screen pixels to texture pixels using direct multiplication, not division:
+`texture_x = PA * screen_dx + PB * screen_dy`
+
+If the ROM leaves unused affine sprites with `PA=0, PB=0, PC=0, PD=0`, then for every single screen pixel in the bounding box, `texture_x` and `texture_y` will equal `0`. The entire sprite collapses to sample the exact single pixel at `(0,0)` of its texture. If that pixel is transparent, the entire 64x64 bounding box becomes completely invisible.
+
+**A common emulator bug:** Many devs see an all-zero matrix and write a safety check: `if (PA==0 && PD==0) { PA=256; PD=256; }` to prevent division-by-zero or math errors. If you do this, you will artificially force 100 collapsed, invisible sprites to suddenly render at a scale of 1.0! The GBA hardware has no division here; it happily multiplies by zero and collapses the sprite.
+
+### How to Diagnose this right now:
+
+1.  **Fix / Verify your Window Logic:** Hardcode a check in your final compositing loop: if a pixel is outside the OBJ window mask, force the OBJ layer's alpha/color value to 0 for that pixel. See if the overlapping texts instantly vanish.
+2.  **Open mGBA's OAM Viewer:**
+    *   Pause at 2.5 seconds.
+    *   Look at those 110 "normal" sprites.
+    *   Look at their **Y coordinate**. Are they set to `160` or higher? (The GBA screen is 160 pixels high. Sprites with `160 <= Y <= 255` are off-screen unless they wrap, which Affine sprites do not).
+    *   Look at their **Matrix**. Are `PA, PB, PC, PD` all `0000`? 
+    *   Look at their **OBJ Mode**. Are they genuinely normal (Mode 0), or did you misparse `ATTR0` bits 10-11?
+3.  **Check your Disable Logic:** Ensure your code strictly uses `(attr0 & 0x0300) == 0x0200` to define a disabled sprite.
+
+**Conclusion:** The overlapping text is almost certainly caused by your emulator ignoring `WINOUT` bit 4 and rendering hidden OBJ pixels outside the OBJ Window mask, combined with potentially rendering zero-matrix affine sprites that hardware natively collapses into transparency.

@@ -1,0 +1,95 @@
+Timestamp: 2026-05-03T14:36:12
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+We're debugging an LLVM block-JIT for ARM7TDMI emulator. The per-instruction JIT works correctly (passes 360 unit tests, GBA BIOS LLE boots and renders the boot logo). The block-JIT (Phase 7 A.6.1 "Strategy 2") infinitely loops inside the BIOS UND/Abort exception handler.
+
+Strategy 2 design:
+- Per-instr mode pre-sets GPR[15] = current_PC + 8 before each instruction (ARM pipeline offset), and detects "PC was written" by comparing GPR[15] before/after.
+- Block-JIT (Strategy 2) does NOT pre-set GPR[15]. Instead, every emitter that does `read_reg(15)` returns a JIT-time CONSTANT equal to (this_instr_PC + 8). And every emitter that writes PC must explicitly call `MarkPcWritten(ctx)` which sets a u8 flag in CPU state.
+- After the block function returns, the executor checks the PcWritten flag. If 0, no branch happened, advance PC by N×instr_size. If 1, a branch already wrote PC.
+
+Symptom: block-JIT hangs in BIOS exception handler. Frame trace shows PC cycling 0x4 (UND vector) → 0x1C/0x30/0x40/0x50/0x60 (ABT/UND handler code) → 0xB53 (Thumb user code, which is first half of a Thumb BL pair at 0xB52: 0xF000 0xF823 — BL to 0xB9C). After exception return (SUBS PC, R14, #4) restores PC=0xB53 and CPSR mode → user re-executes 0xB52 → another exception → cycle.
+
+Per-instr mode does NOT enter UND handler at this code; it advances past 0xB52 normally.
+
+Things already verified:
+1. Spec for Thumb BL (f19) BL_HI has writes_pc=never, BL_LO has writes_pc=always.
+2. ARM data-processing spec has 36 occurrences of `restore_cpsr_from_spsr` (handles MOVS/SUBS PC LR exception return correctly).
+3. BlockLoadEmitter (LDM/POP) was missing MarkPcWritten when i=15; added in BOTH visibleWriteBB and userWriteBB paths. Did not fix the loop.
+4. ARM BX (BranchIndirectArm) explicit MarkPcWritten added.
+5. RaiseExceptionEmitter: Strategy 2 fix for stale R15 read AND MarkPcWritten after vector PC store.
+
+Hypothesis we want validated:
+The Thumb BL pair at 0xB52 (BL_HI) does `read_reg(15)` to compute LR = (PC pipeline value) + sign_ext(offset_high). In block-JIT, this returns the JIT-time constant for that instruction's pipeline PC = 0xB52+4 = 0xB56. Should be correct.
+
+But what if BL_HI and BL_LO are batched into the SAME block? When the block detector sees the pair at 0xB52 + 0xB54, both go in one block. BL_HI computes LR = 0xB56 + 0 = 0xB56. BL_LO then reads LR (runtime, OK), reads R15 (returns pipeline constant for 0xB54 = 0xB58), computes target = 0xB56 + (0x023 << 1) = 0xB9C — wait, BL_LO's target uses LR not R15. OK that should be fine.
+
+But BL_LO ALSO does:
+  `or new_lr = (R15 - 2) | 1 = (0xB58 - 2) | 1 = 0xB57`
+which is the post-BL return address. R15 read here in block-JIT returns 0xB58 (this instr's pipeline). Correct.
+
+So Thumb BL itself seems OK. What else could trigger a UND in block-JIT but not per-instr?
+
+Suspicions:
+A) Some emitter does a direct ctx.Layout.GepGpr(...) write to GPR[15] without MarkPcWritten, so executor's "PcWritten=0 → advance PC" path overwrites the branch target.
+B) Some emitter doesn't honor the pipeline constant and reads R15 from memory, getting the residual value from a previous block's exit (which was a branch target).
+C) ARM shift-by-register (LSL/LSR/ASR) has LLVM UB when shift amount >= 32 (`shl i32 x, 32` is UB) — Strategy 2 might expose this differently than per-instr because of dead-store elimination across instruction boundaries.
+D) CPSR mode change inside a block: an MSR CPSR or MOVS PC, R14 changes mode, but subsequent instructions in the SAME block were JIT-compiled assuming the OLD mode — so e.g. SP is GPR[13] but bank-swap happens at runtime AFTER the IR was built.
+
+Question: Given the "exception handler infinite loop" symptom and the design above, which of A/B/C/D is most likely the root cause? What specific debugging step would isolate it?
+
+The block-JIT runs at 16 MIPS (3.9× real-time), so it's executing efficiently — just executing wrong code. The CPU is genuinely in UND mode (CPSR=0x800000DB, M[4:0]=0x1B = UND mode), so the UND vector entry is happening at the LLVM-IR level, not just a misread.
+
+========================================================================
+RESPONSE
+========================================================================
+Based on the symptoms and the specific design of your "Strategy 2" block-JIT, here is an analysis of the hypotheses and the most likely root cause.
+
+### The Most Likely Root Causes
+
+**1. Suspicion D (CPSR Mode Change / Bank Swap Desync) — *Architectural Root Cause***
+In per-instruction JITs, querying the CPU state (like `CPSR.M`) before every instruction works perfectly because the loop iterates instruction-by-instruction. In a block-JIT, if you resolve register pointers (GEPs to the specific register banks like `R13_und` vs `R13_sys`) at *compile time*, your block builder makes an assumption that the CPSR mode remains constant for the entire block. 
+
+The GBA BIOS exception handlers almost universally contain `MSR CPSR_c, #...` instructions to switch into System/Supervisor mode to safely read the user's stack and registers, and then switch back. 
+*   **The Bug:** If an `MSR` instruction changes the mode mid-block, the generated LLVM IR for all subsequent instructions in that block will still read/write to the **old** register bank. This silently corrupts `R13` (SP) and `R14` (LR) during the handler's push/pop phase. When `SUBS PC, R14, #4` executes, it might read a corrupted `R14`, or the user state restored prior to the return is corrupted, immediately triggering an UND upon re-entering user space.
+
+**2. Suspicion A (Missing `MarkPcWritten` on Data Processing) — *Implementation Root Cause***
+You explicitly noted that you had to add `MarkPcWritten` to `BX` and `LDM/POP`. Did you add it to **Data Processing** instructions where `Rd == 15`?
+*   **The Bug:** The exception return `SUBS PC, R14, #4` is a Data Processing instruction. If it successfully writes to `GPR[15]` and restores the CPSR, but *fails* to call `MarkPcWritten(ctx)`, the block function will return with `PcWritten == 0`. Your executor will then blindly apply `PC = start_pc + N*instr_size`, completely overwriting the branch target back to `0xB52` and instead falling through to garbage memory in the handler space (which causes an immediate UND exception). 
+
+### Evaluating the other Suspicions
+*   **Suspicion B (Stale R15 read):** Highly unlikely to cause a perfect infinite loop back to the *exact* same PC. If `BL_HI` or `BL_LO` used a stale memory read of `R15` (which holds the block start `0xB52`), the target computation would be mathematically wrong, sending the CPU to garbage memory, which would throw an UND at that random garbage address, not looping cleanly to `0xB52`.
+*   **Suspicion C (LLVM UB):** Unlikely. `BL` uses static constant shifts, not register-based shifts. Furthermore, LLVM UB on shifts typically results in host-level traps (like `ud2` on x86 generating a `SIGILL`), which would crash your emulator entirely rather than routing gracefully to the guest UND vector.
+
+---
+
+### How to Isolate and Validate (Debugging Steps)
+
+Implement these three targeted debugging steps in order. They will immediately expose the culprit:
+
+**Step 1: Isolate Suspicion D (Force Block Termination on CPSR writes)**
+Modify your block builder so that **any** instruction that modifies the CPSR immediately terminates the block.
+*   Check your `MSR` emitter.
+*   Check Data Processing instructions where the `S` bit is set and `Rd == 15` (like `MOVS PC, LR` or `SUBS PC, LR`).
+*   **Action:** Add `ctx.EndBlock()` or `break` to force the JIT to return to the executor immediately after these instructions. If the BIOS boots past the exception handler after this change, Suspicion D was the cause.
+
+**Step 2: Isolate Suspicion A (Executor Sanity Check)**
+To prove if a missing `MarkPcWritten` is allowing the executor to overwrite a valid branch, add an assertion in your main execution loop right after the block returns:
+```cpp
+uint32_t pc_before_advance = cpu->gpr[15];
+if (!cpu->PcWritten) {
+    // If the block claims it didn't write PC, but the PC in memory changed 
+    // to something other than what it was when the block started...
+    if (pc_before_advance != block_start_pc) {
+        FATAL("Missing MarkPcWritten! PC was modified to %08X mid-block!", pc_before_advance);
+    }
+    cpu->gpr[15] += N * instr_size;
+}
+```
+If your emulator triggers this FATAL, look at the instruction that preceded the block exit. It wrote to PC but didn't set the flag.
+
+**Step 3: Validate Thumb BL Pipeline Constant (Suspicion B Check)**
+To absolutely ensure `BL_HI` and `BL_LO` batching isn't victim to DSE or bad constant injection, log the runtime value of `GPR[15]` when the block executor commits the PC write for `BL_LO`:
+*   **Action:** Inside the emitter for `BL_LO`, inject a temporary `printf` into the LLVM IR that prints the calculated branch target just before `MarkPcWritten(ctx)`. If it prints `0xB9C`, your batching logic and pipeline constants for the pair are flawless, and you can definitively rule out the Thumb BL instructions as the source of the crash.

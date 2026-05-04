@@ -1,0 +1,84 @@
+Timestamp: 2026-05-02T10:17:21
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+LLVM 20 MCJIT on Windows x64 (.NET 10 + LLVMSharp.Interop) — non-deterministic 'IMAGE_REL_AMD64_ADDR32NB relocation requires an ordered section layout' fatal error during JIT execution.
+
+Context:
+- Building a JSON-driven CPU framework. Each instruction is compiled to a separate LLVM function. The module has ~100 small functions and 3 external global variables (function pointers used as extern shims).
+- For binding the extern function pointers to native C# methods, we use the well-known 'inttoptr-in-initializer' pattern:
+    @memory_read_8 = internal global ptr inttoptr (i64 0x7FFE12345678 to ptr)
+  Linkage starts as ExternalLinkage when declared, then BindExtern() sets the initializer to ConstIntToPtr(addr) and switches to InternalLinkage. This is done BEFORE creating the MCJIT engine.
+- Each emitted function references these globals via 'load ptr, ptr @memory_read_8' followed by an indirect call.
+- Module verifies cleanly. MCJIT engine creation succeeds.
+- This SAME pattern works perfectly for our ARM target (i32 GPRs throughout, ~270 functions, 1 extern global). The new target uses i8/i16 (LR35902/Game Boy), with 102 functions.
+- The error fires non-deterministically during execution. Same ROM at the same cycle budget sometimes runs to completion (e.g. 1M cycles), sometimes aborts after a few thousand cycles. The error always says exactly:
+    LLVM ERROR: IMAGE_REL_AMD64_ADDR32NB relocation requires an ordered section layout
+- MCJIT options used: OptLevel=0, default code model.
+
+Questions:
+1. What does this LLVM error specifically mean? Which RuntimeDyld code path emits it on Windows COFF?
+2. Why might it be non-deterministic — what runtime decision affects whether it fires?
+3. Plausible causes specific to a module with mixed i8/i16/i32 access patterns and frequent extern-pointer loads, vs a uniform-i32 module that doesn't trigger it?
+4. Concrete workarounds that have actually worked in the wild — code model changes, function-pointer call lowering tricks, ORC LLJIT migration, MCJIT options I'm missing, IR transformations to apply before JIT?
+
+Brief, technical answer please — I have an LLVM background.
+
+========================================================================
+RESPONSE
+========================================================================
+Here is a targeted, technical breakdown of the issue and how to resolve it.
+
+### 1. What does this LLVM error mean and where is it emitted?
+This error is emitted by `RuntimeDyldCOFFX86_64::resolveRelocation` in LLVM's `RuntimeDyld` (the underlying object loader for MCJIT). 
+
+The `IMAGE_REL_AMD64_ADDR32NB` relocation represents a 32-bit relative offset without an image base (NB = No Base). It is primarily used in Windows COFF files for **`.pdata` / `.xdata` (SEH Unwind Info)** and **`.rdata` (Jump tables for `switch` statements)**. 
+
+Because JITed memory doesn't have a real PE "Image Base", `RuntimeDyld` fakes one by taking the minimum memory address of all allocated sections. To compute the 32-bit offsets safely, `RuntimeDyld` **strictly requires** that the memory manager allocates sections in ascending address order. If a subsequent section is allocated at a lower memory address than a previous one, `RuntimeDyld` cannot guarantee positive 32-bit offsets, assumes the layout is broken, and fires this exact fatal error.
+
+### 2. Why is it non-deterministic?
+The non-determinism comes from Windows ASLR and memory fragmentation via `VirtualAlloc`. 
+
+If you are compiling functions/modules lazily or on-the-fly (e.g., a block-by-block JIT), MCJIT's default `SectionMemoryManager` calls `sys::Memory::allocateMappedMemory`, which maps to `VirtualAlloc`. 
+* **Run A:** The OS happens to return sequential memory pages for `.text`, `.rdata`, and `.pdata`. Execution succeeds.
+* **Run B:** The OS returns a memory block for `.pdata` or `.rdata` that is *lower* in address space than `.text`. `RuntimeDyld` sees an unordered layout, fails the `Section A addr < Section B addr` invariant, and crashes.
+
+*(Note: Even if you compile everything upfront, the memory allocation order vs address order is at the mercy of the OS at JIT-engine creation/finalization time).*
+
+### 3. Plausible causes: LR35902 (i8/i16) vs ARM (i32)
+The root cause is the generation of supplementary sections (`.pdata`, `.rdata`) which trigger multiple `VirtualAlloc` calls. 
+
+1. **Jump Tables (`.rdata`):** Game Boy emulators often feature dense `switch` statements for 8-bit opcodes. LLVM heavily optimizes dense i8/i16 switches into lookup tables (jump tables) placed in the `.rdata` section. ARM's 32-bit instruction space is usually sparser, resulting in a binary search tree of conditional branches in `.text` rather than `.rdata` jump tables.
+2. **Unwind Info (`.pdata`):** The i8/i16 code may cause LLVM's register allocator to spill more registers (due to x64 lacking enough native 8-bit sub-registers without REX prefix penalties), leading to larger stack frames. Functions with stack frames trigger the emission of Windows SEH `.pdata` unwind tables.
+
+### 4. Concrete Workarounds
+
+Here are the most battle-tested ways to fix this, in order of effectiveness:
+
+#### A. Migrate to ORC JIT + JITLink (Highly Recommended)
+MCJIT and `RuntimeDyld` are essentially deprecated. Migrating to `LLJIT` (ORC) and explicitly forcing the use of `JITLink` fixes this permanently. `JITLink` is LLVM's modern linker; it handles x64 COFF natively, supports sparse allocation naturally, and doesn't rely on the fake Image Base hack.
+* *In LLVMSharp:* Look into `LLVM.CreateLLJITBuilder` and set the `ObjectLinkingLayer` creator to use JITLink instead of RuntimeDyld.
+
+#### B. Disable Unwind Tables (Quickest fix if `.pdata` is the culprit)
+If the relocations are coming from `.pdata`, strip unwind info. You don't need native Windows stack unwinding through JITed LR35902 code.
+* Apply the `nounwind` attribute to **all** emitted LLVM functions.
+* Ensure the module flag `"uwtable"` is set to `0` or absent.
+
+#### C. Disable Jump Tables (Quickest fix if `.rdata` is the culprit)
+If dense `switch` blocks are causing `.rdata` emission, force LLVM to emit branch trees instead.
+* Add the `no-jump-tables=true` attribute to your functions (or pass `-fno-jump-tables` equivalent in `TargetMachine` options).
+
+#### D. Embed Absolute Pointers Directly (Alternative to Globals)
+Instead of the global variable `inttoptr` initializer trick (which forces `.rdata` indirection and potential relocations), inject the 64-bit pointer directly into the IR at the call site.
+```llvm
+; Instead of load ptr, ptr @memory_read_8
+; Emit this directly into the instruction stream:
+%fn = inttoptr i64 140729158395512 to ptr
+call void %fn()
+```
+* *LLVMSharp:* `Builder.CreateIntToPtr(Builder.CreateInt(Address, 64), PointerType, "shim_fn")`. 
+This bypasses memory indirection, generating a direct `mov rax, 0x7FFE...; call rax` in x64 assembly, completely avoiding COFF relocation logic.
+
+#### E. Custom Memory Manager (The MCJIT sledgehammer)
+If you must stay on MCJIT, implement a custom `RTDyldMemoryManager`. Allocate a single, massive 2GB slab of `PAGE_EXECUTE_READWRITE` memory upfront. Override `allocateCodeSection` and `allocateDataSection` to manually bump-allocate out of this single slab. This guarantees strictly increasing, ordered addresses and instantly satisfies `RuntimeDyld`'s invariant.

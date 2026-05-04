@@ -1,0 +1,175 @@
+Timestamp: 2026-05-03T22:47:32
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Context: I'm building a JSON-driven CPU emulator framework in C# (.NET 10) using LLVMSharp.Interop 20.x with ORC LLJIT. Block-JIT compiles consecutive instructions of a basic block into a single LLVM function.
+
+Already shipped (relevant):
+- ARM7TDMI + LR35902 working in block-JIT
+- Phase 1a predictive cycle downcounting in IR (cycles_left state slot decremented per instruction inside the block)
+- Phase 1b MMIO catch-up callback (bus write fires a callback that scheduler uses to sync external hardware state)
+- Generic `defer` micro-op + AST pre-pass for delayed-effect quirks (LR35902 EI / Z80 STI etc.) — no runtime cost
+- Lockstep diff harness: per-instr mode and block-JIT mode produce IDENTICAL state after every instruction on Blargg cpu_instrs/01-special (~2M steps zero divergence)
+
+Now hitting the next class of problem — **IRQ delivery granularity**:
+
+- Per-instruction backend checks IRQ pending status BETWEEN every instruction (in JsonCpu.RunCycles outer loop)
+- Block-JIT backend checks IRQ pending only AFTER each block (~5-30 instructions per block)
+- Result: IRQ delivered later in block-JIT than in per-instr; for ROMs that probe IRQ timing precisely (Blargg 02-interrupts), this causes test divergence
+
+Concrete example: Blargg 02-interrupts subtest 2 sets up STAT IRQ, runs LDH (FF41),A which writes to STAT register, expects IRQ vector at NEXT instruction boundary. Per-instr delivers IRQ correctly. Block-JIT delivers IRQ after block ends (could be 10+ instructions later). Test detects divergence and fails.
+
+Goal: a framework strategy (not LR35902-specific) that achieves IRQ delivery granularity matching per-instruction mode, with **zero or near-zero perf cost** in the common case (no IRQ pending). Industry calls this "interrupt latency precision" in JITs.
+
+Specific questions:
+
+(1) **Inline IRQ check in IR**: emit `if (irq_pending) { exit_block(this_pc); }` between every instruction in the block. Cost: 1 load + 1 branch per instr. With LLVM `llvm.expect.i1(false)` hint and branch-prediction, the cost is ~1-2 ns per instr. **Will modern x86 branch predictors actually saturate this to ~0 in the common case (IRQ rarely pending)?** Or does the load cost dominate?
+
+(2) **Cycle-budget proactive exit (Dolphin style)**: scheduler computes "cycles until next pending IRQ-deliverable event" and pre-loads that into block budget; block IR decrements cycles_left per instr (already done in Phase 1a) and exits early at the right cycle boundary. **Is this approach generic enough? It only works when the framework knows in advance when an IRQ might fire (timer overflow, scanline, etc.). For software-triggered IRQs (MMIO writes that set IF directly), the budget is wrong.**
+
+(3) **MMIO-aware block exit**: detect at compile time which instructions could write IRQ-relevant MMIO (e.g. STAT register, IF register, IE register), and end block at those instructions. **Is this practical for a generic framework? Requires per-CPU MMIO knowledge (LR35902 IF=FF0F, IE=FFFF; ARM IO range different) and per-instruction analysis (LDH FF0F = bad, LDH FF40 = ok). How would this be expressed in JSON spec?**
+
+(4) **Hybrid approach**: combine (1) and (2). Use cycle-budget for predicted events; use sparse inline checks for unpredictable software IRQs. Where to put the inline checks — every instruction, every N, or only at "barrier" instructions?
+
+(5) **Adaptive / profile-guided**: count how often each block triggers IRQ-relevant state changes; for hot blocks with frequent IRQ writes, recompile with finer-grained checks. **Worth the complexity, or do most CPUs have stable enough patterns that static analysis is fine?**
+
+(6) **Industry comparison**: how do real-world JITs handle this? I'm aware:
+- Dynarmic (ARM, used in Yuzu/Citra): uses event queue + cycle budget; inserts inline checks at "synchronization points" (specific instructions).
+- Dolphin (GameCube): cycle-precise event queue, block ends when next event due.
+- mGBA dynarec (GBA): I'm not sure of details.
+- DOSBox dynarec (x86): I think uses inline check + flag.
+- QEMU TCG: has translation block invalidation on event, plus inline `gen_io_start` markers in spec for IRQ-relevant ops.
+
+How does QEMU TCG's `gen_io_start` mechanism work? Could that pattern adapt to a JSON-driven framework?
+
+(7) **"Zero or near-zero cost" target**: which of (1)-(5) actually achieves this in practice? My intuition: (2) cycle-budget is best for predictable IRQs; (1) inline check is best for unpredictable; sparse inline at MMIO writes (subset of 3) might be a sweet spot. Confirm or correct.
+
+Constraints reminder:
+- Spec describes the SEMANTIC, not the implementation. Same spec must work for both per-instr backend AND block-JIT backend.
+- Generic across CPUs (ARM, LR35902, future RISC-V/MIPS)
+- Want preserve current ~+70% block-JIT MIPS over per-instr; OK with single-digit % cost for correctness.
+
+Please give specific actionable recommendation with implementation sketch, citing real source code where possible. ~800-1500 words.
+
+========================================================================
+RESPONSE
+========================================================================
+To achieve per-instruction IRQ granularity with near-zero performance cost in a generic, JSON-driven block-JIT, your intuition is correct: **(4) The Hybrid approach is the industry standard.** 
+
+Specifically, you need a combination of **(2) Cycle-budgeting** for predictable hardware events, and **a generic variant of (3) MMIO-aware exits** for unpredictable software-triggered events, resolved dynamically rather than statically.
+
+Here is the evaluation of your questions, followed by a concrete architectural blueprint for your framework.
+
+### Answers to Your Specific Questions
+
+**(1) Inline IRQ check everywhere:** While modern branch predictors (e.g., TAGE on x86/ARM) will indeed predict `if (irq_pending)` as not-taken with >99% accuracy, the cost is not zero. It bloats your LLVM IR, consumes valuable L1 instruction cache, wastes uOp cache, and restricts LLVM’s ability to optimize across instruction boundaries. It will likely cost you 5-15% of your JIT throughput.
+**(2) Cycle-budget proactive exit:** This is mandatory for "Zero-Cost" predictable IRQs (timers, APU, scanlines). But as you noted, it completely fails for software-triggered MMIO IRQs.
+**(3) MMIO-aware block exit (Static):** Baking MMIO maps into the JIT or JSON is an anti-pattern for a generic framework. The JSON spec shouldn't know that LR35902 `0xFF0F` is special.
+**(5) Adaptive / PGO:** Overkill. Emulators have stable enough patterns that a statically generated fast-path/slow-path split is highly predictable.
+**(6) Industry comparison (QEMU / Dynarmic):** 
+*   **Dynarmic** uses a cycle budget for deterministic events. For MMIO, memory accesses fall back to C++ handlers. If the C++ handler changes IRQ state, Dynarmic uses a `halt_requested` flag checked at specific synchronization points.
+*   **QEMU TCG** uses `gen_io_start` to mark boundaries of state-altering I/O. For MMIO, QEMU uses a slow-path memory helper. If an MMIO access alters CPU interrupt state, QEMU executes a `cpu_loop_exit()`, which uses `siglongjmp` (in C) to instantly abort the translated block and return to the main scheduler loop. LLVM doesn't have a cheap `siglongjmp`, but we can achieve the same result cleanly.
+
+---
+
+### The Recommended Strategy: Hybrid "Fast-Path/Slow-Path Sync"
+
+To keep the JSON spec generic while maintaining lockstep correctness and preserving your +70% MIPS boost, divide IRQ delivery into two categories: **Predictable** and **Unpredictable**.
+
+#### 1. Predictable IRQs: The External Cycle Budget
+You already have Phase 1a (predictive cycle downcounting). Elevate this: before `JsonCpu.RunCycles` enters the JIT, the emulator scheduler calculates the exact number of cycles until the next hardware event (e.g., Timer overflow in 42 cycles). 
+*   Pass this `budget` into the JIT block.
+*   The block decrements cycles and naturally exits when the budget hits zero.
+*   **Cost:** 0 overhead (you are already doing cycle counting).
+
+#### 2. Unpredictable IRQs: The MMIO Slow-Path Sync Request
+Software-triggered IRQs happen when the CPU writes to specific MMIO registers (e.g., `LDH FF41, A`). You don't need to check for IRQs after *every* instruction—**you only need to check after instructions that can mutate IRQ state.** 
+
+In any generic architecture, IRQ state is mutated in exactly two ways:
+1.  **Memory Accesses** (Memory-mapped I/O registers).
+2.  **Special CPU Instructions** (e.g., `EI`, `DI`, ARM `MSR`).
+
+**The Memory Access Trick:**
+Your JSON spec simply defines a memory write node: `mem_write(addr, val)`. The LLVM backend compiles this into an inline fast-path/slow-path check.
+*   **Fast-path:** If `addr` is in RAM, do a direct pointer write.
+*   **Slow-path:** If `addr` is MMIO, call out to your C# Phase 1b MMIO callback. 
+
+Change your C# bus callback signature from `void Bus_Write(...)` to `bool Bus_Write(...)`. The boolean represents `sync_requested`. If the C# memory controller detects a write to an IRQ-relevant register (like LR35902 `STAT`), it returns `true`. The JIT checks this boolean and instantly exits the block.
+
+**Cost Profile:** 
+*   RAM accesses: 0 extra overhead (fast-path branch perfectly predicted).
+*   MMIO accesses: ~2ns for the branch, completely dwarfed by the P/Invoke/delegate overhead of the C# callback itself.
+
+---
+
+### Implementation Sketch
+
+#### 1. The C# Bus Interface
+Update your external bus to return a synchronization flag.
+```csharp
+// C# external memory handler passed to the JIT
+[UnmanagedCallersOnly]
+public static byte BusWrite(uint address, byte value)
+{
+    bool syncRequired = SystemBus.Write(address, value);
+    // Return 1 for true (abort block), 0 for false
+    return syncRequired ? (byte)1 : (byte)0; 
+}
+```
+
+#### 2. The LLVM IR Generation for Memory Access
+When your JSON compiler processes a `mem_write` AST node, emit LLVM IR that looks like this conceptually:
+
+```llvm
+; LLVM IR Pseudo-code generated by your framework
+define void @mem_write(i32 %addr, i8 %val) {
+entry:
+    ; Fast path: Is it standard RAM? (e.g., < 0x8000)
+    %is_ram = icmp ult i32 %addr, 32768
+    br i1 %is_ram, label %fast_path, label %slow_path
+
+fast_path:
+    ; Inline pointer write (Zero overhead)
+    ; ... do inline write ...
+    br label %continue_exec
+
+slow_path:
+    ; Phase 1b Callback
+    %sync_req = call i8 @BusWrite(i32 %addr, i8 %val)
+    %must_sync = icmp eq i8 %sync_req, 1
+    ; Tell LLVM this is extremely unlikely to allow better code layout
+    %must_sync_hint = call i1 @llvm.expect.i1(i1 %must_sync, i1 false)
+    br i1 %must_sync_hint, label %exit_block, label %continue_exec
+
+exit_block:
+    ; Save state, write Next PC to state slot, and return to C#
+    store i32 %next_pc, ptr %cpu_pc_slot
+    ret void
+
+continue_exec:
+    ; Continue to the next instruction in the JIT block
+}
+```
+
+#### 3. Handling Special CPU Instructions (JSON AST)
+For instructions that alter IRQ state without touching memory (e.g., `EI` in LR35902, `MSR` in ARM), you handle this purely in the JSON AST using your existing `defer` micro-op infrastructure.
+
+Add a micro-op to your JSON spec called `Yield` or `Sync`. 
+```json
+{
+  "opcode": "EI",
+  "semantics": [
+    { "op": "set_flag", "target": "IME", "value": 1, "defer": 1 },
+    { "op": "sync" } 
+  ]
+}
+```
+When the JIT backend encounters `{ "op": "sync" }`, it simply emits an unconditional branch to the block exit, forcing the outer C# loop to re-evaluate IRQs at the exact instruction boundary required.
+
+### Why this satisfies all constraints:
+
+1.  **Strict Lockstep Correctness:** The block executes exactly as many instructions as per-instr mode. If a write to `STAT` triggers an IRQ, the C# bus returns `true`, the block exits exactly *at that instruction boundary*, and the outer loop delivers the IRQ. Divergence is mathematically impossible.
+2.  **Zero-Cost Common Case:** 99% of memory writes hit the RAM fast-path. The LLVM `llvm.expect` intrinsic pushes the slow-path to the bottom of the emitted machine code (cold code), keeping your I-cache tightly packed. Standard instructions have zero IRQ checks.
+3.  **Generic & JSON-Driven:** The JSON spec remains blissfully unaware of memory maps, IRQ lines, or hardware timings. It only knows `mem_read`, `mem_write`, and `sync`. The hardware specifics are encapsulated entirely in the C# `BusWrite` callback.
+4.  **Forward Compatible:** When you add RISC-V, its `CSRRW` (Control and Status Register Read/Write) instructions can just trigger the `{ "op": "sync" }` micro-op, seamlessly fitting the model.
