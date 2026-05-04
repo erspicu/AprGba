@@ -445,6 +445,51 @@ B.a OptLevel O3 → F.x id-keyed fn cache → F.y pre-built decoded
 | GB  09-loop100 json  | 2.66      | ~6.5     |    —     | ~13×（GB 走 per-instr） |
 | GB  09-loop100 LEGACY| 32.76     | ~31.7    |    —     | ~67× |
 
+#### 進度快照（2026-05-04 update — GB block-JIT P0+P1 ship）
+
+GB block-JIT 從無到有，子題 roadmap 在 `MD/design/12-gb-block-jit-roadmap.md`。
+P0 4 步 + P0.5/P0.6/P0.7/P0.7b 後續、P1 #5/#5b/#6/#7 主體都已 ship。
+
+**P0 4 步**（`MD/performance/202605040000-gb-block-jit-p0-complete.md` 詳載）：
+1. Variable-width `BlockDetector` (`3024100`) — `lengthOracle` callback
+2. 0xCB prefix as 2-byte atomic (`0cb93a8`) — `prefix_to_set: "CB"` + sub-decoder
+3. Immediate baking via instruction_word packing (`7a8305a`)
+4. GB CLI `--block-jit` + Strategy 2 PC fixes (`adddade`)
+
+**P0 後續**：HALT/STOP boundary (`a10a718`)、generic defer micro-op (`ca248e8`)、
+hybrid IRQ delivery sync micro-op (`2a1de15`+`674316f`)、conditional branch
+taken-cycle accounting (`34f9f4b`+`d7314a8`)。
+
+**P1 主體**（`MD/design/12-gb-block-jit-roadmap.md` §3 Tier P1）：
+- **P1 #5 V1 block-local register shadowing** (`0e1e280`) — EmitContext shadow
+  slot infra + ctx.GepGpr/GepStatusRegister + DrainShadowsToState；7 GPR + F + SP
+  alloca shadows；mem2reg promote 到 SSA。V1 -4% perf cost (block 太小 entry/exit
+  開銷大於內部節省)；V2 待做 per-block live-range analysis 翻成正向。
+- **P1 #5b SMC V2** (`6c04422`) — IR-level inline notify (env `APR_SMC_INLINE_NOTIFY`)
+  + 精確 per-instr coverage (always-on) + cross-jump-into-RAM 解禁 (env
+  `APR_CROSS_JUMP_RAM`)。預設兩 env OFF 保 V1 行為；ON 後 cpu_instrs sub-test
+  03 livelock 因 invalidation cycle drift，待 V3 deferred-invalidation 解。
+- **P1 #6 cross-jump follow** (`dd99c98`) — JR/JP unconditional follow，ROM-only
+  V1；V2 (P1 #5b 解禁) env-gated。
+- **P1 #7 IR-level WRAM/HRAM inline write** (`15f913f`) — 跳過 bus extern；
+  per-CPU pinned base pointer (lr35902_wram_base / hram_base)。
+- **P2 #8 A.5 SMC V1 infrastructure** (`8ce66ac`) — per-byte coverage counter
+  + bus-extern path notify。被 P1 #5b 進化為 V2；併入 P1 範疇。
+
+**累計成果**（GB block-JIT 路徑，cpu_instrs master）：
+
+| Mode | per-instr (json-llvm) | block-JIT | 跟 legacy 比 |
+|---|---:|---:|---:|
+| @ 10k frames | ~9 MIPS | **~21 MIPS** | -32% (legacy 31) |
+| @ 60k frames (compile amortised) | — | **~27 MIPS** | -13% |
+
+**GBA 路徑 known regression**：P0.7b 留下 GBA bjit -16%（commit `d7314a8` 後）；
+正確性 OK 但 perf 待修。原 HLE arm 10.3 → 8.7 MIPS。
+
+**剩餘 P2/P3/P4**：詳見 `MD/design/12-gb-block-jit-roadmap.md` §3。下一步建議
+pick：A.9 profiling tool (S/L/diagnostic, prerequisite for any further perf
+work) → P1 #5 V2 / P1 #5b V3 / GBA bjit P0.7b regression 三選一。
+
 **Known characteristic — BIOS LLE bjit 反慢**：詳見
 `MD/performance/202605032030-bios-loop100-bench.md`。Detector 把 unconditional
 `B`/`BL`/`BX` 切成 block 邊界，loop100 ROM 在 BIOS path 平均 block 長度
@@ -458,9 +503,10 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
 - **[⏸ blocked]** = 需要 prerequisite 才能做（多半 blocked on A.5 SMC
   或 A.7 block linking）
 - **[⊘ skipped]** = 經評估 ROI 太低 / 已被其他 step cover / LLVM 自己會做
-- **[ ]** = doable 但還沒做（剩 A.5 SMC、A.7 block linking、A.8 state→reg
-  caching、A.9 profiling、E.c IR-level region check、G.a/b host runtime
-  優化、H.b-i 各種未做）
+- **[ ]** = doable 但還沒做（**2026-05-04 update**：A.5 SMC ✅、A.8 state→reg
+  caching ✅ (跟 P1 #5 重疊)、E.c IR-level region check ✅ (`15f913f` LR35902
+  WRAM/HRAM inline write)。剩 A.7 block linking、A.9 profiling、G.a/b host
+  runtime 優化、H.b-i 各種未做）
 
 **已嘗試但 deferred**：
 - **C.b alloca-based shadow lazy flag** — 兩次 retry 都失敗：第一次 (2026-05-03
@@ -523,11 +569,11 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
   module 的 memory_read_* / bank_swap 等 trampoline。8 新 unit tests
   (round-trip / miss / capacity / MRU promotion / invalidate / clear /
   ctor 防呆)。
-- [ ] **A.5 SMC 偵測 + invalidation**：寫入「已編譯區域」時 invalidate
-  cached blocks。需要 memory bus write 攔截 + page-level dirty bit table，
-  跟 invalidate-on-write 的 cascade。**為什麼還沒做**：SMC 罕見但漏掉
-  會 silent corruption；要先有 A.4 code cache 才能 invalidate。**估時**：
-  2-3 天。
+- [x] **A.5 SMC 偵測 + invalidation**（2026-05-04 完成，V1+V2）— V1
+  (`8ce66ac`) per-byte coverage counter + bus-extern path notify；V2
+  (`6c04422`) IR-level inline notify (env `APR_SMC_INLINE_NOTIFY` gated)
+  + 精確 per-instr coverage (always-on)。詳見 `MD/design/12-gb-block-jit-roadmap.md`
+  P1 #5b 表。Followup: V3 deferred-invalidation pattern 解 cycle drift。
 - [x] **A.6 Indirect branch dispatch + CpuExecutor block-JIT 整合**
   （2026-05-02 完成）— `CpuExecutor` 新加 `EnableBlockJit(compileResult)`
   + 內部 `StepBlock()` + `CompileBlockAtPc()`：cache 命中直接 jump block fn；
@@ -579,11 +625,14 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
   branch 不退出 JIT，省一次 dispatch。**為什麼還沒做**：高複雜度 native
   code patching；ORC LLJIT 提供 stub-rewriting 機制。**估時**：3-4 天 +
   Windows / Linux 各自 patching mechanism 都要驗。
-- [ ] **A.8 State→register caching**：block entry 把常用 reg load 進 LLVM
-  virtual register，exit 才 store 回 state buffer (mem2reg-friendly pattern)。
-  **為什麼還沒做**：要 A.2 block-level IR 才有「block entry/exit」邊界；
-  跟 SMC 互動 — 中途若有 mem write 觸發 SMC 必須先 spill。**估時**：2-3
-  天。
+- [x] **A.8 State→register caching**（2026-05-04 完成 V1，與 P1 #5
+  重疊）— 機制 commit `0e1e280` (P1 #5 V1)：EmitContext 加 GprShadowSlots
+  / StatusShadowSlots，block entry alloca + load state→shadow，exit
+  drain shadow→state；mem2reg promote 到 SSA。LR35902 路徑 always-on
+  (gated GprWidthBits==8)；ARM 路徑因 GepGprDynamic 不啟用。V1 unconditional
+  alloc 7 GPR + F + SP，cpu_instrs 小 block -4% (entry/exit 開銷大於內部
+  節省)；V2 per-block live-range 待做。詳見 `MD/design/12-gb-block-jit-roadmap.md`
+  P1 #5。
 - [ ] **A.9 Performance profiling 工具**：host 端記錄 block 編譯次數 /
   執行次數 / 佔總執行時間比例，cli flag `--bench-blocks` dump 報表。
   **為什麼還沒做**：profiling 是 nice-to-have，不影響功能；做完整 Group
@@ -745,10 +794,14 @@ B target 也 detect 進來連續編譯（預期 block 平均拉到 5-10 instr，
   保留 slow path（IO/Palette/VRAM/OAM 寫入有 side effects）。
   **loop100 上 +0.6% noise** — 這 ROM ALU-heavy 不是 mem-heavy；改動正確
   但要 mem-heavy bench 才看得出實際收益。
-- [ ] **E.c Mem-bus region table inline check (IR 層)**：比 E.b
-  trampoline-side 更激進 — JIT'd code 內 emit 「addr ∈ ROM/RAM
-  region 直接 GEP；else call extern」分支，**完全省掉 trampoline 進
-  C# 的 cost**。
+- [x] **E.c Mem-bus region table inline check (IR 層)**（2026-05-04 完成
+  LR35902 WRAM/HRAM 部分，commit `15f913f`）：JIT'd code 內 emit「addr ∈
+  WRAM (0xC000-0xDFFF) / HRAM (0xFF80-0xFFFE) 直接 GEP-store；else call
+  sync-flag extern」分支。LR35902 寫入路徑只實作 WRAM/HRAM；MMIO/cart-RAM
+  仍走 sync extern (有 side effects)。讀取路徑、ARM/GBA 端、cart ROM 區
+  仍未做。Pinned base pointers `lr35902_wram_base` / `lr35902_hram_base`
+  由 JsonCpu.Reset bind。原本下面提到的 「比 E.b 更激進」設計目標
+  partial 達成；GBA 端 + 讀取 path 留 followup。
   - **要動什麼**：(1) MemoryEmitters.cs 改 IR 生成 — 把 `call
     @memory_read_8(addr)` 改成 `if region check then load else call`；
     (2) 暴露 region base address (e.g. cart ROM byte[] 的 pinned address)
