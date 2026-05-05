@@ -292,6 +292,19 @@ The framework is designed so that the following are *additive* extensions, not a
 - **Timing model upgrades.** Per-cycle bus contention, deferred SMC invalidation, full pipeline modelling — each one fits one of the three architectural patterns in [`MD_EN/design/15-timing-and-framework-design.md`](MD_EN/design/15-timing-and-framework-design.md).
 - **Beyond emulation.** A JSON-driven CPU model is also a *specification artefact* — usable for: educational visualisations, what-if architectural studies, cross-architecture binary translators, dynamic taint analysis, formal verification scaffolding. The framework doesn't *do* these, but it's a substrate that makes them practical for hobbyist effort.
 
+> **Want to push the framework further?** A long synthesis doc —
+> [`MD_EN/note/framework-future-extensions-and-vision.md`](MD_EN/note/framework-future-extensions-and-vision.md) —
+> lays out a concrete advanced-challenge roadmap: spec-level extensions
+> needed to support modern machines (FPU / SIMD / multi-core / delay
+> slots), the co-processor plug-in architecture (PS1 GTE pattern), the
+> machine-level definition (`MachineDef`) schema, where the JSON-vs-C#
+> boundary should sit, industry comparison (MAME, QEMU TCG, Ghidra
+> SLEIGH, ArchC), and 8 application directions beyond emulation
+> (educational visualisation, what-if architecture studies, cross-arch
+> binary translation, taint analysis, formal verification scaffolding,
+> RTL co-simulation, hardware preservation). **If you want to take over
+> or contribute substantially, start there.**
+
 ### 9. References & acknowledgements
 
 - **Vendor manuals** (in `ref/`) — ARM Architecture Reference Manual, Game Boy CPU manual, Pan Docs.
@@ -582,6 +595,17 @@ dotnet run --project src/AprGb.Cli -- \
 - **Spec-time IR pre-pass。** Dead-flag elimination、micro-op fusion、hot-opcode inlining — 全都自然延伸現有的 AST pre-pass 機制。
 - **Timing 模型升級。** Per-cycle bus contention、deferred SMC invalidation、完整 pipeline 模擬 — 每個都套到 [`MD/design/15-timing-and-framework-design.md`](MD/design/15-timing-and-framework-design.md) 三大 pattern 的其中一個。
 - **超出 emulation 的應用。** JSON-driven CPU model 同時是個 *規格檔* — 可以拿來做：教育性視覺化、what-if 架構研究、跨架構 binary translator、dynamic taint analysis、formal verification scaffolding。框架本身不做這些事，但是它是個讓 hobbyist effort 也能做這些事的基礎。
+
+> **想把框架推得更遠？** 有一份長篇 synthesis doc —
+> [`MD/note/framework-future-extensions-and-vision.md`](MD/note/framework-future-extensions-and-vision.md) —
+> 整理出具體的進階挑戰路線圖：要支援現代機種需要的 spec-level 擴充
+> (FPU / SIMD / 多核 / delay slots)、co-processor plug-in 架構 (PS1
+> GTE 範式)、machine-level definition (`MachineDef`) schema、JSON vs
+> C# 的邊界該劃在哪、業界對比 (MAME / QEMU TCG / Ghidra SLEIGH /
+> ArchC)、以及 8 個 emulation 之外的應用方向（教育視覺化、what-if
+> 架構研究、跨架構 binary translation、taint analysis、formal
+> verification scaffolding、RTL co-simulation、硬體保存等）。**想接
+> 手或實質貢獻的話，從這份開始讀。**
 
 ### 9. References & 致謝
 
