@@ -1,3 +1,5 @@
+#define illegal
+
 // Ricoh 2A03 (NES 6502 variant) CPU oracle implementation.
 //
 // Ported from erspicu/AprNes commit fcbbb23 (2026-02-21) — the last
@@ -87,6 +89,23 @@ public unsafe class Ricoh2A03Cpu
     /// software-only, returned as 0 here; callers needing the BRK form
     /// should OR-in 0x10 themselves, matching the fcbbb23 PHP path.</summary>
     public byte P => GetFlag();
+
+    /// <summary>
+    /// Test / nestest-style direct register init. Caller supplies all
+    /// 6502 register state at once; bypasses the reset-vector fetch.
+    /// </summary>
+    public void SetRegisters(byte a, byte x, byte y, byte sp, ushort pc,
+        byte flagN, byte flagV, byte flagD, byte flagI, byte flagZ, byte flagC)
+    {
+        r_A = a; r_X = x; r_Y = y; r_SP = sp; r_PC = pc;
+        this.flagN = flagN; this.flagV = flagV; this.flagD = flagD;
+        this.flagI = flagI; this.flagZ = flagZ; this.flagC = flagC;
+    }
+
+    /// <summary>Set the bookkeeping cycle count carried over from the
+    /// previous interrupt entry (reset / NMI / IRQ); affects the cycle
+    /// total reported by the next StepOne().</summary>
+    public void SetInterruptCycle(int cycles) { Interrupt_cycle = cycles; }
 
     //table port from  https://github.com/bfirsh/jsnes/blob/master/source/cpu.js
     byte[] cycle_tableData = new byte[]{

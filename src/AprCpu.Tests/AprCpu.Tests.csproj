@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AprCpu.Core\AprCpu.Core.csproj" />
+    <ProjectReference Include="..\AprNes.Cli\AprNes.Cli.csproj" />
   </ItemGroup>
 
 </Project>
