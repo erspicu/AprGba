@@ -1,0 +1,93 @@
+{
+  "$schema": "../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+
+  "architecture": {
+    "id":             "Ricoh2A03",
+    "family":         "MOS6502",
+    "extends":        null,
+    "endianness":     "little",
+    "word_size_bits": 8
+  },
+
+  "variants": [
+    {
+      "id":       "2A03",
+      "core":     "Ricoh2A03",
+      "features": ["unofficial_opcodes"],
+      "notes":    "Ricoh 2A03 = NES NTSC main CPU. Customized 6502: decimal mode disabled (D flag exists but is no-op in ALU), integrated APU (separate spec), no BCD ALU. Compatible with full 6502 instruction set including all 105 unofficial opcodes."
+    },
+    {
+      "id":       "2A07",
+      "core":     "Ricoh2A03",
+      "features": ["unofficial_opcodes"],
+      "notes":    "PAL variant — same ISA as 2A03, different CPU clock divisor + PPU clock. ISA-level identical; not yet shipped."
+    }
+  ],
+
+  "register_file": {
+    "general_purpose": {
+      "count":      3,
+      "width_bits": 8,
+      "names":      ["A", "X", "Y"],
+      "aliases":    {},
+      "pc_index":   null,
+      "comment":    "6502 has only 3 user-visible 8-bit GPRs (accumulator + 2 index regs). SP/PC/P are status registers below."
+    },
+
+    "register_pairs": [],
+
+    "stack_pointer": "SP",
+
+    "status": [
+      {
+        "name":       "P",
+        "width_bits": 8,
+        "comment":    "Processor status: NV-BDIZC. Bit 5 always 1 (unused). Bit 4 (B) only set on stack pushes from BRK/PHP. D flag exists but Ricoh 2A03 disables decimal mode in ALU.",
+        "fields": {
+          "C": "0",
+          "Z": "1",
+          "I": "2",
+          "D": "3",
+          "B": "4",
+          "U": "5",
+          "V": "6",
+          "N": "7"
+        }
+      },
+      {
+        "name":       "SP",
+        "width_bits": 8,
+        "comment":    "Stack pointer — logical 8-bit, physical stack lives at $0100..$01FF. Push: write $0100|SP, then SP--. Pull: SP++, then read $0100|SP.",
+        "fields":     {}
+      },
+      {
+        "name":       "PC",
+        "width_bits": 16,
+        "fields":     {}
+      }
+    ]
+  },
+
+  "exception_vectors": [
+    { "name": "NMI",   "address": "0x0000FFFA" },
+    { "name": "RESET", "address": "0x0000FFFC" },
+    { "name": "IRQ",   "address": "0x0000FFFE", "comment": "Shared with BRK; B flag distinguishes which one fired." }
+  ],
+
+  "instruction_sets": [
+    { "name": "Main", "file": "main.json" }
+  ],
+
+  "instruction_set_dispatch": {
+    "selector":         "single",
+    "selector_values":  { "main": "Main" },
+    "switch_via":       []
+  },
+
+  "pipeline": {
+    "model":          "in_order",
+    "pc_offset_bytes": 1,
+    "comment":        "6502 has no pipeline-PC quirks: PC reads always return the current instruction's address + length. No 'pre-fetched next' visibility."
+  }
+}

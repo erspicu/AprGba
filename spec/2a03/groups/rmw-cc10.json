@@ -1,0 +1,26 @@
+{
+  "name": "Rmw_cc10",
+  "comment": "cc=10 read-modify-write + LD/ST + INC/DEC class. aaa selects op: 000=ASL, 001=ROL, 010=LSR, 011=ROR, 100=STX, 101=LDX, 110=DEC, 111=INC. bbb addressing modes are op-specific (some bbb values illegal per op — those become unofficial NOPs/KILs in unofficial.json). Common modes: bbb=001=zp, 010=A(accumulator)/=#imm for LDX, 011=abs, 101=zp,X (or zp,Y for STX/LDX), 111=abs,X (or abs,Y for LDX). Many holes in this 8x8 matrix → unofficial opcodes.",
+  "formats": [
+    {
+      "name": "Rmw_cc10",
+      "pattern": "aaabbb10",
+      "fields": {
+        "aaa": "7:5",
+        "bbb": "4:2"
+      },
+      "mask": "0x03",
+      "match": "0x02",
+      "instructions": [
+        { "selector": { "field": "aaa", "value": "000" }, "mnemonic": "ASL", "since": "Ricoh2A03", "manual_ref": "6502 §ASL — bbb=010=A (accumulator)", "cycles": { "form": "5m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "001" }, "mnemonic": "ROL", "since": "Ricoh2A03", "manual_ref": "6502 §ROL",                              "cycles": { "form": "5m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "010" }, "mnemonic": "LSR", "since": "Ricoh2A03", "manual_ref": "6502 §LSR",                              "cycles": { "form": "5m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "011" }, "mnemonic": "ROR", "since": "Ricoh2A03", "manual_ref": "6502 §ROR",                              "cycles": { "form": "5m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "100" }, "mnemonic": "STX", "since": "Ricoh2A03", "manual_ref": "6502 §STX — bbb=001/011/101(zp,Y) only", "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "101" }, "mnemonic": "LDX", "since": "Ricoh2A03", "manual_ref": "6502 §LDX — bbb=000=#imm, 101=zp,Y, 111=abs,Y", "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "110" }, "mnemonic": "DEC", "since": "Ricoh2A03", "manual_ref": "6502 §DEC — only zp/abs/zp,X/abs,X",    "cycles": { "form": "5m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "111" }, "mnemonic": "INC", "since": "Ricoh2A03", "manual_ref": "6502 §INC",                              "cycles": { "form": "5m" }, "steps": [] }
+      ]
+    }
+  ]
+}

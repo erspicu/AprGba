@@ -1,0 +1,25 @@
+{
+  "name": "Branches",
+  "comment": "8 conditional branches encoded as ccc10000 (mask 0x1F match 0x10). The ccc field decodes (flag,expected): 000=N=0(BPL), 001=N=1(BMI), 010=V=0(BVC), 011=V=1(BVS), 100=C=0(BCC), 101=C=1(BCS), 110=Z=0(BNE), 111=Z=1(BEQ). All take a signed 8-bit relative offset. Cycle cost: 2m base + 1 if taken + 1 if page crossed.",
+  "formats": [
+    {
+      "name": "ConditionalBranch",
+      "pattern": "ccc10000",
+      "fields": {
+        "ccc": "7:5"
+      },
+      "mask": "0x1F",
+      "match": "0x10",
+      "instructions": [
+        { "selector": { "field": "ccc", "value": "000" }, "mnemonic": "BPL", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BPL", "cycles": { "form": "2m_or_4m" }, "steps": [] },
+        { "selector": { "field": "ccc", "value": "001" }, "mnemonic": "BMI", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BMI", "cycles": { "form": "2m_or_4m" }, "steps": [] },
+        { "selector": { "field": "ccc", "value": "010" }, "mnemonic": "BVC", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BVC", "cycles": { "form": "2m_or_4m" }, "steps": [] },
+        { "selector": { "field": "ccc", "value": "011" }, "mnemonic": "BVS", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BVS", "cycles": { "form": "2m_or_4m" }, "steps": [] },
+        { "selector": { "field": "ccc", "value": "100" }, "mnemonic": "BCC", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BCC", "cycles": { "form": "2m_or_4m" }, "steps": [] },
+        { "selector": { "field": "ccc", "value": "101" }, "mnemonic": "BCS", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BCS", "cycles": { "form": "2m_or_4m" }, "steps": [] },
+        { "selector": { "field": "ccc", "value": "110" }, "mnemonic": "BNE", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BNE", "cycles": { "form": "2m_or_4m" }, "steps": [] },
+        { "selector": { "field": "ccc", "value": "111" }, "mnemonic": "BEQ", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BEQ", "cycles": { "form": "2m_or_4m" }, "steps": [] }
+      ]
+    }
+  ]
+}

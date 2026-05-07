@@ -1,0 +1,42 @@
+{
+  "name": "StackAndJump",
+  "comment": "Stack push/pop + JSR/RTS/RTI + JMP variants. All have unique mask 0xFF opcodes (no encoding family).",
+  "formats": [
+    {
+      "name": "PushAccumulator",  "pattern": "01001000", "fields": {}, "mask": "0xFF", "match": "0x48",
+      "instructions": [{ "mnemonic": "PHA", "since": "Ricoh2A03", "manual_ref": "6502 §PHA", "cycles": { "form": "3m" }, "steps": [] }]
+    },
+    {
+      "name": "PullAccumulator",  "pattern": "01101000", "fields": {}, "mask": "0xFF", "match": "0x68",
+      "instructions": [{ "mnemonic": "PLA", "since": "Ricoh2A03", "manual_ref": "6502 §PLA", "cycles": { "form": "4m" }, "steps": [] }]
+    },
+    {
+      "name": "PushProcessorStatus", "pattern": "00001000", "fields": {}, "mask": "0xFF", "match": "0x08",
+      "instructions": [{ "mnemonic": "PHP", "since": "Ricoh2A03", "manual_ref": "6502 §PHP — pushes P with B=1 U=1", "cycles": { "form": "3m" }, "steps": [] }]
+    },
+    {
+      "name": "PullProcessorStatus", "pattern": "00101000", "fields": {}, "mask": "0xFF", "match": "0x28",
+      "instructions": [{ "mnemonic": "PLP", "since": "Ricoh2A03", "manual_ref": "6502 §PLP — restores P (B/U bits ignored)", "cycles": { "form": "4m" }, "steps": [] }]
+    },
+    {
+      "name": "JumpToSubroutine", "pattern": "00100000", "fields": {}, "mask": "0xFF", "match": "0x20",
+      "instructions": [{ "mnemonic": "JSR", "since": "Ricoh2A03", "writes_pc": "always", "manual_ref": "6502 §JSR abs", "cycles": { "form": "6m" }, "steps": [] }]
+    },
+    {
+      "name": "ReturnFromSubroutine", "pattern": "01100000", "fields": {}, "mask": "0xFF", "match": "0x60",
+      "instructions": [{ "mnemonic": "RTS", "since": "Ricoh2A03", "writes_pc": "always", "manual_ref": "6502 §RTS", "cycles": { "form": "6m" }, "steps": [] }]
+    },
+    {
+      "name": "ReturnFromInterrupt", "pattern": "01000000", "fields": {}, "mask": "0xFF", "match": "0x40",
+      "instructions": [{ "mnemonic": "RTI", "since": "Ricoh2A03", "writes_pc": "always", "manual_ref": "6502 §RTI", "cycles": { "form": "6m" }, "steps": [] }]
+    },
+    {
+      "name": "JumpAbsolute",     "pattern": "01001100", "fields": {}, "mask": "0xFF", "match": "0x4C",
+      "instructions": [{ "mnemonic": "JMP", "since": "Ricoh2A03", "writes_pc": "always", "manual_ref": "6502 §JMP abs", "cycles": { "form": "3m" }, "steps": [] }]
+    },
+    {
+      "name": "JumpIndirect",     "pattern": "01101100", "fields": {}, "mask": "0xFF", "match": "0x6C",
+      "instructions": [{ "mnemonic": "JMP_IND", "since": "Ricoh2A03", "writes_pc": "always", "manual_ref": "6502 §JMP () — has page-cross bug", "cycles": { "form": "5m" }, "steps": [] }]
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+  "name": "Main",
+  "width_bits": 8,
+  "alignment_bytes": 1,
+  "pc_offset_bytes": 1,
+  "endian_within_word": "little",
+  "decode_strategy": "mask_match_priority",
+
+  "comment": [
+    "6502/2A03 instruction set, decoded via the well-known 'aaa bbb cc' encoding pattern.",
+    "Bit layout: [aaa:7-5][bbb:4-2][cc:1-0]. cc selects class (00 ctrl, 01 ALU, 10 RMW, 11 unofficial),",
+    "aaa selects op within class, bbb selects addressing mode.",
+    "",
+    "Group ordering (decode_strategy=mask_match_priority):",
+    "1. Specific 1-opcode entries (mask 0xFF) — BRK/RTI/RTS/JSR/PHA/PLA/...",
+    "2. Branch family (mask 0x1F match 0x10) — 8 conditional branches",
+    "3. cc=01 ALU broad pattern (mask 0x03 match 0x01)",
+    "4. cc=10 RMW + LD/ST (mask 0x03 match 0x02)",
+    "5. cc=00 control + LD/ST (mask 0x03 match 0x00)",
+    "6. cc=11 unofficial (mask 0x03 match 0x03)",
+    "Higher specificity wins over broader patterns, so individual KIL/NOP/unofficial",
+    "opcodes can shadow the broader cc patterns where needed."
+  ],
+
+  "comment_priority": [
+    "Decoder uses first-match-wins on encoding_groups order (DecoderTable",
+    "scans formats in declaration order). So mask=0xFF entries must come",
+    "FIRST to shadow the broader cc-pattern formats. Within each group,",
+    "format declaration order also matters."
+  ],
+
+  "encoding_groups": [
+    { "$include": "groups/unique-opcodes.json" },
+    { "$include": "groups/branches.json" },
+    { "$include": "groups/transfer-and-flags.json" },
+    { "$include": "groups/stack-and-jump.json" },
+    { "$include": "groups/unofficial.json" },
+    { "$include": "groups/alu-cc01.json" },
+    { "$include": "groups/rmw-cc10.json" },
+    { "$include": "groups/ctrl-cc00.json" }
+  ]
+}

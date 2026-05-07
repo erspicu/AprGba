@@ -1,0 +1,23 @@
+{
+  "name": "Ctrl_cc00",
+  "comment": "cc=00 control + LD/ST class. aaa selects op: 000=irregular(BRK/PHP/...), 001=BIT, 010=irregular(JMP/PHA/...), 011=irregular(JMP_IND/PLA/...), 100=STY, 101=LDY, 110=CPY, 111=CPX. The discrete opcodes (BRK/JMP/JSR/etc.) are shadowed by unique-opcodes.json + stack-and-jump.json + branches.json with mask 0xFF. This format covers BIT/STY/LDY/CPY/CPX with bbb addressing modes; aaa=000/010/011 (irregular ops) plus aaa-with-illegal-bbb fall through to unofficial.json.",
+  "formats": [
+    {
+      "name": "Ctrl_cc00",
+      "pattern": "aaabbb00",
+      "fields": {
+        "aaa": "7:5",
+        "bbb": "4:2"
+      },
+      "mask": "0x03",
+      "match": "0x00",
+      "instructions": [
+        { "selector": { "field": "aaa", "value": "001" }, "mnemonic": "BIT", "since": "Ricoh2A03", "manual_ref": "6502 §BIT — only zp(0x24) / abs(0x2C); other bbb shadowed by unofficial NOPs", "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "100" }, "mnemonic": "STY", "since": "Ricoh2A03", "manual_ref": "6502 §STY — zp(0x84)/abs(0x8C)/zp,X(0x94)",                                  "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "101" }, "mnemonic": "LDY", "since": "Ricoh2A03", "manual_ref": "6502 §LDY — #imm(0xA0)/zp(0xA4)/abs(0xAC)/zp,X(0xB4)/abs,X(0xBC)",         "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "110" }, "mnemonic": "CPY", "since": "Ricoh2A03", "manual_ref": "6502 §CPY — #imm(0xC0)/zp(0xC4)/abs(0xCC)",                                  "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "111" }, "mnemonic": "CPX", "since": "Ricoh2A03", "manual_ref": "6502 §CPX — #imm(0xE0)/zp(0xE4)/abs(0xEC)",                                  "cycles": { "form": "3m" }, "steps": [] }
+      ]
+    }
+  ]
+}

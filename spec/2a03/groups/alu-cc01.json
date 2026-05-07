@@ -1,0 +1,26 @@
+{
+  "name": "Alu_cc01",
+  "comment": "cc=01 ALU class — 8 ops × 8 addressing modes = 64 opcodes. Bits [aaa:7-5][bbb:4-2][cc:1-0]. aaa selects op (000=ORA, 001=AND, 010=EOR, 011=ADC, 100=STA, 101=LDA, 110=CMP, 111=SBC). bbb selects addressing mode (000=(zp,X), 001=zp, 010=#imm, 011=abs, 100=(zp),Y, 101=zp,X, 110=abs,Y, 111=abs,X). Note: aaa=100 bbb=010 (opcode 0x89) is STA #imm = unofficial NOP, shadowed by unofficial.json mask 0xFF entry.",
+  "formats": [
+    {
+      "name": "AluCc01",
+      "pattern": "aaabbb01",
+      "fields": {
+        "aaa": "7:5",
+        "bbb": "4:2"
+      },
+      "mask": "0x03",
+      "match": "0x01",
+      "instructions": [
+        { "selector": { "field": "aaa", "value": "000" }, "mnemonic": "ORA", "since": "Ricoh2A03", "manual_ref": "6502 §ORA — bbb selects addr mode", "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "001" }, "mnemonic": "AND", "since": "Ricoh2A03", "manual_ref": "6502 §AND",                "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "010" }, "mnemonic": "EOR", "since": "Ricoh2A03", "manual_ref": "6502 §EOR",                "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "011" }, "mnemonic": "ADC", "since": "Ricoh2A03", "manual_ref": "6502 §ADC",                "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "100" }, "mnemonic": "STA", "since": "Ricoh2A03", "manual_ref": "6502 §STA — addr mode by bbb (#imm form is illegal/NOP, see unofficial.json 0x89)", "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "101" }, "mnemonic": "LDA", "since": "Ricoh2A03", "manual_ref": "6502 §LDA",                "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "110" }, "mnemonic": "CMP", "since": "Ricoh2A03", "manual_ref": "6502 §CMP",                "cycles": { "form": "3m" }, "steps": [] },
+        { "selector": { "field": "aaa", "value": "111" }, "mnemonic": "SBC", "since": "Ricoh2A03", "manual_ref": "6502 §SBC",                "cycles": { "form": "3m" }, "steps": [] }
+      ]
+    }
+  ]
+}

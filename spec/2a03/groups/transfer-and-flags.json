@@ -1,0 +1,74 @@
+{
+  "name": "TransferAndFlags",
+  "comment": "Implied 1-byte register transfers + flag manipulation + register inc/dec. All mask 0xFF (unique opcodes).",
+  "formats": [
+    {
+      "name": "ClearCarry",      "pattern": "00011000", "fields": {}, "mask": "0xFF", "match": "0x18",
+      "instructions": [{ "mnemonic": "CLC", "since": "Ricoh2A03", "manual_ref": "6502 §CLC", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "SetCarry",        "pattern": "00111000", "fields": {}, "mask": "0xFF", "match": "0x38",
+      "instructions": [{ "mnemonic": "SEC", "since": "Ricoh2A03", "manual_ref": "6502 §SEC", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "ClearInterrupt",  "pattern": "01011000", "fields": {}, "mask": "0xFF", "match": "0x58",
+      "instructions": [{ "mnemonic": "CLI", "since": "Ricoh2A03", "manual_ref": "6502 §CLI", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "SetInterrupt",    "pattern": "01111000", "fields": {}, "mask": "0xFF", "match": "0x78",
+      "instructions": [{ "mnemonic": "SEI", "since": "Ricoh2A03", "manual_ref": "6502 §SEI", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "ClearOverflow",   "pattern": "10111000", "fields": {}, "mask": "0xFF", "match": "0xB8",
+      "instructions": [{ "mnemonic": "CLV", "since": "Ricoh2A03", "manual_ref": "6502 §CLV", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "ClearDecimal",    "pattern": "11011000", "fields": {}, "mask": "0xFF", "match": "0xD8",
+      "instructions": [{ "mnemonic": "CLD", "since": "Ricoh2A03", "manual_ref": "6502 §CLD", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "SetDecimal",      "pattern": "11111000", "fields": {}, "mask": "0xFF", "match": "0xF8",
+      "instructions": [{ "mnemonic": "SED", "since": "Ricoh2A03", "manual_ref": "6502 §SED — D flag set but no-op in 2A03 (no BCD ALU)", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "TransferAToX",    "pattern": "10101010", "fields": {}, "mask": "0xFF", "match": "0xAA",
+      "instructions": [{ "mnemonic": "TAX", "since": "Ricoh2A03", "manual_ref": "6502 §TAX", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "TransferXToA",    "pattern": "10001010", "fields": {}, "mask": "0xFF", "match": "0x8A",
+      "instructions": [{ "mnemonic": "TXA", "since": "Ricoh2A03", "manual_ref": "6502 §TXA", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "TransferAToY",    "pattern": "10101000", "fields": {}, "mask": "0xFF", "match": "0xA8",
+      "instructions": [{ "mnemonic": "TAY", "since": "Ricoh2A03", "manual_ref": "6502 §TAY", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "TransferYToA",    "pattern": "10011000", "fields": {}, "mask": "0xFF", "match": "0x98",
+      "instructions": [{ "mnemonic": "TYA", "since": "Ricoh2A03", "manual_ref": "6502 §TYA", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "TransferSpToX",   "pattern": "10111010", "fields": {}, "mask": "0xFF", "match": "0xBA",
+      "instructions": [{ "mnemonic": "TSX", "since": "Ricoh2A03", "manual_ref": "6502 §TSX", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "TransferXToSp",   "pattern": "10011010", "fields": {}, "mask": "0xFF", "match": "0x9A",
+      "instructions": [{ "mnemonic": "TXS", "since": "Ricoh2A03", "manual_ref": "6502 §TXS", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "DecrementX",      "pattern": "11001010", "fields": {}, "mask": "0xFF", "match": "0xCA",
+      "instructions": [{ "mnemonic": "DEX", "since": "Ricoh2A03", "manual_ref": "6502 §DEX", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "IncrementX",      "pattern": "11101000", "fields": {}, "mask": "0xFF", "match": "0xE8",
+      "instructions": [{ "mnemonic": "INX", "since": "Ricoh2A03", "manual_ref": "6502 §INX", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "DecrementY",      "pattern": "10001000", "fields": {}, "mask": "0xFF", "match": "0x88",
+      "instructions": [{ "mnemonic": "DEY", "since": "Ricoh2A03", "manual_ref": "6502 §DEY", "cycles": { "form": "2m" }, "steps": [] }]
+    },
+    {
+      "name": "IncrementY",      "pattern": "11001000", "fields": {}, "mask": "0xFF", "match": "0xC8",
+      "instructions": [{ "mnemonic": "INY", "since": "Ricoh2A03", "manual_ref": "6502 §INY", "cycles": { "form": "2m" }, "steps": [] }]
+    }
+  ]
+}

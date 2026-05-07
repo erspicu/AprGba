@@ -1,0 +1,34 @@
+{
+  "name": "UniqueOpcodes",
+  "comment": "Single-byte opcodes with mask 0xFF — irregular instructions that don't fit any cc-pattern: BRK + the 'official' single-byte NOP. Other discrete instructions (transfers, flags, stack ops, branches) live in their own group files for organisation.",
+  "formats": [
+    {
+      "name": "Brk",
+      "comment": "0x00 — BRK (force interrupt). Pushes PC+2 + status (with B flag set), sets I flag, jumps to IRQ vector ($FFFE).",
+      "pattern": "00000000",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x00",
+      "instructions": [{
+        "mnemonic": "BRK", "since": "Ricoh2A03", "writes_pc": "always",
+        "manual_ref": "6502 §BRK",
+        "cycles": { "form": "7m" },
+        "steps": []
+      }]
+    },
+    {
+      "name": "Nop",
+      "comment": "0xEA — official 1-byte NOP. Other 'unofficial' NOPs (1, 2, 3-byte variants) live in unofficial.json.",
+      "pattern": "11101010",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xEA",
+      "instructions": [{
+        "mnemonic": "NOP", "since": "Ricoh2A03",
+        "manual_ref": "6502 §NOP",
+        "cycles": { "form": "2m" },
+        "steps": []
+      }]
+    }
+  ]
+}
