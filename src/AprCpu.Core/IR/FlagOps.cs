@@ -34,6 +34,7 @@ internal static class FlagOps
         reg.Register(new UpdateHAdd());
         reg.Register(new UpdateHSub());
         reg.Register(new UpdateZero());
+        reg.Register(new UpdateSign());
         reg.Register(new UpdateHInc());
         reg.Register(new UpdateHDec());
     }
@@ -130,6 +131,31 @@ internal static class FlagOps
             var reg  = step.Raw.GetProperty("reg").GetString()!;
             var flag = step.Raw.GetProperty("flag").GetString()!;
             CpsrHelpers.SetStatusFlag(ctx, reg, flag, isZero);
+        }
+    }
+
+    /// <summary>
+    /// update_sign { in, reg, flag } — N = MSB of input. Reads the input
+    /// at its native width and writes the most-significant bit (bit
+    /// width-1) to the named flag. Companion to <c>update_zero</c>; the
+    /// pair handles the "set NZ from result" pattern shared by 6502, ARM,
+    /// x86, and most other ISAs with N/Z flags.
+    /// </summary>
+    private sealed class UpdateSign : IMicroOpEmitter
+    {
+        public string OpName => "update_sign";
+        public void Emit(EmitContext ctx, MicroOpStep step)
+        {
+            var inName = step.Raw.GetProperty("in").GetString()!;
+            var v = ctx.Resolve(inName);
+            var width = v.TypeOf.IntWidth;
+            var msb = ctx.Builder.BuildLShr(v,
+                LLVMValueRef.CreateConstInt(v.TypeOf, width - 1, false),
+                $"upd_n_{inName}_shr");
+            var bit = ctx.Builder.BuildTrunc(msb, LLVMTypeRef.Int1, $"upd_n_{inName}_b");
+            var reg  = step.Raw.GetProperty("reg").GetString()!;
+            var flag = step.Raw.GetProperty("flag").GetString()!;
+            CpsrHelpers.SetStatusFlag(ctx, reg, flag, bit);
         }
     }
 

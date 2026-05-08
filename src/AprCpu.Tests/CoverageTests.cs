@@ -81,6 +81,14 @@ public class CoverageTests
             // CPSR writes which the per-instr executor / block-JIT outer
             // loop catches via PcWritten interaction, not via sync.
             "sync",
+
+            // N1.A.1 — generic 8-bit stack push/pop and N-flag update.
+            // Currently no spec uses these; they'll be referenced by the
+            // 2A03 spec once the steps are filled in (A.3+). Allowlisted
+            // here so A.1 can land independently of the spec-fill work.
+            // (LR35902 PUSH/POP AF could refactor onto push8/pop8 later
+            // for cleanliness, but pair-push semantics work fine today.)
+            "push8", "pop8", "update_sign",
         };
 
         var (registered, used) = CollectOps();

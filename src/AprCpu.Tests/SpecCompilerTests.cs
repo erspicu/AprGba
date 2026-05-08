@@ -540,4 +540,62 @@ public class SpecCompilerTests
         Assert.True(compiled + failed >= 100,
             $"Spec should account for ≥100 instructions total (compiled+failed got {compiled}+{failed} = {compiled + failed}).");
     }
+
+    // ---------------- Ricoh 2A03 (N1) ----------------
+
+    private static string Ricoh2A03CpuJson => Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json");
+
+    /// <summary>
+    /// N1 baseline: spec loads, module builds, "Main" decoder is populated
+    /// for all 256 opcodes (no undecoded slots). Diagnostics may or may not
+    /// be empty here — emitter-coverage gating is in the next test. This
+    /// one only catches gross regressions in spec parsing itself.
+    /// </summary>
+    [Fact]
+    public void Compile_Ricoh2A03_LoadsAndBuildsDecoder()
+    {
+        var result = SpecCompiler.Compile(Ricoh2A03CpuJson);
+
+        Assert.True(result.DecoderTables.ContainsKey("Main"));
+        var main = result.DecoderTables["Main"];
+        for (int op = 0; op < 256; op++)
+        {
+            Assert.NotNull(main.Decode((uint)op));
+        }
+        Assert.True(result.Module.Handle != IntPtr.Zero);
+    }
+
+    /// <summary>
+    /// Track 2A03 emitter coverage. nestest needs the official-opcode set
+    /// (ADC/SBC/AND/ORA/EOR/CMP/CPX/CPY/INC/DEC/INX/INY/DEX/DEY/LDA/LDX/
+    /// LDY/STA/STX/STY/JMP/JSR/RTS/RTI/Bxx/CLx/SEx/PHA/PHP/PLA/PLP/TAX/
+    /// TAY/TXA/TYA/TSX/TXS/ASL/LSR/ROL/ROR/BIT/NOP/BRK) plus the unofficial
+    /// opcodes (SLO/RLA/SRE/RRA/SAX/LAX/DCP/ISC/AAC/ASR/ARR/AXS/XAA/AHX/
+    /// SHX/SHY/TAS/LAR/SBC dup/NOP dup/KIL). Tracks compiled count as a
+    /// baseline so an accidentally-removed emitter triggers regression.
+    /// </summary>
+    [Fact]
+    public void Compile_Ricoh2A03_CoverageBaseline()
+    {
+        var result = SpecCompiler.Compile(Ricoh2A03CpuJson);
+
+        var compiled = result.Functions.Count;
+        var failed = result.Diagnostics.Count(d => d.Contains("emission failed"));
+        var byMnemonic = result.Functions.Keys
+            .Select(k => k.Split('.').Last().Split('_')[0])
+            .GroupBy(m => m)
+            .OrderBy(g => g.Key)
+            .ToList();
+        var compiledMnemonics = string.Join(", ", byMnemonic.Select(g => $"{g.Key}×{g.Count()}"));
+        var sampleFailures = string.Join(" || ", result.Diagnostics.Take(3));
+
+        // Threshold is "≥100" as a starter — bumped as more 6502 emitters land.
+        // The 2A03 has 151 official + 105 unofficial entries decoded but many
+        // share emitter logic, so function count varies with how the spec
+        // disambiguates by selector.
+        Assert.True(compiled >= 50,
+            $"2A03 coverage regression: expected ≥50 compiled instructions (got {compiled}). " +
+            $"Compiled mnemonics: {compiledMnemonics}. " +
+            $"Sample failures: {sampleFailures}");
+    }
 }

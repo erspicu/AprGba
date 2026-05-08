@@ -36,6 +36,8 @@ internal static class StackOps
     {
         reg.Register(new PushPair());
         reg.Register(new PopPair());
+        reg.Register(new Push8());
+        reg.Register(new Pop8());
         reg.Register(new Call());
         reg.Register(new Ret());
         reg.Register(new CallCc());
@@ -219,6 +221,103 @@ internal static class StackOps
     }
 
     // ---------------- ops ----------------
+
+    /// <summary>
+    /// push8 { value, addr_base?: 0, pre_decrement?: true } — push a single
+    /// byte. Two parameters cover the two stack conventions in the wild:
+    /// <list type="bullet">
+    ///   <item><b>pre_decrement=true</b> (default, ARM/LR35902/x86/m68k):
+    ///         <c>SP -= 1; MEM[SP+addr_base] = value</c></item>
+    ///   <item><b>pre_decrement=false</b> (6502 family):
+    ///         <c>MEM[SP+addr_base] = value; SP -= 1</c></item>
+    /// </list>
+    /// <c>addr_base</c> is added to the SP value when computing the memory
+    /// address, used by the 6502 family to put the stack at page 1
+    /// (<c>$0100..$01FF</c>) without storing the offset in SP itself.
+    /// </summary>
+    private sealed class Push8 : IMicroOpEmitter
+    {
+        public string OpName => "push8";
+        public void Emit(EmitContext ctx, MicroOpStep step)
+        {
+            var valName = step.Raw.GetProperty("value").GetString()!;
+            var value   = ctx.Resolve(valName);
+            uint addrBase = step.Raw.TryGetProperty("addr_base", out var ab) ? ab.GetUInt32() : 0u;
+            bool preDec   = step.Raw.TryGetProperty("pre_decrement", out var pd) ? pd.GetBoolean() : true;
+
+            var (spPtr, spType, _) = LocateStackPointer(ctx);
+            var i32 = LLVMTypeRef.Int32;
+            var sp  = ctx.Builder.BuildLoad2(spType, spPtr, "push8_sp");
+            var one = LLVMValueRef.CreateConstInt(spType, 1, false);
+
+            // 6502: write at current SP, then post-decrement.
+            // Other:  decrement first, then write at new SP.
+            var addrSp = preDec ? ctx.Builder.BuildSub(sp, one, "push8_sp_dec") : sp;
+            if (preDec) ctx.Builder.BuildStore(addrSp, spPtr);
+
+            var spZ = spType == i32 ? addrSp : ctx.Builder.BuildZExt(addrSp, i32, "push8_sp_z");
+            var addr = addrBase == 0u
+                ? spZ
+                : ctx.Builder.BuildAdd(spZ,
+                    LLVMValueRef.CreateConstInt(i32, addrBase, false), "push8_addr");
+            var byteVal = value.TypeOf == LLVMTypeRef.Int8
+                ? value
+                : ctx.Builder.BuildTrunc(value, LLVMTypeRef.Int8, "push8_v8");
+            MemoryEmitters.CallWrite8(ctx, addr, byteVal);
+
+            if (!preDec)
+            {
+                var newSp = ctx.Builder.BuildSub(sp, one, "push8_sp_dec_post");
+                ctx.Builder.BuildStore(newSp, spPtr);
+            }
+        }
+    }
+
+    /// <summary>
+    /// pop8 { out, addr_base?: 0, pre_increment?: true } — pop a single byte.
+    /// Mirrors push8's two conventions:
+    /// <list type="bullet">
+    ///   <item><b>pre_increment=true</b> (default, 6502 family):
+    ///         <c>SP += 1; out = MEM[SP+addr_base]</c></item>
+    ///   <item><b>pre_increment=false</b> (ARM/LR35902/x86/m68k):
+    ///         <c>out = MEM[SP+addr_base]; SP += 1</c></item>
+    /// </list>
+    /// Note the default flips compared to push8: 6502's pop sequence is
+    /// pre-increment (mirror of its post-decrement push). LR35902-style
+    /// pops use post-increment, so callers there pass <c>pre_increment: false</c>.
+    /// </summary>
+    private sealed class Pop8 : IMicroOpEmitter
+    {
+        public string OpName => "pop8";
+        public void Emit(EmitContext ctx, MicroOpStep step)
+        {
+            var outName  = StandardEmitters.GetOut(step.Raw);
+            uint addrBase = step.Raw.TryGetProperty("addr_base", out var ab) ? ab.GetUInt32() : 0u;
+            bool preInc   = step.Raw.TryGetProperty("pre_increment", out var pi) ? pi.GetBoolean() : true;
+
+            var (spPtr, spType, _) = LocateStackPointer(ctx);
+            var i32 = LLVMTypeRef.Int32;
+            var sp  = ctx.Builder.BuildLoad2(spType, spPtr, "pop8_sp");
+            var one = LLVMValueRef.CreateConstInt(spType, 1, false);
+
+            var readSp = preInc ? ctx.Builder.BuildAdd(sp, one, "pop8_sp_inc") : sp;
+            if (preInc) ctx.Builder.BuildStore(readSp, spPtr);
+
+            var spZ = spType == i32 ? readSp : ctx.Builder.BuildZExt(readSp, i32, "pop8_sp_z");
+            var addr = addrBase == 0u
+                ? spZ
+                : ctx.Builder.BuildAdd(spZ,
+                    LLVMValueRef.CreateConstInt(i32, addrBase, false), "pop8_addr");
+            var v = MemoryEmitters.CallRead8(ctx, addr, "pop8_v");
+
+            if (!preInc)
+            {
+                var newSp = ctx.Builder.BuildAdd(sp, one, "pop8_sp_inc_post");
+                ctx.Builder.BuildStore(newSp, spPtr);
+            }
+            ctx.Values[outName] = v;
+        }
+    }
 
     /// <summary>push_pair { name } — read pair then push word.</summary>
     private sealed class PushPair : IMicroOpEmitter
