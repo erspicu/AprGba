@@ -141,7 +141,8 @@
         "mnemonic": "DEX", "since": "Ricoh2A03", "manual_ref": "6502 §DEX", "cycles": { "form": "2m" },
         "steps": [
           { "op": "read_reg_named", "name": "X", "out": "x" },
-          { "op": "sub", "in": ["x", { "const": 1 }], "out": "x_new" },
+          { "op": "sub", "in": ["x", { "const": 1 }], "out": "x_new_i32" },
+          { "op": "trunc", "in": "x_new_i32", "width": 8, "out": "x_new" },
           { "op": "write_reg_named", "name": "X", "value": "x_new" },
           { "op": "update_zero", "in": "x_new", "reg": "P", "flag": "Z" },
           { "op": "update_sign", "in": "x_new", "reg": "P", "flag": "N" }
@@ -154,7 +155,8 @@
         "mnemonic": "INX", "since": "Ricoh2A03", "manual_ref": "6502 §INX", "cycles": { "form": "2m" },
         "steps": [
           { "op": "read_reg_named", "name": "X", "out": "x" },
-          { "op": "add", "in": ["x", { "const": 1 }], "out": "x_new" },
+          { "op": "add", "in": ["x", { "const": 1 }], "out": "x_new_i32" },
+          { "op": "trunc", "in": "x_new_i32", "width": 8, "out": "x_new" },
           { "op": "write_reg_named", "name": "X", "value": "x_new" },
           { "op": "update_zero", "in": "x_new", "reg": "P", "flag": "Z" },
           { "op": "update_sign", "in": "x_new", "reg": "P", "flag": "N" }
@@ -167,7 +169,8 @@
         "mnemonic": "DEY", "since": "Ricoh2A03", "manual_ref": "6502 §DEY", "cycles": { "form": "2m" },
         "steps": [
           { "op": "read_reg_named", "name": "Y", "out": "y" },
-          { "op": "sub", "in": ["y", { "const": 1 }], "out": "y_new" },
+          { "op": "sub", "in": ["y", { "const": 1 }], "out": "y_new_i32" },
+          { "op": "trunc", "in": "y_new_i32", "width": 8, "out": "y_new" },
           { "op": "write_reg_named", "name": "Y", "value": "y_new" },
           { "op": "update_zero", "in": "y_new", "reg": "P", "flag": "Z" },
           { "op": "update_sign", "in": "y_new", "reg": "P", "flag": "N" }
@@ -180,7 +183,8 @@
         "mnemonic": "INY", "since": "Ricoh2A03", "manual_ref": "6502 §INY", "cycles": { "form": "2m" },
         "steps": [
           { "op": "read_reg_named", "name": "Y", "out": "y" },
-          { "op": "add", "in": ["y", { "const": 1 }], "out": "y_new" },
+          { "op": "add", "in": ["y", { "const": 1 }], "out": "y_new_i32" },
+          { "op": "trunc", "in": "y_new_i32", "width": 8, "out": "y_new" },
           { "op": "write_reg_named", "name": "Y", "value": "y_new" },
           { "op": "update_zero", "in": "y_new", "reg": "P", "flag": "Z" },
           { "op": "update_sign", "in": "y_new", "reg": "P", "flag": "N" }

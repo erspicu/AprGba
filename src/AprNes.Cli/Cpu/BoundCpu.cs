@@ -14,7 +14,7 @@ using AprNes.Cli.Memory;
 
 namespace AprNes.Cli.Cpu;
 
-public sealed class BoundCpu : Ricoh2A03Cpu
+public sealed class BoundCpu : Ricoh2A03Cpu, INesCpuBackend
 {
     private readonly NesMemoryBus _bus;
 
@@ -25,6 +25,8 @@ public sealed class BoundCpu : Ricoh2A03Cpu
 
     /// <summary>Direct bus access for inspection / poke during tests.</summary>
     public NesMemoryBus Bus => _bus;
+
+    public string BackendName => "legacy";
 
     // --- Bus hook overrides ---
 

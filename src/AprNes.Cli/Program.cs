@@ -32,16 +32,28 @@ bool nestestMode = false;
 ushort? startPc = null;
 long maxCycles = 30_000_000L;     // ~9k instr × ~5 cyc × big margin
 ushort? expectPc = null;
+string backend = "legacy";
+bool diffMode = false;
 foreach (var arg in args)
 {
     if      (arg == "--info")            { /* default — still prints info */ }
     else if (arg == "--run")             runMode = true;
     else if (arg == "--nestest")         { runMode = true; nestestMode = true; }
+    else if (arg == "--diff")            { runMode = true; nestestMode = true; diffMode = true; }   // legacy vs json lockstep
     else if (arg.StartsWith("--rom="))        romPath = arg.Substring("--rom=".Length);
     else if (arg.StartsWith("--screenshot=")) { screenshotPath = arg.Substring("--screenshot=".Length); runMode = true; }
     else if (arg.StartsWith("--start-pc=")) startPc = (ushort)Convert.ToUInt32(arg.Substring("--start-pc=".Length).TrimStart('$').TrimStart('0').TrimStart('x'), 16);
     else if (arg.StartsWith("--max-cycles=")) maxCycles = long.Parse(arg.Substring("--max-cycles=".Length));
     else if (arg.StartsWith("--expect-pc=")) expectPc = (ushort)Convert.ToUInt32(arg.Substring("--expect-pc=".Length).TrimStart('$').TrimStart('0').TrimStart('x'), 16);
+    else if (arg.StartsWith("--backend="))
+    {
+        backend = arg.Substring("--backend=".Length);
+        if (backend != "legacy" && backend != "json")
+        {
+            Console.Error.WriteLine($"unknown --backend value: {backend} (expected legacy|json)");
+            return 2;
+        }
+    }
     else { Console.Error.WriteLine($"unknown arg: {arg}"); PrintUsage(); return 2; }
 }
 
@@ -105,7 +117,74 @@ if (romPath is not null)
     Console.WriteLine($"  mapper:  {rom.MapperId}");
     Console.WriteLine($"  mirror:  {(rom.Vertical ? "vertical" : "horizontal")}");
 
-    if (runMode)
+    if (runMode && diffMode)
+    {
+        // Lockstep diff: legacy + json backends each get their own
+        // NesMemoryBus + Mapper. Step both 1 instruction at a time,
+        // diverge on first PC/A/X/Y/SP/P mismatch.
+        IMapper MakeMapper() => rom.MapperId switch
+        {
+            0 => new Mapper000(),
+            1 => new Mapper001(),
+            _ => throw new NotSupportedException(
+                $"mapper {rom.MapperId} not yet supported")
+        };
+
+        var mLeg = MakeMapper(); mLeg.Reset(rom.PrgRom, rom.ChrRom);
+        var busLeg = new NesMemoryBus(); busLeg.Reset(mLeg);
+        var legCpu = new BoundCpu(busLeg);
+
+        var mJit = MakeMapper(); mJit.Reset(rom.PrgRom, rom.ChrRom);
+        var busJit = new NesMemoryBus(); busJit.Reset(mJit);
+        var jitCpu = new NesJsonCpu(busJit);
+
+        legCpu.InitForNestest();
+        jitCpu.InitForNestest();
+
+        Console.WriteLine();
+        Console.WriteLine("  mode:    diff (legacy vs json, instruction-by-instruction)");
+
+        long maxInstr = 20_000;
+        // Ring buffer of last 6 instructions for context on divergence.
+        var trail = new (long i, ushort pc, byte op, byte a, byte x, byte y, byte sp, byte p)[6];
+        int trailHead = 0;
+        for (long i = 0; i < maxInstr; i++)
+        {
+            ushort pcL = legCpu.PC, pcJ = jitCpu.PC;
+            byte aL = legCpu.A, aJ = jitCpu.A;
+            byte xL = legCpu.X, xJ = jitCpu.X;
+            byte yL = legCpu.Y, yJ = jitCpu.Y;
+            byte spL = legCpu.SP, spJ = jitCpu.SP;
+            byte pL = (byte)(legCpu.P | 0x20), pJ = (byte)(jitCpu.P | 0x20);
+            if (pcL != pcJ || aL != aJ || xL != xJ || yL != yJ || spL != spJ || pL != pJ)
+            {
+                Console.WriteLine($"  diverge @ instr {i}:");
+                Console.WriteLine($"  trail (last {trail.Length} matched instructions):");
+                for (int k = 0; k < trail.Length; k++)
+                {
+                    var t = trail[(trailHead + k) % trail.Length];
+                    if (t.i == 0 && k != 0) continue;
+                    Console.WriteLine($"    i={t.i,5} PC=0x{t.pc:X4} op=0x{t.op:X2} A=0x{t.a:X2} X=0x{t.x:X2} Y=0x{t.y:X2} SP=0x{t.sp:X2} P=0x{t.p:X2}");
+                }
+                Console.WriteLine($"  divergence:");
+                Console.WriteLine($"    legacy: PC=0x{pcL:X4} A=0x{aL:X2} X=0x{xL:X2} Y=0x{yL:X2} SP=0x{spL:X2} P=0x{pL:X2}");
+                Console.WriteLine($"    json:   PC=0x{pcJ:X4} A=0x{aJ:X2} X=0x{xJ:X2} Y=0x{yJ:X2} SP=0x{spJ:X2} P=0x{pJ:X2}");
+                Console.WriteLine($"    opcode at PC: 0x{busLeg.ReadByte(pcL):X2} (legacy bus)");
+                Console.WriteLine($"    P diff: legacy^json = 0x{(byte)(pL^pJ):X2}");
+                return 7;
+            }
+            // Capture state into trail BEFORE executing
+            byte op = busLeg.ReadByte(pcL);
+            trail[trailHead] = (i, pcL, op, aL, xL, yL, spL, pL);
+            trailHead = (trailHead + 1) % trail.Length;
+            if (pcL == 0xC66E) { Console.WriteLine($"  both reached PC=0xC66E after {i} instr — no diff"); return 0; }
+            legCpu.Step();
+            jitCpu.Step();
+        }
+        Console.WriteLine($"  no diff in {maxInstr:N0} instructions");
+        return 0;
+    }
+    else if (runMode)
     {
         IMapper mapper = rom.MapperId switch
         {
@@ -117,7 +196,12 @@ if (romPath is not null)
         mapper.Reset(rom.PrgRom, rom.ChrRom);
         var bus = new NesMemoryBus();
         bus.Reset(mapper);
-        var cpu = new BoundCpu(bus);
+        INesCpuBackend cpu = backend switch
+        {
+            "json"   => new NesJsonCpu(bus),
+            _        => new BoundCpu(bus)
+        };
+        Console.WriteLine($"  backend: {cpu.BackendName}");
 
         // Always wire the PPU — even nestest writes to PPU regs during init
         // (resets PPUCTRL/PPUMASK), and a screenshot at end-of-run captures
@@ -198,7 +282,7 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("usage: apr-nes [--info] [--rom=<path.nes>] [--run|--nestest]");
     Console.Error.WriteLine("              [--start-pc=<hex>] [--max-cycles=N] [--expect-pc=<hex>]");
-    Console.Error.WriteLine("              [--screenshot=<out.png>]");
+    Console.Error.WriteLine("              [--screenshot=<out.png>] [--backend=legacy|json]");
     Console.Error.WriteLine();
     Console.Error.WriteLine("Modes:");
     Console.Error.WriteLine("  (default)    — load spec, report 256-opcode decode coverage");
