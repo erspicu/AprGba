@@ -45,5 +45,14 @@ namespace AprNes.Cli.Memory
         /// silently drop the write).
         /// </summary>
         void PpuWrite(ushort addr, byte value);
+
+        /// <summary>
+        /// Optional callback invoked when the mapper changes the cartridge
+        /// nametable mirroring at runtime (e.g. MMC1 control register
+        /// writes). Argument follows OldProject's `Vertical` encoding:
+        /// 0 = horizontal, 1 = vertical, 2 = one-screen lower, 3 = one-screen upper.
+        /// Set by the harness after Reset().
+        /// </summary>
+        Action<int>? MirroringChanged { get; set; }
     }
 }

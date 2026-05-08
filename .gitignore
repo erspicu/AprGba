@@ -443,12 +443,13 @@ FodyWeavers.xsd
 # API key) stays local.
 /tools/knowledgebase/config.json
 
-# AprGBemu reference clone — local-only for Phase 4.5 GB spec work
-/GB/
-
-# AprNes reference clone — local-only for cross-emulator reference
-# (pre-master-clock-timing version, last commit b996937)
-/NES/
+# Old-project reference clones — local-only sources for the GB / NES
+# oracles ported into AprGb.Cli / AprNes.Cli respectively. Subdivided:
+#   OldProject/AprGBemu — erspicu/AprGBemu (LR35902 oracle, commit 2ee0e13)
+#   OldProject/AprNes   — erspicu/AprNes (Ricoh 2A03 oracle, fcbbb23 = the
+#                         last "post-hoc cycle compensation" timing model
+#                         before the per-master-clock refactor)
+/OldProject/
 
 # Big GB test-rom zips / source clones — only blargg-cpu/ is tracked
 /test-roms/game-boy-test-roms-v*/

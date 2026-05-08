@@ -93,5 +93,10 @@ namespace AprNes.Cli.Memory
             }
             // CHR-ROM games silently drop the write.
         }
+
+        // NROM has fixed mirroring (set from iNES header at startup); never
+        // changes at runtime. The interface property is here for protocol
+        // conformance — Mapper001 (MMC1) actually uses it.
+        public Action<int>? MirroringChanged { get; set; }
     }
 }

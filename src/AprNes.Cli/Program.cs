@@ -107,13 +107,13 @@ if (romPath is not null)
 
     if (runMode)
     {
-        if (rom.MapperId != 0)
+        IMapper mapper = rom.MapperId switch
         {
-            Console.Error.WriteLine($"  N0b: only Mapper 0 (NROM) supported; rom uses mapper {rom.MapperId}");
-            return 5;
-        }
-
-        var mapper = new Mapper000();
+            0 => new Mapper000(),
+            1 => new Mapper001(),
+            _ => throw new NotSupportedException(
+                $"mapper {rom.MapperId} not yet supported (have 0=NROM, 1=MMC1)")
+        };
         mapper.Reset(rom.PrgRom, rom.ChrRom);
         var bus = new NesMemoryBus();
         bus.Reset(mapper);
@@ -126,7 +126,10 @@ if (romPath is not null)
         bus.BindPpu(
             readReg:  addr => ppu.ReadRegister(addr),
             writeReg: (addr, val) => ppu.WriteRegister(addr, val),
-            tick:     cpuCycles => ppu.Tick(cpuCycles));
+            tick:     cpuCycles => ppu.Tick(cpuCycles),
+            consumeNmi: () => ppu.ConsumeNmi());
+        // MMC1 mirroring is dynamic — let the mapper push changes to the PPU.
+        mapper.MirroringChanged = mode => ppu.SetMirroringMode(mode);
         ppu.Reset();
 
         if (nestestMode)

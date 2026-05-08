@@ -9,8 +9,8 @@
 // per-instruction backend semantics, making it a clean oracle for
 // JsonCpu lockstep diff validation.
 //
-// Source: NES/AprNes/NesCore/CPU.cs (the partial-class NesCore type
-// flattened into a standalone Ricoh2A03Cpu for use here).
+// Source: OldProject/AprNes/AprNes/NesCore/CPU.cs (the partial-class
+// NesCore type flattened into a standalone Ricoh2A03Cpu for use here).
 
 using System;
 using System.Runtime.CompilerServices;

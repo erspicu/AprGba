@@ -31,7 +31,11 @@ namespace AprNes.Cli.Video
         private readonly byte[] _oam;         // 256 bytes sprite RAM (matches source's spr_ram)
         private readonly byte[] _paletteRam;  // 32 bytes palette mirror; $3F00-$3F1F authoritative copy lives in _vram
         private readonly IMapper _mapper;     // for $0000-$1FFF pattern-table reads (CHR)
-        private bool _verticalMirroring;
+        // Mirroring mode (OldProject `Vertical` encoding):
+        //   0 = horizontal, 1 = vertical, 2 = one-screen lower, 3 = one-screen upper.
+        // PpuBusWrite duplicates nametable writes across mirrored slots so the
+        // rendering path can do raw _vram[idx] reads at any aliased address.
+        private int _verticalMirroring;
 
         // ---- 256x240 RGB framebuffer (R,G,B per pixel) ----
         private readonly byte[] _framebuffer = new byte[256 * 240 * 3];
@@ -98,7 +102,7 @@ namespace AprNes.Cli.Video
             _oam = oam ?? throw new ArgumentNullException(nameof(oam));
             _paletteRam = paletteRam ?? throw new ArgumentNullException(nameof(paletteRam));
             _mapper = mapper ?? throw new ArgumentNullException(nameof(mapper));
-            _verticalMirroring = verticalMirroring;
+            _verticalMirroring = verticalMirroring ? 1 : 0;
             Reset();
         }
 
@@ -147,7 +151,14 @@ namespace AprNes.Cli.Video
             Array.Clear(_framebuffer, 0, _framebuffer.Length);
         }
 
-        public void SetMirroring(bool verticalMirroring) => _verticalMirroring = verticalMirroring;
+        public void SetMirroring(bool verticalMirroring) => _verticalMirroring = verticalMirroring ? 1 : 0;
+
+        /// <summary>
+        /// Set the cartridge nametable mirroring mode using OldProject's
+        /// `Vertical` encoding: 0=horizontal, 1=vertical, 2=one-screen lower,
+        /// 3=one-screen upper. Used by MMC1's $8000 control writes.
+        /// </summary>
+        public void SetMirroringMode(int mode) => _verticalMirroring = mode & 3;
 
         // ---- public scheduler / NMI surface ----
 
@@ -222,8 +233,10 @@ namespace AprNes.Cli.Video
             if (addr < 0x2000) return _mapper.PpuRead((ushort)addr);
             if (addr < 0x3F00)
             {
-                int nt = MirrorNametable(addr);
-                return _vram[nt];
+                // Reads use the raw nametable slot — PpuBusWrite has already
+                // replicated data across mirrors, so any of the 4 physical
+                // locations is valid (matches OldProject MEM.cs read path).
+                return _vram[addr & 0x2FFF];
             }
             int p = addr & 0x1F;
             if ((p & 0x03) == 0) p &= 0x0C; // $3F10/$14/$18/$1C mirror to $3F00/$04/$08/$0C
@@ -237,38 +250,42 @@ namespace AprNes.Cli.Video
             if (addr < 0x2000) { _mapper.PpuWrite((ushort)addr, value); return; }
             if (addr < 0x3F00)
             {
-                int nt = MirrorNametable(addr);
-                _vram[nt] = value;
-                // Keep the legacy $2000-$2FFF region in _vram coherent for the
-                // ppu_ram[] reads that still index by $2xxx directly.
+                // Nametable write — replicate across every alias the current
+                // mirroring mode collapses, so the cycle-accurate render's
+                // raw _vram[ioaddr] reads see data wherever vram_addr lands.
+                // Ported verbatim from OldProject NesCore/MEM.cs ppu_write_fun.
+                int v = addr & 0x2FFF;             // $3000-$3EFF mirrors $2000-$2EFF
+                int range = v & 0xC00;
+                int mirror = _verticalMirroring;
+                if (mirror >= 2)
+                {
+                    // One-screen: every nametable slot resolves to one bank.
+                    int rel = v & 0x3FF;
+                    _vram[0x2000 + rel] = value;
+                    _vram[0x2400 + rel] = value;
+                    _vram[0x2800 + rel] = value;
+                    _vram[0x2C00 + rel] = value;
+                }
+                else if (mirror == 1)
+                {
+                    // Vertical: NT0=NT2, NT1=NT3.
+                    if (range < 0x800) { _vram[v] = value; _vram[v | 0x800]   = value; }
+                    else                { _vram[v] = value; _vram[v & 0x37FF] = value; }
+                }
+                else
+                {
+                    // Horizontal: NT0=NT1, NT2=NT3.
+                    if (range < 0x400)      { _vram[v] = value; _vram[v | 0x400]   = value; }
+                    else if (range < 0x800) { _vram[v] = value; _vram[v & 0x3BFF] = value; }
+                    else if (range < 0xC00) { _vram[v] = value; _vram[v | 0x400]   = value; }
+                    else                    { _vram[v] = value; _vram[v & 0x3BFF] = value; }
+                }
                 return;
             }
             int p = addr & 0x1F;
             if ((p & 0x03) == 0) p &= 0x0C;
             _paletteRam[p] = value;
             _vram[0x3F00 + p] = value;
-        }
-
-        // Mirror $2000-$3EFF to a [$2000..$2FFF] index in _vram, accounting
-        // for the cartridge's nametable mirroring mode.
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private int MirrorNametable(int addr)
-        {
-            int a = (addr & 0x0FFF);   // 0x000-0xFFF in nametable space
-            int table = (a >> 10) & 3; // 0..3
-            int offset = a & 0x03FF;
-            int phys;
-            if (_verticalMirroring)
-            {
-                // tables 0/2 -> bank 0, 1/3 -> bank 1
-                phys = ((table & 1) * 0x400) + offset;
-            }
-            else
-            {
-                // horizontal: 0/1 -> bank 0, 2/3 -> bank 1
-                phys = ((table >> 1) * 0x400) + offset;
-            }
-            return 0x2000 + phys;
         }
 
         // Convenience: emulate the source's `ppu_ram[idx]` direct access for
@@ -732,18 +749,28 @@ namespace AprNes.Cli.Video
         /// <summary>End-of-frame full-screen scan for screenshot capture.
         /// Walks the visible nametable + sprites and produces the public
         /// RGB framebuffer. Independent of the per-pixel cycle renderer
-        /// driven by Tick(); use whichever surface fits the caller. </summary>
+        /// driven by Tick().
+        ///
+        /// Why we ALWAYS run the simple full-screen scan (and not the
+        /// cycle-accurate `_screenBuf1x`): our framework batches PPU
+        /// catch-up per CPU instruction (Bus.Tick(cpuCycles)) instead of
+        /// running PPU at single-cycle granularity interleaved with each
+        /// CPU sub-step like OldProject does. With per-instruction PPU
+        /// granularity, mid-instruction $2005/$2006 writes don't shape
+        /// the scroll latch at the exact right cycle, so the cycle-
+        /// accurate per-pixel renderer can latch a stale or wrong
+        /// `vram_addr_internal` for a given scanline (symptom seen on
+        /// blargg_nes_cpu_test5: scroll latch ends at row-19, renderer
+        /// walks empty area, output is all-black backdrop).
+        ///
+        /// For the validation-screenshot use case we just need "what does
+        /// the cart's nametable look like RIGHT NOW" — a static snapshot
+        /// reading from NT0 (per current $2000-CTRL base) is the most
+        /// reliable proxy. Cycle-accurate per-pixel timing remains a
+        /// downstream goal independent of this CLI surface.</summary>
         public void RenderFrame()
         {
-            // If the cycle-accurate renderer has already produced a frame
-            // this NES second, _screenBuf1x is current — just convert.
-            if (_frameReady)
-            {
-                RenderScreen();
-                return;
-            }
-
-            // Otherwise, do a simplified end-of-frame full-screen scan: walk
+            // Always do the simplified end-of-frame full-screen scan: walk
             // the four nametables (using the current scroll origin in
             // vram_addr_internal) and render 30 rows of 32 tiles, then
             // overlay sprites in OAM-priority order.
@@ -891,7 +918,7 @@ namespace AprNes.Cli.Video
                 if (va < 0x2000)
                     ppu_2007_buffer = _mapper.PpuRead((ushort)va);
                 else
-                    ppu_2007_buffer = _vram[MirrorNametable(va)];
+                    ppu_2007_buffer = _vram[va & 0x2FFF];
             }
             else
             {
@@ -900,7 +927,7 @@ namespace AprNes.Cli.Video
                 int p = va & 0x1F;
                 if ((p & 0x03) == 0) p &= 0x0C;
                 ret = (byte)((openbus & 0xC0) | (_paletteRam[p] & 0x3F));
-                ppu_2007_buffer = _vram[MirrorNametable(va & 0x2FFF)];
+                ppu_2007_buffer = _vram[va & 0x2FFF];
             }
             vram_addr = (vram_addr + VramaddrIncrement) & 0x7FFF;
             openbus = ret;

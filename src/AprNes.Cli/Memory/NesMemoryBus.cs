@@ -204,16 +204,24 @@ namespace AprNes.Cli.Memory
         private Func<ushort, byte>? _ppuReadHook;
         private Action<ushort, byte>? _ppuWriteHook;
         private Action<int>? _ppuTickHook;
+        private Func<bool>? _ppuConsumeNmiHook;
 
         public void BindPpu(
             Func<ushort, byte> readReg,
             Action<ushort, byte> writeReg,
-            Action<int>? tick = null)
+            Action<int>? tick = null,
+            Func<bool>? consumeNmi = null)
         {
             _ppuReadHook  = readReg;
             _ppuWriteHook = writeReg;
             _ppuTickHook  = tick;
+            _ppuConsumeNmiHook = consumeNmi;
         }
+
+        /// <summary>Atomically read-and-clear PPU NMI line. Returns true if
+        /// VBlank NMI is pending and should be serviced before the next
+        /// instruction.</summary>
+        public bool ConsumePpuNmi() => _ppuConsumeNmiHook?.Invoke() ?? false;
 
         private byte ReadPpu(ushort addr)
         {
@@ -288,6 +296,7 @@ namespace AprNes.Cli.Memory
             public void CpuWrite(ushort addr, byte value) { }
             public byte PpuRead(ushort addr) => 0;
             public void PpuWrite(ushort addr, byte value) { }
+            public Action<int>? MirroringChanged { get; set; }
         }
     }
 }

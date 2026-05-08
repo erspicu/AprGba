@@ -56,6 +56,15 @@ public sealed class BoundCpu : Ricoh2A03Cpu
     /// </summary>
     public int Step()
     {
+        // Service pending PPU VBlank NMI before fetching the next opcode —
+        // matches the source's main loop ordering (poll NMI → step CPU →
+        // tick PPU). Without this the CPU spins forever in any vblank-wait
+        // loop that begins with `BIT $2002 / BPL ...`.
+        if (_bus.ConsumePpuNmi())
+        {
+            NmiInterrupt();
+        }
+
         StepOne();
         var cycles = LastStepCycles;
         // OAM DMA on $4014 write adds 513 stall cycles (514 if odd-cycle
