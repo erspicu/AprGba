@@ -93,6 +93,12 @@ public static class Mos6502Emitters
         reg.Register(new MosAxs());
         reg.Register(new MosXaa());
         reg.Register(new MosLas());
+
+        // Magic-store unstable opcodes that blargg cpu_test5 still exercises
+        // for the no-page-cross case (well-defined behaviour). The full
+        // page-cross + dummy-read semantics are matched against LegacyCpu.
+        reg.Register(new MosShy());
+        reg.Register(new MosShx());
     }
 
     // ---------------- shared helpers ----------------
@@ -1685,8 +1691,19 @@ internal sealed class MosUnofficialCc11 : IMicroOpEmitter
             return;
         }
 
-        // Compute effective address once.
-        var addr32 = Mos6502Emitters.ComputeEffectiveAddrCc01(ctx, bbb, $"u11_b{bbb}");
+        // Compute effective address once. LAX and SAX are special: bbb=101
+        // (zp,X slot) and bbb=111 (abs,X slot) actually use Y as the index
+        // register on the real 6502 — this is the same swap_xy quirk that
+        // STX/LDX use in the cc=10 family. Concretely:
+        //   $B7 LAX zp,Y, $97 SAX zp,Y   (bbb=101)
+        //   $BF LAX abs,Y                 (bbb=111)
+        //   ($9F SAX abs,Y is intercepted by the AHX_9F mask-0xFF entry,
+        //    so we never reach here with kind=sax bbb=111 in practice — but
+        //    swap unconditionally for symmetry / future correctness.)
+        bool useY = (kind == "lax" || kind == "sax") && (bbb == 5 || bbb == 7);
+        var addr32 = useY
+            ? ComputeCc11AddrSwapY(ctx, bbb, $"u11_b{bbb}")
+            : Mos6502Emitters.ComputeEffectiveAddrCc01(ctx, bbb, $"u11_b{bbb}");
 
         switch (kind)
         {
@@ -1829,6 +1846,35 @@ internal sealed class MosUnofficialCc11 : IMicroOpEmitter
             }
             default:
                 throw new NotSupportedException($"mos_unofficial_cc11: unknown kind '{kind}'");
+        }
+    }
+
+    // For LAX/SAX with bbb=101 / bbb=111 — swap X for Y as the index register.
+    // bbb=101 is zp + Y (8-bit wrap), bbb=111 is abs + Y (16-bit add).
+    private static LLVMValueRef ComputeCc11AddrSwapY(EmitContext ctx, int bbb, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        switch (bbb)
+        {
+            case 5: // zp,Y
+            {
+                var zp = Mos6502Emitters.FetchImm8(ctx, $"{label}_zp");
+                var y  = Mos6502Emitters.ReadGpr(ctx, "Y", $"{label}_y");
+                var sum8 = ctx.Builder.BuildAdd(zp, y, $"{label}_zpy");
+                return ctx.Builder.BuildZExt(sum8, i32, $"{label}_addr");
+            }
+            case 7: // abs,Y
+            {
+                var w = Mos6502Emitters.FetchImm16(ctx, $"{label}_abs");
+                var y = Mos6502Emitters.ReadGpr(ctx, "Y", $"{label}_y");
+                var yZ = ctx.Builder.BuildZExt(y, i16, $"{label}_yz16");
+                var sum16 = ctx.Builder.BuildAdd(w, yZ, $"{label}_addr16");
+                return ctx.Builder.BuildZExt(sum16, i32, $"{label}_addr");
+            }
+            default:
+                // Fallback — should be unreachable; caller only uses bbb=5/7.
+                return Mos6502Emitters.ComputeEffectiveAddrCc01(ctx, bbb, label);
         }
     }
 
@@ -2122,4 +2168,78 @@ internal sealed class MosLas : IMicroOpEmitter
         CpsrHelpers.SetStatusFlag(ctx, "P", "Z", z);
         CpsrHelpers.SetStatusFlag(ctx, "P", "N", n);
     }
+}
+
+/// <summary>
+/// Magic-store helper shared by SHY ($9C abs,X), SHX ($9E abs,Y).
+/// Semantics (matches LegacyCpu oracle):
+///   base16 = imm16; hi = base16 &gt;&gt; 8; lo = base16 &amp; 0xFF
+///   value = src AND (hi + 1)              // src = Y for SHY, X for SHX
+///   effLo = (lo + idx) &amp; 0xFF             // idx = X for SHY, Y for SHX
+///   // page-cross: if (lo + idx) overflowed, magic injects value as new hi
+///   effHi = (effLo &lt; idx) ? value : hi
+///   M[(effHi &lt;&lt; 8) | effLo] = value
+/// blargg cpu_test5 06-abs_xy exercises this — for the no-cross case the
+/// store goes to the canonical base+idx address; for the cross case the
+/// hi byte is replaced by the magic value (low byte still wrapped).
+/// </summary>
+internal static class MosMagicStore
+{
+    public static void EmitMagic(EmitContext ctx, string srcReg, string idxReg, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var base16 = Mos6502Emitters.FetchImm16(ctx, $"{label}_abs");
+        // hi = (base >> 8) & 0xFF as i8
+        var hi16 = ctx.Builder.BuildLShr(base16,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi16");
+        var hi8 = ctx.Builder.BuildTrunc(hi16, i8, $"{label}_hi8");
+        // lo = base & 0xFF as i8
+        var lo8 = ctx.Builder.BuildTrunc(base16, i8, $"{label}_lo8");
+
+        // src register (Y for SHY, X for SHX)
+        var src = Mos6502Emitters.ReadGpr(ctx, srcReg, $"{label}_src");
+        // value = src AND (hi+1) — adds in i8 (wrap is fine, hi=0xFF→0x00 is canonical)
+        var hiPlus1 = ctx.Builder.BuildAdd(hi8,
+            LLVMValueRef.CreateConstInt(i8, 1, false), $"{label}_hi1");
+        var value = ctx.Builder.BuildAnd(src, hiPlus1, $"{label}_val");
+
+        // idx register (X for SHY, Y for SHX)
+        var idx = Mos6502Emitters.ReadGpr(ctx, idxReg, $"{label}_idx");
+        // effLo = (lo + idx) & 0xFF — i8 add wraps naturally
+        var effLo = ctx.Builder.BuildAdd(lo8, idx, $"{label}_eff_lo");
+        // page-cross detect: effLo < idx (unsigned) iff (lo+idx) >= 0x100
+        var crossed = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntULT,
+            effLo, idx, $"{label}_crossed");
+        // effHi = crossed ? value : hi8
+        var effHi = ctx.Builder.BuildSelect(crossed, value, hi8, $"{label}_eff_hi");
+
+        // Combine effHi:effLo into i16 address.
+        var effHi16 = ctx.Builder.BuildZExt(effHi, i16, $"{label}_ehi16");
+        var effLo16 = ctx.Builder.BuildZExt(effLo, i16, $"{label}_elo16");
+        var hiSh = ctx.Builder.BuildShl(effHi16,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi_shl");
+        var addr16 = ctx.Builder.BuildOr(hiSh, effLo16, $"{label}_addr16");
+        var addr32 = ctx.Builder.BuildZExt(addr16, i32, $"{label}_addr32");
+
+        Mos6502Emitters.BusWrite8(ctx, addr32, value);
+    }
+}
+
+/// <summary>SHY abs,X ($9C): M[base + X] = Y AND (high+1) — magic store.</summary>
+internal sealed class MosShy : IMicroOpEmitter
+{
+    public string OpName => "mos_shy";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+        => MosMagicStore.EmitMagic(ctx, srcReg: "Y", idxReg: "X", label: "shy");
+}
+
+/// <summary>SHX abs,Y ($9E): M[base + Y] = X AND (high+1) — magic store.</summary>
+internal sealed class MosShx : IMicroOpEmitter
+{
+    public string OpName => "mos_shx";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+        => MosMagicStore.EmitMagic(ctx, srcReg: "X", idxReg: "Y", label: "shx");
 }
