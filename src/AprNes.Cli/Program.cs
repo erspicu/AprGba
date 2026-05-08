@@ -17,6 +17,7 @@ using AprCpu.Core.Compilation;
 using AprNes.Cli;
 using AprNes.Cli.Cpu;
 using AprNes.Cli.Memory;
+using AprNes.Cli.Video;
 
 if (args.Length == 0)
 {
@@ -25,6 +26,7 @@ if (args.Length == 0)
 }
 
 string? romPath = null;
+string? screenshotPath = null;
 bool runMode = false;
 bool nestestMode = false;
 ushort? startPc = null;
@@ -35,7 +37,8 @@ foreach (var arg in args)
     if      (arg == "--info")            { /* default — still prints info */ }
     else if (arg == "--run")             runMode = true;
     else if (arg == "--nestest")         { runMode = true; nestestMode = true; }
-    else if (arg.StartsWith("--rom="))   romPath = arg.Substring("--rom=".Length);
+    else if (arg.StartsWith("--rom="))        romPath = arg.Substring("--rom=".Length);
+    else if (arg.StartsWith("--screenshot=")) { screenshotPath = arg.Substring("--screenshot=".Length); runMode = true; }
     else if (arg.StartsWith("--start-pc=")) startPc = (ushort)Convert.ToUInt32(arg.Substring("--start-pc=".Length).TrimStart('$').TrimStart('0').TrimStart('x'), 16);
     else if (arg.StartsWith("--max-cycles=")) maxCycles = long.Parse(arg.Substring("--max-cycles=".Length));
     else if (arg.StartsWith("--expect-pc=")) expectPc = (ushort)Convert.ToUInt32(arg.Substring("--expect-pc=".Length).TrimStart('$').TrimStart('0').TrimStart('x'), 16);
@@ -116,6 +119,16 @@ if (romPath is not null)
         bus.Reset(mapper);
         var cpu = new BoundCpu(bus);
 
+        // Always wire the PPU — even nestest writes to PPU regs during init
+        // (resets PPUCTRL/PPUMASK), and a screenshot at end-of-run captures
+        // whatever the cart drew (mostly empty for nestest, but valid PNG).
+        var ppu = new NesPpu(bus.Vram, bus.Oam, bus.PaletteRam, mapper, rom.Vertical);
+        bus.BindPpu(
+            readReg:  addr => ppu.ReadRegister(addr),
+            writeReg: (addr, val) => ppu.WriteRegister(addr, val),
+            tick:     cpuCycles => ppu.Tick(cpuCycles));
+        ppu.Reset();
+
         if (nestestMode)
         {
             cpu.InitForNestest();
@@ -150,6 +163,19 @@ if (romPath is not null)
         Console.WriteLine();
         Console.WriteLine($"  ran {instructions:N0} instr in {sw.Elapsed.TotalSeconds:F3}s ({cyclesConsumed:N0} cycles, {instructions / sw.Elapsed.TotalSeconds / 1_000_000:F2} MIPS)");
         Console.WriteLine($"  final  PC=0x{cpu.PC:X4} A=0x{cpu.A:X2} X=0x{cpu.X:X2} Y=0x{cpu.Y:X2} SP=0x{cpu.SP:X2} P=0x{cpu.P:X2}");
+
+        // End-of-run screenshot: render whatever the cart drew to PPU
+        // memory + write as 256×240 RGB PNG. Even for CPU-only test ROMs
+        // like nestest the screenshot is meaningful — many test ROMs
+        // write a result string to the BG nametable, and visual diff is
+        // a useful sanity check.
+        if (screenshotPath is not null)
+        {
+            ppu.RenderFrame();
+            PngWriter.SavePng(ppu.Framebuffer, NesPpu.Width, NesPpu.Height, screenshotPath);
+            Console.WriteLine($"  screenshot: {screenshotPath} (256×240 RGB)");
+        }
+
         if (expectPc is ushort tgt)
         {
             Console.WriteLine($"  expect PC=0x{tgt:X4} → {(reachedExpect ? "REACHED" : "NOT reached (cycle budget exhausted)")}");
@@ -169,13 +195,15 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("usage: apr-nes [--info] [--rom=<path.nes>] [--run|--nestest]");
     Console.Error.WriteLine("              [--start-pc=<hex>] [--max-cycles=N] [--expect-pc=<hex>]");
+    Console.Error.WriteLine("              [--screenshot=<out.png>]");
     Console.Error.WriteLine();
     Console.Error.WriteLine("Modes:");
-    Console.Error.WriteLine("  (default)  — load spec, report 256-opcode decode coverage");
-    Console.Error.WriteLine("  --rom=X    — additionally parse iNES header");
-    Console.Error.WriteLine("  --run      — boot ROM via LegacyCpu (oracle), reset vector fetch");
-    Console.Error.WriteLine("  --nestest  — like --run but jump to PC=0xC000 with nestest init state,");
-    Console.Error.WriteLine("                 stop when PC=0xC66E (official-opcode pass marker)");
+    Console.Error.WriteLine("  (default)    — load spec, report 256-opcode decode coverage");
+    Console.Error.WriteLine("  --rom=X      — additionally parse iNES header");
+    Console.Error.WriteLine("  --run        — boot ROM via LegacyCpu (oracle), reset vector fetch");
+    Console.Error.WriteLine("  --nestest    — like --run but jump to PC=0xC000 with nestest init state,");
+    Console.Error.WriteLine("                   stop when PC=0xC66E (official-opcode pass marker)");
+    Console.Error.WriteLine("  --screenshot — write 256×240 PNG of PPU framebuffer at end-of-run");
 }
 
 static string LocateSpec()

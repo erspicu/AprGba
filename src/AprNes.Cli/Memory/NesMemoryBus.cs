@@ -186,38 +186,53 @@ namespace AprNes.Cli.Memory
         public void Tick(int cpuCycles)
         {
             _pendingCatchUpCycles += cpuCycles;
-            // TODO: wire PPU/APU later — drain _pendingCatchUpCycles by
-            // stepping NesPpu 3x per CPU cycle and NesApu 1x per CPU cycle.
+            // Drain into the PPU hook if attached. NES NTSC: 3 PPU dots
+            // per CPU cycle. PPU implementation is a separate component
+            // (AprNes.Cli.Video.NesPpu); bus binds via delegate to avoid
+            // a Memory→Video namespace dependency.
+            _ppuTickHook?.Invoke(cpuCycles);
         }
 
-        // --- PPU register stubs --------------------------------------------
-        // TODO: wire PPU/APU — these will dispatch into NesPpu once that
-        // class exists. Reads return open bus, writes are dropped.
+        // --- PPU register hooks --------------------------------------------
+        // Bus dispatches $2000-$2007 reads/writes through caller-supplied
+        // delegates. Default stubs return open bus / drop. AprNes.Cli
+        // attaches NesPpu via BindPpu() at startup. This decoupling keeps
+        // the bus oblivious to the rendering side and lets tests run with
+        // a no-op PPU when only CPU correctness is being verified
+        // (e.g. NestestOracleTests).
+
+        private Func<ushort, byte>? _ppuReadHook;
+        private Action<ushort, byte>? _ppuWriteHook;
+        private Action<int>? _ppuTickHook;
+
+        public void BindPpu(
+            Func<ushort, byte> readReg,
+            Action<ushort, byte> writeReg,
+            Action<int>? tick = null)
+        {
+            _ppuReadHook  = readReg;
+            _ppuWriteHook = writeReg;
+            _ppuTickHook  = tick;
+        }
 
         private byte ReadPpu(ushort addr)
         {
-            // addr is already folded into $2000-$2007 by the caller.
-            switch (addr)
+            if (_ppuReadHook is { } hook) return hook(addr);
+            // Fallback: open-bus / write-only-register defaults.
+            return addr switch
             {
-                case 0x2000: return _cpubus;          // write-only
-                case 0x2001: return _cpubus;          // write-only
-                case 0x2002: return 0;                // TODO: PPUSTATUS
-                case 0x2003: return _cpubus;          // write-only
-                case 0x2004: return 0;                // TODO: OAMDATA
-                case 0x2005: return _cpubus;          // write-only
-                case 0x2006: return _cpubus;          // write-only
-                case 0x2007: return 0;                // TODO: PPUDATA (with buffered read)
-                default:     return _cpubus;
-            }
+                0x2002 => 0,      // PPUSTATUS — would be VBL flag etc.
+                0x2004 => 0,      // OAMDATA
+                0x2007 => 0,      // PPUDATA buffered read
+                _      => _cpubus // write-only registers return last bus value
+            };
         }
 
         private void WritePpu(ushort addr, byte value)
         {
-            // addr is already folded into $2000-$2007 by the caller.
-            // TODO: wire PPU — for now silently drop everything except track
-            // the value on the open-bus latch (already done by WriteByte).
-            _ = addr;
-            _ = value;
+            _ppuWriteHook?.Invoke(addr, value);
+            // No-op fallback when no PPU bound; _cpubus already updated.
+            _ = addr; _ = value;
         }
 
         // --- APU + IO register stubs ---------------------------------------
