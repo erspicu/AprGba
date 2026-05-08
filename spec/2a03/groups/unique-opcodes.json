@@ -13,7 +13,9 @@
         "mnemonic": "BRK", "since": "Ricoh2A03", "writes_pc": "always",
         "manual_ref": "6502 §BRK",
         "cycles": { "form": "7m" },
-        "steps": []
+        "steps": [
+          { "op": "mos_brk" }
+        ]
       }]
     },
     {

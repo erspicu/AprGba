@@ -12,14 +12,77 @@
       "mask": "0x03",
       "match": "0x01",
       "instructions": [
-        { "selector": { "field": "aaa", "value": "000" }, "mnemonic": "ORA", "since": "Ricoh2A03", "manual_ref": "6502 §ORA — bbb selects addr mode", "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "001" }, "mnemonic": "AND", "since": "Ricoh2A03", "manual_ref": "6502 §AND",                "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "010" }, "mnemonic": "EOR", "since": "Ricoh2A03", "manual_ref": "6502 §EOR",                "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "011" }, "mnemonic": "ADC", "since": "Ricoh2A03", "manual_ref": "6502 §ADC",                "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "100" }, "mnemonic": "STA", "since": "Ricoh2A03", "manual_ref": "6502 §STA — addr mode by bbb (#imm form is illegal/NOP, see unofficial.json 0x89)", "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "101" }, "mnemonic": "LDA", "since": "Ricoh2A03", "manual_ref": "6502 §LDA",                "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "110" }, "mnemonic": "CMP", "since": "Ricoh2A03", "manual_ref": "6502 §CMP",                "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "111" }, "mnemonic": "SBC", "since": "Ricoh2A03", "manual_ref": "6502 §SBC",                "cycles": { "form": "3m" }, "steps": [] }
+        {
+          "selector": { "field": "aaa", "value": "000" }, "mnemonic": "ORA", "since": "Ricoh2A03", "manual_ref": "6502 §ORA — bbb selects addr mode", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc01", "field": "bbb", "out": "v" },
+            { "op": "read_reg_named", "name": "A", "out": "a" },
+            { "op": "or", "in": ["a", "v"], "out": "r" },
+            { "op": "write_reg_named", "name": "A", "value": "r" },
+            { "op": "update_zero", "in": "r", "reg": "P", "flag": "Z" },
+            { "op": "update_sign", "in": "r", "reg": "P", "flag": "N" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "001" }, "mnemonic": "AND", "since": "Ricoh2A03", "manual_ref": "6502 §AND", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc01", "field": "bbb", "out": "v" },
+            { "op": "read_reg_named", "name": "A", "out": "a" },
+            { "op": "and", "in": ["a", "v"], "out": "r" },
+            { "op": "write_reg_named", "name": "A", "value": "r" },
+            { "op": "update_zero", "in": "r", "reg": "P", "flag": "Z" },
+            { "op": "update_sign", "in": "r", "reg": "P", "flag": "N" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "010" }, "mnemonic": "EOR", "since": "Ricoh2A03", "manual_ref": "6502 §EOR", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc01", "field": "bbb", "out": "v" },
+            { "op": "read_reg_named", "name": "A", "out": "a" },
+            { "op": "xor", "in": ["a", "v"], "out": "r" },
+            { "op": "write_reg_named", "name": "A", "value": "r" },
+            { "op": "update_zero", "in": "r", "reg": "P", "flag": "Z" },
+            { "op": "update_sign", "in": "r", "reg": "P", "flag": "N" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "011" }, "mnemonic": "ADC", "since": "Ricoh2A03", "manual_ref": "6502 §ADC", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc01", "field": "bbb", "out": "v" },
+            { "op": "mos_adc", "rhs": "v" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "100" }, "mnemonic": "STA", "since": "Ricoh2A03", "manual_ref": "6502 §STA — addr mode by bbb (#imm form is illegal/NOP, see unofficial.json 0x89)", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "read_reg_named", "name": "A", "out": "a" },
+            { "op": "mos_store_operand_cc01", "field": "bbb", "value": "a" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "101" }, "mnemonic": "LDA", "since": "Ricoh2A03", "manual_ref": "6502 §LDA", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc01", "field": "bbb", "out": "v" },
+            { "op": "write_reg_named", "name": "A", "value": "v" },
+            { "op": "update_zero", "in": "v", "reg": "P", "flag": "Z" },
+            { "op": "update_sign", "in": "v", "reg": "P", "flag": "N" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "110" }, "mnemonic": "CMP", "since": "Ricoh2A03", "manual_ref": "6502 §CMP", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc01", "field": "bbb", "out": "v" },
+            { "op": "read_reg_named", "name": "A", "out": "a" },
+            { "op": "mos_compare", "lhs": "a", "rhs": "v" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "111" }, "mnemonic": "SBC", "since": "Ricoh2A03", "manual_ref": "6502 §SBC", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc01", "field": "bbb", "out": "v" },
+            { "op": "mos_sbc", "rhs": "v" }
+          ]
+        }
       ]
     }
   ]

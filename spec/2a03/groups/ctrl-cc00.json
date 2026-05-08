@@ -12,11 +12,45 @@
       "mask": "0x03",
       "match": "0x00",
       "instructions": [
-        { "selector": { "field": "aaa", "value": "001" }, "mnemonic": "BIT", "since": "Ricoh2A03", "manual_ref": "6502 §BIT — only zp(0x24) / abs(0x2C); other bbb shadowed by unofficial NOPs", "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "100" }, "mnemonic": "STY", "since": "Ricoh2A03", "manual_ref": "6502 §STY — zp(0x84)/abs(0x8C)/zp,X(0x94)",                                  "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "101" }, "mnemonic": "LDY", "since": "Ricoh2A03", "manual_ref": "6502 §LDY — #imm(0xA0)/zp(0xA4)/abs(0xAC)/zp,X(0xB4)/abs,X(0xBC)",         "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "110" }, "mnemonic": "CPY", "since": "Ricoh2A03", "manual_ref": "6502 §CPY — #imm(0xC0)/zp(0xC4)/abs(0xCC)",                                  "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "111" }, "mnemonic": "CPX", "since": "Ricoh2A03", "manual_ref": "6502 §CPX — #imm(0xE0)/zp(0xE4)/abs(0xEC)",                                  "cycles": { "form": "3m" }, "steps": [] }
+        {
+          "selector": { "field": "aaa", "value": "001" }, "mnemonic": "BIT", "since": "Ricoh2A03", "manual_ref": "6502 §BIT — only zp(0x24) / abs(0x2C); other bbb shadowed by unofficial NOPs", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc00", "field": "bbb", "out": "v" },
+            { "op": "mos_bit", "rhs": "v" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "100" }, "mnemonic": "STY", "since": "Ricoh2A03", "manual_ref": "6502 §STY — zp(0x84)/abs(0x8C)/zp,X(0x94)", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "read_reg_named", "name": "Y", "out": "y" },
+            { "op": "mos_store_operand_cc00", "field": "bbb", "value": "y" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "101" }, "mnemonic": "LDY", "since": "Ricoh2A03", "manual_ref": "6502 §LDY — #imm(0xA0)/zp(0xA4)/abs(0xAC)/zp,X(0xB4)/abs,X(0xBC)", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc00", "field": "bbb", "out": "v" },
+            { "op": "write_reg_named", "name": "Y", "value": "v" },
+            { "op": "update_zero", "in": "v", "reg": "P", "flag": "Z" },
+            { "op": "update_sign", "in": "v", "reg": "P", "flag": "N" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "110" }, "mnemonic": "CPY", "since": "Ricoh2A03", "manual_ref": "6502 §CPY — #imm(0xC0)/zp(0xC4)/abs(0xCC)", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc00", "field": "bbb", "out": "v" },
+            { "op": "read_reg_named", "name": "Y", "out": "y" },
+            { "op": "mos_compare", "lhs": "y", "rhs": "v" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "111" }, "mnemonic": "CPX", "since": "Ricoh2A03", "manual_ref": "6502 §CPX — #imm(0xE0)/zp(0xE4)/abs(0xEC)", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc00", "field": "bbb", "out": "v" },
+            { "op": "read_reg_named", "name": "X", "out": "x" },
+            { "op": "mos_compare", "lhs": "x", "rhs": "v" }
+          ]
+        }
       ]
     }
   ]

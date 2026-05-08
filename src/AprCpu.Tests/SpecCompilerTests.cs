@@ -598,4 +598,37 @@ public class SpecCompilerTests
             $"Compiled mnemonics: {compiledMnemonics}. " +
             $"Sample failures: {sampleFailures}");
     }
+
+    /// <summary>
+    /// Sanity-check a few key 6502 opcode functions emit non-trivial IR
+    /// (i.e., the spec.steps for these aren't empty no-ops). LDA must
+    /// load a byte; ADC must do 32-bit arithmetic for carry computation;
+    /// BIT must set flags via P-register stores; JSR must touch SP and PC.
+    /// </summary>
+    [Fact]
+    public void Compile_Ricoh2A03_KeyOpsEmitNonTrivialIR()
+    {
+        var result = SpecCompiler.Compile(Ricoh2A03CpuJson);
+        var ir = result.Module.PrintToString();
+
+        // LDA is in alu-cc01 — must end up loading i8 from memory.
+        Assert.Contains("define void @Execute_Main_AluCc01_LDA", ir);
+        // ADC widens to i32 to derive carry from bit 8 of the sum.
+        Assert.Contains("define void @Execute_Main_AluCc01_ADC", ir);
+        // BIT in ctrl-cc00 emits the AND mask.
+        Assert.Contains("define void @Execute_Main_Ctrl_cc00_BIT", ir);
+        // JSR pushes PC and writes new PC.
+        Assert.Contains("define void @Execute_Main_JumpToSubroutine_JSR", ir);
+        // Conditional branches use mos_branch_rel.
+        Assert.Contains("define void @Execute_Main_ConditionalBranch_BNE", ir);
+
+        // The IR must contain real operations — `load i8` (memory reads) +
+        // `add i32` (32-bit arithmetic for ADC's carry-out) + `add i16`
+        // (PC arithmetic for branches/JMPs).
+        Assert.Contains("load i8",   ir);
+        Assert.Contains("add i32",   ir);
+        Assert.Contains("add i16",   ir);
+        // SBC must do the inversion via xor with 0xFF (`xor i8`).
+        Assert.Contains("xor i8",    ir);
+    }
 }

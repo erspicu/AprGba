@@ -11,14 +11,38 @@
       "mask": "0x1F",
       "match": "0x10",
       "instructions": [
-        { "selector": { "field": "ccc", "value": "000" }, "mnemonic": "BPL", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BPL", "cycles": { "form": "2m_or_4m" }, "steps": [] },
-        { "selector": { "field": "ccc", "value": "001" }, "mnemonic": "BMI", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BMI", "cycles": { "form": "2m_or_4m" }, "steps": [] },
-        { "selector": { "field": "ccc", "value": "010" }, "mnemonic": "BVC", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BVC", "cycles": { "form": "2m_or_4m" }, "steps": [] },
-        { "selector": { "field": "ccc", "value": "011" }, "mnemonic": "BVS", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BVS", "cycles": { "form": "2m_or_4m" }, "steps": [] },
-        { "selector": { "field": "ccc", "value": "100" }, "mnemonic": "BCC", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BCC", "cycles": { "form": "2m_or_4m" }, "steps": [] },
-        { "selector": { "field": "ccc", "value": "101" }, "mnemonic": "BCS", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BCS", "cycles": { "form": "2m_or_4m" }, "steps": [] },
-        { "selector": { "field": "ccc", "value": "110" }, "mnemonic": "BNE", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BNE", "cycles": { "form": "2m_or_4m" }, "steps": [] },
-        { "selector": { "field": "ccc", "value": "111" }, "mnemonic": "BEQ", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BEQ", "cycles": { "form": "2m_or_4m" }, "steps": [] }
+        { "selector": { "field": "ccc", "value": "000" }, "mnemonic": "BPL", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BPL", "cycles": { "form": "2m_or_4m" }, "steps": [
+            { "op": "mos_branch_rel", "cond_reg": "P", "cond_flag": "N", "cond_value": 0 }
+          ]
+        },
+        { "selector": { "field": "ccc", "value": "001" }, "mnemonic": "BMI", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BMI", "cycles": { "form": "2m_or_4m" }, "steps": [
+            { "op": "mos_branch_rel", "cond_reg": "P", "cond_flag": "N", "cond_value": 1 }
+          ]
+        },
+        { "selector": { "field": "ccc", "value": "010" }, "mnemonic": "BVC", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BVC", "cycles": { "form": "2m_or_4m" }, "steps": [
+            { "op": "mos_branch_rel", "cond_reg": "P", "cond_flag": "V", "cond_value": 0 }
+          ]
+        },
+        { "selector": { "field": "ccc", "value": "011" }, "mnemonic": "BVS", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BVS", "cycles": { "form": "2m_or_4m" }, "steps": [
+            { "op": "mos_branch_rel", "cond_reg": "P", "cond_flag": "V", "cond_value": 1 }
+          ]
+        },
+        { "selector": { "field": "ccc", "value": "100" }, "mnemonic": "BCC", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BCC", "cycles": { "form": "2m_or_4m" }, "steps": [
+            { "op": "mos_branch_rel", "cond_reg": "P", "cond_flag": "C", "cond_value": 0 }
+          ]
+        },
+        { "selector": { "field": "ccc", "value": "101" }, "mnemonic": "BCS", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BCS", "cycles": { "form": "2m_or_4m" }, "steps": [
+            { "op": "mos_branch_rel", "cond_reg": "P", "cond_flag": "C", "cond_value": 1 }
+          ]
+        },
+        { "selector": { "field": "ccc", "value": "110" }, "mnemonic": "BNE", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BNE", "cycles": { "form": "2m_or_4m" }, "steps": [
+            { "op": "mos_branch_rel", "cond_reg": "P", "cond_flag": "Z", "cond_value": 0 }
+          ]
+        },
+        { "selector": { "field": "ccc", "value": "111" }, "mnemonic": "BEQ", "since": "Ricoh2A03", "writes_pc": "conditional", "manual_ref": "6502 §BEQ", "cycles": { "form": "2m_or_4m" }, "steps": [
+            { "op": "mos_branch_rel", "cond_reg": "P", "cond_flag": "Z", "cond_value": 1 }
+          ]
+        }
       ]
     }
   ]

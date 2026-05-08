@@ -4,71 +4,188 @@
   "formats": [
     {
       "name": "ClearCarry",      "pattern": "00011000", "fields": {}, "mask": "0xFF", "match": "0x18",
-      "instructions": [{ "mnemonic": "CLC", "since": "Ricoh2A03", "manual_ref": "6502 §CLC", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "CLC", "since": "Ricoh2A03", "manual_ref": "6502 §CLC", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "set_flag", "reg": "P", "flag": "C", "value": 0 }
+        ]
+      }]
     },
     {
       "name": "SetCarry",        "pattern": "00111000", "fields": {}, "mask": "0xFF", "match": "0x38",
-      "instructions": [{ "mnemonic": "SEC", "since": "Ricoh2A03", "manual_ref": "6502 §SEC", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "SEC", "since": "Ricoh2A03", "manual_ref": "6502 §SEC", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "set_flag", "reg": "P", "flag": "C", "value": 1 }
+        ]
+      }]
     },
     {
       "name": "ClearInterrupt",  "pattern": "01011000", "fields": {}, "mask": "0xFF", "match": "0x58",
-      "instructions": [{ "mnemonic": "CLI", "since": "Ricoh2A03", "manual_ref": "6502 §CLI", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "CLI", "since": "Ricoh2A03", "manual_ref": "6502 §CLI", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "set_flag", "reg": "P", "flag": "I", "value": 0 }
+        ]
+      }]
     },
     {
       "name": "SetInterrupt",    "pattern": "01111000", "fields": {}, "mask": "0xFF", "match": "0x78",
-      "instructions": [{ "mnemonic": "SEI", "since": "Ricoh2A03", "manual_ref": "6502 §SEI", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "SEI", "since": "Ricoh2A03", "manual_ref": "6502 §SEI", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "set_flag", "reg": "P", "flag": "I", "value": 1 }
+        ]
+      }]
     },
     {
       "name": "ClearOverflow",   "pattern": "10111000", "fields": {}, "mask": "0xFF", "match": "0xB8",
-      "instructions": [{ "mnemonic": "CLV", "since": "Ricoh2A03", "manual_ref": "6502 §CLV", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "CLV", "since": "Ricoh2A03", "manual_ref": "6502 §CLV", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "set_flag", "reg": "P", "flag": "V", "value": 0 }
+        ]
+      }]
     },
     {
       "name": "ClearDecimal",    "pattern": "11011000", "fields": {}, "mask": "0xFF", "match": "0xD8",
-      "instructions": [{ "mnemonic": "CLD", "since": "Ricoh2A03", "manual_ref": "6502 §CLD", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "CLD", "since": "Ricoh2A03", "manual_ref": "6502 §CLD", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "set_flag", "reg": "P", "flag": "D", "value": 0 }
+        ]
+      }]
     },
     {
       "name": "SetDecimal",      "pattern": "11111000", "fields": {}, "mask": "0xFF", "match": "0xF8",
-      "instructions": [{ "mnemonic": "SED", "since": "Ricoh2A03", "manual_ref": "6502 §SED — D flag set but no-op in 2A03 (no BCD ALU)", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "SED", "since": "Ricoh2A03", "manual_ref": "6502 §SED — D flag set but no-op in 2A03 (no BCD ALU)", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "set_flag", "reg": "P", "flag": "D", "value": 1 }
+        ]
+      }]
     },
     {
       "name": "TransferAToX",    "pattern": "10101010", "fields": {}, "mask": "0xFF", "match": "0xAA",
-      "instructions": [{ "mnemonic": "TAX", "since": "Ricoh2A03", "manual_ref": "6502 §TAX", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "TAX", "since": "Ricoh2A03", "manual_ref": "6502 §TAX", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named",  "name": "A", "out": "v" },
+          { "op": "write_reg_named", "name": "X", "value": "v" },
+          { "op": "update_zero", "in": "v", "reg": "P", "flag": "Z" },
+          { "op": "update_sign", "in": "v", "reg": "P", "flag": "N" }
+        ]
+      }]
     },
     {
       "name": "TransferXToA",    "pattern": "10001010", "fields": {}, "mask": "0xFF", "match": "0x8A",
-      "instructions": [{ "mnemonic": "TXA", "since": "Ricoh2A03", "manual_ref": "6502 §TXA", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "TXA", "since": "Ricoh2A03", "manual_ref": "6502 §TXA", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named",  "name": "X", "out": "v" },
+          { "op": "write_reg_named", "name": "A", "value": "v" },
+          { "op": "update_zero", "in": "v", "reg": "P", "flag": "Z" },
+          { "op": "update_sign", "in": "v", "reg": "P", "flag": "N" }
+        ]
+      }]
     },
     {
       "name": "TransferAToY",    "pattern": "10101000", "fields": {}, "mask": "0xFF", "match": "0xA8",
-      "instructions": [{ "mnemonic": "TAY", "since": "Ricoh2A03", "manual_ref": "6502 §TAY", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "TAY", "since": "Ricoh2A03", "manual_ref": "6502 §TAY", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named",  "name": "A", "out": "v" },
+          { "op": "write_reg_named", "name": "Y", "value": "v" },
+          { "op": "update_zero", "in": "v", "reg": "P", "flag": "Z" },
+          { "op": "update_sign", "in": "v", "reg": "P", "flag": "N" }
+        ]
+      }]
     },
     {
       "name": "TransferYToA",    "pattern": "10011000", "fields": {}, "mask": "0xFF", "match": "0x98",
-      "instructions": [{ "mnemonic": "TYA", "since": "Ricoh2A03", "manual_ref": "6502 §TYA", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "TYA", "since": "Ricoh2A03", "manual_ref": "6502 §TYA", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named",  "name": "Y", "out": "v" },
+          { "op": "write_reg_named", "name": "A", "value": "v" },
+          { "op": "update_zero", "in": "v", "reg": "P", "flag": "Z" },
+          { "op": "update_sign", "in": "v", "reg": "P", "flag": "N" }
+        ]
+      }]
     },
     {
       "name": "TransferSpToX",   "pattern": "10111010", "fields": {}, "mask": "0xFF", "match": "0xBA",
-      "instructions": [{ "mnemonic": "TSX", "since": "Ricoh2A03", "manual_ref": "6502 §TSX", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "TSX", "since": "Ricoh2A03", "manual_ref": "6502 §TSX", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named",  "name": "SP", "out": "v" },
+          { "op": "write_reg_named", "name": "X",  "value": "v" },
+          { "op": "update_zero", "in": "v", "reg": "P", "flag": "Z" },
+          { "op": "update_sign", "in": "v", "reg": "P", "flag": "N" }
+        ]
+      }]
     },
     {
       "name": "TransferXToSp",   "pattern": "10011010", "fields": {}, "mask": "0xFF", "match": "0x9A",
-      "instructions": [{ "mnemonic": "TXS", "since": "Ricoh2A03", "manual_ref": "6502 §TXS", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "TXS", "since": "Ricoh2A03", "manual_ref": "6502 §TXS", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named",  "name": "X",  "out": "v" },
+          { "op": "write_reg_named", "name": "SP", "value": "v" }
+        ]
+      }]
     },
     {
       "name": "DecrementX",      "pattern": "11001010", "fields": {}, "mask": "0xFF", "match": "0xCA",
-      "instructions": [{ "mnemonic": "DEX", "since": "Ricoh2A03", "manual_ref": "6502 §DEX", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "DEX", "since": "Ricoh2A03", "manual_ref": "6502 §DEX", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named", "name": "X", "out": "x" },
+          { "op": "sub", "in": ["x", { "const": 1 }], "out": "x_new" },
+          { "op": "write_reg_named", "name": "X", "value": "x_new" },
+          { "op": "update_zero", "in": "x_new", "reg": "P", "flag": "Z" },
+          { "op": "update_sign", "in": "x_new", "reg": "P", "flag": "N" }
+        ]
+      }]
     },
     {
       "name": "IncrementX",      "pattern": "11101000", "fields": {}, "mask": "0xFF", "match": "0xE8",
-      "instructions": [{ "mnemonic": "INX", "since": "Ricoh2A03", "manual_ref": "6502 §INX", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "INX", "since": "Ricoh2A03", "manual_ref": "6502 §INX", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named", "name": "X", "out": "x" },
+          { "op": "add", "in": ["x", { "const": 1 }], "out": "x_new" },
+          { "op": "write_reg_named", "name": "X", "value": "x_new" },
+          { "op": "update_zero", "in": "x_new", "reg": "P", "flag": "Z" },
+          { "op": "update_sign", "in": "x_new", "reg": "P", "flag": "N" }
+        ]
+      }]
     },
     {
       "name": "DecrementY",      "pattern": "10001000", "fields": {}, "mask": "0xFF", "match": "0x88",
-      "instructions": [{ "mnemonic": "DEY", "since": "Ricoh2A03", "manual_ref": "6502 §DEY", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "DEY", "since": "Ricoh2A03", "manual_ref": "6502 §DEY", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named", "name": "Y", "out": "y" },
+          { "op": "sub", "in": ["y", { "const": 1 }], "out": "y_new" },
+          { "op": "write_reg_named", "name": "Y", "value": "y_new" },
+          { "op": "update_zero", "in": "y_new", "reg": "P", "flag": "Z" },
+          { "op": "update_sign", "in": "y_new", "reg": "P", "flag": "N" }
+        ]
+      }]
     },
     {
       "name": "IncrementY",      "pattern": "11001000", "fields": {}, "mask": "0xFF", "match": "0xC8",
-      "instructions": [{ "mnemonic": "INY", "since": "Ricoh2A03", "manual_ref": "6502 §INY", "cycles": { "form": "2m" }, "steps": [] }]
+      "instructions": [{
+        "mnemonic": "INY", "since": "Ricoh2A03", "manual_ref": "6502 §INY", "cycles": { "form": "2m" },
+        "steps": [
+          { "op": "read_reg_named", "name": "Y", "out": "y" },
+          { "op": "add", "in": ["y", { "const": 1 }], "out": "y_new" },
+          { "op": "write_reg_named", "name": "Y", "value": "y_new" },
+          { "op": "update_zero", "in": "y_new", "reg": "P", "flag": "Z" },
+          { "op": "update_sign", "in": "y_new", "reg": "P", "flag": "N" }
+        ]
+      }]
     }
   ]
 }

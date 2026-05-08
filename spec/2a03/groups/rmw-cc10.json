@@ -12,14 +12,58 @@
       "mask": "0x03",
       "match": "0x02",
       "instructions": [
-        { "selector": { "field": "aaa", "value": "000" }, "mnemonic": "ASL", "since": "Ricoh2A03", "manual_ref": "6502 §ASL — bbb=010=A (accumulator)", "cycles": { "form": "5m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "001" }, "mnemonic": "ROL", "since": "Ricoh2A03", "manual_ref": "6502 §ROL",                              "cycles": { "form": "5m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "010" }, "mnemonic": "LSR", "since": "Ricoh2A03", "manual_ref": "6502 §LSR",                              "cycles": { "form": "5m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "011" }, "mnemonic": "ROR", "since": "Ricoh2A03", "manual_ref": "6502 §ROR",                              "cycles": { "form": "5m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "100" }, "mnemonic": "STX", "since": "Ricoh2A03", "manual_ref": "6502 §STX — bbb=001/011/101(zp,Y) only", "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "101" }, "mnemonic": "LDX", "since": "Ricoh2A03", "manual_ref": "6502 §LDX — bbb=000=#imm, 101=zp,Y, 111=abs,Y", "cycles": { "form": "3m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "110" }, "mnemonic": "DEC", "since": "Ricoh2A03", "manual_ref": "6502 §DEC — only zp/abs/zp,X/abs,X",    "cycles": { "form": "5m" }, "steps": [] },
-        { "selector": { "field": "aaa", "value": "111" }, "mnemonic": "INC", "since": "Ricoh2A03", "manual_ref": "6502 §INC",                              "cycles": { "form": "5m" }, "steps": [] }
+        {
+          "selector": { "field": "aaa", "value": "000" }, "mnemonic": "ASL", "since": "Ricoh2A03", "manual_ref": "6502 §ASL — bbb=010=A (accumulator)", "cycles": { "form": "5m" },
+          "steps": [
+            { "op": "mos_rmw_cc10", "field": "bbb", "kind": "asl" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "001" }, "mnemonic": "ROL", "since": "Ricoh2A03", "manual_ref": "6502 §ROL", "cycles": { "form": "5m" },
+          "steps": [
+            { "op": "mos_rmw_cc10", "field": "bbb", "kind": "rol" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "010" }, "mnemonic": "LSR", "since": "Ricoh2A03", "manual_ref": "6502 §LSR", "cycles": { "form": "5m" },
+          "steps": [
+            { "op": "mos_rmw_cc10", "field": "bbb", "kind": "lsr" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "011" }, "mnemonic": "ROR", "since": "Ricoh2A03", "manual_ref": "6502 §ROR", "cycles": { "form": "5m" },
+          "steps": [
+            { "op": "mos_rmw_cc10", "field": "bbb", "kind": "ror" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "100" }, "mnemonic": "STX", "since": "Ricoh2A03", "manual_ref": "6502 §STX — bbb=001/011/101(zp,Y) only", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "read_reg_named", "name": "X", "out": "x" },
+            { "op": "mos_store_operand_cc10", "field": "bbb", "swap_xy": true, "value": "x" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "101" }, "mnemonic": "LDX", "since": "Ricoh2A03", "manual_ref": "6502 §LDX — bbb=000=#imm, 101=zp,Y, 111=abs,Y", "cycles": { "form": "3m" },
+          "steps": [
+            { "op": "mos_load_operand_cc10", "field": "bbb", "swap_xy": true, "out": "v" },
+            { "op": "write_reg_named", "name": "X", "value": "v" },
+            { "op": "update_zero", "in": "v", "reg": "P", "flag": "Z" },
+            { "op": "update_sign", "in": "v", "reg": "P", "flag": "N" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "110" }, "mnemonic": "DEC", "since": "Ricoh2A03", "manual_ref": "6502 §DEC — only zp/abs/zp,X/abs,X", "cycles": { "form": "5m" },
+          "steps": [
+            { "op": "mos_rmw_cc10", "field": "bbb", "kind": "dec" }
+          ]
+        },
+        {
+          "selector": { "field": "aaa", "value": "111" }, "mnemonic": "INC", "since": "Ricoh2A03", "manual_ref": "6502 §INC", "cycles": { "form": "5m" },
+          "steps": [
+            { "op": "mos_rmw_cc10", "field": "bbb", "kind": "inc" }
+          ]
+        }
       ]
     }
   ]

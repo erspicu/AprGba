@@ -66,6 +66,7 @@ internal static class StackOps
             var def  = ctx.Layout.GetStatusRegisterDef(statusName);
             var type = def.WidthBits switch
             {
+                8  => LLVMTypeRef.Int8,
                 16 => LLVMTypeRef.Int16,
                 32 => LLVMTypeRef.Int32,
                 _  => throw new NotSupportedException($"stack pointer width {def.WidthBits}-bit unsupported.")

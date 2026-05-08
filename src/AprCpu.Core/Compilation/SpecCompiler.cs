@@ -63,6 +63,10 @@ public sealed unsafe class SpecCompiler
         {
             Lr35902Emitters.RegisterAll(registry);
         }
+        else if (string.Equals(family, "MOS6502", StringComparison.OrdinalIgnoreCase))
+        {
+            Mos6502Emitters.RegisterAll(registry);
+        }
 
         var decoderTables = new Dictionary<string, DecoderTable>(StringComparer.Ordinal);
         var functions = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
