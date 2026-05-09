@@ -176,3 +176,23 @@ Page-cross extra: spec 加新 field `cycle_nuances.page_cross_addr_modes: ["abs_
 **N3.5** 不做（mapper / NMI body / PPU regs 留 C# escape hatch、文件化）。
 
 每個 step 結束 → T1 + nestest（三 backend）+ blargg（三 backend）+ commit + push 後再進下一步。**5 分鐘 timeout cap on all tests**（CLAUDE.md 慣例）。
+
+---
+
+> **2026-05-09 update — N4 invalidations 紀錄**
+>
+> N3.4 結論「legacy backend ~7% slower」(1.69 → 1.57 MIPS) 已被 N4
+> 系列大幅改善。N4.3 page-table O(1) dispatch + N4.4 offset semantics
+> 把 legacy 推回 1.65 MIPS，剩 ~2% 距 N1 baseline。
+>
+> N3.4 doc 提到「未來 perf-critical 可考慮把 region scan 改成 jumping
+> table」— N4.3 已實作此一方案（32-byte page → 2048 entries）。
+>
+> N3.4 §1.1 結論：「選擇接受這 7%」過時 — 實際在 N4.3 救回了。
+>
+> N3.4 §2.1「Memory bus dispatch 80% declarative」也已被 N4 推到 95%
+> （詳見 `MD/performance/202605091900-n4-memory-spec-v2.md`）。
+>
+> N4 系列的設計 + closeout 紀錄分別在：
+> - `MD/design/22-memory-spec-v2.md` — schema v2 design
+> - `MD/performance/202605091900-n4-memory-spec-v2.md` — 3-run bench + ratio
