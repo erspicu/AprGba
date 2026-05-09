@@ -47,6 +47,13 @@ public static class X86_16Emitters
         reg.Register(new X86ReadReg16FieldEmitter());
         reg.Register(new X86FetchModRmEmitter());
 
+        // 24.6.5c — memory ModR/M: effective-address computation + segmented load/store.
+        reg.Register(new X86ModRmComputeEaEmitter());
+        reg.Register(new X86ModRmLoad8Emitter());
+        reg.Register(new X86ModRmLoad16Emitter());
+        reg.Register(new X86ModRmStore8Emitter());
+        reg.Register(new X86ModRmStore16Emitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -612,5 +619,517 @@ internal sealed class X86FetchModRmEmitter : IMicroOpEmitter
         ctx.Values["modrm_mod"] = mod;
         ctx.Values["modrm_reg"] = regV;
         ctx.Values["modrm_rm"]  = rm;
+    }
+}
+
+// ============================================================================
+// x86_modrm_compute_ea — compute the effective address (seg, off) for the
+// memory operand encoded by the most recent x86_fetch_modrm. The 8086 EA
+// table:
+//
+//   r/m | mod=00         | mod=01           | mod=10            | default seg
+//   ----+----------------+------------------+-------------------+-------------
+//   000 | BX+SI          | BX+SI+disp8      | BX+SI+disp16      | DS
+//   001 | BX+DI          | BX+DI+disp8      | BX+DI+disp16      | DS
+//   010 | BP+SI          | BP+SI+disp8      | BP+SI+disp16      | SS
+//   011 | BP+DI          | BP+DI+disp8      | BP+DI+disp16      | SS
+//   100 | SI             | SI+disp8         | SI+disp16         | DS
+//   101 | DI             | DI+disp8         | DI+disp16         | DS
+//   110 | direct disp16  | BP+disp8         | BP+disp16         | DS / SS / SS
+//   111 | BX             | BX+disp8         | BX+disp16         | DS
+//
+// For mod=11 (register-direct) this emitter still runs but the produced
+// values are unused — load/store emitters branch on mod and skip the
+// memory path. This keeps the IR straight-line and avoids a conditional
+// IP-advance that would muddle the variable-length fetch bookkeeping
+// (per Intel: ModR/M's mod=11 path consumes zero displacement bytes,
+// which we honour by feeding the 4-arm mod switch with the no-disp
+// case for mod=11).
+//
+// Stashes in cache:
+//   ea_off  i16  — within-segment 16-bit offset
+//   ea_seg  i16  — default segment register value (DS or SS)
+//
+// Segment override prefixes (0x26/0x2E/0x36/0x3E) are not yet supported;
+// 24.6.5d will revisit. For now ea_seg always takes the architectural
+// default for the chosen r/m.
+//
+// JSON shape: { "op": "x86_modrm_compute_ea" }
+// ============================================================================
+
+internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_modrm_compute_ea";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var mod = ctx.Resolve("modrm_mod");
+        var rm  = ctx.Resolve("modrm_rm");
+
+        // Phase 1 — produce (base, default_seg_name) from the rm switch.
+        // Default seg is encoded as a constant string at IR build time;
+        // each rm arm loads either DS or SS and feeds the join phi.
+        var endRmBB = ctx.Function.AppendBasicBlock("ea_rm_end");
+        var rmDefaultBB = ctx.Function.AppendBasicBlock("ea_rm_default");
+        var rmArms = new LLVMBasicBlockRef[8];
+        var rmBaseVals = new LLVMValueRef[8];
+        var rmSegVals  = new LLVMValueRef[8];
+        for (int i = 0; i < 8; i++) rmArms[i] = ctx.Function.AppendBasicBlock($"ea_rm_{i}");
+
+        var sw = ctx.Builder.BuildSwitch(rm, rmDefaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), rmArms[i]);
+
+        // rm=000: BX + SI         seg=DS
+        ctx.Builder.PositionAtEnd(rmArms[0]);
+        rmBaseVals[0] = ctx.Builder.BuildAdd(
+            X86_16Emitters.ReadGpr16(ctx, 3, "ea_bx_0"),
+            X86_16Emitters.ReadGpr16(ctx, 6, "ea_si_0"),
+            "ea_base_0");
+        rmSegVals[0] = X86_16Emitters.LoadSeg16(ctx, "DS", "ea_seg_0");
+        ctx.Builder.BuildBr(endRmBB);
+
+        // rm=001: BX + DI         seg=DS
+        ctx.Builder.PositionAtEnd(rmArms[1]);
+        rmBaseVals[1] = ctx.Builder.BuildAdd(
+            X86_16Emitters.ReadGpr16(ctx, 3, "ea_bx_1"),
+            X86_16Emitters.ReadGpr16(ctx, 7, "ea_di_1"),
+            "ea_base_1");
+        rmSegVals[1] = X86_16Emitters.LoadSeg16(ctx, "DS", "ea_seg_1");
+        ctx.Builder.BuildBr(endRmBB);
+
+        // rm=010: BP + SI         seg=SS
+        ctx.Builder.PositionAtEnd(rmArms[2]);
+        rmBaseVals[2] = ctx.Builder.BuildAdd(
+            X86_16Emitters.ReadGpr16(ctx, 5, "ea_bp_2"),
+            X86_16Emitters.ReadGpr16(ctx, 6, "ea_si_2"),
+            "ea_base_2");
+        rmSegVals[2] = X86_16Emitters.LoadSeg16(ctx, "SS", "ea_seg_2");
+        ctx.Builder.BuildBr(endRmBB);
+
+        // rm=011: BP + DI         seg=SS
+        ctx.Builder.PositionAtEnd(rmArms[3]);
+        rmBaseVals[3] = ctx.Builder.BuildAdd(
+            X86_16Emitters.ReadGpr16(ctx, 5, "ea_bp_3"),
+            X86_16Emitters.ReadGpr16(ctx, 7, "ea_di_3"),
+            "ea_base_3");
+        rmSegVals[3] = X86_16Emitters.LoadSeg16(ctx, "SS", "ea_seg_3");
+        ctx.Builder.BuildBr(endRmBB);
+
+        // rm=100: SI              seg=DS
+        ctx.Builder.PositionAtEnd(rmArms[4]);
+        rmBaseVals[4] = X86_16Emitters.ReadGpr16(ctx, 6, "ea_base_4");
+        rmSegVals[4]  = X86_16Emitters.LoadSeg16(ctx, "DS", "ea_seg_4");
+        ctx.Builder.BuildBr(endRmBB);
+
+        // rm=101: DI              seg=DS
+        ctx.Builder.PositionAtEnd(rmArms[5]);
+        rmBaseVals[5] = X86_16Emitters.ReadGpr16(ctx, 7, "ea_base_5");
+        rmSegVals[5]  = X86_16Emitters.LoadSeg16(ctx, "DS", "ea_seg_5");
+        ctx.Builder.BuildBr(endRmBB);
+
+        // rm=110: SPECIAL — for mod=00 it's direct disp16 (we'll override
+        // base in the disp phase below). For mod=01/10 it's BP+disp.
+        // To keep the join shape uniform, base here is BP (used for mod=01/10)
+        // and seg defaults to SS. The mod=00 case rewrites both fields after
+        // fetching the disp16.
+        ctx.Builder.PositionAtEnd(rmArms[6]);
+        rmBaseVals[6] = X86_16Emitters.ReadGpr16(ctx, 5, "ea_base_6_bp");
+        rmSegVals[6]  = X86_16Emitters.LoadSeg16(ctx, "SS", "ea_seg_6_ss");
+        ctx.Builder.BuildBr(endRmBB);
+
+        // rm=111: BX              seg=DS
+        ctx.Builder.PositionAtEnd(rmArms[7]);
+        rmBaseVals[7] = X86_16Emitters.ReadGpr16(ctx, 3, "ea_base_7");
+        rmSegVals[7]  = X86_16Emitters.LoadSeg16(ctx, "DS", "ea_seg_7");
+        ctx.Builder.BuildBr(endRmBB);
+
+        // Default arm — should never fire (rm is 3 bits) but join-shape requires it.
+        ctx.Builder.PositionAtEnd(rmDefaultBB);
+        var zeroI16 = LLVMValueRef.CreateConstInt(i16, 0, false);
+        ctx.Builder.BuildBr(endRmBB);
+
+        // Phase 1 join: phi-merge base and seg from 9 incoming blocks (8 + default).
+        ctx.Builder.PositionAtEnd(endRmBB);
+        var basePhi = ctx.Builder.BuildPhi(i16, "ea_base");
+        var segPhi  = ctx.Builder.BuildPhi(i16, "ea_seg_pre");
+        var inBlocks = new LLVMBasicBlockRef[9];
+        var inBases  = new LLVMValueRef[9];
+        var inSegs   = new LLVMValueRef[9];
+        for (int i = 0; i < 8; i++) { inBlocks[i] = rmArms[i]; inBases[i] = rmBaseVals[i]; inSegs[i] = rmSegVals[i]; }
+        inBlocks[8] = rmDefaultBB; inBases[8] = zeroI16; inSegs[8] = zeroI16;
+        basePhi.AddIncoming(inBases, inBlocks, 9);
+        segPhi.AddIncoming(inSegs,  inBlocks, 9);
+
+        // Phase 2 — switch on mod to produce final ea_off (and possibly
+        // override seg/base for the mod=00 rm=110 special case).
+        var endModBB = ctx.Function.AppendBasicBlock("ea_mod_end");
+        var mod00BB  = ctx.Function.AppendBasicBlock("ea_mod_00");
+        var mod01BB  = ctx.Function.AppendBasicBlock("ea_mod_01");
+        var mod10BB  = ctx.Function.AppendBasicBlock("ea_mod_10");
+        var mod11BB  = ctx.Function.AppendBasicBlock("ea_mod_11");
+        var modSw = ctx.Builder.BuildSwitch(mod, mod11BB, 4);
+        modSw.AddCase(LLVMValueRef.CreateConstInt(i32, 0, false), mod00BB);
+        modSw.AddCase(LLVMValueRef.CreateConstInt(i32, 1, false), mod01BB);
+        modSw.AddCase(LLVMValueRef.CreateConstInt(i32, 2, false), mod10BB);
+        modSw.AddCase(LLVMValueRef.CreateConstInt(i32, 3, false), mod11BB);
+
+        // mod=00: disp = 0, EXCEPT rm=110 means direct disp16 (no base, seg=DS).
+        ctx.Builder.PositionAtEnd(mod00BB);
+        var rmIs6 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, rm,
+            LLVMValueRef.CreateConstInt(i32, 6, false), "ea_rm_is_6");
+        var mod00DispBB    = ctx.Function.AppendBasicBlock("ea_mod00_disp16");
+        var mod00NoDispBB  = ctx.Function.AppendBasicBlock("ea_mod00_nodisp");
+        var mod00JoinBB    = ctx.Function.AppendBasicBlock("ea_mod00_join");
+        ctx.Builder.BuildCondBr(rmIs6, mod00DispBB, mod00NoDispBB);
+
+        // mod=00 rm=6: ea_off = fetch_imm16; seg = DS
+        ctx.Builder.PositionAtEnd(mod00DispBB);
+        var directDisp = X86_16Emitters.FetchImm16(ctx, "ea_disp16_direct");
+        var dsSeg00 = X86_16Emitters.LoadSeg16(ctx, "DS", "ea_seg_direct_ds");
+        ctx.Builder.BuildBr(mod00JoinBB);
+
+        // mod=00 other rm: ea_off = base; seg = segPhi (already loaded)
+        ctx.Builder.PositionAtEnd(mod00NoDispBB);
+        ctx.Builder.BuildBr(mod00JoinBB);
+
+        ctx.Builder.PositionAtEnd(mod00JoinBB);
+        var mod00Off = ctx.Builder.BuildPhi(i16, "ea_mod00_off");
+        var mod00Seg = ctx.Builder.BuildPhi(i16, "ea_mod00_seg");
+        mod00Off.AddIncoming(new[] { directDisp, basePhi }, new[] { mod00DispBB, mod00NoDispBB }, 2);
+        mod00Seg.AddIncoming(new[] { dsSeg00,    segPhi   }, new[] { mod00DispBB, mod00NoDispBB }, 2);
+        ctx.Builder.BuildBr(endModBB);
+
+        // mod=01: disp = sext(fetch_imm8); ea_off = base + disp; seg = segPhi.
+        // For rm=110, base was BP and seg was SS — that's correct here.
+        ctx.Builder.PositionAtEnd(mod01BB);
+        var disp8raw = X86_16Emitters.FetchImm8(ctx, "ea_disp8");
+        var disp8sx  = ctx.Builder.BuildSExt(disp8raw, i16, "ea_disp8_sx");
+        var mod01Off = ctx.Builder.BuildAdd(basePhi, disp8sx, "ea_mod01_off");
+        ctx.Builder.BuildBr(endModBB);
+
+        // mod=10: disp = fetch_imm16; ea_off = base + disp; seg = segPhi.
+        ctx.Builder.PositionAtEnd(mod10BB);
+        var disp16 = X86_16Emitters.FetchImm16(ctx, "ea_disp16");
+        var mod10Off = ctx.Builder.BuildAdd(basePhi, disp16, "ea_mod10_off");
+        ctx.Builder.BuildBr(endModBB);
+
+        // mod=11 (register-direct): EA values are unused; emit zero
+        // placeholders that fold into the join phi. Load/store emitters
+        // detect mod=11 at runtime and bypass the EA path.
+        ctx.Builder.PositionAtEnd(mod11BB);
+        ctx.Builder.BuildBr(endModBB);
+
+        // Final join — ea_off + ea_seg merge from the 4 mod arms.
+        ctx.Builder.PositionAtEnd(endModBB);
+        var eaOff = ctx.Builder.BuildPhi(i16, "ea_off");
+        var eaSeg = ctx.Builder.BuildPhi(i16, "ea_seg");
+        eaOff.AddIncoming(
+            new[] { (LLVMValueRef)mod00Off, mod01Off, mod10Off, zeroI16 },
+            new[] { mod00JoinBB, mod01BB, mod10BB, mod11BB },
+            4);
+        eaSeg.AddIncoming(
+            new[] { (LLVMValueRef)mod00Seg, segPhi, segPhi, zeroI16 },
+            new[] { mod00JoinBB, mod01BB, mod10BB, mod11BB },
+            4);
+
+        ctx.Values["ea_off"] = eaOff;
+        ctx.Values["ea_seg"] = eaSeg;
+    }
+}
+
+// ============================================================================
+// Helper for the four x86_modrm_load_w{8,16} / x86_modrm_store_w{8,16}
+// emitters. Splits the runtime path on mod==11: register-direct on the
+// "true" branch, segmented memory access via cached ea_seg/ea_off on
+// the "false" branch.
+// ============================================================================
+
+internal static class X86ModRmMemHelpers
+{
+    public static LLVMValueRef BuildLoadW8(EmitContext ctx, string outName)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+        var mod = ctx.Resolve("modrm_mod");
+        var rm  = ctx.Resolve("modrm_rm");
+        var isReg = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, mod,
+            LLVMValueRef.CreateConstInt(i32, 3, false), $"{outName}_isreg");
+
+        var regBB = ctx.Function.AppendBasicBlock($"{outName}_reg");
+        var memBB = ctx.Function.AppendBasicBlock($"{outName}_mem");
+        var endBB = ctx.Function.AppendBasicBlock($"{outName}_end");
+        ctx.Builder.BuildCondBr(isReg, regBB, memBB);
+
+        // reg path — runtime switch on rm to read the byte register.
+        ctx.Builder.PositionAtEnd(regBB);
+        var regVal = X86ReadByteByField(ctx, rm, $"{outName}_reg_v");
+        var regBlock = ctx.Builder.InsertBlock;
+        ctx.Builder.BuildBr(endBB);
+
+        // mem path — segmented read at ea_seg:ea_off.
+        ctx.Builder.PositionAtEnd(memBB);
+        var seg = ctx.Resolve("ea_seg");
+        var off = ctx.Resolve("ea_off");
+        var memVal = X86_16Emitters.SegmentedRead8(ctx, seg, off, $"{outName}_mem_v");
+        var memBlock = ctx.Builder.InsertBlock;
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i8, outName);
+        phi.AddIncoming(new[] { regVal, memVal }, new[] { regBlock, memBlock }, 2);
+        return phi;
+    }
+
+    public static LLVMValueRef BuildLoadW16(EmitContext ctx, string outName)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var mod = ctx.Resolve("modrm_mod");
+        var rm  = ctx.Resolve("modrm_rm");
+        var isReg = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, mod,
+            LLVMValueRef.CreateConstInt(i32, 3, false), $"{outName}_isreg");
+
+        var regBB = ctx.Function.AppendBasicBlock($"{outName}_reg");
+        var memBB = ctx.Function.AppendBasicBlock($"{outName}_mem");
+        var endBB = ctx.Function.AppendBasicBlock($"{outName}_end");
+        ctx.Builder.BuildCondBr(isReg, regBB, memBB);
+
+        ctx.Builder.PositionAtEnd(regBB);
+        var regVal = X86ReadWordByField(ctx, rm, $"{outName}_reg_v");
+        var regBlock = ctx.Builder.InsertBlock;
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(memBB);
+        var seg = ctx.Resolve("ea_seg");
+        var off = ctx.Resolve("ea_off");
+        var memVal = X86_16Emitters.SegmentedRead16(ctx, seg, off, $"{outName}_mem_v");
+        var memBlock = ctx.Builder.InsertBlock;
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i16, outName);
+        phi.AddIncoming(new[] { regVal, memVal }, new[] { regBlock, memBlock }, 2);
+        return phi;
+    }
+
+    public static void BuildStoreW8(EmitContext ctx, LLVMValueRef value8)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var mod = ctx.Resolve("modrm_mod");
+        var rm  = ctx.Resolve("modrm_rm");
+        var isReg = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, mod,
+            LLVMValueRef.CreateConstInt(i32, 3, false), "stw8_isreg");
+
+        var regBB = ctx.Function.AppendBasicBlock("stw8_reg");
+        var memBB = ctx.Function.AppendBasicBlock("stw8_mem");
+        var endBB = ctx.Function.AppendBasicBlock("stw8_end");
+        ctx.Builder.BuildCondBr(isReg, regBB, memBB);
+
+        ctx.Builder.PositionAtEnd(regBB);
+        X86WriteByteByField(ctx, rm, value8);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(memBB);
+        var seg = ctx.Resolve("ea_seg");
+        var off = ctx.Resolve("ea_off");
+        X86_16Emitters.SegmentedWrite8(ctx, seg, off, value8, "stw8_w");
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+
+    public static void BuildStoreW16(EmitContext ctx, LLVMValueRef value16)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var mod = ctx.Resolve("modrm_mod");
+        var rm  = ctx.Resolve("modrm_rm");
+        var isReg = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, mod,
+            LLVMValueRef.CreateConstInt(i32, 3, false), "stw16_isreg");
+
+        var regBB = ctx.Function.AppendBasicBlock("stw16_reg");
+        var memBB = ctx.Function.AppendBasicBlock("stw16_mem");
+        var endBB = ctx.Function.AppendBasicBlock("stw16_end");
+        ctx.Builder.BuildCondBr(isReg, regBB, memBB);
+
+        ctx.Builder.PositionAtEnd(regBB);
+        X86WriteWordByField(ctx, rm, value16);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(memBB);
+        var seg = ctx.Resolve("ea_seg");
+        var off = ctx.Resolve("ea_off");
+        X86_16Emitters.SegmentedWrite16(ctx, seg, off, value16, "stw16_w");
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+
+    private static LLVMValueRef X86ReadByteByField(EmitContext ctx, LLVMValueRef sel, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+        var endBB     = ctx.Function.AppendBasicBlock($"{label}_end");
+        var defaultBB = ctx.Function.AppendBasicBlock($"{label}_default");
+        var arms = new LLVMBasicBlockRef[8];
+        var armVals = new LLVMValueRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"{label}_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            armVals[i] = X86_16Emitters.ReadGpr8(ctx, i, $"{label}_{i}_v");
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        var defVal = LLVMValueRef.CreateConstInt(i8, 0, false);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i8, label);
+        var inVals   = new LLVMValueRef[9];
+        var inBlocks = new LLVMBasicBlockRef[9];
+        for (int i = 0; i < 8; i++) { inVals[i] = armVals[i]; inBlocks[i] = arms[i]; }
+        inVals[8] = defVal; inBlocks[8] = defaultBB;
+        phi.AddIncoming(inVals, inBlocks, 9);
+        return phi;
+    }
+
+    private static LLVMValueRef X86ReadWordByField(EmitContext ctx, LLVMValueRef sel, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var endBB     = ctx.Function.AppendBasicBlock($"{label}_end");
+        var defaultBB = ctx.Function.AppendBasicBlock($"{label}_default");
+        var arms = new LLVMBasicBlockRef[8];
+        var armVals = new LLVMValueRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"{label}_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            armVals[i] = X86_16Emitters.ReadGpr16(ctx, i, $"{label}_{i}_v");
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        var defVal = LLVMValueRef.CreateConstInt(i16, 0, false);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i16, label);
+        var inVals   = new LLVMValueRef[9];
+        var inBlocks = new LLVMBasicBlockRef[9];
+        for (int i = 0; i < 8; i++) { inVals[i] = armVals[i]; inBlocks[i] = arms[i]; }
+        inVals[8] = defVal; inBlocks[8] = defaultBB;
+        phi.AddIncoming(inVals, inBlocks, 9);
+        return phi;
+    }
+
+    private static void X86WriteByteByField(EmitContext ctx, LLVMValueRef sel, LLVMValueRef value8)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var endBB     = ctx.Function.AppendBasicBlock("wbf8_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("wbf8_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"wbf8_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            X86_16Emitters.WriteGpr8(ctx, i, value8);
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+
+    private static void X86WriteWordByField(EmitContext ctx, LLVMValueRef sel, LLVMValueRef value16)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var endBB     = ctx.Function.AppendBasicBlock("wbf16_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("wbf16_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"wbf16_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            X86_16Emitters.WriteGpr16(ctx, i, value16);
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+// ============================================================================
+// x86_modrm_load_w8 / x86_modrm_load_w16 — read source operand based on
+// modrm_mod (reg if mod=11, else memory at ea_seg:ea_off). Cache the
+// result in step.out.
+//
+// JSON shape: { "op": "x86_modrm_load_w8", "out": "<name>" }
+// ============================================================================
+
+internal sealed class X86ModRmLoad8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_modrm_load_w8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var outName = step.Raw.GetProperty("out").GetString()!;
+        ctx.Values[outName] = X86ModRmMemHelpers.BuildLoadW8(ctx, outName);
+    }
+}
+
+internal sealed class X86ModRmLoad16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_modrm_load_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var outName = step.Raw.GetProperty("out").GetString()!;
+        ctx.Values[outName] = X86ModRmMemHelpers.BuildLoadW16(ctx, outName);
+    }
+}
+
+// ============================================================================
+// x86_modrm_store_w8 / x86_modrm_store_w16 — write destination operand
+// based on modrm_mod (reg if mod=11, else memory at ea_seg:ea_off).
+//
+// JSON shape: { "op": "x86_modrm_store_w8", "in": ["<value>"] }
+// ============================================================================
+
+internal sealed class X86ModRmStore8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_modrm_store_w8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var inArr = step.Raw.GetProperty("in");
+        var valueName = inArr[0].GetString()!;
+        var v = ctx.Resolve(valueName);
+        X86ModRmMemHelpers.BuildStoreW8(ctx, v);
+    }
+}
+
+internal sealed class X86ModRmStore16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_modrm_store_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var inArr = step.Raw.GetProperty("in");
+        var valueName = inArr[0].GetString()!;
+        var v = ctx.Resolve(valueName);
+        X86ModRmMemHelpers.BuildStoreW16(ctx, v);
     }
 }

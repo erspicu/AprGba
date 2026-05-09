@@ -47,7 +47,7 @@
 
     {
       "name":  "MovRm8R8",
-      "comment": "0x88 MOV r/m8, r8 — copy r8 (modrm.reg) → r/m8 (modrm.rm). 24.6.5b restricts to mod=11 (register-direct); mod=00/01/10 memory forms land in 24.6.5c with effective-address computation.",
+      "comment": "0x88 MOV r/m8, r8 — copy r8 (modrm.reg) → r/m8 (modrm.rm). Now full ModR/M (24.6.5c): mod=11 reg-direct OR mod=00/01/10 memory effective address (BX+SI / BP+disp / disp16 / etc.) with default segment.",
       "fields": {},
       "mask":  "0xFF",
       "match": "0x88",
@@ -60,8 +60,9 @@
           "cycles":     { "form": "2" },
           "steps": [
             { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
             { "op": "x86_read_reg8_field",  "field": "modrm_reg", "out": "src" },
-            { "op": "x86_write_reg8_field", "field": "modrm_rm",  "in":  ["src"] }
+            { "op": "x86_modrm_store_w8",   "in": ["src"] }
           ]
         }
       ]
@@ -69,7 +70,7 @@
 
     {
       "name":  "MovRm16R16",
-      "comment": "0x89 MOV r/m16, r16 — copy r16 (modrm.reg) → r/m16 (modrm.rm). mod=11-only at 24.6.5b.",
+      "comment": "0x89 MOV r/m16, r16 — copy r16 (modrm.reg) → r/m16 (modrm.rm). Full ModR/M.",
       "fields": {},
       "mask":  "0xFF",
       "match": "0x89",
@@ -82,8 +83,9 @@
           "cycles":     { "form": "2" },
           "steps": [
             { "op": "x86_fetch_modrm" },
-            { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "src" },
-            { "op": "x86_write_reg16_field", "field": "modrm_rm",  "in":  ["src"] }
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_read_reg16_field", "field": "modrm_reg", "out": "src" },
+            { "op": "x86_modrm_store_w16",  "in": ["src"] }
           ]
         }
       ]
@@ -91,7 +93,7 @@
 
     {
       "name":  "MovR8Rm8",
-      "comment": "0x8A MOV r8, r/m8 — copy r/m8 (modrm.rm) → r8 (modrm.reg). mod=11-only at 24.6.5b.",
+      "comment": "0x8A MOV r8, r/m8 — copy r/m8 (modrm.rm) → r8 (modrm.reg). Full ModR/M.",
       "fields": {},
       "mask":  "0xFF",
       "match": "0x8A",
@@ -104,8 +106,9 @@
           "cycles":     { "form": "2" },
           "steps": [
             { "op": "x86_fetch_modrm" },
-            { "op": "x86_read_reg8_field",  "field": "modrm_rm",  "out": "src" },
-            { "op": "x86_write_reg8_field", "field": "modrm_reg", "in":  ["src"] }
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_modrm_load_w8",     "out": "src" },
+            { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["src"] }
           ]
         }
       ]
@@ -113,7 +116,7 @@
 
     {
       "name":  "MovR16Rm16",
-      "comment": "0x8B MOV r16, r/m16 — copy r/m16 (modrm.rm) → r16 (modrm.reg). mod=11-only at 24.6.5b.",
+      "comment": "0x8B MOV r16, r/m16 — copy r/m16 (modrm.rm) → r16 (modrm.reg). Full ModR/M.",
       "fields": {},
       "mask":  "0xFF",
       "match": "0x8B",
@@ -126,8 +129,9 @@
           "cycles":     { "form": "2" },
           "steps": [
             { "op": "x86_fetch_modrm" },
-            { "op": "x86_read_reg16_field",  "field": "modrm_rm",  "out": "src" },
-            { "op": "x86_write_reg16_field", "field": "modrm_reg", "in":  ["src"] }
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_modrm_load_w16",     "out": "src" },
+            { "op": "x86_write_reg16_field",  "field": "modrm_reg", "in": ["src"] }
           ]
         }
       ]

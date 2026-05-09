@@ -325,6 +325,159 @@ public class X86JsonCpuTests
         Assert.Equal(0x34, cpu.State.C.H);
     }
 
+    // ---------------- 24.6.5c — memory ModR/M (88-8B with mod=00/01/10) ----------------
+
+    /// <summary>
+    /// 0xA3 50 00 form not yet implemented (that's MOV moffs16,AX — a
+    /// different group). For 24.6.5c we use 0x8B with a memory operand:
+    ///   mov bx, [0x0050]   = 8B 1E 50 00   (modrm: mod=00 reg=011(BX) rm=110 = direct disp16)
+    /// Memory at DS:0x50 is loaded into BX. After Reset DS=0, so linear
+    /// address = 0x50.
+    /// </summary>
+    [Fact]
+    public void Step_MovBx_DirectDisp16Read()
+    {
+        // Pre-seed memory with two bytes (LE) at linear 0x50.
+        var (cpu, mem) = Setup(new byte[] { 0x8B, 0x1E, 0x50, 0x00, 0xF4 });
+        mem.WriteByte(0x50, 0xCD);
+        mem.WriteByte(0x51, 0xAB);
+
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xABCD, cpu.State.B.X);
+    }
+
+    /// <summary>
+    /// 0x89 1E 80 00  → MOV [0x0080], BX (mod=00, reg=011(BX), rm=110 → direct disp16)
+    /// Verifies the memory store path.
+    /// </summary>
+    [Fact]
+    public void Step_MovDirectDisp16_Write_FromBx()
+    {
+        // mov bx, 0xFEED  (BB ED FE)
+        // mov [0x0080], bx (89 1E 80 00)
+        // hlt
+        var (cpu, mem) = Setup(new byte[] { 0xBB, 0xED, 0xFE, 0x89, 0x1E, 0x80, 0x00, 0xF4 });
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xED, mem.ReadByte(0x80));
+        Assert.Equal(0xFE, mem.ReadByte(0x81));
+    }
+
+    /// <summary>
+    /// MOV with [BX+SI] base addressing (mod=00 rm=000):
+    ///   8B 00          mov ax, [bx+si]
+    /// Pre-seed BX=0x40, SI=0x10 so EA = DS:0x50.
+    /// </summary>
+    [Fact]
+    public void Step_MovAx_BxPlusSi_NoDisp()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x8B, 0x00, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x40;
+        s.SI  = 0x10;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x50, 0x34);
+        mem.WriteByte(0x51, 0x12);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x1234, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// MOV with [SI+disp8] addressing (mod=01 rm=100):
+    ///   8B 44 0C       mov ax, [si+0x0C]
+    /// Pre-seed SI=0x40 so EA = DS:0x4C.
+    /// </summary>
+    [Fact]
+    public void Step_MovAx_SiPlusDisp8()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x8B, 0x44, 0x0C, 0xF4 });
+        var s = cpu.State;
+        s.SI = 0x40;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x4C, 0xBE);
+        mem.WriteByte(0x4D, 0xBA);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xBABE, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// MOV with [BX+DI+disp16] addressing (mod=10 rm=001):
+    ///   8B 81 00 02    mov ax, [bx+di+0x0200]
+    /// Pre-seed BX=0x100, DI=0x50 so EA = DS:0x350.
+    /// </summary>
+    [Fact]
+    public void Step_MovAx_BxPlusDiPlusDisp16()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x8B, 0x81, 0x00, 0x02, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x100;
+        s.DI  = 0x50;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x350, 0x78);
+        mem.WriteByte(0x351, 0x56);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x5678, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// MOV byte from memory: 0x8A 07 → mov al, [bx]. Pre-seed BX=0x60.
+    /// </summary>
+    [Fact]
+    public void Step_MovAl_AtBx_ByteRead()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x8A, 0x07, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x60;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x60, 0x99);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x99, cpu.State.A.L);
+    }
+
+    /// <summary>
+    /// Round-trip: load memory, write back to a different address. Covers
+    /// the full read-then-write data-transfer flow with both forms of EA.
+    ///   8B 1E 00 02    mov bx, [0x0200]    (mod=00 rm=110 disp16)
+    ///   89 5C 04       mov [si+0x04], bx   (mod=01 rm=100 disp8) — actually mod=01 rm=4 is SI+disp8
+    /// Pre-seed memory at 0x200 with 0xC0FE; SI=0x100; expect bytes at
+    /// 0x104/0x105 = 0xFE / 0xC0.
+    /// </summary>
+    [Fact]
+    public void Step_RoundTrip_LoadFromDirectDisp16_StoreToSiDisp8()
+    {
+        var (cpu, mem) = Setup(new byte[]
+        {
+            0x8B, 0x1E, 0x00, 0x02,   // mov bx, [0x0200]
+            0x89, 0x5C, 0x04,         // mov [si+0x04], bx
+            0xF4
+        });
+        var s = cpu.State;
+        s.SI = 0x100;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x200, 0xFE);
+        mem.WriteByte(0x201, 0xC0);
+
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xC0FE, cpu.State.B.X);
+        Assert.Equal(0xFE,   mem.ReadByte(0x104));
+        Assert.Equal(0xC0,   mem.ReadByte(0x105));
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,
