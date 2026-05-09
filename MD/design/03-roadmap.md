@@ -4,9 +4,12 @@
 
 業餘投入估計：每週 8–15 小時。
 
-> **狀態快照**（2026-05-09 更新）：Phase 0/1/2/2.5/2.6/3/4.1/4.2/4.3/4.4/
+> **狀態快照**（2026-05-10 更新）：Phase 0/1/2/2.5/2.6/3/4.1/4.2/4.3/4.4/
 > 4.5/5/7（部分）/8 ✅ 完成；**N0-N11 (NES 2A03 + spec-driven runtime
-> 系列)** ✅ 完成（2026-05-09）。詳見本文件最後新增的「N 系列」段。
+> 系列)** ✅ 完成（2026-05-09）；**24 系列 (Intel 8086 第 4 顆 CPU)
+> 24.0–24.5 ✅ 完工 + 24.6.1–24.6.5c ✅ JSON-driven port partial**（697/697
+> T1 全綠）；24.6.5d–g + 24.6.6–9 + 24.7 + 24.8 待做。詳見本文件最後新增
+> 的「N 系列」+「24 系列」段。
 >
 > - **MVP**：GBA 端 test-ROM → 真 Nintendo BIOS LLE → 完整 PPU pipeline
 >   (Mode 0/1/2/3/4 + OBJ + BLDCNT + WIN)。GB 端 BIOS LLE + DMG Nintendo®
@@ -1177,3 +1180,79 @@ block-JIT 反超 N1 約 5%。**每一步都同時提升 declarativity 而 perf �
 
 完整 commit list 見 `git log --oneline | grep -E "feat|docs.*N[0-9]"`；
 詳細 closeout 文件在 `MD/performance/2026050[89]*.md`。
+
+---
+
+## 24 系列：Intel 8086 第 4 顆 CPU 移植（2026-05-10 起）🚧 進行中
+
+繼 N 系列完工後加上的 4th CPU milestone — 以 Intel 8086 / x86-16 為
+題，要回答「framework 真的支援 4 顆 CPU」這個 framework genericity
+claim 的最後 evidence。完整 phase plan 在
+[`MD/design/24-8086-port-plan.md`](/MD/design/24-8086-port-plan.md)。
+
+| Series | 內容 | 範圍 | 狀態 |
+|---|---|---|---|
+| **24.0** | Phase plan doc 落地 | DRAFT → IN PROGRESS；3 支柱（Tom Harte SST + Magic IO + .com demo）+ 截圖驗證為核心方法論 | ✅ |
+| **24.1** | AprX86.Cli skeleton + 1 MB linear memory + CS:IP fetch loop | hello-cga.com 跑得起來 (legacy backend) | ✅ |
+| **24.2** | ModR/M decoder + MOV 全 forms + ALU + 9-flag computation + Tom Harte SST 8088 v2 runner | 230k SST cases 全綠 (legacy backend) | ✅ |
+| **24.3** | CGA text framebuffer + PNG 截圖 + magic IO | result/x86-16/hello-cga-i8086.png | ✅ |
+| **24.4** | PUSH/POP/Control flow/Shifts/Rotates/MUL/IMUL/String ops/REP/INT/IRET/BCD/IO 全套 | 1.31M Tom Harte SST cases 全綠；8088 silicon flag quirks 反向工程（PUSH SP 後減值、SHL/SHR AF 規則、MUL 高位元組 SF/ZF/PF） | ✅ |
+| **24.5** | 6 個 hand-crafted .com demo + 截圖 | hello-cga / primes / fibonacci / mandelbrot / string-copy / factorial 6 paper-quality screenshots | ✅ |
+| **24.6** | **JSON-driven port** — 8086 真正成為 framework 第 4 顆 CPU、走同一條 SpecCompiler + LLVM JIT pipeline | partial (24.6.1-5c)；剩 24.6.5d-g + 24.6.6-9 | 🚧 |
+| 24.6.1 | spec scaffolding (`spec/x86-16/i8086/cpu.json` + main.json)；8 GPRs in ModR/M order, 9-flag FLAGS, 4 segs + IP + HALTED | ✅ | `4730945` |
+| 24.6.2 | smoke group：NOP + HLT decode through framework DecoderTable | ✅ | `9a43c73` |
+| 24.6.3 | `X86_16Emitters.cs` 落地 + family dispatch + halt + helpers (FetchImm8/16, SegmentedRead/Write8/16, Read/WriteGpr8/16 with byte-half preservation) | ✅ | `24e5e70` |
+| 24.6.4 | `X86JsonCpu` skeleton：SpecCompiler → ORC LLJIT → live fn pointers + per-instr Step() + State getter + LoadState | ✅ | `01cdeb3` |
+| 24.6.5a | MOV r, imm (B0-BF) — 16 opcodes through field-dispatched write_reg{8,16} + fetch_imm{8,16} | ✅ | `1e992a3` |
+| 24.6.5b | MOV r/m,r 與 r,r/m (88-8B) — `fetch_modrm` + read_reg{8,16}_field, mod=11 reg-direct only | ✅ | `06d9dab` |
+| 24.6.5c | Memory ModR/M — `x86_modrm_compute_ea` (full 8086 EA grammar：BX+SI/BP+disp/disp16/etc.) + `x86_modrm_load/store_w{8,16}` mod-aware emitters；88-8B 全 mod×rm 組合通過 | ✅ | `384eca5` |
+| 24.6.5d | Segment override prefixes (0x26/0x2E/0x36/0x3E) | ⏳ | — |
+| 24.6.5e | MOV r/m,imm (C6/C7) + MOV moffs (A0-A3) + sreg moves (8C/8E) | ⏳ | — |
+| 24.6.5f | PUSH/POP r16 + sreg + PUSHF/POPF + r/m forms | ⏳ | — |
+| 24.6.5g | XCHG (86/87/90-97) + LEA (8D) + LDS/LES (C4/C5) | ⏳ | — |
+| 24.6.6 | ALU group + 9-flag IR computation (CF/PF/AF/ZF/SF/OF rules in LLVM IR mirroring `X86Alu.cs`) | ⏳ | — |
+| 24.6.7 | 控流 + shift/rotate + string ops + REP + INT/IRET + BCD + IO | ⏳ | — |
+| 24.6.8 | block-JIT mode (alloca + mem2reg, 對齊 NES N1.B') | ⏳ | — |
+| 24.6.9 | 24.5 demo 透過 json-block backend 重跑：result/x86-16/jit-*.png pixel-identical | ⏳ | — |
+| **24.7** | 80186 spec — 透過 inheritance (#23)：ENTER/LEAVE demo + 截圖 | ⏳ | — |
+| **24.8** | 80286 real-mode + protected-mode demo：4 顆 CPU 全綠 + protmode 截圖 | ⏳ | — |
+
+### 本 session (2026-05-10) 8 個 commits 摘要
+
+```
+3fc3963 docs(#24): record 24.6.1-24.6.5c completion
+384eca5 feat(N0c.24.6.5c): memory ModR/M — full 8086 effective-address grammar
+06d9dab feat(N0c.24.6.5b): MOV r/m,r and r,r/m (88-8B) — register-direct ModR/M (mod=11)
+1e992a3 feat(N0c.24.6.5a): MOV r, imm (B0-BF) — first real data-transfer subset through json backend
+01cdeb3 feat(N0c.24.6.4): X86JsonCpu skeleton — per-instr backend, NOP+HLT roundtrip via LLJIT
+24e5e70 feat(N0c.24.6.3): X86_16Emitters.cs scaffolding + family dispatch + halt emitter
+9a43c73 feat(N0c.24.6.2): smoke group — NOP + HLT decode through framework DecoderTable
+4730945 feat(N0c.24.6.1): scaffold spec/x86-16/i8086 — cpu.json + 9 FLAGS + main.json (empty groups)
+```
+
+T1 增量：673 → 697 (+24 X86JsonCpu 端到端 tests)；
+**所有 MOV opcode (88-8B 全 ModR/M + B0-BF reg/imm) 已透過 framework
+SpecCompiler + LLVM ORC JIT 跑通 — JSON-driven 8086 第一個能跑的 milestone 達成。**
+
+### 為何 24.6 是 framework genericity 的關鍵
+
+24.0–24.5 完工時，8086 是「framework 旁邊的 standalone emulator」，
+不通過 SpecCompiler / LLVM IR / ORC LLJIT pipeline。這是 doc #24
+v1 漏掉的 sub-phase。要讓 8086 真正成為框架第 4 顆 CPU、跟 ARM /
+LR35902 / 6502 走同一條 declarative spec → IR pipeline，**24.6 是
+唯一驗證**。同時 24.7 inheritance (#23) 機制要 base spec 是 JSON
+才能對 — 沒有 24.6 就沒有 24.7-8 的可能性。
+
+### 剩餘 sub-phase 工作量粗估
+
+24.6.5d-g + 24.6.6-9 + 24.7 + 24.8 是 multi-session sprint：
+
+- 24.6.5d-g：4 個小 commit（segment override + 雜項 MOV / PUSH-POP / XCHG-LEA），中等
+- 24.6.6 ALU + 9-flag：~10 個 commit；flag IR 是核心硬骨頭，要對 8088 silicon quirk
+- 24.6.7 控流 + 移位 + 字串：~15-20 commit；shift/rotate AF/OF rule 也是硬骨頭
+- 24.6.8 block-JIT：~5-10 commit；模式對齊 NES N1.B'
+- 24.6.9 demo 重跑：~3 commit
+- 24.7 80186：~5-10 commit；inheritance + ENTER/LEAVE
+- 24.8 80286：~10-20 commit；protected mode 是另一個維度
+
+合計 50-90 commits 範圍；本 session 完成 8 個關鍵 foundation commits。
