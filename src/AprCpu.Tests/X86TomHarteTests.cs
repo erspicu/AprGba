@@ -20,16 +20,25 @@ namespace AprCpu.Tests;
 
 public class X86TomHarteTests
 {
-    private static string SstV2Dir =>
-        Path.Combine(TestPaths.RepoRoot, "OldProject", "8088", "v2");
+    private static string SstRoot =>
+        Path.Combine(TestPaths.RepoRoot, "OldProject", "8088");
 
-    private static bool SstAvailable(string opcodeHex)
-        => File.Exists(Path.Combine(SstV2Dir, $"{opcodeHex}.json.gz"));
+    private static string? LocateOpcodeFile(string opcodeHex)
+    {
+        // Most opcodes live under v2/; group sub-opcodes (FE.0 etc.) and
+        // a few stragglers only exist under v1/. Probe both.
+        foreach (var ver in new[] { "v2", "v1" })
+        {
+            var p = Path.Combine(SstRoot, ver, $"{opcodeHex}.json.gz");
+            if (File.Exists(p)) return p;
+        }
+        return null;
+    }
 
     private void RunOpcodeOrSkip(string opcodeHex, int? limit = null)
     {
-        var path = Path.Combine(SstV2Dir, $"{opcodeHex}.json.gz");
-        if (!File.Exists(path))
+        var path = LocateOpcodeFile(opcodeHex);
+        if (path == null)
             return;     // data not present locally — silently skip
 
         var runner = new TomHarteRunner();
@@ -78,4 +87,35 @@ public class X86TomHarteTests
     // ===== NOP (sanity check) =====
 
     [Fact] public void Tom_90_Nop()             => RunOpcodeOrSkip("90");
+
+    // ===== 24.4.1 — PUSH/POP/INC/DEC/XCHG =====
+
+    [Fact] public void Tom_06_Push_ES()         => RunOpcodeOrSkip("06");
+    [Fact] public void Tom_07_Pop_ES()          => RunOpcodeOrSkip("07");
+    [Fact] public void Tom_0E_Push_CS()         => RunOpcodeOrSkip("0E");
+    [Fact] public void Tom_16_Push_SS()         => RunOpcodeOrSkip("16");
+    [Fact] public void Tom_17_Pop_SS()          => RunOpcodeOrSkip("17");
+    [Fact] public void Tom_1E_Push_DS()         => RunOpcodeOrSkip("1E");
+    [Fact] public void Tom_1F_Pop_DS()          => RunOpcodeOrSkip("1F");
+    [Fact] public void Tom_40_Inc_AX()          => RunOpcodeOrSkip("40");
+    [Fact] public void Tom_47_Inc_DI()          => RunOpcodeOrSkip("47");
+    [Fact] public void Tom_48_Dec_AX()          => RunOpcodeOrSkip("48");
+    [Fact] public void Tom_4F_Dec_DI()          => RunOpcodeOrSkip("4F");
+    [Fact] public void Tom_50_Push_AX()         => RunOpcodeOrSkip("50");
+    [Fact] public void Tom_54_Push_SP()         => RunOpcodeOrSkip("54");   // 8086 quirk
+    [Fact] public void Tom_57_Push_DI()         => RunOpcodeOrSkip("57");
+    [Fact] public void Tom_58_Pop_AX()          => RunOpcodeOrSkip("58");
+    [Fact] public void Tom_5F_Pop_DI()          => RunOpcodeOrSkip("5F");
+    [Fact] public void Tom_86_Xchg_Rm8_R8()     => RunOpcodeOrSkip("86");
+    [Fact] public void Tom_87_Xchg_Rm16_R16()   => RunOpcodeOrSkip("87");
+    [Fact] public void Tom_8F_Pop_Rm16()        => RunOpcodeOrSkip("8F");
+    [Fact] public void Tom_91_Xchg_AX_CX()      => RunOpcodeOrSkip("91");
+    [Fact] public void Tom_97_Xchg_AX_DI()      => RunOpcodeOrSkip("97");
+    [Fact] public void Tom_9C_Pushf()           => RunOpcodeOrSkip("9C");
+    [Fact] public void Tom_9D_Popf()            => RunOpcodeOrSkip("9D");
+    [Fact] public void Tom_FE_0_Inc_Rm8()       => RunOpcodeOrSkip("FE.0");
+    [Fact] public void Tom_FE_1_Dec_Rm8()       => RunOpcodeOrSkip("FE.1");
+    [Fact] public void Tom_FF_0_Inc_Rm16()      => RunOpcodeOrSkip("FF.0");
+    [Fact] public void Tom_FF_1_Dec_Rm16()      => RunOpcodeOrSkip("FF.1");
+    [Fact] public void Tom_FF_6_Push_Rm16()     => RunOpcodeOrSkip("FF.6");   // 8086 SP quirk via mem path too
 }

@@ -175,4 +175,43 @@ public static class X86Alu
     }
 
     public static bool ParityEven(byte v) => s_parityTable[v] != 0;
+
+    // ---------------- INC / DEC ----------------
+    //
+    // Quirk: INC/DEC do NOT affect CF (carry flag) — the original CF is
+    // preserved. All other arithmetic flags (OF/SF/ZF/AF/PF) are updated
+    // per the result. This is one of the rare 8086 instructions that
+    // touches some flags but not CF.
+
+    public static byte Inc8(byte a, X86State s)
+    {
+        bool savedCf = s.FlagC;
+        byte r = X86Alu.Execute8(AluOp.Add, a, 1, s);
+        s.FlagC = savedCf;
+        return r;
+    }
+
+    public static byte Dec8(byte a, X86State s)
+    {
+        bool savedCf = s.FlagC;
+        byte r = X86Alu.Execute8(AluOp.Sub, a, 1, s);
+        s.FlagC = savedCf;
+        return r;
+    }
+
+    public static ushort Inc16(ushort a, X86State s)
+    {
+        bool savedCf = s.FlagC;
+        ushort r = X86Alu.Execute16(AluOp.Add, a, 1, s);
+        s.FlagC = savedCf;
+        return r;
+    }
+
+    public static ushort Dec16(ushort a, X86State s)
+    {
+        bool savedCf = s.FlagC;
+        ushort r = X86Alu.Execute16(AluOp.Sub, a, 1, s);
+        s.FlagC = savedCf;
+        return r;
+    }
 }

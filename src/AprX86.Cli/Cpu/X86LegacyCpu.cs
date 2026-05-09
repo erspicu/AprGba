@@ -75,6 +75,29 @@ public sealed class X86LegacyCpu : IX86CpuBackend
         };
     }
 
+    // ---------------- Stack helpers (PUSH/POP/CALL/RET) ----------------
+    //
+    // 8086 stack: SS:SP, grows DOWNWARD. PUSH word: SP -= 2 first, then
+    // store to SS:SP (low byte at SS:SP, high byte at SS:SP+1, with the
+    // 16-bit offset wrap honoured per the same rule as ReadMem16/WriteMem16).
+    // POP word: read from SS:SP, then SP += 2.
+    //
+    // 8086 quirk: PUSH SP pushes the NEW (decremented) value of SP, not
+    // the original. 80286+ flipped this to push the ORIGINAL. We're 8086.
+
+    private void PushWord(ushort value)
+    {
+        _state.SP = (ushort)(_state.SP - 2);
+        WriteMem16(SegReg.SS, _state.SP, value);
+    }
+
+    private ushort PopWord()
+    {
+        ushort v = ReadMem16(SegReg.SS, _state.SP);
+        _state.SP = (ushort)(_state.SP + 2);
+        return v;
+    }
+
     // ---------------- Memory access with segment override ----------------
 
     private byte ReadMem8(SegReg seg, ushort offset)
@@ -381,6 +404,169 @@ public sealed class X86LegacyCpu : IX86CpuBackend
                     WriteRm8(f, disp, segOverride, res);
             }
             return f.IsRegister ? 4 : 17;
+        }
+
+        // ===== INC/DEC short forms (0x40-0x4F) =====
+        // 0x40-0x47 INC r16 (low 3 bits = reg index)
+        // 0x48-0x4F DEC r16
+        // Note: INC/DEC do NOT affect CF (only OF/SF/ZF/AF/PF).
+        if (opcode >= 0x40 && opcode <= 0x4F)
+        {
+            int reg = opcode & 0x07;
+            ushort cur = _state.GetReg16(reg);
+            ushort res = (opcode < 0x48) ? X86Alu.Inc16(cur, _state) : X86Alu.Dec16(cur, _state);
+            _state.SetReg16(reg, res);
+            return 2;
+        }
+
+        // ===== PUSH r16 (0x50-0x57) / POP r16 (0x58-0x5F) =====
+        if (opcode >= 0x50 && opcode <= 0x57)
+        {
+            int reg = opcode & 0x07;
+            if (reg == 4)
+            {
+                // 8086 PUSH SP quirk: push the DECREMENTED value of SP,
+                // not the original. (80286+ flipped this; we're 8086.)
+                _state.SP = (ushort)(_state.SP - 2);
+                WriteMem16(SegReg.SS, _state.SP, _state.SP);
+            }
+            else
+            {
+                PushWord(_state.GetReg16(reg));
+            }
+            return 11;
+        }
+        if (opcode >= 0x58 && opcode <= 0x5F)
+        {
+            int reg = opcode & 0x07;
+            _state.SetReg16(reg, PopWord());
+            return 8;
+        }
+
+        // ===== PUSH/POP segment registers =====
+        // 0x06 PUSH ES, 0x07 POP ES, 0x0E PUSH CS, 0x16 PUSH SS, 0x17 POP SS,
+        // 0x1E PUSH DS, 0x1F POP DS. (No POP CS on 8086.)
+        switch (opcode)
+        {
+            case 0x06: PushWord(_state.ES); return 10;
+            case 0x07: _state.ES = PopWord(); return 8;
+            case 0x0E: PushWord(_state.CS); return 10;
+            case 0x16: PushWord(_state.SS); return 10;
+            case 0x17: _state.SS = PopWord(); return 8;
+            case 0x1E: PushWord(_state.DS); return 10;
+            case 0x1F: _state.DS = PopWord(); return 8;
+        }
+
+        // ===== PUSHF / POPF =====
+        if (opcode == 0x9C) { PushWord(_state.GetFlags()); return 10; }
+        if (opcode == 0x9D) { _state.SetFlags(PopWord()); return 8; }
+
+        // ===== XCHG AX, r16 (0x91-0x97) — 0x90 is NOP (XCHG AX, AX) =====
+        if (opcode >= 0x91 && opcode <= 0x97)
+        {
+            int reg = opcode & 0x07;
+            ushort tmp = _state.A.X;
+            _state.A.X = _state.GetReg16(reg);
+            _state.SetReg16(reg, tmp);
+            return 3;
+        }
+
+        // ===== XCHG r/m8, r8 (0x86)  /  XCHG r/m16, r16 (0x87) =====
+        if (opcode is 0x86 or 0x87)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+            if (opcode == 0x86)
+            {
+                byte a = ReadRm8(f, disp, segOverride);
+                byte b = _state.GetReg8(f.Reg);
+                WriteRm8(f, disp, segOverride, b);
+                _state.SetReg8(f.Reg, a);
+            }
+            else
+            {
+                ushort a = ReadRm16(f, disp, segOverride);
+                ushort b = _state.GetReg16(f.Reg);
+                WriteRm16(f, disp, segOverride, b);
+                _state.SetReg16(f.Reg, a);
+            }
+            return f.IsRegister ? 4 : 17;
+        }
+
+        // ===== Group 0xFE: INC/DEC r/m8 (reg field = 0/1) =====
+        if (opcode == 0xFE)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+            byte v = ReadRm8(f, disp, segOverride);
+            byte r = f.Reg switch
+            {
+                0 => X86Alu.Inc8(v, _state),
+                1 => X86Alu.Dec8(v, _state),
+                _ => throw new NotImplementedException($"0xFE /{f.Reg} undefined on 8086"),
+            };
+            WriteRm8(f, disp, segOverride, r);
+            return f.IsRegister ? 3 : 15;
+        }
+
+        // ===== Group 0xFF: INC/DEC/CALL/JMP/PUSH r/m16 =====
+        // reg field selects: 0=INC, 1=DEC, 2=CALL near, 3=CALL far,
+        //                    4=JMP near, 5=JMP far, 6=PUSH, 7=undefined
+        // For 24.4.1, only INC/DEC/PUSH; CALL/JMP indirect lands in 24.4.2.
+        if (opcode == 0xFF)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+            switch (f.Reg)
+            {
+                case 0:    // INC r/m16
+                {
+                    ushort v = ReadRm16(f, disp, segOverride);
+                    WriteRm16(f, disp, segOverride, X86Alu.Inc16(v, _state));
+                    return f.IsRegister ? 3 : 15;
+                }
+                case 1:    // DEC r/m16
+                {
+                    ushort v = ReadRm16(f, disp, segOverride);
+                    WriteRm16(f, disp, segOverride, X86Alu.Dec16(v, _state));
+                    return f.IsRegister ? 3 : 15;
+                }
+                case 6:    // PUSH r/m16
+                {
+                    // 8086 quirk also applies via FF /6 when r/m = SP:
+                    // push the DECREMENTED SP, not the original.
+                    if (f.IsRegister && f.RM == 4)
+                    {
+                        _state.SP = (ushort)(_state.SP - 2);
+                        WriteMem16(SegReg.SS, _state.SP, _state.SP);
+                    }
+                    else
+                    {
+                        ushort v = ReadRm16(f, disp, segOverride);
+                        PushWord(v);
+                    }
+                    return f.IsRegister ? 11 : 16;
+                }
+                default:
+                    throw new NotImplementedException(
+                        $"0xFF /{f.Reg} (CALL/JMP indirect) lands in phase 24.4.2");
+            }
+        }
+
+        // ===== 0x8F /0 — POP r/m16 =====
+        if (opcode == 0x8F)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+            if (f.Reg != 0)
+                throw new NotImplementedException($"0x8F /{f.Reg} undefined on 8086");
+            ushort v = PopWord();
+            WriteRm16(f, disp, segOverride, v);
+            return f.IsRegister ? 8 : 17;
         }
 
         // ===== Anything else = not implemented yet =====
