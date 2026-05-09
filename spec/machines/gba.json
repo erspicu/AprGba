@@ -1,14 +1,20 @@
 {
     "$schema": "../schema/machine-spec.schema.json",
+    "spec_version": "2.0",
     "name": "gba",
     "cpu": "ARMv4T",
+    "unmapped_behavior": "last_bus_value",
     "memory_regions": [
         {
             "name": "bios",
             "addr_start": "0x00000000",
             "addr_end_exclusive": "0x00004000",
             "type": "rom",
+            "handler": "bios",
             "fastmem_eligible": true,
+            "readable": true,
+            "writable": false,
+            "allowed_widths": [8, 16, 32],
             "side_effects": ["bios_open_bus"]
         },
         {
@@ -16,15 +22,24 @@
             "addr_start": "0x02000000",
             "addr_end_exclusive": "0x02040000",
             "type": "ram",
+            "handler": "ewram",
             "fastmem_eligible": true,
-            "smc_notify": true
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8, 16, 32],
+            "smc_notify": true,
+            "wait_states": { "seq": 2, "nonseq": 2 }
         },
         {
             "name": "iwram",
             "addr_start": "0x03000000",
             "addr_end_exclusive": "0x03008000",
             "type": "ram",
+            "handler": "iwram",
             "fastmem_eligible": true,
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8, 16, 32],
             "smc_notify": true
         },
         {
@@ -32,14 +47,23 @@
             "addr_start": "0x04000000",
             "addr_end_exclusive": "0x04000400",
             "type": "io",
-            "side_effects": ["dispstat", "if", "ie", "ime", "dma", "timer"],
-            "forces_end_of_block": false
+            "handler": "ioregs",
+            "readable": true,
+            "writable": true,
+            "volatile": true,
+            "allowed_widths": [16, 32],
+            "forces_end_of_block": false,
+            "observers": ["dispstat", "if", "ie", "ime", "dma", "timer"]
         },
         {
             "name": "palette",
             "addr_start": "0x05000000",
             "addr_end_exclusive": "0x05000400",
             "type": "ram",
+            "handler": "palette",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [16, 32],
             "side_effects": ["ppu_palette"]
         },
         {
@@ -47,7 +71,11 @@
             "addr_start": "0x06000000",
             "addr_end_exclusive": "0x06018000",
             "type": "ram",
+            "handler": "vram",
             "fastmem_eligible": false,
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [16, 32],
             "side_effects": ["ppu_vram"]
         },
         {
@@ -55,6 +83,10 @@
             "addr_start": "0x07000000",
             "addr_end_exclusive": "0x07000400",
             "type": "ram",
+            "handler": "oam",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [16, 32],
             "side_effects": ["ppu_oam"]
         },
         {
@@ -62,7 +94,12 @@
             "addr_start": "0x08000000",
             "addr_end_exclusive": "0x0E000000",
             "type": "rom",
-            "fastmem_eligible": true
+            "handler": "cart",
+            "fastmem_eligible": true,
+            "readable": true,
+            "writable": false,
+            "allowed_widths": [8, 16, 32],
+            "wait_states": { "seq": 2, "nonseq": 4 }
         }
     ],
     "interrupt_vectors": {

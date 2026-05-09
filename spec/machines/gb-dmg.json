@@ -1,21 +1,31 @@
 {
     "$schema": "../schema/machine-spec.schema.json",
+    "spec_version": "2.0",
     "name": "gb-dmg",
     "cpu": "LR35902",
+    "unmapped_behavior": "zero",
     "memory_regions": [
         {
             "name": "cart_rom_bank0",
             "addr_start": "0x0000",
             "addr_end_exclusive": "0x4000",
             "type": "rom",
-            "fastmem_eligible": true
+            "handler": "mbc",
+            "fastmem_eligible": true,
+            "readable": true,
+            "writable": false,
+            "allowed_widths": [8]
         },
         {
             "name": "cart_rom_bankN",
             "addr_start": "0x4000",
             "addr_end_exclusive": "0x8000",
             "type": "rom",
+            "handler": "mbc",
             "fastmem_eligible": true,
+            "readable": true,
+            "writable": false,
+            "allowed_widths": [8],
             "side_effects": ["mbc_bank_switch"]
         },
         {
@@ -23,6 +33,10 @@
             "addr_start": "0x8000",
             "addr_end_exclusive": "0xA000",
             "type": "ram",
+            "handler": "ppu",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8],
             "side_effects": ["ppu_vram"]
         },
         {
@@ -30,7 +44,11 @@
             "addr_start": "0xA000",
             "addr_end_exclusive": "0xC000",
             "type": "ram",
+            "handler": "mbc",
             "fastmem_eligible": true,
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8],
             "side_effects": ["mbc_cart_ram"]
         },
         {
@@ -38,7 +56,11 @@
             "addr_start": "0xC000",
             "addr_end_exclusive": "0xE000",
             "type": "ram",
+            "handler": "wram",
             "fastmem_eligible": true,
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8],
             "smc_notify": true
         },
         {
@@ -46,6 +68,11 @@
             "addr_start": "0xE000",
             "addr_end_exclusive": "0xFE00",
             "type": "ram",
+            "handler": "wram",
+            "mirror_mask": "0x1FFF",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8],
             "side_effects": ["echo_wram_mirror"]
         },
         {
@@ -53,6 +80,10 @@
             "addr_start": "0xFE00",
             "addr_end_exclusive": "0xFEA0",
             "type": "ram",
+            "handler": "ppu",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8],
             "side_effects": ["ppu_oam"]
         },
         {
@@ -60,6 +91,11 @@
             "addr_start": "0xFEA0",
             "addr_end_exclusive": "0xFF00",
             "type": "io",
+            "handler": "openbus",
+            "readable": true,
+            "writable": false,
+            "volatile": true,
+            "allowed_widths": [8],
             "side_effects": ["open_bus"]
         },
         {
@@ -67,14 +103,23 @@
             "addr_start": "0xFF00",
             "addr_end_exclusive": "0xFF80",
             "type": "io",
-            "side_effects": ["joypad", "serial", "timer", "if", "apu", "ppu_regs", "boot_rom_disable"]
+            "handler": "ioregs",
+            "readable": true,
+            "writable": true,
+            "volatile": true,
+            "allowed_widths": [8],
+            "observers": ["joypad", "serial", "timer", "if", "apu", "ppu_regs", "boot_rom_disable"]
         },
         {
             "name": "hram",
             "addr_start": "0xFF80",
             "addr_end_exclusive": "0xFFFF",
             "type": "ram",
+            "handler": "hram",
             "fastmem_eligible": true,
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8],
             "smc_notify": true
         },
         {
@@ -82,6 +127,11 @@
             "addr_start": "0xFFFF",
             "addr_end_exclusive": "0x10000",
             "type": "io",
+            "handler": "ie",
+            "readable": true,
+            "writable": true,
+            "volatile": true,
+            "allowed_widths": [8],
             "side_effects": ["ie"]
         }
     ],
