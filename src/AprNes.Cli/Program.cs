@@ -34,12 +34,14 @@ long maxCycles = 30_000_000L;     // ~9k instr × ~5 cyc × big margin
 ushort? expectPc = null;
 string backend = "legacy";
 bool diffMode = false;
+bool diffBlockMode = false;
 foreach (var arg in args)
 {
     if      (arg == "--info")            { /* default — still prints info */ }
     else if (arg == "--run")             runMode = true;
     else if (arg == "--nestest")         { runMode = true; nestestMode = true; }
     else if (arg == "--diff")            { runMode = true; nestestMode = true; diffMode = true; }   // legacy vs json lockstep
+    else if (arg == "--diff-block")      { runMode = true; nestestMode = true; diffMode = true; diffBlockMode = true; }   // json vs json-block lockstep
     else if (arg.StartsWith("--rom="))        romPath = arg.Substring("--rom=".Length);
     else if (arg.StartsWith("--screenshot=")) { screenshotPath = arg.Substring("--screenshot=".Length); runMode = true; }
     else if (arg.StartsWith("--start-pc=")) startPc = (ushort)Convert.ToUInt32(arg.Substring("--start-pc=".Length).TrimStart('$').TrimStart('0').TrimStart('x'), 16);
@@ -48,9 +50,9 @@ foreach (var arg in args)
     else if (arg.StartsWith("--backend="))
     {
         backend = arg.Substring("--backend=".Length);
-        if (backend != "legacy" && backend != "json")
+        if (backend != "legacy" && backend != "json" && backend != "json-block")
         {
-            Console.Error.WriteLine($"unknown --backend value: {backend} (expected legacy|json)");
+            Console.Error.WriteLine($"unknown --backend value: {backend} (expected legacy|json|json-block)");
             return 2;
         }
     }
@@ -132,17 +134,23 @@ if (romPath is not null)
 
         var mLeg = MakeMapper(); mLeg.Reset(rom.PrgRom, rom.ChrRom);
         var busLeg = new NesMemoryBus(); busLeg.Reset(mLeg);
-        var legCpu = new BoundCpu(busLeg);
+        INesCpuBackend legCpu = diffBlockMode
+            ? new NesJsonCpu(busLeg)                            // json (per-instr) baseline
+            : (INesCpuBackend)new BoundCpu(busLeg);             // legacy interpreter baseline
 
         var mJit = MakeMapper(); mJit.Reset(rom.PrgRom, rom.ChrRom);
         var busJit = new NesMemoryBus(); busJit.Reset(mJit);
-        var jitCpu = new NesJsonCpu(busJit);
+        var jitCpu = new NesJsonCpu(busJit, enableBlockJit: diffBlockMode);
+        if (diffBlockMode)
+        {
+            mJit.PrgBankSwitched = (lo, hi) => jitCpu.InvalidateCachedBlocksInRange(lo, hi);
+        }
 
         legCpu.InitForNestest();
         jitCpu.InitForNestest();
 
         Console.WriteLine();
-        Console.WriteLine("  mode:    diff (legacy vs json, instruction-by-instruction)");
+        Console.WriteLine($"  mode:    diff ({(diffBlockMode ? "json vs json-block" : "legacy vs json")}, instruction-by-instruction)");
 
         long maxInstr = 20_000;
         // Ring buffer of last 6 instructions for context on divergence.
@@ -155,7 +163,8 @@ if (romPath is not null)
             byte xL = legCpu.X, xJ = jitCpu.X;
             byte yL = legCpu.Y, yJ = jitCpu.Y;
             byte spL = legCpu.SP, spJ = jitCpu.SP;
-            byte pL = (byte)(legCpu.P | 0x20), pJ = (byte)(jitCpu.P | 0x20);
+            byte pL = (byte)((legCpu is BoundCpu) ? (legCpu.P | 0x20) : legCpu.P);
+            byte pJ = (byte)(jitCpu.P);
             if (pcL != pcJ || aL != aJ || xL != xJ || yL != yJ || spL != spJ || pL != pJ)
             {
                 Console.WriteLine($"  diverge @ instr {i}:");
@@ -198,10 +207,19 @@ if (romPath is not null)
         bus.Reset(mapper);
         INesCpuBackend cpu = backend switch
         {
-            "json"   => new NesJsonCpu(bus),
-            _        => new BoundCpu(bus)
+            "json"       => new NesJsonCpu(bus),
+            "json-block" => new NesJsonCpu(bus, enableBlockJit: true),
+            _            => new BoundCpu(bus)
         };
         Console.WriteLine($"  backend: {cpu.BackendName}");
+
+        // Wire PRG bank-switch + SMC invalidation for block-JIT (no-op
+        // for other backends + non-banking mappers).
+        if (cpu is NesJsonCpu jit)
+        {
+            mapper.PrgBankSwitched = (lo, hi) => jit.InvalidateCachedBlocksInRange(lo, hi);
+            bus.SmcWriteHook = jit.NotifyBusWrite;
+        }
 
         // Always wire the PPU — even nestest writes to PPU regs during init
         // (resets PPUCTRL/PPUMASK), and a screenshot at end-of-run captures
@@ -282,7 +300,7 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("usage: apr-nes [--info] [--rom=<path.nes>] [--run|--nestest]");
     Console.Error.WriteLine("              [--start-pc=<hex>] [--max-cycles=N] [--expect-pc=<hex>]");
-    Console.Error.WriteLine("              [--screenshot=<out.png>] [--backend=legacy|json]");
+    Console.Error.WriteLine("              [--screenshot=<out.png>] [--backend=legacy|json|json-block]");
     Console.Error.WriteLine();
     Console.Error.WriteLine("Modes:");
     Console.Error.WriteLine("  (default)    — load spec, report 256-opcode decode coverage");

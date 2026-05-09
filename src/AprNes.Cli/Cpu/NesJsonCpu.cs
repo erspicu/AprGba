@@ -6,12 +6,25 @@
 // call by reading the opcode byte from NesMemoryBus and invoking the
 // matching native function pointer.
 //
-// This is the per-instr (no block-JIT) backend. NMI handling is done in
-// C# at the start of each Step() — JIT'd code never sees the NMI line.
+// Two modes — selected at construction time via enableBlockJit:
 //
-// Cycle accounting reuses the LegacyCpu cycle_table (256-byte per-opcode
-// table) rather than the spec's coarse per-mnemonic "Nm" form, so that
-// PPU NMI scheduling matches LegacyCpu byte-for-byte.
+// 1. Per-instruction (default) — Step() handles one opcode. NMI handled
+//    in C# at the start of each Step(). Cycle accounting reuses the
+//    LegacyCpu 256-byte cycle_table rather than the spec's per-mnemonic
+//    "Nm" form, so PPU NMI scheduling matches LegacyCpu byte-for-byte.
+//
+// 2. Block-JIT (enableBlockJit=true) — BlockDetector walks PC + builds a
+//    Block (multiple instructions until next writes_pc:always boundary),
+//    BlockFunctionBuilder emits one LLVM function per block, ORC LLJIT
+//    AddModule wires it. State access goes through the framework's
+//    alloca + mem2reg machinery (#18 design doc), so Mos6502Emitters.cs
+//    is unchanged. Cycle accounting via IR-level cycles_left budget:
+//    set initial = sentinel large value, IR decrements per executed
+//    instruction (using BFB's per-instr cycle decrement with
+//    CyclesPerSpecUnit=1 to match 6502's raw-cycle spec form), read
+//    residual after block exit, consumed = initial - residual. This
+//    correctly bills cycles only for instructions that actually ran
+//    (taken-branch early exits don't get charged for the unrun tail).
 
 using System;
 using System.Buffers.Binary;
@@ -24,12 +37,13 @@ using AprCpu.Core.IR;
 using AprCpu.Core.JsonSpec;
 using AprCpu.Core.Runtime;
 using AprNes.Cli.Memory;
+using LLVMSharp.Interop;
 
 namespace AprNes.Cli.Cpu;
 
 public sealed unsafe class NesJsonCpu : INesCpuBackend
 {
-    public string BackendName => "json-llvm";
+    public string BackendName => _blockJitEnabled ? "json-block-llvm" : "json-llvm";
 
     // Static bus reference used by the unmanaged extern shims. Last-call-
     // wins when multiple NesJsonCpu instances exist; the harness only ever
@@ -40,6 +54,13 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
     private readonly LoadedSpec    _spec;
     private readonly HostRuntime   _rt;
     private readonly DecoderTable  _mainDecoder;
+    private readonly SpecCompiler.CompileResult _compileResult;
+
+    // Block-JIT (optional, opt-in via ctor flag).
+    private readonly bool          _blockJitEnabled;
+    private readonly BlockDetector? _blockDetector;
+    private readonly BlockCache?    _blockCache;
+    private int _blockGeneration;
 
     // Identity-keyed function-pointer cache (InstructionDef → fn ptr).
     // Reference equality is fine because DecoderTable.Decode returns the
@@ -55,6 +76,8 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
     // (A, X, Y) and the status section (P, SP, PC).
     private readonly int _aOff, _xOff, _yOff;
     private readonly int _pOff, _spOff, _pcOff;
+    // Block-JIT-only — cycles_left budget slot + PcWritten flag slot.
+    private readonly int _cyclesLeftOff, _pcWrittenOff;
 
     // Per-opcode cycle table mirroring LegacyCpu.cycle_tableData. Used
     // for cycle accounting since the 2A03 spec only carries per-mnemonic
@@ -84,9 +107,10 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
     // Step() call so the harness sees the +7 reset / NMI prologue.
     private int _interruptCycle;
 
-    public NesJsonCpu(NesMemoryBus bus)
+    public NesJsonCpu(NesMemoryBus bus, bool enableBlockJit = false)
     {
         _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+        _blockJitEnabled = enableBlockJit;
 
         var specPath = LocateSpec();
         var compileResult = SpecCompiler.Compile(specPath);
@@ -96,6 +120,7 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
                 "NesJsonCpu: spec compilation produced diagnostics:\n  " +
                 string.Join("\n  ", compileResult.Diagnostics));
         }
+        _compileResult = compileResult;
 
         _spec = SpecLoader.LoadCpuSpec(specPath);
         if (!compileResult.DecoderTables.TryGetValue("Main", out var mainDecoder))
@@ -129,12 +154,26 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
         _pOff  = (int)_rt.StatusOffset("P");
         _spOff = (int)_rt.StatusOffset("SP");
         _pcOff = (int)_rt.StatusOffset("PC");
+        _cyclesLeftOff = (int)_rt.CyclesLeftOffset;
+        _pcWrittenOff  = (int)_rt.PcWrittenOffset;
 
         // Allocate + pin the state buffer. Permanently pinned for the
         // lifetime of this NesJsonCpu — we never reallocate.
         _state = new byte[(int)_rt.StateSizeBytes];
         _stateHandle = GCHandle.Alloc(_state, GCHandleType.Pinned);
         _statePtr    = (byte*)_stateHandle.AddrOfPinnedObject();
+
+        // Block-JIT setup — only if requested.
+        if (_blockJitEnabled)
+        {
+            var mainSetSpec = _spec.InstructionSets["Main"];
+            _blockDetector = new BlockDetector(
+                mainSetSpec,
+                _mainDecoder,
+                lengthOracle: Mos6502InstructionLengths.GetLength,
+                prefixSubDecoders: null);   // 6502 has no prefix bytes
+            _blockCache = new BlockCache();
+        }
     }
 
     private static string LocateSpec()
@@ -213,14 +252,19 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
     {
         _activeBus = _bus;
 
-        // Service pending PPU VBlank NMI before fetching the next opcode —
-        // matches BoundCpu.Step ordering. Without this, vblank-wait loops
-        // (BIT $2002 / BPL ...) spin forever.
+        // Service pending PPU VBlank NMI before fetching the next opcode /
+        // entering the next block — matches BoundCpu.Step ordering. Without
+        // this, vblank-wait loops (BIT $2002 / BPL ...) spin forever.
         if (_bus.ConsumePpuNmi())
         {
             NmiInterrupt();
         }
 
+        return _blockJitEnabled ? StepBlock() : StepOne();
+    }
+
+    private int StepOne()
+    {
         // Fetch opcode (advances PC by 1 — multi-byte fetches handled
         // by the IR's read_imm8 / read_imm16 emitters which themselves
         // bump PC).
@@ -255,6 +299,182 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
         cycles += dmaStall;
         _bus.Tick(cycles);
         return cycles;
+    }
+
+    /// <summary>
+    /// Block-JIT step: detect (or hit cache for) the block at current PC,
+    /// invoke its compiled function, and bill the actual cycles consumed
+    /// via the IR's cycles_left budget. Cycles are debited per-instruction
+    /// inside the block (BlockFunctionBuilder's predictive-downcount
+    /// machinery), so taken-branch early exits don't get charged for the
+    /// instructions they didn't run — read residual = (init − cycles_left)
+    /// after block exit to get the true count.
+    /// </summary>
+    private int StepBlock()
+    {
+        ushort pc = ReadU16(_pcOff);
+        // APR_NES_NOCACHE — debug knob: bypass block cache, recompile
+        // every Step. Useful for SMC-suspect bugs (if blargg passes only
+        // with this, the cache is stale due to RAM-resident code rewrites).
+        bool noCache = Environment.GetEnvironmentVariable("APR_NES_NOCACHE") is not null;
+        if (noCache || !_blockCache!.TryGet(pc, out var entry))
+        {
+            entry = CompileBlockAtPc(pc);
+            if (!noCache) _blockCache.Add(pc, entry);
+        }
+
+        // Initialise IR-level cycle budget. Set high enough that a full
+        // 64-instruction block (max ~64 × 8 cyc = 512) won't exhaust it
+        // mid-block; we're using cycles_left as a counter, not a real
+        // budget. Sentinel = 1024.
+        const int budgetInit = 1024;
+        Marshal.WriteInt32((IntPtr)(_statePtr + _cyclesLeftOff), budgetInit);
+        _statePtr[_pcWrittenOff] = 0;
+
+        var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
+        fn(_statePtr);
+
+        int residual = Marshal.ReadInt32((IntPtr)(_statePtr + _cyclesLeftOff));
+        int consumedIr = budgetInit - residual;
+        if (consumedIr < 0) consumedIr = 0;   // defensive — shouldn't happen with budgetInit=1024
+
+        // PcWritten=0 fall-through path: the IR-driven cycles_left walked
+        // every instruction's deduct. PcWritten=1 (branch/JMP/RTS taken):
+        // only the executed prefix paid, the unrun tail stayed unbilled.
+        // Either way `consumedIr` is the right number.
+
+        int cycles = consumedIr + _interruptCycle;
+        _interruptCycle = 0;
+        int dmaStall = _bus.ConsumeStallCycles();
+        cycles += dmaStall;
+        _bus.Tick(cycles);
+        return cycles;
+    }
+
+    private CachedBlock CompileBlockAtPc(ushort pc)
+    {
+        // APR_NES_BLOCK_MAX env var: optional debug knob to limit block
+        // size. Set to 1 to reduce block-JIT to per-instr-via-block-path
+        // (each block contains exactly 1 instruction). Useful for
+        // bisecting multi-instruction-block bugs vs single-instr emitter
+        // bugs.
+        int maxInstr = BlockDetector.DefaultMaxInstructions;
+        var maxEnv = Environment.GetEnvironmentVariable("APR_NES_BLOCK_MAX");
+        if (maxEnv is not null && int.TryParse(maxEnv, out var m) && m > 0) maxInstr = m;
+        var block = _blockDetector!.Detect(new BusAdapter(_bus), pc, maxInstructions: maxInstr);
+        if (block.Instructions.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"NesJsonCpu: BlockDetector found no instructions at PC=0x{pc:X4}.");
+        }
+
+        var generation = ++_blockGeneration;
+        var moduleName = $"AprNes_BlockJit_pc{pc:X4}_g{generation}";
+        var module = LLVMModuleRef.CreateWithName(moduleName);
+        var bfb = new BlockFunctionBuilder(
+            module, _compileResult.Layout,
+            _compileResult.EmitterRegistry, _compileResult.ResolverRegistry)
+        {
+            // 6502 spec's "3m" form means 3 raw cycles, NOT 12 (m-cycle×4).
+            // Override the default GB/ARM multiplier so cycles_left
+            // decrements match real 6502 cycle costs.
+            CyclesPerSpecUnit = 1
+        };
+        var mainSetSpec = _spec.InstructionSets["Main"];
+        bfb.Build(mainSetSpec, block, generation);
+
+        _rt.AddModule(module);
+        var fnName = BlockFunctionBuilder.BlockFunctionName("Main", pc, generation);
+        var fnPtr = _rt.GetFunctionPointer(fnName);
+
+        // Compute coverage range for SMC / bank-switch invalidation.
+        int totalBytes = 0;
+        uint covStart = uint.MaxValue, covEnd = 0;
+        var n = block.Instructions.Count;
+        var instrPcs  = new uint[n];
+        var instrLens = new byte[n];
+        for (int i = 0; i < n; i++)
+        {
+            var bi = block.Instructions[i];
+            totalBytes += bi.LengthBytes;
+            instrPcs[i] = bi.Pc;
+            instrLens[i] = bi.LengthBytes;
+            if (bi.Pc < covStart) covStart = bi.Pc;
+            uint instrEnd = bi.Pc + bi.LengthBytes;
+            if (instrEnd > covEnd) covEnd = instrEnd;
+        }
+        var lastBi = block.Instructions[n - 1];
+        uint nextPcAfterLastInstr = (uint)((lastBi.Pc + lastBi.LengthBytes) & 0xFFFFu);
+
+        return new CachedBlock(fnPtr, n, totalBytes, nextPcAfterLastInstr,
+            covStart, covEnd, instrPcs, instrLens);
+    }
+
+    /// <summary>
+    /// Drop all cached blocks whose instruction bytes fall in [addrStart, addrEnd).
+    /// Wired to <see cref="IMapper.PrgBankSwitched"/> so MMC1 PRG bank changes
+    /// don't leave stale blocks pointing at obsolete code. Conservative
+    /// implementation — clears the entire cache. PRG bank switches are
+    /// infrequent in real games (per-frame at most), so the recompile cost
+    /// is fine.
+    /// </summary>
+    public void InvalidateCachedBlocksInRange(uint addrStart, uint addrEnd)
+    {
+        if (!_blockJitEnabled || _blockCache is null) return;
+        // We could be more surgical (only blocks overlapping [start,end)),
+        // but Clear() is simpler + correct. blargg cpu_test5 hits this
+        // path during MMC1 control-register init — only ~5 times total.
+        _blockCache.Clear();
+    }
+
+    /// <summary>
+    /// SMC notification — called from <see cref="NesMemoryBus.WriteByte"/>
+    /// on every CPU bus write. Routes through BlockCache's per-byte
+    /// coverage counter (1-byte read + branch on the fast path) so most
+    /// writes are no-ops; only writes overlapping a cached block's PC
+    /// range trigger invalidation.
+    ///
+    /// blargg cpu_test5 needs this — the test framework's instr_template
+    /// is in RAM and gets rewritten between sub-tests. Without SMC notify,
+    /// the cache returns stale block IR for the rewritten template's PC
+    /// and runs the wrong opcode.
+    /// </summary>
+    public void NotifyBusWrite(uint addr)
+    {
+        _blockCache?.NotifyMemoryWrite(addr);
+    }
+
+    /// <summary>
+    /// Minimal IMemoryBus adapter so BlockDetector can read instruction
+    /// bytes from NesMemoryBus during cache-miss block detection. Only
+    /// 8-bit reads are needed (BlockDetector calls ReadByte per step);
+    /// other widths fall back to byte-by-byte composition.
+    /// </summary>
+    private sealed class BusAdapter : IMemoryBus
+    {
+        private readonly NesMemoryBus _bus;
+        public BusAdapter(NesMemoryBus bus) => _bus = bus;
+        public byte   ReadByte    (uint addr) => _bus.ReadByte((ushort)addr);
+        public ushort ReadHalfword(uint addr) =>
+            (ushort)(_bus.ReadByte((ushort)addr) | (_bus.ReadByte((ushort)(addr + 1)) << 8));
+        public uint   ReadWord    (uint addr) => (uint)(
+              _bus.ReadByte((ushort)addr)
+            | (_bus.ReadByte((ushort)(addr + 1)) << 8)
+            | (_bus.ReadByte((ushort)(addr + 2)) << 16)
+            | (_bus.ReadByte((ushort)(addr + 3)) << 24));
+        public void WriteByte    (uint addr, byte   v) => _bus.WriteByte((ushort)addr, v);
+        public void WriteHalfword(uint addr, ushort v)
+        {
+            _bus.WriteByte((ushort)addr,        (byte)v);
+            _bus.WriteByte((ushort)(addr + 1), (byte)(v >> 8));
+        }
+        public void WriteWord    (uint addr, uint   v)
+        {
+            _bus.WriteByte((ushort)addr,        (byte)v);
+            _bus.WriteByte((ushort)(addr + 1), (byte)(v >> 8));
+            _bus.WriteByte((ushort)(addr + 2), (byte)(v >> 16));
+            _bus.WriteByte((ushort)(addr + 3), (byte)(v >> 24));
+        }
     }
 
     // --- NMI ------------------------------------------------------------

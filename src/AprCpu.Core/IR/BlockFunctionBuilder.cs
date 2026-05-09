@@ -42,6 +42,22 @@ public sealed unsafe class BlockFunctionBuilder
     public EmitterRegistry      Registry  { get; }
     public OperandResolverRegistry ResolverRegistry { get; }
 
+    /// <summary>
+    /// Multiplier applied when parsing spec's <c>cycles.form</c> (e.g.
+    /// <c>"3m"</c>) into the integer cycle cost charged per instruction.
+    /// LR35902/GB convention: the form's number is in m-cycles (= 4
+    /// t-cycles), so the default 4 produces correct t-cycle costs. ARM
+    /// data-processing is also ~1 m-cycle ≈ 4 t-cycles so the default
+    /// matches there too. MOS6502 spec uses raw CPU cycles in the form
+    /// (i.e. <c>"3m"</c> means 3 cycles, NOT 12), so NesJsonCpu sets
+    /// this to 1 to disable the multiplier.
+    ///
+    /// Default 4 preserves backwards compatibility with all callers
+    /// before this property existed (GB/ARM block-JIT still see exactly
+    /// the same per-instruction cycle counts they did pre-N1.B').
+    /// </summary>
+    public int CyclesPerSpecUnit { get; init; } = 4;
+
     public BlockFunctionBuilder(
         LLVMModuleRef module,
         CpuStateLayout layout,
@@ -522,9 +538,9 @@ public sealed unsafe class BlockFunctionBuilder
     /// Mirrors AprGb.Cli.JsonCpu.CyclesFor: extract first integer N, return
     /// N × 4 (m-cycle = 4 t-cycles). Default to 4 (= 1 m-cycle) if no form.
     /// </summary>
-    private static int ParseCyclesForm(string? form)
+    private int ParseCyclesForm(string? form)
     {
-        if (string.IsNullOrEmpty(form)) return 4;
+        if (string.IsNullOrEmpty(form)) return CyclesPerSpecUnit;
         int n = 0;
         foreach (var ch in form)
         {
@@ -532,7 +548,7 @@ public sealed unsafe class BlockFunctionBuilder
             if (n > 0) break;
         }
         if (n == 0) n = 1;
-        return n * 4;
+        return n * CyclesPerSpecUnit;
     }
 
     /// <summary>
@@ -546,9 +562,10 @@ public sealed unsafe class BlockFunctionBuilder
     /// </list>
     /// Anything unparseable defaults to (4, 0).
     /// </summary>
-    internal static (int notTakenT, int extraTakenT) ParseCyclesFormBoth(string? form)
+    internal (int notTakenT, int extraTakenT) ParseCyclesFormBoth(string? form)
     {
-        if (string.IsNullOrEmpty(form)) return (4, 0);
+        int mul = CyclesPerSpecUnit;
+        if (string.IsNullOrEmpty(form)) return (mul, 0);
         int n = 0, m = 0;
         bool inFirst = true, sawDigit = false;
         for (int i = 0; i < form.Length; i++)
@@ -573,8 +590,8 @@ public sealed unsafe class BlockFunctionBuilder
             }
         }
         if (n == 0) n = 1;
-        if (m == 0) return (n * 4, 0);
-        return (n * 4, (m - n) * 4);
+        if (m == 0) return (n * mul, 0);
+        return (n * mul, (m - n) * mul);
     }
 
     private static unsafe LLVMAttributeRef CreateEnumAttribute(LLVMContextRef ctx, string name)

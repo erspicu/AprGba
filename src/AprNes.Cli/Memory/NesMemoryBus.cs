@@ -41,6 +41,13 @@ namespace AprNes.Cli.Memory
         // DMA contributes (513). Tick() drains this on the next dispatch.
         private int _pendingStallCycles;
 
+        // N1.B' B'.5b — block-JIT SMC notification hook. Fired on every
+        // CPU bus write so the JsonCpu's BlockCache can invalidate any
+        // cached block whose coverage range includes the address.
+        // Default null = no-op (per-instr / legacy backends don't need it).
+        // NesJsonCpu wires this when block-JIT is enabled.
+        public Action<uint>? SmcWriteHook { get; set; }
+
         // Accumulated CPU cycles waiting to be flushed to the PPU/APU. The
         // framework calls Tick() per instruction; once PPU/APU are wired the
         // catch-up loop will consume this.
@@ -137,6 +144,12 @@ namespace AprNes.Cli.Memory
         public void WriteByte(ushort addr, byte value)
         {
             _cpubus = value;
+            // N1.B' SMC notify — BlockCache.NotifyMemoryWrite is a 1-byte
+            // coverage-counter check + early-return; cheap on hot path.
+            // Only fires invalidation for addresses where a cached block
+            // actually has coverage. Routes RAM-resident SMC (blargg's
+            // instr_template self-rewrite) to JIT cache invalidation.
+            SmcWriteHook?.Invoke(addr);
             if (addr < 0x2000)
             {
                 _wram[addr & 0x07FF] = value;
@@ -173,6 +186,11 @@ namespace AprNes.Cli.Memory
         public void WriteZeroPage(byte addr, byte value)
         {
             _cpubus = value;
+            // SMC notify — same rationale as WriteByte. zp writes are common
+            // (stack pushes route to $0100|SP via WriteByte though, not here)
+            // but block-JIT-cached blocks rarely live in zp, so the coverage
+            // counter early-returns ~always.
+            SmcWriteHook?.Invoke(addr);
             _wram[addr] = value;
         }
 
