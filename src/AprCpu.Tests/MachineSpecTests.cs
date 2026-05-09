@@ -45,6 +45,40 @@ public class MachineSpecTests
     }
 
     [Fact]
+    public void Loads_Gba_MachineSpec_AndAlignsWith_GbaMemoryMap()
+    {
+        var spec = MachineSpecLoader.LoadFromFile(MachineSpecPath("gba"));
+
+        Assert.Equal("gba", spec.Name);
+        Assert.Equal("ARMv4T", spec.CpuRef);
+        Assert.Equal(8, spec.MemoryRegions.Count);
+
+        // Spec values must match the hardcoded GbaMemoryMap constants.
+        // If GbaMemoryMap ever changes, this test fails — forces sync.
+        var bios = spec.MemoryRegions.Single(r => r.Name == "bios");
+        Assert.Equal(AprCpu.Core.Runtime.Gba.GbaMemoryMap.BiosBase, bios.AddrStart);
+        Assert.Equal(AprCpu.Core.Runtime.Gba.GbaMemoryMap.BiosBase
+                   + AprCpu.Core.Runtime.Gba.GbaMemoryMap.BiosSize, bios.AddrEndExclusive);
+        Assert.Equal(MemoryRegionKind.Rom, bios.Kind);
+
+        var ewram = spec.MemoryRegions.Single(r => r.Name == "ewram");
+        Assert.Equal(AprCpu.Core.Runtime.Gba.GbaMemoryMap.EwramBase, ewram.AddrStart);
+        Assert.Equal(AprCpu.Core.Runtime.Gba.GbaMemoryMap.EwramBase
+                   + AprCpu.Core.Runtime.Gba.GbaMemoryMap.EwramSize, ewram.AddrEndExclusive);
+        Assert.True(ewram.FastmemEligible);
+        Assert.True(ewram.SmcNotify);
+
+        var iwram = spec.MemoryRegions.Single(r => r.Name == "iwram");
+        Assert.Equal(AprCpu.Core.Runtime.Gba.GbaMemoryMap.IwramBase, iwram.AddrStart);
+        Assert.True(iwram.FastmemEligible);
+
+        var rom = spec.MemoryRegions.Single(r => r.Name == "cart_rom");
+        Assert.Equal(AprCpu.Core.Runtime.Gba.GbaMemoryMap.RomBase, rom.AddrStart);
+        Assert.Equal(MemoryRegionKind.Rom, rom.Kind);
+        Assert.False(rom.Writable);
+    }
+
+    [Fact]
     public void RegionTypeDefaults_AreSensible()
     {
         // io region: forces_end_of_block default-on, smc_notify default-off,

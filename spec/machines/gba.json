@@ -1,0 +1,77 @@
+{
+    "$schema": "../schema/machine-spec.schema.json",
+    "name": "gba",
+    "cpu": "ARMv4T",
+    "memory_regions": [
+        {
+            "name": "bios",
+            "addr_start": "0x00000000",
+            "addr_end_exclusive": "0x00004000",
+            "type": "rom",
+            "fastmem_eligible": true,
+            "side_effects": ["bios_open_bus"]
+        },
+        {
+            "name": "ewram",
+            "addr_start": "0x02000000",
+            "addr_end_exclusive": "0x02040000",
+            "type": "ram",
+            "fastmem_eligible": true,
+            "smc_notify": true
+        },
+        {
+            "name": "iwram",
+            "addr_start": "0x03000000",
+            "addr_end_exclusive": "0x03008000",
+            "type": "ram",
+            "fastmem_eligible": true,
+            "smc_notify": true
+        },
+        {
+            "name": "io",
+            "addr_start": "0x04000000",
+            "addr_end_exclusive": "0x04000400",
+            "type": "io",
+            "side_effects": ["dispstat", "if", "ie", "ime", "dma", "timer"],
+            "forces_end_of_block": false
+        },
+        {
+            "name": "palette",
+            "addr_start": "0x05000000",
+            "addr_end_exclusive": "0x05000400",
+            "type": "ram",
+            "side_effects": ["ppu_palette"]
+        },
+        {
+            "name": "vram",
+            "addr_start": "0x06000000",
+            "addr_end_exclusive": "0x06018000",
+            "type": "ram",
+            "fastmem_eligible": false,
+            "side_effects": ["ppu_vram"]
+        },
+        {
+            "name": "oam",
+            "addr_start": "0x07000000",
+            "addr_end_exclusive": "0x07000400",
+            "type": "ram",
+            "side_effects": ["ppu_oam"]
+        },
+        {
+            "name": "cart_rom",
+            "addr_start": "0x08000000",
+            "addr_end_exclusive": "0x0E000000",
+            "type": "rom",
+            "fastmem_eligible": true
+        }
+    ],
+    "interrupt_vectors": {
+        "reset":             "0x00000000",
+        "undefined":         "0x00000004",
+        "swi":               "0x00000008",
+        "prefetch_abort":    "0x0000000C",
+        "data_abort":        "0x00000010",
+        "irq":               "0x00000018",
+        "fiq":               "0x0000001C"
+    }
+}
