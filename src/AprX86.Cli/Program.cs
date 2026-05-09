@@ -10,6 +10,7 @@ using System.IO;
 using AprX86.Cli.Cpu;
 using AprX86.Cli.Memory;
 using AprX86.Cli.Tests;
+using AprX86.Cli.Video;
 
 if (args.Length == 0)
 {
@@ -18,6 +19,7 @@ if (args.Length == 0)
 }
 
 string? romPath = null;
+string? screenshotPath = null;
 string? tomHartePath = null;
 int? tomHarteLimit = null;
 bool tomHarteStopOnFail = false;
@@ -31,6 +33,7 @@ bool verbose = false;
 foreach (var arg in args)
 {
     if      (arg.StartsWith("--rom="))               romPath = arg.Substring("--rom=".Length);
+    else if (arg.StartsWith("--screenshot="))        screenshotPath = arg.Substring("--screenshot=".Length);
     else if (arg.StartsWith("--tomharte="))          tomHartePath = arg.Substring("--tomharte=".Length);
     else if (arg.StartsWith("--tomharte-limit="))    tomHarteLimit = int.Parse(arg.Substring("--tomharte-limit=".Length));
     else if (arg == "--tomharte-stop-on-fail")       tomHarteStopOnFail = true;
@@ -153,6 +156,12 @@ Console.WriteLine($"  final state:");
     Console.WriteLine($"    FLAGS={s.GetFlags():X4}  C={(s.FlagC?1:0)} P={(s.FlagP?1:0)} A={(s.FlagA?1:0)} Z={(s.FlagZ?1:0)} S={(s.FlagS?1:0)} O={(s.FlagO?1:0)} D={(s.FlagD?1:0)} I={(s.FlagI?1:0)}");
 }
 Console.WriteLine($"  halted: {cpu.Halted}");
+
+if (screenshotPath is not null)
+{
+    X86CgaRenderer.Render(mem.Ram, screenshotPath);
+    Console.WriteLine($"  screenshot: {screenshotPath} ({X86CgaRenderer.ImgW}×{X86CgaRenderer.ImgH} CGA text mode)");
+}
 
 return cpu.Halted ? 0 : 5;
 
