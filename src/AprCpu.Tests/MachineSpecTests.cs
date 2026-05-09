@@ -139,28 +139,66 @@ public class MachineSpecTests
     }
 
     /// <summary>
-    /// N3.3 — documents the spec format limitation for per-opcode cycles.
-    /// Current 2A03 spec declares cycles.form per mnemonic (e.g. ORA "3m")
-    /// regardless of addressing mode. LegacyCpu's oracle has per-opcode
-    /// cycles (ORA #imm=2, ORA zp=3, ORA abs=4, ORA (zp,X)=6, ORA (zp),Y=5+,
-    /// ORA zp,X=4, ORA abs,Y=4+, ORA abs,X=4+). Because spec doesn't encode
-    /// the addressing-mode dimension, walking decoder+parsing cycles.form
-    /// produces a 145/256-opcode mismatch vs the oracle.
+    /// N3.3 — proof of the spec format break: cc=01 ALU group declares a
+    /// <c>cycles.table</c> mapping the bbb-selector bit pattern to a precise
+    /// cycle count. For each opcode in the cc=01 group, walking the decoder
+    /// + resolving via <see cref="CycleTable.Resolve"/> must agree with the
+    /// hardcoded LegacyCpu oracle (<see cref="AprNes.Cli.Cpu.NesJsonCpu"/>'s
+    /// <c>s_cycleTable</c>).
     ///
-    /// Pragmatic fix would require restructuring spec to either:
-    /// (a) one instruction-def per (mnemonic, addressing-mode) — 8 → 64
-    ///     entries for ALU class; 4-5× spec growth.
-    /// (b) per-format cycle_table mapping bbb selector → cycle count.
-    ///
-    /// Neither is in N3 scope. NesJsonCpu keeps its hardcoded
-    /// s_cycleTable[256] for now (faithful LegacyCpu mirror); block-JIT
-    /// uses spec.form values which are coarser but adequate for sub-test
-    /// timing tolerances.
+    /// Other groups (cc=00, cc=10, branches, stack/jump, unofficial) still
+    /// rely on the hardcoded fallback in NesJsonCpu — converting them is
+    /// follow-up work.
     /// </summary>
-    [Fact(Skip = "Documents known limitation — spec lacks per-addressing-mode cycle granularity. See test summary.")]
-    public void Mos6502CycleTable_DerivedFromSpec_DivergesFromOracle()
+    [Fact]
+    public void Mos6502CycleTable_DerivedFromSpec_MatchesOracleForCc01()
     {
-        // Intentionally skipped — see XML doc comment.
+        // Hardcoded LegacyCpu oracle — exact mirror of NesJsonCpu.s_cycleTable.
+        byte[] oracle =
+        {
+            7,6,2,8,3,3,5,5,3,2,2,2,4,4,6,6,
+            2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+            6,6,2,8,3,3,5,5,4,2,2,2,4,4,6,6,
+            2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+            6,6,2,8,3,3,5,5,3,2,2,2,3,4,6,6,
+            2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+            6,6,2,8,3,3,5,5,4,2,2,2,5,4,6,6,
+            2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+            2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,
+            2,6,2,6,4,4,4,4,2,5,2,5,5,5,5,5,
+            2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,
+            2,5,2,5,4,4,4,4,2,4,2,4,4,4,4,4,
+            2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,
+            2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+            2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,
+            2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7
+        };
+
+        var compiled = AprCpu.Core.Compilation.SpecCompiler.Compile(
+            Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json"));
+        Assert.True(compiled.DecoderTables.TryGetValue("Main", out var dec));
+
+        int verified = 0;
+        for (int op = 0; op < 256; op++)
+        {
+            // cc=01 ALU class: low two bits == 01 (excluding 0x89 = STA #imm
+            // which the unofficial.json overrides with a NOP entry).
+            if ((op & 0x03) != 0x01) continue;
+            var d = dec!.Decode((uint)op);
+            Assert.NotNull(d);
+            // Skip if the decoded format isn't the cc=01 ALU group (e.g.
+            // unofficial.json with mask=0xFF wins for 0x89).
+            if (d!.Format.Name != "AluCc01") continue;
+            var resolved = d.Instruction.Cycles?.Table?.Resolve(d.Format, (uint)op);
+            Assert.True(resolved.HasValue,
+                $"opcode 0x{op:X2}: cc=01 spec must declare cycles.table");
+            Assert.Equal(oracle[op], resolved!.Value);
+            verified++;
+        }
+        // Sanity: at least 56 opcodes covered (8 mnemonics × 8 modes minus
+        // STA #imm which is shadowed by unofficial.json = 63; allow some
+        // slack if the spec changes).
+        Assert.True(verified >= 56, $"verified only {verified} cc=01 opcodes, expected ≥56");
     }
 
     [Fact]

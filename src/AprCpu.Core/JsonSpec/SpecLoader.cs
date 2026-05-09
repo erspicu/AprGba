@@ -444,12 +444,36 @@ public static class SpecLoader
         Cycles? cycles = null;
         if (el.TryGetProperty("cycles", out var cEl) && cEl.ValueKind == JsonValueKind.Object)
         {
+            // N3.3 — optional `table` for per-(mnemonic, addressing-mode)
+            // cycle granularity.
+            CycleTable? cycleTable = null;
+            if (cEl.TryGetProperty("table", out var tEl) && tEl.ValueKind == JsonValueKind.Object)
+            {
+                var fieldName = ReqString(tEl, "field", filePath, $"{jsonPath}.cycles.table.field");
+                if (!tEl.TryGetProperty("values", out var vEl) || vEl.ValueKind != JsonValueKind.Object)
+                    throw new SpecValidationException(
+                        "cycles.table.values must be an object mapping bit-pattern strings to integer cycle counts.",
+                        filePath, $"{jsonPath}.cycles.table.values");
+
+                var values = new Dictionary<string, int>(StringComparer.Ordinal);
+                foreach (var kv in vEl.EnumerateObject())
+                {
+                    if (kv.Value.ValueKind != JsonValueKind.Number)
+                        throw new SpecValidationException(
+                            $"cycles.table.values['{kv.Name}'] must be an integer cycle count.",
+                            filePath, $"{jsonPath}.cycles.table.values.{kv.Name}");
+                    values[kv.Name] = kv.Value.GetInt32();
+                }
+                cycleTable = new CycleTable(fieldName, values);
+            }
+
             cycles = new Cycles(
                 Form:              OptStringFlexible(cEl, "form"),
                 FormAlt:           ParseStringList(cEl, "form_alt"),
                 ExtraWhenDestPc:   OptString(cEl, "extra_when_dest_pc"),
                 ExtraWhenLoadPc:   OptString(cEl, "extra_when_load_pc"),
-                ComputedAt:        OptString(cEl, "computed_at"));
+                ComputedAt:        OptString(cEl, "computed_at"),
+                Table:             cycleTable);
         }
 
         var steps = ParseList(el, "steps", ParseMicroOpStep, filePath, $"{jsonPath}.steps");

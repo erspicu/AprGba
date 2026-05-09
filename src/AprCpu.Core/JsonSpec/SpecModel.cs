@@ -219,7 +219,49 @@ public sealed record Cycles(
     IReadOnlyList<string> FormAlt,
     string? ExtraWhenDestPc,
     string? ExtraWhenLoadPc,
-    string? ComputedAt);
+    string? ComputedAt,
+    // N3.3 — per-(mnemonic, addressing-mode) cycle granularity. The `Form`
+    // field gives a coarse default; `Table` maps a decoder field's bit
+    // pattern to an exact cycle count, breaking the 1D limitation that
+    // motivated the original BLOCKED status of N3.3.
+    CycleTable? Table = null);
+
+/// <summary>
+/// N3.3 — selector-driven cycle count map.
+/// <c>Field</c> names a decoder field declared on the instruction's
+/// <see cref="EncodingFormat"/> (e.g. "bbb" for the cc=01 6502 ALU
+/// addressing mode selector). <c>Values</c> maps each bit pattern (as a
+/// binary or hex string, matching the same convention as
+/// <see cref="InstructionSelector.Value"/>) to its cycle count.
+/// </summary>
+public sealed record CycleTable(
+    string Field,
+    IReadOnlyDictionary<string, int> Values)
+{
+    /// <summary>
+    /// Look up the cycle count for <paramref name="opcode"/> via the format's
+    /// field bits. Returns null if the field isn't declared on the format,
+    /// or if the extracted value isn't covered by <see cref="Values"/>.
+    /// </summary>
+    public int? Resolve(EncodingFormat format, uint opcode)
+    {
+        if (!format.Fields.TryGetValue(Field, out var range)) return null;
+        int width = range.High - range.Low + 1;
+        if (width <= 0 || width > 32) return null;
+        uint mask = width == 32 ? 0xFFFFFFFFu : (1u << width) - 1u;
+        uint value = (opcode >> range.Low) & mask;
+
+        // Try binary-padded string first (matches selector convention),
+        // then hex with "0x" prefix, then plain decimal.
+        var binKey = System.Convert.ToString(value, 2).PadLeft(width, '0');
+        if (Values.TryGetValue(binKey, out var bin)) return bin;
+        var hexKey = "0x" + value.ToString("X");
+        if (Values.TryGetValue(hexKey, out var hex)) return hex;
+        var decKey = value.ToString();
+        if (Values.TryGetValue(decKey, out var dec)) return dec;
+        return null;
+    }
+}
 
 #endregion
 
