@@ -1,14 +1,18 @@
-// X86LegacyCpu — phase 24.1 STUB.
+// X86LegacyCpu — 8086 hand-coded interpreter (incremental).
 //
-// Just enough to: fetch one byte at CS:IP, recognise NOP (0x90) and HLT
-// (0xF4), and detect "OUT 0xE9" (E6 E9) for the magic-port stdout
-// convention. Everything else throws NotImplementedException so the
-// harness can immediately tell what real opcode is hit by test ROMs.
+// Phase 24.2.2 deliverable: full MOV instruction set + segment override
+// prefixes + operand fetch/store helpers built on the ModR/M decoder
+// from 24.2.1. Subsequent phases (24.2.3 ALU, 24.2.4 Tom Harte) layer
+// on the same helper foundation.
 //
-// Phase 24.2 will replace this with the full 256-opcode handler — at
-// which point this file may stay as the "Apr86-port" reference oracle
-// for lockstep diffing, with bug fixes for AAM/AAD/IMUL etc. flagged
-// in MD/design/24-8086-port-plan.md §1.
+// Style:
+//   - Fetch advances IP via FetchByte/FetchWord (modular within the
+//     16-bit IP counter; CS held constant per fetch).
+//   - Memory access respects an optional segment override prefix
+//     (0x26/0x2E/0x36/0x3E for ES/CS/SS/DS); falls back to the
+//     ModR/M default segment from ComputeEffectiveAddress.
+//   - Anything not yet implemented throws NotImplementedException
+//     with the offending opcode + CS:IP for fast triage.
 
 using AprX86.Cli.Memory;
 
@@ -40,58 +44,268 @@ public sealed class X86LegacyCpu : IX86CpuBackend
         _halted = false;
     }
 
+    // ---------------- Instruction fetch ----------------
+
+    private byte FetchByte()
+    {
+        byte b = _mem.ReadByte(X86Memory.LinearAddr(_state.CS, _state.IP));
+        _state.IP++;
+        return b;
+    }
+
+    private ushort FetchWord()
+    {
+        // 8086 fetches little-endian; two byte fetches.
+        byte lo = FetchByte();
+        byte hi = FetchByte();
+        return (ushort)(lo | (hi << 8));
+    }
+
+    /// <summary>Fetch the displacement (0/1/2 bytes per ModR/M).</summary>
+    private ushort FetchDisplacement(int dispBytes)
+    {
+        return dispBytes switch
+        {
+            0 => 0,
+            1 => (ushort)(sbyte)FetchByte(),     // sign-extend disp8 to 16-bit
+            2 => FetchWord(),
+            _ => throw new InvalidOperationException($"unexpected displacement byte count {dispBytes}"),
+        };
+    }
+
+    // ---------------- Memory access with segment override ----------------
+
+    private byte ReadMem8(SegReg seg, ushort offset)
+        => _mem.ReadByte(X86Memory.LinearAddr(_state.GetSeg(seg), offset));
+
+    private void WriteMem8(SegReg seg, ushort offset, byte value)
+        => _mem.WriteByte(X86Memory.LinearAddr(_state.GetSeg(seg), offset), value);
+
+    private ushort ReadMem16(SegReg seg, ushort offset)
+        => _mem.ReadWord(X86Memory.LinearAddr(_state.GetSeg(seg), offset));
+
+    private void WriteMem16(SegReg seg, ushort offset, ushort value)
+        => _mem.WriteWord(X86Memory.LinearAddr(_state.GetSeg(seg), offset), value);
+
     /// <summary>
-    /// Phase 24.1 stub — executes the tiny set of opcodes needed to verify
-    /// the harness loop + memory + screenshot path can run end-to-end.
-    /// Real instruction set lands in phase 24.2.
+    /// Read an 8-bit operand specified by ModR/M (register or memory).
+    /// Caller has already fetched displacement bytes.
     /// </summary>
+    private byte ReadRm8(ModRmFields f, ushort disp, SegReg? segOverride)
+    {
+        if (f.IsRegister) return _state.GetReg8(f.RM);
+        var ea = ModRm.ComputeEffectiveAddress(f, disp, _state);
+        return ReadMem8(segOverride ?? ea.DefaultSegment, ea.Offset);
+    }
+
+    private void WriteRm8(ModRmFields f, ushort disp, SegReg? segOverride, byte value)
+    {
+        if (f.IsRegister) { _state.SetReg8(f.RM, value); return; }
+        var ea = ModRm.ComputeEffectiveAddress(f, disp, _state);
+        WriteMem8(segOverride ?? ea.DefaultSegment, ea.Offset, value);
+    }
+
+    private ushort ReadRm16(ModRmFields f, ushort disp, SegReg? segOverride)
+    {
+        if (f.IsRegister) return _state.GetReg16(f.RM);
+        var ea = ModRm.ComputeEffectiveAddress(f, disp, _state);
+        return ReadMem16(segOverride ?? ea.DefaultSegment, ea.Offset);
+    }
+
+    private void WriteRm16(ModRmFields f, ushort disp, SegReg? segOverride, ushort value)
+    {
+        if (f.IsRegister) { _state.SetReg16(f.RM, value); return; }
+        var ea = ModRm.ComputeEffectiveAddress(f, disp, _state);
+        WriteMem16(segOverride ?? ea.DefaultSegment, ea.Offset, value);
+    }
+
+    // ---------------- Step() — single-instruction execution ----------------
+
     public int Step()
     {
         if (_halted) return 0;
 
-        int linearIp = X86Memory.LinearAddr(_state.CS, _state.IP);
-        byte opcode = _mem.ReadByte(linearIp);
+        // Prefix loop — segment override is the only prefix we honour
+        // in phase 24.2.2 (REP / LOCK come with string ops in 24.2.3+).
+        SegReg? segOverride = null;
+        byte opcode;
+        while (true)
+        {
+            opcode = FetchByte();
+            switch (opcode)
+            {
+                case 0x26: segOverride = SegReg.ES; continue;
+                case 0x2E: segOverride = SegReg.CS; continue;
+                case 0x36: segOverride = SegReg.SS; continue;
+                case 0x3E: segOverride = SegReg.DS; continue;
+                default: goto exec;
+            }
+        }
+    exec:
 
+        return Execute(opcode, segOverride);
+    }
+
+    /// <summary>
+    /// Dispatch a single (already-fetched, prefix-stripped) opcode.
+    /// Phase 24.2.2 implements: NOP / HLT / OUT 0xE9 / JMP far / full
+    /// MOV set. Anything else throws with diagnostic info.
+    /// </summary>
+    private int Execute(byte opcode, SegReg? segOverride)
+    {
+        // ===== NOP / HLT / magic-port stubs / JMP far =====
         switch (opcode)
         {
             case 0x90:    // NOP
-                _state.IP++;
                 return 3;
 
             case 0xF4:    // HLT
                 _halted = true;
                 return 2;
 
-            case 0xE6:    // OUT imm8, AL — phase 24.1 magic-port stub
+            case 0xE6:    // OUT imm8, AL — magic-port stub
             {
-                byte port = _mem.ReadByte(X86Memory.LinearAddr(_state.CS, (ushort)(_state.IP + 1)));
-                _state.IP += 2;
-                if (port == 0xE9)
-                {
-                    // Bochs/qemu convention: OUT 0xE9 emits AL as a debug char.
-                    Console.Write((char)_state.A.L);
-                }
-                else if (port == 0xF4)
-                {
-                    // qemu isa-debug-exit: AL=0 → success exit; AL≠0 → fail.
-                    _halted = true;
-                }
+                byte port = FetchByte();
+                if      (port == 0xE9) Console.Write((char)_state.A.L);
+                else if (port == 0xF4) _halted = true;
                 return 8;
             }
 
-            case 0xEA:    // JMP far ptr16:16 — useful for entry-jump prologues
+            case 0xEA:    // JMP far ptr16:16
             {
-                int b = X86Memory.LinearAddr(_state.CS, (ushort)(_state.IP + 1));
-                ushort newIp = (ushort)(_mem.ReadByte(b) | (_mem.ReadByte(b + 1) << 8));
-                ushort newCs = (ushort)(_mem.ReadByte(b + 2) | (_mem.ReadByte(b + 3) << 8));
+                ushort newIp = FetchWord();
+                ushort newCs = FetchWord();
                 _state.IP = newIp;
                 _state.CS = newCs;
                 return 15;
             }
-
-            default:
-                throw new NotImplementedException(
-                    $"X86LegacyCpu phase 24.1 stub: opcode 0x{opcode:X2} at CS:IP={_state.CS:X4}:{_state.IP:X4} not implemented yet (full ISA in phase 24.2).");
         }
+
+        // ===== MOV r/m8, r8 (0x88)  /  MOV r/m16, r16 (0x89)
+        //       MOV r8, r/m8 (0x8A)  /  MOV r16, r/m16 (0x8B) =====
+        if (opcode is 0x88 or 0x89 or 0x8A or 0x8B)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+
+            bool isWord    = (opcode & 0x01) != 0;     // bit 0 of opcode = w
+            bool toReg     = (opcode & 0x02) != 0;     // bit 1 of opcode = d
+            // toReg=false: r/m ← reg ;   toReg=true: reg ← r/m
+
+            if (isWord)
+            {
+                if (toReg)
+                {
+                    ushort src = ReadRm16(f, disp, segOverride);
+                    _state.SetReg16(f.Reg, src);
+                }
+                else
+                {
+                    ushort src = _state.GetReg16(f.Reg);
+                    WriteRm16(f, disp, segOverride, src);
+                }
+            }
+            else
+            {
+                if (toReg)
+                {
+                    byte src = ReadRm8(f, disp, segOverride);
+                    _state.SetReg8(f.Reg, src);
+                }
+                else
+                {
+                    byte src = _state.GetReg8(f.Reg);
+                    WriteRm8(f, disp, segOverride, src);
+                }
+            }
+            return f.IsRegister ? 2 : 9;       // approx 8086 cycles
+        }
+
+        // ===== MOV r/m16, sreg (0x8C)  /  MOV sreg, r/m16 (0x8E) =====
+        if (opcode is 0x8C or 0x8E)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+            // reg field encodes sreg (only low 2 bits used; high bit reserved
+            // on 8086 — accept all but only low 2 bits route to GetSeg).
+            var seg = (SegReg)(f.Reg & 0b11);
+
+            if (opcode == 0x8C)        // r/m16 ← sreg
+            {
+                ushort src = _state.GetSeg(seg);
+                WriteRm16(f, disp, segOverride, src);
+            }
+            else                        // sreg ← r/m16
+            {
+                ushort src = ReadRm16(f, disp, segOverride);
+                _state.SetSeg(seg, src);
+            }
+            return f.IsRegister ? 2 : 12;
+        }
+
+        // ===== MOV r8, imm8  (0xB0-0xB7) =====
+        if (opcode >= 0xB0 && opcode <= 0xB7)
+        {
+            byte imm = FetchByte();
+            _state.SetReg8(opcode - 0xB0, imm);
+            return 4;
+        }
+
+        // ===== MOV r16, imm16 (0xB8-0xBF) =====
+        if (opcode >= 0xB8 && opcode <= 0xBF)
+        {
+            ushort imm = FetchWord();
+            _state.SetReg16(opcode - 0xB8, imm);
+            return 4;
+        }
+
+        // ===== MOV AL, [disp16]    (0xA0)
+        //       MOV AX, [disp16]    (0xA1)
+        //       MOV [disp16], AL    (0xA2)
+        //       MOV [disp16], AX    (0xA3) =====
+        if (opcode is 0xA0 or 0xA1 or 0xA2 or 0xA3)
+        {
+            ushort addr = FetchWord();
+            SegReg seg = segOverride ?? SegReg.DS;     // direct addressing defaults DS
+            switch (opcode)
+            {
+                case 0xA0: _state.A.L = ReadMem8(seg, addr); break;
+                case 0xA1: _state.A.X = ReadMem16(seg, addr); break;
+                case 0xA2: WriteMem8(seg, addr, _state.A.L); break;
+                case 0xA3: WriteMem16(seg, addr, _state.A.X); break;
+            }
+            return 10;
+        }
+
+        // ===== MOV r/m8, imm8  (0xC6, ModR/M reg=000)
+        //       MOV r/m16, imm16 (0xC7, ModR/M reg=000) =====
+        if (opcode is 0xC6 or 0xC7)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+            // ModR/M reg field MUST be 0 for MOV r/m, imm
+            if (f.Reg != 0)
+                throw new NotImplementedException(
+                    $"opcode 0x{opcode:X2} with ModR/M reg={f.Reg} is reserved/unused on 8086 at CS:IP={_state.CS:X4}:{(ushort)(_state.IP - 2):X4}");
+
+            if (opcode == 0xC6)
+            {
+                byte imm = FetchByte();
+                WriteRm8(f, disp, segOverride, imm);
+            }
+            else
+            {
+                ushort imm = FetchWord();
+                WriteRm16(f, disp, segOverride, imm);
+            }
+            return f.IsRegister ? 4 : 10;
+        }
+
+        // ===== Anything else = not implemented yet =====
+        throw new NotImplementedException(
+            $"X86LegacyCpu: opcode 0x{opcode:X2} at CS:IP={_state.CS:X4}:{(ushort)(_state.IP - 1):X4} not implemented yet (expected by phase 24.2.{(opcode is 0xC6 or 0xC7 ? 2 : 3)}+).");
     }
 }
