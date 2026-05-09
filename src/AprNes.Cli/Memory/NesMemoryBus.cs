@@ -88,11 +88,15 @@ namespace AprNes.Cli.Memory
 
         private struct PageEntry
         {
-            public RegionKind Kind;     // 1 byte (default Unmapped = 0)
-            public bool SmcNotify;      // 1 byte
-            public ushort Start;        // 2 bytes — region start (always < 0x10000)
-            public ushort MirrorMask;   // 2 bytes — 0 = no mirror
-            // 8-byte struct (1+1+2+2 + 2 padding); cache-line friendly.
+            public RegionKind Kind;          // 1 byte (default Unmapped = 0)
+            public bool SmcNotify;           // 1 byte
+            public byte AllowedWidthsMask;   // 1 byte — N7: bit 0 = 8-bit,
+                                              //   bit 1 = 16-bit, bit 2 = 32-bit;
+                                              //   0 = unspecified (any width OK).
+            public byte _pad;                // 1 byte explicit padding
+            public ushort Start;             // 2 bytes — region start (always < 0x10000)
+            public ushort MirrorMask;        // 2 bytes — 0 = no mirror
+            // 8-byte struct (1+1+1+1+2+2); cache-line friendly.
         }
 
         private struct RegionEntry
@@ -181,6 +185,10 @@ namespace AprNes.Cli.Memory
             // Reset to all-Unmapped (default for the struct).
             Array.Clear(_pageTable, 0, _pageTable.Length);
 
+            // N7 — read allowed_widths from spec for IsAccessWidthAllowed
+            // queries. NES is uniformly 8-bit so most NES specs declare
+            // [8]; we still parse it generically so the same code can be
+            // lifted for GBA / GB-DMG.
             for (int p = 0; p < PageCount; p++)
             {
                 int pageAddr = p << PageShift;
@@ -189,10 +197,28 @@ namespace AprNes.Cli.Memory
                     ref var r = ref _regions[i];
                     if (pageAddr >= r.Start && pageAddr < r.End)
                     {
+                        // Default mask 0 = any width. If the spec declares
+                        // allowed_widths, encode them: 8→bit0, 16→bit1, 32→bit2.
+                        byte widthMask = 0;
+                        var specRegion = FindSpecRegionByStart(r.Start);
+                        if (specRegion?.AllowedWidths is { } widths)
+                        {
+                            foreach (var w in widths)
+                            {
+                                widthMask |= w switch
+                                {
+                                    8 => (byte)0x01,
+                                    16 => (byte)0x02,
+                                    32 => (byte)0x04,
+                                    _ => (byte)0x00,
+                                };
+                            }
+                        }
                         _pageTable[p] = new PageEntry
                         {
                             Kind = r.Kind,
                             SmcNotify = r.SmcNotify,
+                            AllowedWidthsMask = widthMask,
                             Start = (ushort)r.Start,
                             MirrorMask = r.MirrorMask,
                         };
@@ -200,6 +226,23 @@ namespace AprNes.Cli.Memory
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// N7 — locate the original MachineSpec.MemoryRegion entry that
+        /// corresponds to a runtime RegionEntry. Used at boot to look up
+        /// v2 fields (allowed_widths, wait_states) that the runtime
+        /// RegionEntry doesn't carry. O(N) over <see cref="_regions"/>; only
+        /// called during table build, not on hot path.
+        /// </summary>
+        private MemoryRegion? FindSpecRegionByStart(int start)
+        {
+            if (_machineSpec is null) return null;
+            foreach (var sr in _machineSpec.MemoryRegions)
+            {
+                if ((int)sr.AddrStart == start) return sr;
+            }
+            return null;
         }
 
         private static RegionKind ClassifyRegion(MemoryRegion r)
@@ -309,6 +352,70 @@ namespace AprNes.Cli.Memory
             int s = _pendingStallCycles;
             _pendingStallCycles = 0;
             return s;
+        }
+
+        // --- N7 query APIs (spec-declared values, not yet enforced on hot path) ----
+
+        /// <summary>
+        /// N7.1 — fastmem query: if <paramref name="addr"/> resolves to a
+        /// host-array-backed region (currently only the 2KB internal WRAM),
+        /// return the underlying byte[] + the offset within it. Block-JIT
+        /// emitters can use this to inline a GEP-store and skip the bus
+        /// dispatch entirely.
+        ///
+        /// Returns false for IO regions (PPU/APU registers — side effects)
+        /// and for the cart_prg region (mapper bank-switching means no
+        /// stable host pointer).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryGetHostPointer(ushort addr, out byte[]? hostArray, out int offset)
+        {
+            ref var p = ref _pageTable[addr >> PageShift];
+            if (p.Kind == RegionKind.Wram)
+            {
+                offset = (addr - p.Start) & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0xFFFF);
+                hostArray = _wram;
+                return true;
+            }
+            hostArray = null;
+            offset = 0;
+            return false;
+        }
+
+        /// <summary>
+        /// N7.2 — query whether <paramref name="widthBits"/> (8 / 16 / 32)
+        /// is permitted at <paramref name="addr"/> per the spec's
+        /// <c>allowed_widths</c>. NES regions all declare [8] so non-8-bit
+        /// queries return false; if the spec doesn't declare allowed_widths
+        /// for a region, returns true (no constraint).
+        ///
+        /// Not enforced on hot path — callers (tests, future width-checking
+        /// debug mode, GBA halfword-write splitters) opt in.
+        /// </summary>
+        public bool IsAccessWidthAllowed(ushort addr, int widthBits)
+        {
+            ref var p = ref _pageTable[addr >> PageShift];
+            if (p.AllowedWidthsMask == 0) return true;     // unspecified → any
+            byte bit = widthBits switch
+            {
+                8  => 0x01,
+                16 => 0x02,
+                32 => 0x04,
+                _  => 0x00,
+            };
+            return (p.AllowedWidthsMask & bit) != 0;
+        }
+
+        /// <summary>
+        /// N7.3 — placeholder for spec-declared wait states. NES has none
+        /// (returns 0/0). GBA's bus will override this when N8 lands —
+        /// cart_rom + EWRAM declare wait_states in spec/machines/gba.json
+        /// already (per N4.5).
+        /// </summary>
+        public (int seq, int nonseq) GetWaitStates(ushort addr)
+        {
+            _ = addr;
+            return (0, 0);
         }
 
         // --- CPU bus dispatch ----------------------------------------------
