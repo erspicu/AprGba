@@ -131,6 +131,31 @@ public class MachineSpecTests
         Assert.Equal("lazy", nes.Cpu.IsaMetadata.PcUpdatePolicy);
     }
 
+    /// <summary>
+    /// N3.3 — documents the spec format limitation for per-opcode cycles.
+    /// Current 2A03 spec declares cycles.form per mnemonic (e.g. ORA "3m")
+    /// regardless of addressing mode. LegacyCpu's oracle has per-opcode
+    /// cycles (ORA #imm=2, ORA zp=3, ORA abs=4, ORA (zp,X)=6, ORA (zp),Y=5+,
+    /// ORA zp,X=4, ORA abs,Y=4+, ORA abs,X=4+). Because spec doesn't encode
+    /// the addressing-mode dimension, walking decoder+parsing cycles.form
+    /// produces a 145/256-opcode mismatch vs the oracle.
+    ///
+    /// Pragmatic fix would require restructuring spec to either:
+    /// (a) one instruction-def per (mnemonic, addressing-mode) — 8 → 64
+    ///     entries for ALU class; 4-5× spec growth.
+    /// (b) per-format cycle_table mapping bbb selector → cycle count.
+    ///
+    /// Neither is in N3 scope. NesJsonCpu keeps its hardcoded
+    /// s_cycleTable[256] for now (faithful LegacyCpu mirror); block-JIT
+    /// uses spec.form values which are coarser but adequate for sub-test
+    /// timing tolerances.
+    /// </summary>
+    [Fact(Skip = "Documents known limitation — spec lacks per-addressing-mode cycle granularity. See test summary.")]
+    public void Mos6502CycleTable_DerivedFromSpec_DivergesFromOracle()
+    {
+        // Intentionally skipped — see XML doc comment.
+    }
+
     [Fact]
     public void RegionTypeDefaults_AreSensible()
     {

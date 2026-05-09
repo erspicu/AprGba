@@ -95,11 +95,33 @@ NesMemoryBus.ReadByte/WriteByte 從 `Func<addr> → handler` 寫死改成 region
 
 GB / GBA bus 不動（perf 敏感、分開做）。
 
-### N3.3 Per-instr cycle table from spec
+### N3.3 Per-instr cycle table from spec — **BLOCKED** (spec format limit)
 
-NesJsonCpu 構造時 walk `Main` decoder 256 個 opcodes、parse 每個 spec.cycles.form，build 一個 `byte[256]` 表（一次性、O(N)）。replace `s_cycleTable[]` hardcoded。
+嘗試結果：spec-derived cycles 對 256 個 opcode 跟 LegacyCpu oracle 比對，
+**145 個不一致**。原因：spec.cycles.form 是 per-mnemonic（每個 ALU op 一
+個 form），不分 addressing mode。LegacyCpu 是 per-opcode（256 個獨立值）。
 
-驗證：spec-derived 表跟 LegacyCpu 的 hardcoded `cycle_tableData` byte-for-byte 對比 — 若有差異標 diagnostic 並決定怎處理（可能 spec 的 cycle.form 對某些 opcode 寫得不準）。
+例子：ORA spec `"3m"` → 解析成 3 cycles。但實際 6502:
+- `$09` ORA #imm = 2 cycles
+- `$05` ORA zp = 3 cycles
+- `$0D` ORA abs = 4 cycles
+- `$01` ORA (zp,X) = 6 cycles
+- ...
+
+要支援 per-opcode cycles 需要 spec format 重構：
+
+(a) 每個 (mnemonic, addressing-mode) 各自 instruction-def — ALU 8 → 64
+    entries (4-5× spec 膨脹)
+(b) 加 `cycle_table` 在 InstructionFormat — bbb selector 對應 cycle count
+    table
+
+**兩個都不在 N3 scope**。NesJsonCpu 繼續用 hardcoded `s_cycleTable[256]`
+（LegacyCpu 副本作 oracle 一致）；block-JIT 用 spec.form coarser 值
+（subtest 容忍度內 OK）。
+
+對應 test：`MachineSpecTests.Mos6502CycleTable_DerivedFromSpec_DivergesFromOracle`
+標 `[Fact(Skip)]` + XML doc 解釋此限制 — 未來 spec 改進後可解 skip 驗證
+新 spec 通過。
 
 ### N3.4 Branch-taken / page-cross cycle nuances
 
