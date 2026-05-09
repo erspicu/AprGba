@@ -443,12 +443,14 @@ FodyWeavers.xsd
 # API key) stays local.
 /tools/knowledgebase/config.json
 
-# Old-project reference clones — local-only sources for the GB / NES
-# oracles ported into AprGb.Cli / AprNes.Cli respectively. Subdivided:
+# Old-project reference clones — local-only sources used as oracles /
+# reference for the JSON-driven AprCpu ports. Subdivided:
 #   OldProject/AprGBemu — erspicu/AprGBemu (LR35902 oracle, commit 2ee0e13)
 #   OldProject/AprNes   — erspicu/AprNes (Ricoh 2A03 oracle, fcbbb23 = the
 #                         last "post-hoc cycle compensation" timing model
 #                         before the per-master-clock refactor)
+#   OldProject/Apr86    — erspicu/Apr86 (Intel 8086 emulator, 2018 — staged
+#                         as reference oracle for the future 4th-CPU port)
 /OldProject/
 
 # Big GB test-rom zips / source clones — only blargg-cpu/ is tracked
