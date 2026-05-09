@@ -38,11 +38,14 @@ public static class X86_16Emitters
         // loop until an external interrupt clears it.
         reg.Register(new X86HaltEmitter());
 
-        // 24.6.5 — immediate fetch + field-dispatched register write.
+        // 24.6.5 — immediate fetch + field-dispatched register read/write.
         reg.Register(new X86FetchImm8Emitter());
         reg.Register(new X86FetchImm16Emitter());
         reg.Register(new X86WriteReg8FieldEmitter());
         reg.Register(new X86WriteReg16FieldEmitter());
+        reg.Register(new X86ReadReg8FieldEmitter());
+        reg.Register(new X86ReadReg16FieldEmitter());
+        reg.Register(new X86FetchModRmEmitter());
 
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
@@ -449,5 +452,165 @@ internal sealed class X86WriteReg16FieldEmitter : IMicroOpEmitter
         ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+// ============================================================================
+// x86_read_reg8_field — runtime-dispatched 8-bit read keyed off a 3-bit
+// instruction-word field or a cached value (e.g. modrm_reg from the
+// previous ModR/M decode step). Caches the result in step.out.
+//
+// JSON shape:
+//   { "op": "x86_read_reg8_field", "field": "<name>", "out": "<name>" }
+// ============================================================================
+
+internal sealed class X86ReadReg8FieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_read_reg8_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var outName   = step.Raw.GetProperty("out").GetString()!;
+
+        var i8  = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+
+        var sel = ctx.Resolve(fieldName);
+
+        // Result is selected via a switch + phi — each arm produces its
+        // own i8 value and they merge into a single SSA value at the join.
+        var endBB     = ctx.Function.AppendBasicBlock($"rreg8_{outName}_end");
+        var defaultBB = ctx.Function.AppendBasicBlock($"rreg8_{outName}_default");
+        var arms      = new LLVMBasicBlockRef[8];
+        var armVals   = new LLVMValueRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"rreg8_{outName}_{i}");
+
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            armVals[i] = X86_16Emitters.ReadGpr8(ctx, i, $"rreg8_{outName}_{i}_v");
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        var defVal = LLVMValueRef.CreateConstInt(i8, 0, false);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i8, outName);
+        var incVals   = new LLVMValueRef[9];
+        var incBlocks = new LLVMBasicBlockRef[9];
+        for (int i = 0; i < 8; i++) { incVals[i] = armVals[i]; incBlocks[i] = arms[i]; }
+        incVals[8] = defVal; incBlocks[8] = defaultBB;
+        phi.AddIncoming(incVals, incBlocks, 9);
+
+        ctx.Values[outName] = phi;
+    }
+}
+
+// ============================================================================
+// x86_read_reg16_field — runtime-dispatched 16-bit read keyed off a 3-bit
+// instruction-word field or a cached value. Caches the result in step.out.
+//
+// JSON shape:
+//   { "op": "x86_read_reg16_field", "field": "<name>", "out": "<name>" }
+// ============================================================================
+
+internal sealed class X86ReadReg16FieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_read_reg16_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var outName   = step.Raw.GetProperty("out").GetString()!;
+
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var sel = ctx.Resolve(fieldName);
+
+        var endBB     = ctx.Function.AppendBasicBlock($"rreg16_{outName}_end");
+        var defaultBB = ctx.Function.AppendBasicBlock($"rreg16_{outName}_default");
+        var arms      = new LLVMBasicBlockRef[8];
+        var armVals   = new LLVMValueRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"rreg16_{outName}_{i}");
+
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            armVals[i] = X86_16Emitters.ReadGpr16(ctx, i, $"rreg16_{outName}_{i}_v");
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        var defVal = LLVMValueRef.CreateConstInt(i16, 0, false);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i16, outName);
+        var incVals   = new LLVMValueRef[9];
+        var incBlocks = new LLVMBasicBlockRef[9];
+        for (int i = 0; i < 8; i++) { incVals[i] = armVals[i]; incBlocks[i] = arms[i]; }
+        incVals[8] = defVal; incBlocks[8] = defaultBB;
+        phi.AddIncoming(incVals, incBlocks, 9);
+
+        ctx.Values[outName] = phi;
+    }
+}
+
+// ============================================================================
+// x86_fetch_modrm — read the ModR/M byte at CS:IP, advance IP by 1, and
+// stash three sub-fields in the value cache:
+//   modrm_mod  i32  bits 7:6  (00=mem-no-disp, 01=mem-disp8, 10=mem-disp16, 11=reg)
+//   modrm_reg  i32  bits 5:3  (3-bit register field — usually the "other" operand)
+//   modrm_rm   i32  bits 2:0  (3-bit r/m field — register or memory specifier)
+//
+// Subsequent steps look these up via ctx.Resolve("modrm_reg") etc.
+//
+// 24.6.5b — only the mod=11 (register-direct) case is exercised. mod=00/01/10
+// memory paths land in 24.6.5c with effective-address computation.
+//
+// JSON shape: { "op": "x86_fetch_modrm" }   — no args; outputs are fixed.
+// ============================================================================
+
+internal sealed class X86FetchModRmEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fetch_modrm";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+
+        // Fetch the byte and zero-extend to i32 for field-extraction shifts.
+        var byteVal = X86_16Emitters.FetchImm8(ctx, "modrm_byte");
+        var asI32   = ctx.Builder.BuildZExt(byteVal, i32, "modrm_z");
+
+        // mod = (byte >> 6) & 3
+        var modShift = ctx.Builder.BuildLShr(asI32,
+            LLVMValueRef.CreateConstInt(i32, 6, false), "modrm_mod_sh");
+        var mod = ctx.Builder.BuildAnd(modShift,
+            LLVMValueRef.CreateConstInt(i32, 3, false), "modrm_mod");
+
+        // reg = (byte >> 3) & 7
+        var regShift = ctx.Builder.BuildLShr(asI32,
+            LLVMValueRef.CreateConstInt(i32, 3, false), "modrm_reg_sh");
+        var regV = ctx.Builder.BuildAnd(regShift,
+            LLVMValueRef.CreateConstInt(i32, 7, false), "modrm_reg");
+
+        // rm = byte & 7
+        var rm = ctx.Builder.BuildAnd(asI32,
+            LLVMValueRef.CreateConstInt(i32, 7, false), "modrm_rm");
+
+        ctx.Values["modrm_mod"] = mod;
+        ctx.Values["modrm_reg"] = regV;
+        ctx.Values["modrm_rm"]  = rm;
     }
 }

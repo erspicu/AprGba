@@ -43,6 +43,94 @@
           ]
         }
       ]
+    },
+
+    {
+      "name":  "MovRm8R8",
+      "comment": "0x88 MOV r/m8, r8 — copy r8 (modrm.reg) → r/m8 (modrm.rm). 24.6.5b restricts to mod=11 (register-direct); mod=00/01/10 memory forms land in 24.6.5c with effective-address computation.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0x88",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "2" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_read_reg8_field",  "field": "modrm_reg", "out": "src" },
+            { "op": "x86_write_reg8_field", "field": "modrm_rm",  "in":  ["src"] }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovRm16R16",
+      "comment": "0x89 MOV r/m16, r16 — copy r16 (modrm.reg) → r/m16 (modrm.rm). mod=11-only at 24.6.5b.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0x89",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "2" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "src" },
+            { "op": "x86_write_reg16_field", "field": "modrm_rm",  "in":  ["src"] }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovR8Rm8",
+      "comment": "0x8A MOV r8, r/m8 — copy r/m8 (modrm.rm) → r8 (modrm.reg). mod=11-only at 24.6.5b.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0x8A",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "2" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_read_reg8_field",  "field": "modrm_rm",  "out": "src" },
+            { "op": "x86_write_reg8_field", "field": "modrm_reg", "in":  ["src"] }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovR16Rm16",
+      "comment": "0x8B MOV r16, r/m16 — copy r/m16 (modrm.rm) → r16 (modrm.reg). mod=11-only at 24.6.5b.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0x8B",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "2" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_read_reg16_field",  "field": "modrm_rm",  "out": "src" },
+            { "op": "x86_write_reg16_field", "field": "modrm_reg", "in":  ["src"] }
+          ]
+        }
+      ]
     }
 
   ]
