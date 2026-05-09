@@ -119,9 +119,30 @@ per design doc #21 §5 + N3 實踐結論：
 - ✓ N3.0 design doc #21
 - ✓ N3.1 interrupt vectors from MachineSpec
 - ✓ N3.2 NES memory bus dispatch via MachineSpec
-- ⚠️ N3.3 per-instr cycle table from spec — BLOCKED + documented
+- ✓ ~~N3.3 per-instr cycle table from spec — BLOCKED + documented~~
+       **RESOLVED 2026-05-09 後段**（詳見 §下方 update + commit `027fe79`/`c806358`）
 - ✓ N3.4 perf bench + ratio doc（本文件）
 
 Outstanding：spec format 改進（per-addressing-mode cycles）若想推進可開
 N4 系列。或暫停，做別的方向（N5 通用 lockstep diff、N6 加第 4 個 CPU、
 等等）。
+
+---
+
+> **2026-05-09 (later) update — N3.3 RESOLVED**
+>
+> 本 doc §1.1 提到的「N3 結束時 cycle table 撞上結構性 blocker」已在
+> 同日後段補完（路線採 §2.3 的方向 (b) — per-format cycle_table）：
+>
+> - commit `027fe79` — schema break + cc=01 conversion (64 opcodes)
+> - commit `c806358` — 剩餘 7 group 全轉 + drop hardcoded oracle
+>
+> 本 doc §2.3 結論「方向 (b) 比較合理，但留作 future N4+ 範圍」過時 —
+> 實際路徑：N4/N5/N7/N8 把 framework 其他維度推到位後，回頭發現 N3.3
+> 的 schema 改造其實很 trivial（12 行 resolver C# + mechanical spec
+> 填表），跟「結構性限制」標籤的悲觀感受不符。
+>
+> Per-instr cycle table declarative ratio: 60% → **100%**（§2.1 表格）
+> Framework 整體 ratio: 70% (N3) → 78% (N4) → **~85%** (N3.3-finally)
+>
+> 詳細紀錄：`MD/performance/202605092000-n33-full-spec-cycles.md`

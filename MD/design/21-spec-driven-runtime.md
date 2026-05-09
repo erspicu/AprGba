@@ -196,3 +196,25 @@ Page-cross extra: spec 加新 field `cycle_nuances.page_cross_addr_modes: ["abs_
 > N4 系列的設計 + closeout 紀錄分別在：
 > - `MD/design/22-memory-spec-v2.md` — schema v2 design
 > - `MD/performance/202605091900-n4-memory-spec-v2.md` — 3-run bench + ratio
+
+---
+
+> **2026-05-09 (later) update — N3.3 BLOCKED → RESOLVED**
+>
+> N3.3「per-(mnemonic, addressing-mode) cycle granularity」已完整收掉。
+> 兩階段：
+> 1. commit `027fe79` — 加 `cycles.table` schema (CycleTable record)，
+>    cc=01 ALU group 64 opcodes 轉換完成
+> 2. commit `c806358` — 剩餘 7 個 group 全部轉換 + 12 個 KIL form 修正；
+>    `NesJsonCpu.s_cycleTable[256]` hardcoded oracle 從 codebase 完全
+>    刪除，改成 `BuildSpecCycleTable(decoder, cyclesPerSpecUnit)` 在
+>    constructor 動態 derive。
+>
+> N3.3 §「Pragmatic fix would require restructuring spec...」段落過時 —
+> 採用 **(b) per-format cycle_table** 路徑（Gemini 諮詢時推薦的選項），
+> spec 大小幾乎不變，resolver 邏輯只需 12 行 C#。
+>
+> Per-instr cycle table declarative ratio: 60% → **100%**。Framework
+> 整體 ratio: ~78% → **~85%**。
+>
+> 詳細紀錄：`MD/performance/202605092000-n33-full-spec-cycles.md`
