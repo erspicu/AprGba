@@ -304,8 +304,148 @@ public sealed class X86LegacyCpu : IX86CpuBackend
             return f.IsRegister ? 4 : 10;
         }
 
+        // ===== ALU groups (0x00-0x3D, 8 ops × 6 forms) =====
+        //
+        // Each ALU group occupies 8 consecutive opcodes (low 3 bits of
+        // (op >> 3) selects one of {ADD, OR, ADC, SBB, AND, SUB, XOR, CMP}).
+        // Within each group the low 3 bits of the opcode select the form:
+        //
+        //   +0  r/m8, r8     (0x00, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38)
+        //   +1  r/m16, r16
+        //   +2  r8, r/m8
+        //   +3  r16, r/m16
+        //   +4  AL, imm8     (0x04, 0x0C, 0x14, 0x1C, 0x24, 0x2C, 0x34, 0x3C)
+        //   +5  AX, imm16
+        //   +6 / +7 reserved (some are SREG push/pop in opcode space; not
+        //                    part of the ALU pattern)
+        //
+        // We detect ALU-pattern opcodes by `op & 0xC6 == 0` (i.e. low 6
+        // bits are 0xx0xx, where the high two bits select op class — but
+        // this gets fiddly; explicit range check is clearer and faster).
+        if ((opcode & 0xC0) == 0x00 && (opcode & 0x06) != 0x06)
+        {
+            AluOp aluOp = (AluOp)((opcode >> 3) & 0x07);
+            int form = opcode & 0x07;
+            return ExecuteAluGroup(aluOp, form, segOverride);
+        }
+
+        // ===== Group opcodes 0x80/0x81/0x82/0x83 — r/m, imm =====
+        // ModR/M reg field selects the AluOp (0..7).
+        //   0x80: r/m8, imm8
+        //   0x81: r/m16, imm16
+        //   0x82: r/m8, imm8 (sign-extended; identical to 0x80 on 8086)
+        //   0x83: r/m16, imm8 sign-extended to 16-bit
+        if (opcode is 0x80 or 0x81 or 0x82 or 0x83)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+            AluOp aluOp = (AluOp)f.Reg;
+
+            bool isWord = (opcode == 0x81 || opcode == 0x83);
+            if (isWord)
+            {
+                ushort imm;
+                if (opcode == 0x83)
+                    imm = (ushort)(sbyte)FetchByte();   // sign-extended imm8
+                else
+                    imm = FetchWord();
+                ushort dst = ReadRm16(f, disp, segOverride);
+                ushort res = X86Alu.Execute16(aluOp, dst, imm, _state);
+                if (!X86Alu.IsCompareOnly(aluOp))
+                    WriteRm16(f, disp, segOverride, res);
+            }
+            else
+            {
+                byte imm = FetchByte();
+                byte dst = ReadRm8(f, disp, segOverride);
+                byte res = X86Alu.Execute8(aluOp, dst, imm, _state);
+                if (!X86Alu.IsCompareOnly(aluOp))
+                    WriteRm8(f, disp, segOverride, res);
+            }
+            return f.IsRegister ? 4 : 17;
+        }
+
         // ===== Anything else = not implemented yet =====
         throw new NotImplementedException(
-            $"X86LegacyCpu: opcode 0x{opcode:X2} at CS:IP={_state.CS:X4}:{(ushort)(_state.IP - 1):X4} not implemented yet (expected by phase 24.2.{(opcode is 0xC6 or 0xC7 ? 2 : 3)}+).");
+            $"X86LegacyCpu: opcode 0x{opcode:X2} at CS:IP={_state.CS:X4}:{(ushort)(_state.IP - 1):X4} not implemented yet.");
+    }
+
+    /// <summary>
+    /// Dispatch the 6 form variants of an ALU group (forms +0..+5).
+    /// Forms +6/+7 inside the same byte range are NOT ALU — caller
+    /// must filter them out before calling this.
+    /// </summary>
+    private int ExecuteAluGroup(AluOp aluOp, int form, SegReg? segOverride)
+    {
+        switch (form)
+        {
+            case 0:    // r/m8, r8
+            {
+                byte modrm = FetchByte();
+                var f = ModRmFields.Decode(modrm);
+                ushort disp = FetchDisplacement(f.DisplacementBytes);
+                byte dst = ReadRm8(f, disp, segOverride);
+                byte src = _state.GetReg8(f.Reg);
+                byte res = X86Alu.Execute8(aluOp, dst, src, _state);
+                if (!X86Alu.IsCompareOnly(aluOp))
+                    WriteRm8(f, disp, segOverride, res);
+                return f.IsRegister ? 3 : 16;
+            }
+            case 1:    // r/m16, r16
+            {
+                byte modrm = FetchByte();
+                var f = ModRmFields.Decode(modrm);
+                ushort disp = FetchDisplacement(f.DisplacementBytes);
+                ushort dst = ReadRm16(f, disp, segOverride);
+                ushort src = _state.GetReg16(f.Reg);
+                ushort res = X86Alu.Execute16(aluOp, dst, src, _state);
+                if (!X86Alu.IsCompareOnly(aluOp))
+                    WriteRm16(f, disp, segOverride, res);
+                return f.IsRegister ? 3 : 16;
+            }
+            case 2:    // r8, r/m8
+            {
+                byte modrm = FetchByte();
+                var f = ModRmFields.Decode(modrm);
+                ushort disp = FetchDisplacement(f.DisplacementBytes);
+                byte dst = _state.GetReg8(f.Reg);
+                byte src = ReadRm8(f, disp, segOverride);
+                byte res = X86Alu.Execute8(aluOp, dst, src, _state);
+                if (!X86Alu.IsCompareOnly(aluOp))
+                    _state.SetReg8(f.Reg, res);
+                return f.IsRegister ? 3 : 9;
+            }
+            case 3:    // r16, r/m16
+            {
+                byte modrm = FetchByte();
+                var f = ModRmFields.Decode(modrm);
+                ushort disp = FetchDisplacement(f.DisplacementBytes);
+                ushort dst = _state.GetReg16(f.Reg);
+                ushort src = ReadRm16(f, disp, segOverride);
+                ushort res = X86Alu.Execute16(aluOp, dst, src, _state);
+                if (!X86Alu.IsCompareOnly(aluOp))
+                    _state.SetReg16(f.Reg, res);
+                return f.IsRegister ? 3 : 9;
+            }
+            case 4:    // AL, imm8
+            {
+                byte imm = FetchByte();
+                byte res = X86Alu.Execute8(aluOp, _state.A.L, imm, _state);
+                if (!X86Alu.IsCompareOnly(aluOp))
+                    _state.A.L = res;
+                return 4;
+            }
+            case 5:    // AX, imm16
+            {
+                ushort imm = FetchWord();
+                ushort res = X86Alu.Execute16(aluOp, _state.A.X, imm, _state);
+                if (!X86Alu.IsCompareOnly(aluOp))
+                    _state.A.X = res;
+                return 4;
+            }
+            default:
+                throw new InvalidOperationException($"ExecuteAluGroup: form {form} not in ALU range");
+        }
     }
 }
