@@ -61,7 +61,7 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
     // (AX/CX/DX/BX/SP/BP/SI/DI in ModR/M order) and the status section.
     private readonly int _axOff, _cxOff, _dxOff, _bxOff;
     private readonly int _spOff, _bpOff, _siOff, _diOff;
-    private readonly int _flagsOff, _ipOff, _esOff, _csOff, _ssOff, _dsOff, _haltedOff;
+    private readonly int _flagsOff, _ipOff, _esOff, _csOff, _ssOff, _dsOff, _haltedOff, _segOverrideOff;
 
     public X86Memory Memory => _mem;
 
@@ -117,17 +117,23 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         _siOff = (int)_rt.GprOffset(6);
         _diOff = (int)_rt.GprOffset(7);
 
-        _flagsOff  = (int)_rt.StatusOffset("FLAGS");
-        _ipOff     = (int)_rt.StatusOffset("IP");
-        _esOff     = (int)_rt.StatusOffset("ES");
-        _csOff     = (int)_rt.StatusOffset("CS");
-        _ssOff     = (int)_rt.StatusOffset("SS");
-        _dsOff     = (int)_rt.StatusOffset("DS");
-        _haltedOff = (int)_rt.StatusOffset("HALTED");
+        _flagsOff       = (int)_rt.StatusOffset("FLAGS");
+        _ipOff          = (int)_rt.StatusOffset("IP");
+        _esOff          = (int)_rt.StatusOffset("ES");
+        _csOff          = (int)_rt.StatusOffset("CS");
+        _ssOff          = (int)_rt.StatusOffset("SS");
+        _dsOff          = (int)_rt.StatusOffset("DS");
+        _haltedOff      = (int)_rt.StatusOffset("HALTED");
+        _segOverrideOff = (int)_rt.StatusOffset("SEG_OVERRIDE");
 
         _state = new byte[(int)_rt.StateSizeBytes];
         _stateHandle = GCHandle.Alloc(_state, GCHandleType.Pinned);
         _statePtr    = (byte*)_stateHandle.AddrOfPinnedObject();
+
+        // Initialize SEG_OVERRIDE to 0xFF (no override). The Reset() path
+        // zeroes the buffer, so seed the default here to keep the EA
+        // emitter's "no override unless seen" invariant.
+        _state[_segOverrideOff] = 0xFF;
     }
 
     private static string LocateSpec()
@@ -152,6 +158,7 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         Array.Clear(_state, 0, _state.Length);
         WriteU16(_csOff, 0xFFFF);
         // FLAGS, IP, others already cleared.
+        _state[_segOverrideOff] = 0xFF;     // no segment override at reset
         _activeMem = _mem;
     }
 
@@ -222,30 +229,67 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
 
         if (Halted) return 0;
 
-        // Fetch opcode at CS:IP.
+        // 24.6.5d — segment override prefix loop. 8086 has 4 single-byte
+        // segment override prefixes (0x26 ES / 0x2E CS / 0x36 SS / 0x3E DS)
+        // that affect the default segment used by the immediately following
+        // instruction's memory operand. The C# dispatcher consumes them
+        // here, sets the SEG_OVERRIDE state slot (0..3 = ES/CS/SS/DS;
+        // 0xFF = none), and clears it after the next non-prefix opcode
+        // completes. Last-prefix-wins matches 8086 silicon: a sequence
+        // like 0x26 0x36 keeps SS as the active override.
         ushort cs = ReadU16(_csOff);
         ushort ip = ReadU16(_ipOff);
-        int linear = ((cs << 4) + ip) & 0xFFFFF;
-        byte opcode = _mem.ReadByte(linear);
+        int prefixesConsumed = 0;
+        byte opcode;
+        while (true)
+        {
+            int linear = ((cs << 4) + ip) & 0xFFFFF;
+            opcode = _mem.ReadByte(linear);
+            byte? overrideId = opcode switch
+            {
+                0x26 => (byte?)0,   // ES
+                0x2E => (byte?)1,   // CS
+                0x36 => (byte?)2,   // SS
+                0x3E => (byte?)3,   // DS
+                _    => null,
+            };
+            if (overrideId is null) break;
+            _state[_segOverrideOff] = overrideId.Value;
+            ip = (ushort)(ip + 1);
+            prefixesConsumed++;
+            // Defensive cap — shouldn't ever exceed a few prefixes in real
+            // code; bail out on absurd runs to avoid potential infinite
+            // loops with malformed input.
+            if (prefixesConsumed > 15)
+            {
+                _state[_segOverrideOff] = 0xFF;
+                WriteU16(_ipOff, ip);
+                return -1;
+            }
+        }
 
-        // Advance IP past the opcode byte. Multi-byte fetches (ModR/M /
-        // displacement / immediate) advance IP further from inside the
-        // emitted IR via x86_fetch_imm8/16.
+        // ip now points at the real opcode byte (post-prefixes). Persist
+        // it before invoking the function so emitters that read CS:IP
+        // (FetchImm8/16 / fetch_modrm) see the correct value.
         WriteU16(_ipOff, (ushort)(ip + 1));
 
         var decoded = _mainDecoder.Decode(opcode);
         if (decoded is null)
         {
-            // 24.6.4 — unsupported opcode: revert IP and signal "not handled".
-            // Returning -1 lets the test harness distinguish "json backend
-            // doesn't cover this byte yet" from "it ran successfully".
-            WriteU16(_ipOff, ip);
+            // Unsupported opcode: revert IP past consumed prefixes too,
+            // so the caller can fall through cleanly.
+            WriteU16(_ipOff, (ushort)(ip - prefixesConsumed));
+            _state[_segOverrideOff] = 0xFF;
             return -1;
         }
 
         var fnPtr = ResolveFunctionPointer(_mainDecoder.Name, decoded);
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
         fn(_statePtr, opcode);
+
+        // Override is per-instruction: clear after execution so the next
+        // Step() starts with a clean default-segment policy.
+        _state[_segOverrideOff] = 0xFF;
 
         // Cycle accounting deferred — 8088 cycle accuracy is not the
         // 24.6 goal. Return 1 for now so the caller has a non-zero

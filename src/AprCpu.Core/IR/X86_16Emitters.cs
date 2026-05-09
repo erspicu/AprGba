@@ -826,15 +826,69 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
         // Final join — ea_off + ea_seg merge from the 4 mod arms.
         ctx.Builder.PositionAtEnd(endModBB);
         var eaOff = ctx.Builder.BuildPhi(i16, "ea_off");
-        var eaSeg = ctx.Builder.BuildPhi(i16, "ea_seg");
+        var eaSegDefault = ctx.Builder.BuildPhi(i16, "ea_seg_default");
         eaOff.AddIncoming(
             new[] { (LLVMValueRef)mod00Off, mod01Off, mod10Off, zeroI16 },
             new[] { mod00JoinBB, mod01BB, mod10BB, mod11BB },
             4);
-        eaSeg.AddIncoming(
+        eaSegDefault.AddIncoming(
             new[] { (LLVMValueRef)mod00Seg, segPhi, segPhi, zeroI16 },
             new[] { mod00JoinBB, mod01BB, mod10BB, mod11BB },
             4);
+
+        // Phase 3 — apply segment override prefix (24.6.5d). The C# Step()
+        // dispatcher writes SEG_OVERRIDE to a non-0xFF value (0=ES, 1=CS,
+        // 2=SS, 3=DS — matches sreg ModR/M encoding) when one of the four
+        // 0x26/0x2E/0x36/0x3E bytes precedes the real opcode, then clears
+        // it after the instruction completes. If active, the override
+        // segment replaces the architectural default; otherwise the
+        // default flows through unchanged.
+        var ovrPtr = ctx.GepStatusRegister("SEG_OVERRIDE");
+        var ovr8 = ctx.Builder.BuildLoad2(i8, ovrPtr, "seg_ovr8");
+        var ovr32 = ctx.Builder.BuildZExt(ovr8, i32, "seg_ovr32");
+        var noOverride = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, ovr32,
+            LLVMValueRef.CreateConstInt(i32, 0xFF, false), "no_seg_ovr");
+
+        var ovrApplyBB = ctx.Function.AppendBasicBlock("seg_ovr_apply");
+        var ovrSkipBB  = ctx.Function.AppendBasicBlock("seg_ovr_skip");
+        var ovrEndBB   = ctx.Function.AppendBasicBlock("seg_ovr_end");
+        ctx.Builder.BuildCondBr(noOverride, ovrSkipBB, ovrApplyBB);
+
+        // Apply: 4-arm switch on override value (0..3 = ES/CS/SS/DS).
+        ctx.Builder.PositionAtEnd(ovrApplyBB);
+        var ovrDefBB = ctx.Function.AppendBasicBlock("seg_ovr_default");
+        var ovrArms  = new LLVMBasicBlockRef[4];
+        var ovrVals  = new LLVMValueRef[4];
+        for (int i = 0; i < 4; i++) ovrArms[i] = ctx.Function.AppendBasicBlock($"seg_ovr_{i}");
+        var ovrSw = ctx.Builder.BuildSwitch(ovr32, ovrDefBB, 4);
+        for (int i = 0; i < 4; i++)
+            ovrSw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), ovrArms[i]);
+
+        var segNames = new[] { "ES", "CS", "SS", "DS" };
+        for (int i = 0; i < 4; i++)
+        {
+            ctx.Builder.PositionAtEnd(ovrArms[i]);
+            ovrVals[i] = X86_16Emitters.LoadSeg16(ctx, segNames[i], $"seg_ovr_v_{i}");
+            ctx.Builder.BuildBr(ovrEndBB);
+        }
+        // Default arm — unreachable in practice (override is 0..3 or 0xFF;
+        // 0xFF was filtered above). Feed back the default to keep IR sane.
+        ctx.Builder.PositionAtEnd(ovrDefBB);
+        ctx.Builder.BuildBr(ovrEndBB);
+
+        // Skip path — pass default through.
+        ctx.Builder.PositionAtEnd(ovrSkipBB);
+        ctx.Builder.BuildBr(ovrEndBB);
+
+        // Final phi.
+        ctx.Builder.PositionAtEnd(ovrEndBB);
+        var eaSeg = ctx.Builder.BuildPhi(i16, "ea_seg");
+        var pIns = new LLVMValueRef[6];
+        var pBlk = new LLVMBasicBlockRef[6];
+        for (int i = 0; i < 4; i++) { pIns[i] = ovrVals[i]; pBlk[i] = ovrArms[i]; }
+        pIns[4] = eaSegDefault; pBlk[4] = ovrDefBB;
+        pIns[5] = eaSegDefault; pBlk[5] = ovrSkipBB;
+        eaSeg.AddIncoming(pIns, pBlk, 6);
 
         ctx.Values["ea_off"] = eaOff;
         ctx.Values["ea_seg"] = eaSeg;

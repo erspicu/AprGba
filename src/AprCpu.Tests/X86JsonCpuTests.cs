@@ -478,6 +478,160 @@ public class X86JsonCpuTests
         Assert.Equal(0xC0,   mem.ReadByte(0x105));
     }
 
+    // ---------------- 24.6.5d — segment override prefixes ----------------
+
+    /// <summary>
+    /// 0x26 0x8B 0x07  → ES: MOV AX, [BX]
+    /// Pre-seed BX=0x0010, ES=0x1000, DS=0x2000. Memory at ES:BX (linear
+    /// 0x10010) holds 0x1234. Without the ES override, the read would go
+    /// to DS:BX (linear 0x20010) which holds 0x9999 — so the test only
+    /// passes when the override correctly redirects the segment.
+    /// </summary>
+    [Fact]
+    public void Step_EsOverride_SwitchesDefaultDsToEs()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x26, 0x8B, 0x07, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x0010;
+        s.ES  = 0x1000;
+        s.DS  = 0x2000;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        // ES:BX = 0x10010
+        mem.WriteByte(0x10010, 0x34);
+        mem.WriteByte(0x10011, 0x12);
+        // DS:BX = 0x20010 — should NOT be read
+        mem.WriteByte(0x20010, 0x99);
+        mem.WriteByte(0x20011, 0x99);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x1234, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// 0x2E 0x89 0x07  → CS: MOV [BX], AX. Stores AX into CS:BX.
+    /// </summary>
+    [Fact]
+    public void Step_CsOverride_StoreToCs()
+    {
+        // mov ax, 0xCAFE   B8 FE CA
+        // cs: mov [bx], ax  2E 89 07
+        // hlt              F4
+        var (cpu, mem) = Setup(new byte[] { 0xB8, 0xFE, 0xCA, 0x2E, 0x89, 0x07, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x0040;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0x0500, 0);   // CS=0x0500, IP=0
+        // Re-load code at CS:0 since SetEntryPoint moved CS:IP.
+        var code = new byte[] { 0xB8, 0xFE, 0xCA, 0x2E, 0x89, 0x07, 0xF4 };
+        mem.LoadBinary(code, 0x0500, 0);
+
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        // CS:BX = 0x05000 + 0x40 = 0x05040
+        Assert.Equal(0xFE, mem.ReadByte(0x05040));
+        Assert.Equal(0xCA, mem.ReadByte(0x05041));
+    }
+
+    /// <summary>
+    /// 0x36 0x8B 0x47 0x04  → SS: MOV AX, [BX+0x04]
+    /// SS is the natural default for [BP+...] addressing modes; here we
+    /// force it for [BX+disp8] (which would normally use DS).
+    /// </summary>
+    [Fact]
+    public void Step_SsOverride_OnBxBased()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x36, 0x8B, 0x47, 0x04, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x0050;
+        s.SS  = 0x3000;
+        s.DS  = 0x4000;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        // SS:BX+4 = 0x30054
+        mem.WriteByte(0x30054, 0xAD);
+        mem.WriteByte(0x30055, 0xDE);
+        // DS:BX+4 = 0x40054 — should NOT be read
+        mem.WriteByte(0x40054, 0x00);
+        mem.WriteByte(0x40055, 0x00);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xDEAD, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// Override is one-shot: after the prefixed instruction, the next
+    /// instruction must use its architectural default segment again.
+    ///   26 8B 07     ES: mov ax, [bx]
+    ///   8B 1F        mov bx, [bx]   (no prefix → DS default)
+    /// </summary>
+    [Fact]
+    public void Step_OverrideClearsAfterOneInstruction()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x26, 0x8B, 0x07, 0x8B, 0x1F, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x0010;
+        s.ES  = 0x1000;
+        s.DS  = 0x2000;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        // ES:BX (0x10010) — first instruction reads from here
+        mem.WriteByte(0x10010, 0x34);
+        mem.WriteByte(0x10011, 0x12);
+        // DS:BX (0x20010) — second instruction reads from here
+        mem.WriteByte(0x20010, 0x78);
+        mem.WriteByte(0x20011, 0x56);
+
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x1234, cpu.State.A.X);   // ES:BX after first
+        Assert.Equal(0x5678, cpu.State.B.X);   // DS:BX after second (no override)
+    }
+
+    /// <summary>
+    /// Last-prefix-wins: 8086 silicon takes the most recent override when
+    /// multiple are present. 0x26 then 0x36 → SS active.
+    /// </summary>
+    [Fact]
+    public void Step_MultiplePrefixes_LastWins()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x26, 0x36, 0x8B, 0x07, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x0010;
+        s.ES  = 0x1000;     // would yield 0x9999
+        s.SS  = 0x3000;     // should yield 0x4242
+        s.DS  = 0x4000;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        mem.WriteByte(0x10010, 0x99); mem.WriteByte(0x10011, 0x99);
+        mem.WriteByte(0x30010, 0x42); mem.WriteByte(0x30011, 0x42);
+        mem.WriteByte(0x40010, 0x77); mem.WriteByte(0x40011, 0x77);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x4242, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// Reg-direct ModR/M (mod=11) ignores segment override since there's
+    /// no memory operand. 0x26 0x8B 0xC3 → ES: mov ax, bx. ES is consumed
+    /// but the instruction is reg-to-reg, so no segment is used.
+    /// </summary>
+    [Fact]
+    public void Step_OverrideOnRegDirect_NoEffectOnRegisterCopy()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xBB, 0xCD, 0xAB, 0x26, 0x8B, 0xC3, 0xF4 });
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xABCD, cpu.State.A.X);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,
