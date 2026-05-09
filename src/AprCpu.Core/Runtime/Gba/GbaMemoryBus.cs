@@ -66,6 +66,102 @@ public sealed class GbaMemoryBus : IMemoryBus
     {
         Dma = new GbaDmaController(this);
         BuildPageTable();
+        BuildAllowedWidthsTable();
+    }
+
+    // ---------------- N10 allowed_widths debug-mode enforcement ----------------
+    //
+    // When `EnforceAllowedWidths` is true, every Read/Write operation
+    // checks the access width against the spec-declared allowed_widths
+    // for that region (per-page bitmask: bit 0=8, bit 1=16, bit 2=32).
+    // On violation, throws InvalidOperationException with addr + width
+    // for diagnostics.
+    //
+    // Default OFF — zero hot-path cost when disabled (single field
+    // load + branch). Flip on for debug runs / new emitter validation.
+    //
+    // Mask values come from `spec/machines/gba.json` (loaded at construction
+    // if present); fallback is all-widths (no enforcement) when spec
+    // isn't found, so headless test harnesses without the spec on disk
+    // still work.
+
+    /// <summary>
+    /// N10 — when true, every memory access is validated against the
+    /// spec's <c>allowed_widths</c>; a mismatch throws.
+    /// </summary>
+    public bool EnforceAllowedWidths { get; set; }
+
+    /// <summary>Per-page allowed-widths bitmask. bit 0=8, bit 1=16,
+    /// bit 2=32. 0 = unspecified = any width OK.</summary>
+    private readonly byte[] _allowedWidthsByPage = new byte[256];
+
+    private void BuildAllowedWidthsTable()
+    {
+        // Default: all widths allowed (0x07 = 8|16|32). Gets overwritten
+        // for any region the spec has explicit allowed_widths on.
+        for (int i = 0; i < _allowedWidthsByPage.Length; i++)
+            _allowedWidthsByPage[i] = 0x07;
+
+        var spec = TryLoadGbaMachineSpec();
+        if (spec is null) return;     // no spec → no enforcement metadata
+
+        foreach (var region in spec.MemoryRegions)
+        {
+            if (region.AllowedWidths is not { } widths) continue;
+            byte mask = 0;
+            foreach (var w in widths)
+            {
+                mask |= w switch
+                {
+                    8  => (byte)0x01,
+                    16 => (byte)0x02,
+                    32 => (byte)0x04,
+                    _  => (byte)0x00,
+                };
+            }
+            // Stamp the mask onto every page in the region's address range.
+            int firstPage = (int)(region.AddrStart >> 24);
+            int lastPage  = (int)((region.AddrEndExclusive - 1) >> 24);
+            for (int p = firstPage; p <= lastPage && p < 256; p++)
+                _allowedWidthsByPage[p] = mask;
+        }
+    }
+
+    private static AprCpu.Core.JsonSpec.MachineSpec? TryLoadGbaMachineSpec()
+    {
+        for (var d = new System.IO.DirectoryInfo(System.AppContext.BaseDirectory);
+             d is not null; d = d.Parent)
+        {
+            var probe = System.IO.Path.Combine(d.FullName, "spec", "machines", "gba.json");
+            if (System.IO.File.Exists(probe))
+                return AprCpu.Core.JsonSpec.MachineSpecLoader.LoadFromFile(probe);
+        }
+        var cwdProbe = System.IO.Path.Combine(System.Environment.CurrentDirectory,
+            "spec", "machines", "gba.json");
+        return System.IO.File.Exists(cwdProbe)
+            ? AprCpu.Core.JsonSpec.MachineSpecLoader.LoadFromFile(cwdProbe)
+            : null;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private void CheckWidth(uint addr, int widthBits)
+    {
+        if (!EnforceAllowedWidths) return;
+        var mask = _allowedWidthsByPage[(addr >> 24) & 0xFF];
+        byte bit = widthBits switch
+        {
+            8  => 0x01,
+            16 => 0x02,
+            32 => 0x04,
+            _  => 0,
+        };
+        if ((mask & bit) == 0)
+        {
+            throw new InvalidOperationException(
+                $"GbaMemoryBus: {widthBits}-bit access at 0x{addr:X8} disallowed " +
+                $"by spec.allowed_widths (page mask=0x{mask:X2})");
+        }
     }
 
     // ---------------- N8 page-table dispatch ----------------
@@ -344,6 +440,7 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     public byte ReadByte(uint addr)
     {
+        CheckWidth(addr, 8);
         var (region, off) = Locate(addr);
         return region switch
         {
@@ -363,6 +460,7 @@ public sealed class GbaMemoryBus : IMemoryBus
         System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public ushort ReadHalfword(uint addr)
     {
+        CheckWidth(addr, 16);
         var (region, off) = Locate(addr);
         return region switch
         {
@@ -384,6 +482,7 @@ public sealed class GbaMemoryBus : IMemoryBus
         System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public uint ReadWord(uint addr)
     {
+        CheckWidth(addr, 32);
         var (region, off) = Locate(addr);
         return region switch
         {
@@ -444,6 +543,7 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     public void WriteByte(uint addr, byte value)
     {
+        CheckWidth(addr, 8);
         var (region, off) = Locate(addr);
         switch (region)
         {
@@ -460,6 +560,7 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     public void WriteHalfword(uint addr, ushort value)
     {
+        CheckWidth(addr, 16);
         var (region, off) = Locate(addr);
         if (region == Region.Io) { WriteIoHalfword((uint)off, value); return; }
         var bytes = region switch
@@ -477,6 +578,7 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     public void WriteWord(uint addr, uint value)
     {
+        CheckWidth(addr, 32);
         var (region, off) = Locate(addr);
         if (region == Region.Io)
         {
