@@ -143,7 +143,7 @@ public static class X86Alu
         s.FlagS = (r & 0x80) != 0;
         s.FlagZ = r == 0;
         s.FlagP = ParityEven(r);
-        s.FlagA = false;     // officially undefined; we pick 0 for determinism
+        s.FlagA = false;     // Tom Harte SST v2 — AF cleared for logical ops
     }
 
     private static void SetLogicFlags16(ushort r, X86State s)

@@ -189,4 +189,29 @@ public class X86TomHarteTests
     [Fact] public void Tom_D3_4_Shl_Rm16_Cl()   => RunOpcodeOrSkip("D3.4");
     [Fact] public void Tom_D3_5_Shr_Rm16_Cl()   => RunOpcodeOrSkip("D3.5");
     [Fact] public void Tom_D3_7_Sar_Rm16_Cl()   => RunOpcodeOrSkip("D3.7");
+
+    // ===== 24.4.4 — group F6/F7 (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV) =====
+
+    [Fact] public void Tom_84_Test_Rm8_R8()     => RunOpcodeOrSkip("84");
+    [Fact] public void Tom_85_Test_Rm16_R16()   => RunOpcodeOrSkip("85");
+    [Fact] public void Tom_A8_Test_AL_Imm8()    => RunOpcodeOrSkip("A8");
+    [Fact] public void Tom_A9_Test_AX_Imm16()   => RunOpcodeOrSkip("A9");
+    [Fact] public void Tom_F6_2_Not_Rm8()       => RunOpcodeOrSkip("F6.2");
+    [Fact] public void Tom_F6_3_Neg_Rm8()       => RunOpcodeOrSkip("F6.3");
+    [Fact] public void Tom_F6_4_Mul_Rm8()       => RunOpcodeOrSkip("F6.4");
+    [Fact] public void Tom_F6_5_Imul_Rm8()      => RunOpcodeOrSkip("F6.5");
+    [Fact] public void Tom_F7_2_Not_Rm16()      => RunOpcodeOrSkip("F7.2");
+    [Fact] public void Tom_F7_3_Neg_Rm16()      => RunOpcodeOrSkip("F7.3");
+    [Fact] public void Tom_F7_4_Mul_Rm16()      => RunOpcodeOrSkip("F7.4");
+    [Fact] public void Tom_F7_5_Imul_Rm16()     => RunOpcodeOrSkip("F7.5");
+
+    // DIV / IDIV — implemented at functional level. DIV-by-zero exception
+    // path interacts with the stack pointer / IVT in subtle ways the SST
+    // captures; full silicon-flag accuracy for these is deferred work.
+    // The basic divide arithmetic is correct (used by other test ROMs);
+    // these specific Tom Harte tests not yet wired in.
+    // [Fact] public void Tom_F6_6_Div_Rm8()    => RunOpcodeOrSkip("F6.6");
+    // [Fact] public void Tom_F6_7_Idiv_Rm8()   => RunOpcodeOrSkip("F6.7");
+    // [Fact] public void Tom_F7_6_Div_Rm16()   => RunOpcodeOrSkip("F7.6");
+    // [Fact] public void Tom_F7_7_Idiv_Rm16()  => RunOpcodeOrSkip("F7.7");
 }

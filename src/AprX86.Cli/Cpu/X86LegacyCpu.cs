@@ -591,6 +591,58 @@ public sealed class X86LegacyCpu : IX86CpuBackend
             }
         }
 
+        // ===== TEST AL, imm8 / TEST AX, imm16 / TEST r/m, r =====
+        // TEST is AND that doesn't store the result (only sets flags).
+        if (opcode == 0xA8)
+        {
+            byte imm = FetchByte();
+            X86Alu.Execute8(AluOp.And, _state.A.L, imm, _state);
+            return 4;
+        }
+        if (opcode == 0xA9)
+        {
+            ushort imm = FetchWord();
+            X86Alu.Execute16(AluOp.And, _state.A.X, imm, _state);
+            return 4;
+        }
+        if (opcode is 0x84 or 0x85)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+            if (opcode == 0x84)
+            {
+                byte a = ReadRm8(f, disp, segOverride);
+                byte b = _state.GetReg8(f.Reg);
+                X86Alu.Execute8(AluOp.And, a, b, _state);
+            }
+            else
+            {
+                ushort a = ReadRm16(f, disp, segOverride);
+                ushort b = _state.GetReg16(f.Reg);
+                X86Alu.Execute16(AluOp.And, a, b, _state);
+            }
+            return f.IsRegister ? 3 : 9;
+        }
+
+        // ===== Group 0xF6 (r/m8) / 0xF7 (r/m16) — TEST/NOT/NEG/MUL/IMUL/DIV/IDIV =====
+        // ModR/M reg field selects:
+        //   0 / 1 (alias) : TEST r/m, imm    (imm8 for F6, imm16 for F7)
+        //   2             : NOT r/m
+        //   3             : NEG r/m
+        //   4             : MUL  AX/DX:AX, r/m
+        //   5             : IMUL AX/DX:AX, r/m  (signed)
+        //   6             : DIV  AX/DX:AX / r/m → AL,AH or AX,DX
+        //   7             : IDIV (signed)
+        if (opcode is 0xF6 or 0xF7)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+            bool isWord = (opcode == 0xF7);
+            return ExecuteGroupF6F7(f, disp, segOverride, isWord);
+        }
+
         // ===== Shift / rotate groups — 0xD0/0xD1/0xD2/0xD3 =====
         //   0xD0 r/m8, 1            (count = 1)
         //   0xD1 r/m16, 1
@@ -788,6 +840,220 @@ public sealed class X86LegacyCpu : IX86CpuBackend
         // ===== Anything else = not implemented yet =====
         throw new NotImplementedException(
             $"X86LegacyCpu: opcode 0x{opcode:X2} at CS:IP={_state.CS:X4}:{(ushort)(_state.IP - 1):X4} not implemented yet.");
+    }
+
+    /// <summary>
+    /// Group 0xF6 / 0xF7 dispatch — 8086's "unary ALU" group covering
+    /// TEST/NOT/NEG/MUL/IMUL/DIV/IDIV. Apr86's CPU.cs had bugs in
+    /// MUL/IMUL CF/OF logic + IMUL byte sign-extension (per doc #24
+    /// §2.1); we implement straight from the 8086 datasheet + validate
+    /// against Tom Harte SST.
+    /// </summary>
+    private int ExecuteGroupF6F7(ModRmFields f, ushort disp, SegReg? segOverride, bool isWord)
+    {
+        switch (f.Reg)
+        {
+            case 0:    // TEST r/m, imm
+            case 1:    // alias on 8086 (some sources document; identical behaviour)
+            {
+                if (isWord)
+                {
+                    ushort dst = ReadRm16(f, disp, segOverride);
+                    ushort imm = FetchWord();
+                    X86Alu.Execute16(AluOp.And, dst, imm, _state);
+                }
+                else
+                {
+                    byte dst = ReadRm8(f, disp, segOverride);
+                    byte imm = FetchByte();
+                    X86Alu.Execute8(AluOp.And, dst, imm, _state);
+                }
+                return f.IsRegister ? 5 : 11;
+            }
+
+            case 2:    // NOT r/m — bitwise complement, no flag changes
+            {
+                if (isWord)
+                {
+                    ushort v = ReadRm16(f, disp, segOverride);
+                    WriteRm16(f, disp, segOverride, (ushort)~v);
+                }
+                else
+                {
+                    byte v = ReadRm8(f, disp, segOverride);
+                    WriteRm8(f, disp, segOverride, (byte)~v);
+                }
+                return f.IsRegister ? 3 : 16;
+            }
+
+            case 3:    // NEG r/m — two's complement; flags as 0 - r/m
+            {
+                if (isWord)
+                {
+                    ushort v = ReadRm16(f, disp, segOverride);
+                    ushort r = X86Alu.Execute16(AluOp.Sub, 0, v, _state);
+                    WriteRm16(f, disp, segOverride, r);
+                }
+                else
+                {
+                    byte v = ReadRm8(f, disp, segOverride);
+                    byte r = X86Alu.Execute8(AluOp.Sub, 0, v, _state);
+                    WriteRm8(f, disp, segOverride, r);
+                }
+                return f.IsRegister ? 3 : 16;
+            }
+
+            case 4:    // MUL — unsigned: AX = AL * r/m8 ; DX:AX = AX * r/m16
+            {
+                // 8088 quirk per Tom Harte SST v1: SF/ZF/PF all reflect the
+                // HIGH BYTE only (AH for byte MUL; DL for word MUL — the
+                // microcode happens to leave the parity-line latched on
+                // the high byte).
+                //   CF/OF: 1 iff high half non-zero
+                //   SF:    bit 7 of high byte (= bit 15 of full result)
+                //   ZF:    high byte == 0  (effectively !CF)
+                //   PF:    parity of high byte
+                //   AF:    preserved
+                // 8088 silicon (per Tom Harte SST v1) — different rule per width:
+                //   Byte MUL: SF/ZF/PF all from AH (high byte of result)
+                //   Word MUL: SF from DH (bit 15 of DX), PF from DL (parity
+                //             of low byte of DX), ZF from DX==0 (full high half)
+                if (isWord)
+                {
+                    ushort src = ReadRm16(f, disp, segOverride);
+                    uint result = (uint)_state.A.X * src;
+                    _state.A.X = (ushort)result;
+                    _state.D.X = (ushort)(result >> 16);
+                    bool overflow = _state.D.X != 0;
+                    _state.FlagC = _state.FlagO = overflow;
+                    _state.FlagS = (_state.D.X & 0x8000) != 0;
+                    _state.FlagZ = _state.D.X == 0;
+                    _state.FlagP = X86Alu.ParityEven((byte)_state.D.X);
+                }
+                else
+                {
+                    byte src = ReadRm8(f, disp, segOverride);
+                    ushort result = (ushort)(_state.A.L * src);
+                    _state.A.X = result;
+                    bool overflow = _state.A.H != 0;
+                    _state.FlagC = _state.FlagO = overflow;
+                    _state.FlagS = (_state.A.H & 0x80) != 0;
+                    _state.FlagZ = _state.A.H == 0;
+                    _state.FlagP = X86Alu.ParityEven(_state.A.H);
+                }
+                return f.IsRegister ? 70 : 76;
+            }
+
+            case 5:    // IMUL — signed
+            {
+                if (isWord)
+                {
+                    short a = (short)_state.A.X;
+                    short b = (short)ReadRm16(f, disp, segOverride);
+                    int result = a * b;
+                    _state.A.X = (ushort)result;
+                    _state.D.X = (ushort)(result >> 16);
+                    bool nontrivial = (short)_state.A.X < 0
+                        ? _state.D.X != 0xFFFF
+                        : _state.D.X != 0x0000;
+                    _state.FlagC = _state.FlagO = nontrivial;
+                    _state.FlagS = (_state.D.X & 0x8000) != 0;
+                    _state.FlagZ = _state.D.X == 0;
+                    _state.FlagP = X86Alu.ParityEven((byte)_state.D.X);
+                }
+                else
+                {
+                    sbyte a = (sbyte)_state.A.L;
+                    sbyte b = (sbyte)ReadRm8(f, disp, segOverride);
+                    short result = (short)(a * b);
+                    _state.A.X = (ushort)result;
+                    bool nontrivial = (sbyte)_state.A.L < 0
+                        ? _state.A.H != 0xFF
+                        : _state.A.H != 0x00;
+                    _state.FlagC = _state.FlagO = nontrivial;
+                    _state.FlagS = (_state.A.H & 0x80) != 0;
+                    _state.FlagZ = _state.A.H == 0;
+                    _state.FlagP = X86Alu.ParityEven(_state.A.H);
+                }
+                return f.IsRegister ? 80 : 86;
+            }
+
+            case 6:    // DIV — unsigned: divide DX:AX (or AX) by r/m
+            {
+                if (isWord)
+                {
+                    ushort src = ReadRm16(f, disp, segOverride);
+                    if (src == 0) { Interrupt(0); return 50; }
+                    uint dividend = ((uint)_state.D.X << 16) | _state.A.X;
+                    uint quotient = dividend / src;
+                    uint remainder = dividend % src;
+                    if (quotient > 0xFFFF) { Interrupt(0); return 50; }
+                    _state.A.X = (ushort)quotient;
+                    _state.D.X = (ushort)remainder;
+                }
+                else
+                {
+                    byte src = ReadRm8(f, disp, segOverride);
+                    if (src == 0) { Interrupt(0); return 50; }
+                    ushort dividend = _state.A.X;
+                    int quotient = dividend / src;
+                    int remainder = dividend % src;
+                    if (quotient > 0xFF) { Interrupt(0); return 50; }
+                    _state.A.L = (byte)quotient;
+                    _state.A.H = (byte)remainder;
+                }
+                return f.IsRegister ? 80 : 86;
+            }
+
+            case 7:    // IDIV — signed
+            {
+                if (isWord)
+                {
+                    short src = (short)ReadRm16(f, disp, segOverride);
+                    if (src == 0) { Interrupt(0); return 50; }
+                    int dividend = ((int)(short)_state.D.X << 16) | _state.A.X;
+                    // For unbiased rounding we need C# integer division semantics
+                    // (truncate toward zero) — that matches 8086 IDIV.
+                    int quotient = dividend / src;
+                    int remainder = dividend % src;
+                    if (quotient > 0x7FFF || quotient < -0x8000) { Interrupt(0); return 50; }
+                    _state.A.X = (ushort)quotient;
+                    _state.D.X = (ushort)remainder;
+                }
+                else
+                {
+                    sbyte src = (sbyte)ReadRm8(f, disp, segOverride);
+                    if (src == 0) { Interrupt(0); return 50; }
+                    short dividend = (short)_state.A.X;
+                    int quotient = dividend / src;
+                    int remainder = dividend % src;
+                    if (quotient > 0x7F || quotient < -0x80) { Interrupt(0); return 50; }
+                    _state.A.L = (byte)quotient;
+                    _state.A.H = (byte)remainder;
+                }
+                return f.IsRegister ? 100 : 106;
+            }
+
+            default:
+                throw new NotImplementedException($"F6/F7 /{f.Reg} undefined on 8086");
+        }
+    }
+
+    /// <summary>
+    /// Software interrupt entry. Pushes flags + CS + IP, fetches new
+    /// CS:IP from the IVT at 0:type*4, clears IF/TF. Used by INT/INTO/
+    /// DIV-by-zero etc. Full INT opcode dispatch comes in 24.4.6.
+    /// </summary>
+    private void Interrupt(byte type)
+    {
+        PushWord(_state.GetFlags());
+        PushWord(_state.CS);
+        PushWord(_state.IP);
+        _state.FlagI = false;
+        _state.FlagT = false;
+        int vec = type * 4;
+        _state.IP = (ushort)(_mem.ReadByte(vec) | (_mem.ReadByte(vec + 1) << 8));
+        _state.CS = (ushort)(_mem.ReadByte(vec + 2) | (_mem.ReadByte(vec + 3) << 8));
     }
 
     /// <summary>
