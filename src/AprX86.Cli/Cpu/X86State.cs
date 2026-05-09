@@ -112,4 +112,80 @@ public sealed class X86State
         FlagD = (f & 0x0400) != 0;
         FlagO = (f & 0x0800) != 0;
     }
+
+    // --- Register-by-encoding accessors ---
+    //
+    // ModR/M reg / r/m fields use these encodings:
+    //   8-bit (w=0):   000=AL 001=CL 010=DL 011=BL 100=AH 101=CH 110=DH 111=BH
+    //   16-bit (w=1):  000=AX 001=CX 010=DX 011=BX 100=SP 101=BP 110=SI 111=DI
+    //   sreg (2-bit):  00=ES  01=CS  10=SS  11=DS
+    //
+    // Note encoding ordering does NOT match field-declaration order
+    // (architectural: A/C/D/B vs. structural: A/B/C/D). These methods
+    // are the canonical way for emitters / decoders to read registers
+    // by their architectural index.
+
+    public byte GetReg8(int idx) => (idx & 7) switch
+    {
+        0 => A.L, 1 => C.L, 2 => D.L, 3 => B.L,
+        4 => A.H, 5 => C.H, 6 => D.H, 7 => B.H,
+        _ => 0,
+    };
+
+    public void SetReg8(int idx, byte value)
+    {
+        switch (idx & 7)
+        {
+            case 0: A.L = value; break;
+            case 1: C.L = value; break;
+            case 2: D.L = value; break;
+            case 3: B.L = value; break;
+            case 4: A.H = value; break;
+            case 5: C.H = value; break;
+            case 6: D.H = value; break;
+            case 7: B.H = value; break;
+        }
+    }
+
+    public ushort GetReg16(int idx) => (idx & 7) switch
+    {
+        0 => A.X, 1 => C.X, 2 => D.X, 3 => B.X,
+        4 => SP,  5 => BP,  6 => SI,  7 => DI,
+        _ => 0,
+    };
+
+    public void SetReg16(int idx, ushort value)
+    {
+        switch (idx & 7)
+        {
+            case 0: A.X = value; break;
+            case 1: C.X = value; break;
+            case 2: D.X = value; break;
+            case 3: B.X = value; break;
+            case 4: SP  = value; break;
+            case 5: BP  = value; break;
+            case 6: SI  = value; break;
+            case 7: DI  = value; break;
+        }
+    }
+
+    public ushort GetSeg(SegReg s) => s switch
+    {
+        SegReg.ES => ES,
+        SegReg.CS => CS,
+        SegReg.SS => SS,
+        SegReg.DS => DS,
+        _         => 0,
+    };
+
+    public void SetSeg(SegReg s, ushort value)
+    {
+        switch (s)
+        {
+            case SegReg.ES: ES = value; break;
+            case SegReg.CS: CS = value; break;
+            case SegReg.SS: SS = value; break;
+            case SegReg.DS: DS = value; break;
+        }
+    }
 }
