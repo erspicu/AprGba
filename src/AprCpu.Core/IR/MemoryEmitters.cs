@@ -69,6 +69,14 @@ public static class MemoryEmitters
         public const string Lr35902WramBase = "lr35902_wram_base";  // 0xC000..0xDFFF
         public const string Lr35902HramBase = "lr35902_hram_base";  // 0xFF80..0xFFFE
 
+        // N11 — Ricoh 2A03 / NES inline fastmem. WRAM is a 2KB array at
+        // 0x0000..0x07FF mirrored up through 0x1FFF (mirror_mask 0x07FF).
+        // Block-JIT + per-instr backends both read through Mos6502Emitters
+        // .BusRead8, which now emits an inline range-check + GEP-load
+        // when addr < 0x2000. Writes still go through the bus to preserve
+        // SmcWriteHook firing (blargg cpu_test5 exercises SMC heavily).
+        public const string Mos6502WramBase = "mos6502_wram_base";   // 0x0000..0x1FFF (mirrored)
+
         // Phase 7 GB block-JIT P1 #5b SMC V2 — base of the per-byte coverage
         // counter array (i8[0x10000] for LR35902). After every IR-level
         // inline RAM store, JIT'd code does:

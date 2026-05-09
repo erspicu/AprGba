@@ -72,6 +72,12 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
     private GCHandle _stateHandle;
     private byte* _statePtr;
 
+    // N11 — pin WRAM so the JIT'd code can GEP-load directly from it
+    // via the mos6502_wram_base extern (set in the constructor). Bus's
+    // _wram[] is a fixed-size readonly array, so pinning once here is
+    // safe for the lifetime of this NesJsonCpu instance.
+    private GCHandle _wramHandle;
+
     // Pre-cached field offsets — order matches cpu.json's GPR list
     // (A, X, Y) and the status section (P, SP, PC).
     private readonly int _aOff, _xOff, _yOff;
@@ -183,6 +189,13 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
             (IntPtr)(delegate* unmanaged[Cdecl]<uint, byte>)&MemRead8);
         _rt.BindExtern(MemoryEmitters.ExternFunctionNames.Write8,
             (IntPtr)(delegate* unmanaged[Cdecl]<uint, byte, void>)&MemWrite8);
+
+        // N11 — bind WRAM base pointer so Mos6502Emitters.BusRead8's
+        // inline fastmem path (addr < 0x2000 → GEP-load from _wram[]) can
+        // resolve the host array address at JIT time.
+        _wramHandle = GCHandle.Alloc(_bus.Wram, GCHandleType.Pinned);
+        _rt.BindExtern(MemoryEmitters.ExternFunctionNames.Mos6502WramBase,
+            _wramHandle.AddrOfPinnedObject());
 
         _rt.Compile();
 

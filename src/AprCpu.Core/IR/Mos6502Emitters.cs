@@ -104,12 +104,72 @@ public static class Mos6502Emitters
     // ---------------- shared helpers ----------------
 
     /// <summary>
-    /// Read a byte from the bus by 32-bit address. Identical wrapper to
-    /// <see cref="MemoryEmitters.CallRead8"/>; kept as a local alias so
-    /// the 6502 emitters read like a coherent block.
+    /// Read a byte from the bus by 32-bit address.
+    ///
+    /// <para>N11 inline fastmem — when addr &lt; 0x2000 (NES WRAM region,
+    /// mirrored every 2KB) AND env var <c>APR_MOS6502_FASTMEM</c> is set,
+    /// emits a GEP-load directly from the host <c>_wram[]</c> array via
+    /// the <c>mos6502_wram_base</c> extern, skipping the bus dispatch
+    /// entirely. Otherwise falls through to the regular
+    /// <see cref="MemoryEmitters.CallRead8"/> extern call.</para>
+    ///
+    /// <para>Empirically the inline path is a perf REGRESSION on the
+    /// 6502 block-JIT (~3% on blargg cpu_test5) — the cond-br + phi-merge
+    /// overhead exceeds the savings from skipping the extern call,
+    /// because most NES bytecodes already had decent JIT inlining of
+    /// the indirect call. Kept as opt-in infrastructure to prove the
+    /// N7 TryGetHostPointer query API can drive JIT inline paths;
+    /// future architectures (CISC, longer reads per instr) may benefit.</para>
     /// </summary>
     internal static LLVMValueRef BusRead8(EmitContext ctx, LLVMValueRef addrI32, string label)
-        => MemoryEmitters.CallRead8(ctx, addrI32, label);
+    {
+        if (!s_fastmemEnabled)
+            return MemoryEmitters.CallRead8(ctx, addrI32, label);
+
+        var fn          = ctx.Function;
+        var i32         = LLVMTypeRef.Int32;
+        var fastBB      = fn.AppendBasicBlock($"{label}_fast");
+        var slowBB      = fn.AppendBasicBlock($"{label}_slow");
+        var afterBB     = fn.AppendBasicBlock($"{label}_after");
+
+        // Range check: addr < 0x2000 → WRAM region (mirrored every 2KB).
+        var wramHi = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntULT,
+            addrI32, LLVMValueRef.CreateConstInt(i32, 0x2000, false), $"{label}_in_wram");
+        ctx.Builder.BuildCondBr(wramHi, fastBB, slowBB);
+
+        // fast: load _wram[addr & 0x07FF].
+        ctx.Builder.PositionAtEnd(fastBB);
+        var (wramSlot, wramPtrType) = MemoryEmitters.GetOrDeclareRamBasePointer(
+            ctx.Module, MemoryEmitters.ExternFunctionNames.Mos6502WramBase);
+        var wramBase = ctx.Builder.BuildLoad2(wramPtrType, wramSlot, $"{label}_wbase");
+        var wramOff  = ctx.Builder.BuildAnd(addrI32,
+            LLVMValueRef.CreateConstInt(i32, 0x07FF, false), $"{label}_woff");
+        var wramAddr = ctx.Builder.BuildGEP2(LLVMTypeRef.Int8, wramBase,
+            new[] { wramOff }, $"{label}_waddr");
+        var fastVal  = ctx.Builder.BuildLoad2(LLVMTypeRef.Int8, wramAddr, $"{label}_fastv");
+        ctx.Builder.BuildBr(afterBB);
+
+        // slow: extern call.
+        ctx.Builder.PositionAtEnd(slowBB);
+        var slowVal = MemoryEmitters.CallRead8(ctx, addrI32, $"{label}_slowv");
+        ctx.Builder.BuildBr(afterBB);
+
+        // after: phi-merge fast and slow values.
+        ctx.Builder.PositionAtEnd(afterBB);
+        var phi = ctx.Builder.BuildPhi(LLVMTypeRef.Int8, label);
+        phi.AddIncoming(new[] { fastVal, slowVal }, new[] { fastBB, slowBB }, 2);
+        return phi;
+    }
+
+    /// <summary>
+    /// N11 — opt-in inline fastmem gate. Default OFF (regression on
+    /// blargg cpu_test5 block-JIT). Enable via env var
+    /// <c>APR_MOS6502_FASTMEM=1</c> for experimentation. Read once at
+    /// emitter-load time.
+    /// </summary>
+    private static readonly bool s_fastmemEnabled =
+        Environment.GetEnvironmentVariable("APR_MOS6502_FASTMEM") is { } v &&
+        (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
 
     internal static void BusWrite8(EmitContext ctx, LLVMValueRef addrI32, LLVMValueRef value8)
         => MemoryEmitters.CallWrite8(ctx, addrI32, value8);
