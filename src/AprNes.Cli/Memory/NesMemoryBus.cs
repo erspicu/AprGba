@@ -316,18 +316,19 @@ namespace AprNes.Cli.Memory
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public byte ReadByte(ushort addr)
         {
-            // N4.3 — O(1) page-table dispatch. The page table was built from
-            // the spec at boot, so a single array index reaches the region
-            // descriptor. Hot path: 1 array load + 1 enum switch. Compared
-            // to N3.2's linear scan (~2.5 iters average for NES), this drops
-            // ~3 conditional branches per access.
+            // N4.3 — O(1) page-table dispatch.
+            // N4.4 — handlers receive an OFFSET (region-local addr), not the
+            // absolute CPU bus addr. offset = (addr - region.Start) & mirror.
+            // Mapper is the one exception — mappers everywhere assume an
+            // absolute addr ($8000+, etc.) so we keep that convention.
             ref var p = ref _pageTable[addr >> PageShift];
+            ushort offset = (ushort)((addr - p.Start) & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0xFFFF));
             byte val = p.Kind switch
             {
-                RegionKind.Wram   => _wram[(addr - p.Start) & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0xFFFF)],
-                RegionKind.PpuIo  => ReadPpu((ushort)(p.Start | (addr & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0x0007)))),
-                RegionKind.ApuIo  => ReadApu(addr),
-                RegionKind.CartIo => _mapper.CpuRead(addr),
+                RegionKind.Wram   => _wram[offset],
+                RegionKind.PpuIo  => ReadPpu(offset),
+                RegionKind.ApuIo  => ReadApu(offset),
+                RegionKind.CartIo => _mapper.CpuRead(addr),     // mapper: absolute addr (convention)
                 _                 => _cpubus,
             };
             _cpubus = val;
@@ -346,19 +347,20 @@ namespace AprNes.Cli.Memory
             SmcWriteHook?.Invoke(addr);
 
             ref var p = ref _pageTable[addr >> PageShift];
+            ushort offset = (ushort)((addr - p.Start) & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0xFFFF));
             switch (p.Kind)
             {
                 case RegionKind.Wram:
-                    _wram[(addr - p.Start) & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0xFFFF)] = value;
+                    _wram[offset] = value;
                     break;
                 case RegionKind.PpuIo:
-                    WritePpu((ushort)(p.Start | (addr & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0x0007))), value);
+                    WritePpu(offset, value);
                     break;
                 case RegionKind.ApuIo:
-                    WriteApu(addr, value);
+                    WriteApu(offset, value);
                     break;
                 case RegionKind.CartIo:
-                    _mapper.CpuWrite(addr, value);
+                    _mapper.CpuWrite(addr, value);              // mapper: absolute addr (convention)
                     break;
                 // RegionKind.Unmapped: drop write (open-bus latch already updated above)
             }
@@ -437,42 +439,49 @@ namespace AprNes.Cli.Memory
         /// instruction.</summary>
         public bool ConsumePpuNmi() => _ppuConsumeNmiHook?.Invoke() ?? false;
 
-        private byte ReadPpu(ushort addr)
+        // N4.4 — ReadPpu / WritePpu now take a region-local OFFSET (0-7 after
+        // the bus's mirror_mask is applied). The bound NesPpu handles the
+        // routing — its ReadRegister still applies `& 7` defensively (cheap).
+        private byte ReadPpu(ushort offset)
         {
-            if (_ppuReadHook is { } hook) return hook(addr);
-            // Fallback: open-bus / write-only-register defaults.
-            return addr switch
+            if (_ppuReadHook is { } hook) return hook(offset);
+            // Fallback: open-bus / write-only-register defaults — offsets
+            // are PPU-register-local (0-7), not absolute $2000+ addrs.
+            return offset switch
             {
-                0x2002 => 0,      // PPUSTATUS — would be VBL flag etc.
-                0x2004 => 0,      // OAMDATA
-                0x2007 => 0,      // PPUDATA buffered read
-                _      => _cpubus // write-only registers return last bus value
+                0x02 => 0,        // PPUSTATUS ($2002) — VBL flag etc.
+                0x04 => 0,        // OAMDATA   ($2004)
+                0x07 => 0,        // PPUDATA   ($2007) buffered read
+                _    => _cpubus   // write-only registers return last bus value
             };
         }
 
-        private void WritePpu(ushort addr, byte value)
+        private void WritePpu(ushort offset, byte value)
         {
-            _ppuWriteHook?.Invoke(addr, value);
+            _ppuWriteHook?.Invoke(offset, value);
             // No-op fallback when no PPU bound; _cpubus already updated.
-            _ = addr; _ = value;
+            _ = offset; _ = value;
         }
 
         // --- APU + IO register stubs ---------------------------------------
+        // N4.4 — handlers receive a region-local OFFSET, not absolute addr.
+        // For apu_io ($4000-$401F, mirror_mask=0) offset = addr - 0x4000,
+        // so $4014 → 0x14, $4015 → 0x15, $4016 → 0x16, $4017 → 0x17.
 
-        private byte ReadApu(ushort addr)
+        private byte ReadApu(ushort offset)
         {
-            switch (addr)
+            switch (offset)
             {
-                case 0x4015: return 0;        // TODO: APU status
-                case 0x4016: return 0;        // TODO: joypad 1
-                case 0x4017: return 0;        // TODO: joypad 2 / frame counter status
-                default:     return _cpubus;  // open bus on write-only / unmapped
+                case 0x15: return 0;          // TODO: APU status ($4015)
+                case 0x16: return 0;          // TODO: joypad 1 ($4016)
+                case 0x17: return 0;          // TODO: joypad 2 / frame counter ($4017)
+                default:   return _cpubus;    // open bus on write-only / unmapped
             }
         }
 
-        private void WriteApu(ushort addr, byte value)
+        private void WriteApu(ushort offset, byte value)
         {
-            if (addr == 0x4014)
+            if (offset == 0x14)               // $4014 OAM DMA
             {
                 OamDma(value);
                 return;
