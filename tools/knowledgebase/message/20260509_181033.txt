@@ -1,0 +1,208 @@
+Timestamp: 2026-05-09T18:10:33
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I'm looking for design feedback on the memory-map declarative spec format + dispatch strategy in my multi-CPU JIT framework (C# / .NET 10 / LLVM 20).
+
+CONTEXT (prior consultation history):
+
+You consulted me earlier on declarative block-JIT policy (logged 2026-05-09 in tools/knowledgebase/message/20260509_163828.txt). Key takeaway from that round: split CPU spec from Machine spec — a CPU shouldn't know about a board's memory map. I implemented that split: spec/<arch>/cpu.json holds ISA semantics, spec/machines/<machine>.json holds memory map + interrupt vectors. The framework now boots up with both specs and the bus dispatches via a region table built from the machine spec.
+
+The N3 phase just landed and went well except one structural issue (N3.3 — the cycles.form is per-mnemonic but real cycles are per-(mnemonic, addressing-mode); blocked, documented). Per the new doc 21 § N3.3, the fix candidate is per-format cycle_table mapping bbb selector → cycle count.
+
+Now I want a fresh look specifically at the MEMORY SPEC + DISPATCH STRATEGY, with you as a sanity check.
+
+CURRENT SCHEMA (machine-spec.schema.json):
+
+```json
+{
+  "name": "nes-ntsc",
+  "cpu": "Ricoh2A03",
+  "memory_regions": [
+    {
+      "name": "wram",
+      "addr_start": "0x0000",
+      "addr_end_exclusive": "0x2000",
+      "type": "ram",
+      "mirror_mask": "0x07FF",
+      "fastmem_eligible": true,
+      "smc_notify": true
+    },
+    {
+      "name": "ppu_io",
+      "addr_start": "0x2000",
+      "addr_end_exclusive": "0x4000",
+      "type": "io",
+      "mirror_mask": "0x2007",
+      "side_effects": ["ppu"]
+    },
+    {
+      "name": "apu_io",
+      "addr_start": "0x4000",
+      "addr_end_exclusive": "0x4020",
+      "type": "io",
+      "side_effects": ["apu", "oam_dma", "joypad"]
+    },
+    {
+      "name": "cart_prg",
+      "addr_start": "0x4020",
+      "addr_end_exclusive": "0x10000",
+      "type": "io",
+      "side_effects": ["mapper"],
+      "forces_end_of_block": true
+    }
+  ],
+  "interrupt_vectors": { "nmi": "0xFFFA", "reset": "0xFFFC", "irq": "0xFFFE" }
+}
+```
+
+Each region has:
+- addr_start / addr_end_exclusive (uint, accept hex string "0x..." or decimal)
+- type: enum { ram, rom, io }
+- mirror_mask (uint, optional) — "a write to addr X is mirrored to (X & mirror_mask | start)" semantically; default = no mirror
+- fastmem_eligible (bool, opt-in for block-JIT inline GEP-store)
+- forces_end_of_block (bool, default true for io)
+- smc_notify (bool, default true for ram)
+- writable (bool, default false for rom)
+- side_effects (string[]) — first entry maps to dispatch kind in C#
+
+CURRENT DISPATCH IMPLEMENTATION (NesMemoryBus.cs):
+
+Built once at construction from MachineSpec. Internal struct:
+
+```csharp
+struct RegionEntry { int Start; int End; ushort MirrorMask; RegionKind Kind; bool SmcNotify; }
+enum RegionKind { Unmapped, Wram, PpuIo, ApuIo, CartIo }
+
+byte ReadByte(ushort addr) {
+    for (int i = 0; i < _regions.Length; i++) {
+        ref var r = ref _regions[i];
+        if (addr < r.End) {
+            if (addr < r.Start) break;   // gap = unmapped (return open-bus)
+            return r.Kind switch {
+                RegionKind.Wram   => _wram[(addr - r.Start) & (r.MirrorMask | 0xFFFF)],
+                RegionKind.PpuIo  => ReadPpu(r.Start | (addr & r.MirrorMask)),
+                RegionKind.ApuIo  => ReadApu(addr),
+                RegionKind.CartIo => _mapper.CpuRead(addr),
+                _ => 0,
+            };
+        }
+    }
+    return 0;
+}
+```
+
+`ClassifyRegion()` maps spec.region.side_effects[0] to RegionKind (string match: "ppu"→PpuIo, "apu"|"oam_dma"|"joypad"→ApuIo, "mapper"→CartIo). This is essentially a hardcoded routing table from spec tag names to C# handlers.
+
+PERF: legacy backend dropped 7% (1.69 → 1.57 MIPS) on blargg_nes_cpu_test5 110M cycles vs the pre-N3 hardcoded if-else chain. JIT backends within noise. 4 regions linear scan vs 4-way if-else.
+
+OPEN QUESTIONS — please critique with brutal honesty:
+
+1. **The string-tag → C# handler routing**: "ppu" / "apu" / "mapper" are spec strings that I hardcode-map to C# delegates in the bus class. This means adding a new side-effect category requires both a spec change AND a C# code change. Is there a cleaner pattern? E.g. registries keyed by tag name, or auto-discovered handler classes?
+
+2. **mirror_mask semantics**: I made up a half-baked rule where `(addr & mirror_mask) | start` is the canonical mirrored address. This works for NES PPU (mirror_mask 0x2007 + start 0x2000 → canonical 0x2000–0x2007 stripe) and for WRAM (mirror_mask 0x07FF + start 0x0000 → wraps within 2KB). But it's brittle — what if a region's mirror is more complex, like "every 0x1000 within 0x10000"? Should the spec have a more general "period" or pattern-based mirror description?
+
+3. **Tile-the-whole-space assumption**: Currently I assume regions don't overlap and gaps mean unmapped/open-bus. NES happens to tile cleanly. Will this break for ARM (huge sparse 32-bit address space with multiple gap regions: $00010000-$01FFFFFF unmapped), or m68k ($01000000+ unmapped on 24-bit chips)? Should the spec validator complain about gaps, or allow them as "unmapped"?
+
+4. **Performance scaling**: 4 regions linear scan is fine; 8 regions for GBA is borderline (BIOS, EWRAM, IWRAM, IO, palette, VRAM, OAM, ROM). 32-bit address space + ~10 regions still works for linear scan but becomes O(N) when regions tile sparsely. Should the framework provide multiple dispatch strategies (linear / binary / lookup table indexed by upper-N-bits)? Or is linear scan with branch-predicted hot paths fine for the typical 5-15 regions?
+
+5. **The fastmem_eligible flag**: Currently used as a hint for block-JIT "can inline GEP-store" — but the inline-GEP IR generation lives in arch-specific emitters (Lr35902Emitters.EmitWriteByteWithSyncAndRamFastPath only). NES doesn't yet leverage fastmem from MachineSpec. Should this hint be more declarative — e.g. region declares "this is a contiguous byte[] at host pointer P (resolved at runtime), inline GEP-store with these bounds"? Or stay arch-specific because the actual IR shape varies?
+
+6. **Side-effect ordering**: I currently treat side_effects[] as a tagged list where the FIRST entry routes the dispatch (see ClassifyRegion). But the array ordering is semantic — e.g. cart_prg has side_effects=["mapper"] but a real region might have multiple subsystems handling it. Should this be a single "handler" string + an optional "side_effect_tags" array for additional metadata?
+
+7. **General sanity check**: are there fields you'd add (e.g. cache_policy, alignment_required, byte_order_override)? Anything you'd remove as over-design?
+
+Be direct about anything that smells like over-design or under-design. The framework currently has 3 CPUs with this format; we'd like to be sure before adding a 4th.
+
+========================================================================
+RESPONSE
+========================================================================
+Here is the brutally honest, strictly technical critique of your declarative memory map and dispatch strategy. 
+
+### 1. The String-Tag → C# Handler Routing
+**The Verdict:** Under-designed and coupled. Hardcoding a `switch` statement in C# that maps JSON strings to specific component methods defeats the purpose of data-driven specs. You haven’t separated the Machine from the CPU; you’ve just moved the coupling into `NesMemoryBus.cs`. 
+**The Fix:** Use a **Handler Registry**. The JSON spec should define a `handler` string. During machine bootup, your components (PPU, APU, Mapper) register their read/write delegates with the bus builder using that exact string.
+```csharp
+// Boot phase
+busBuilder.RegisterHandler("ppu_io", ppu.Read, ppu.Write);
+busBuilder.RegisterHandler("wram", ram.Read, ram.Write);
+
+// Bus construction phase matches JSON "handler" to registered delegates
+```
+This means adding a new side-effect or a 4th CPU system requires *zero* changes to the core bus routing code. 
+
+### 2. `mirror_mask` Semantics
+**The Verdict:** Half-baked and mathematically brittle. `(addr & mirror_mask) | start` relies on coincidental bitwise alignment of your start addresses. It will break the moment you have a region starting at `0x1200` that mirrors every `0x0100` bytes.
+**The Fix:** Apply masks to the **offset**, not the absolute address. 
+```json
+"mirror_period": "0x0800" // or mask: "0x07FF"
+```
+```csharp
+// Implementation
+int offset = (addr - r.Start) & r.MirrorMask; 
+// or: int offset = (addr - r.Start) % r.MirrorPeriod;
+return handler(offset); // Handlers should receive offsets, not absolute addresses!
+```
+Passing the *offset* to the handler (e.g., passing `0-7` to the PPU instead of `0x2000-0x2007`) simplifies the component logic immensely. The component shouldn't care where it is mapped in the address space.
+
+### 3. Tile-The-Whole-Space Assumption (Gaps)
+**The Verdict:** Tiling cleanly is an 8-bit luxury. ARM and m68k will laugh at you. Gaps are standard, expected, and necessary.
+**The Fix:** Your `if (addr < r.Start) break;` logic works for handling gaps *if* the array is sorted, but it forces "open bus" to return `0`. On many systems, open bus returns the last value on the data lines, or triggers a CPU exception (e.g., ARM Data Abort). 
+*   **Validator:** Do NOT complain about gaps.
+*   **Spec:** Add a machine-level `"unmapped_behavior": "zero" | "ignore" | "fault" | "last_bus_value"`.
+*   **Code:** If `addr` falls in a gap, route it to an `UnmappedHandler` configured by the spec.
+
+### 4. Performance Scaling (The 7% Drop)
+**The Verdict:** A linear array scan inside a tight inner interpreter loop is a classic performance killer. The 7% drop isn't from the work being done, it's from the bounds checks and pipeline stalls on the `r.End` branches. It will absolutely tank on a GBA (10+ regions) or ARM.
+**The Fix:** Use a **Page Table** (Flat Lookup Array) for the C# fallback, and JIT-emit binary searches (or inline page tables) for LLVM.
+For a 16-bit address space (NES), create an array of 64 or 256 handler structs. 
+```csharp
+// 16-bit space, 1KB pages = 64 elements. 
+// Startup time: ~0.01ms to populate.
+// Runtime lookup: O(1)
+ref var page = ref _pageTable[addr >> 10];
+return page.Handler(addr); 
+```
+For 32-bit (ARM), use a 2-level page table (e.g., top 8 bits point to a sub-table). The memory overhead is trivial (a few KB), and it returns your interpreter to $O(1)$ dispatch time, immediately reclaiming that 7% performance loss.
+
+### 5. The `fastmem_eligible` Flag
+**The Verdict:** Leaky abstraction. `fastmem` is a JIT optimization strategy, not a hardware specification. The JSON is dictating compiler optimizations. 
+**The Fix:** The spec should only declare hardware facts: `"type": "ram"`. 
+The JIT framework should query the Bus at compilation time:
+```csharp
+if (bus.TryGetHostPointer(addr, out IntPtr hostPtr, out int length)) {
+    // LLVM Emitter generates an inline GEP-store
+} else {
+    // LLVM Emitter generates a callout to the C# Bus
+}
+```
+This decouples the JIT from the JSON. If the region is backed by a pinned C# `byte[]` and has no complex read/write side effects, `TryGetHostPointer` succeeds. 
+
+### 6. Side-Effect Ordering (`side_effects[0]` for routing)
+**The Verdict:** Hidden semantic rules ("the first element in this array is magically the primary routing key") are a classic source of tech debt. 
+**The Fix:** Be explicit. Separate the *handler* from the *side-effects*.
+```json
+{
+  "name": "cart_prg",
+  "handler": "mapper",
+  "snooped_by": ["other_system"],
+  "is_pure": false
+}
+```
+If an address write needs to go to two places, the Bus's registration system (from Point 1) should compose a multicast delegate, or the primary handler should trigger the side effect. 
+
+### 7. General Sanity Check (Over/Under-design)
+
+**Remove (Over-design):** 
+*   `forces_end_of_block`: The hardware doesn't know what a JIT basic block is. Replace this with `"volatile": true` or `"is_pure": false`. The CPU's JIT compiler should decide that a volatile memory access terminates a block.
+
+**Add (Under-design - Critical for CPUs 3 and 4):**
+*   **Access Widths:** NES is 8-bit, but GBA/ARM components care deeply about access widths. A 16-bit write to 8-bit SRAM on GBA ignores the top byte. A 8-bit write to GBA VRAM writes the same byte twice (mirrored) or is ignored depending on the exact address. Your region spec *must* support `"allowed_widths": [8, 16, 32]` and `"width_mismatch_behavior"`.
+*   **Permissions:** Add `"readable": true` and `"writable": false`. A write to ROM shouldn't require a dummy C# handler; the bus should reject it via the spec.
+*   **Wait States / Cycles:** If you want accurate timing later, memory regions need cycle penalties. GBA GamePak ROM is notoriously slow (e.g., 4 wait states for sequential, 2 for non-sequential). Add a `"wait_states": { "seq": 1, "nonseq": 1 }` object for future-proofing.
+
+### Summary Strategy for N4:
+1. **Change JSON schema:** swap `side_effects[0]` to `"handler": "str"`, add explicit `mask` and access permissions, remove JIT-specific flags.
+2. **Refactor Bus Builder:** Parse JSON, map `"handler": "ppu"` to `Action/Func` via a runtime registry. 
+3. **Optimize Dispatch:** Throw away the 4-element struct array loop. Build a 64-element array (1KB pages) that maps `addr >> 10` directly to the registered delegate. (This guarantees you will beat your legacy MIPS benchmark).

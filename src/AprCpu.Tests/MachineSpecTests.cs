@@ -22,16 +22,23 @@ public class MachineSpecTests
         Assert.Equal(0x2000u, wram.AddrEndExclusive);
         Assert.Equal(MemoryRegionKind.Ram, wram.Kind);
         Assert.Equal(0x07FFu, wram.MirrorMask);
-        Assert.True(wram.FastmemEligible);
         Assert.True(wram.SmcNotify);            // smc_notify default-on for ram
-        Assert.False(wram.ForcesEndOfBlock);    // forces_end_of_block default-off for ram
+        Assert.False(wram.ForcesEndOfBlock);    // v1-deprecated; default-off for ram
+
+        // N4 v2 schema fields:
+        Assert.Equal("wram", wram.Handler);     // explicit handler routing key
+        Assert.NotNull(wram.AllowedWidths);
+        Assert.Contains(8, wram.AllowedWidths!);
 
         var cartPrg = spec.MemoryRegions.Single(r => r.Name == "cart_prg");
         Assert.Equal(0x4020u, cartPrg.AddrStart);
         Assert.Equal(0x10000u, cartPrg.AddrEndExclusive);
         Assert.Equal(MemoryRegionKind.Io, cartPrg.Kind);
-        Assert.True(cartPrg.ForcesEndOfBlock);  // explicitly set
-        Assert.Contains("mapper", cartPrg.SideEffects);
+        Assert.Equal("mapper", cartPrg.Handler);   // v2 — explicit handler
+
+        // N4 spec_version + unmapped_behavior load from machine root
+        Assert.Equal("2.0", spec.SpecVersion);
+        Assert.Equal(UnmappedBehavior.Zero, spec.UnmappedBehavior);
     }
 
     [Fact]

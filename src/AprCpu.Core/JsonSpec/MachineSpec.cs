@@ -19,7 +19,24 @@ public sealed record MachineSpec(
     string Name,
     string CpuRef,
     IReadOnlyList<MemoryRegion> MemoryRegions,
-    IReadOnlyDictionary<string, uint> InterruptVectors);
+    IReadOnlyDictionary<string, uint> InterruptVectors,
+    // N4.1 — schema v2 fields. Optional; legacy v1 specs that omit these
+    // load with sensible defaults.
+    string SpecVersion = "1.0",
+    UnmappedBehavior UnmappedBehavior = UnmappedBehavior.Zero);
+
+/// <summary>
+/// N4.1 — machine-level policy for accesses that fall in gaps between
+/// declared memory_regions. NES tiles cleanly so this defaults to Zero;
+/// ARM/m68k bus may want Fault or LastBusValue.
+/// </summary>
+public enum UnmappedBehavior
+{
+    Zero,            // return 0; writes silently dropped
+    Ignore,          // same as Zero (no-op writes); reads also return 0
+    Fault,           // bus exception — caller decides handling
+    LastBusValue     // open-bus latch (last cpu-bus value read by CPU)
+}
 
 /// <summary>
 /// One contiguous CPU-bus address range with a uniform handling policy.
@@ -33,11 +50,19 @@ public sealed record MemoryRegion(
     uint AddrEndExclusive,
     MemoryRegionKind Kind,
     uint? MirrorMask,
-    bool FastmemEligible,
-    bool ForcesEndOfBlock,
+    bool FastmemEligible,    // v1 — DEPRECATED; bus.TryGetHostPointer query API replaces it
+    bool ForcesEndOfBlock,   // v1 — DEPRECATED; use Volatile in v2
     bool SmcNotify,
     bool Writable,
-    IReadOnlyList<string> SideEffects);
+    IReadOnlyList<string> SideEffects,    // v1 — back-compat; v2 uses Handler+Observers
+    // N4.1 — v2 fields. Optional; v1 specs that omit them get sensible defaults.
+    string? Handler = null,                          // routing key into bus's RegisterHandler registry
+    IReadOnlyList<int>? AllowedWidths = null,        // null = any width; else e.g. [8] for NES
+    bool? Readable = null,                            // null = derived from Kind (rom/ram/io = true)
+    bool? Volatile = null,                            // null = derived from Kind (io = true)
+    IReadOnlyList<string>? Observers = null,         // metadata-only side-effect tags
+    int? WaitStatesSeq = null,                        // future: cart-rom timing
+    int? WaitStatesNonseq = null);
 
 public enum MemoryRegionKind
 {
@@ -96,7 +121,25 @@ public static class MachineSpecLoader
                 vectors[v.Name] = ParseUint(v.Value, $"interrupt_vectors.{v.Name}");
         }
 
-        return new MachineSpec(name, cpuRef, regions, vectors);
+        var specVersion = "1.0";
+        if (root.TryGetProperty("spec_version", out var sv) && sv.ValueKind == JsonValueKind.String)
+            specVersion = sv.GetString() ?? "1.0";
+
+        var unmappedBehavior = UnmappedBehavior.Zero;
+        if (root.TryGetProperty("unmapped_behavior", out var ub) && ub.ValueKind == JsonValueKind.String)
+        {
+            unmappedBehavior = ub.GetString()?.ToLowerInvariant() switch
+            {
+                "zero"            => UnmappedBehavior.Zero,
+                "ignore"          => UnmappedBehavior.Ignore,
+                "fault"           => UnmappedBehavior.Fault,
+                "last_bus_value"  => UnmappedBehavior.LastBusValue,
+                _ => throw new InvalidDataException(
+                    $"unmapped_behavior must be one of zero/ignore/fault/last_bus_value; got '{ub.GetString()}'")
+            };
+        }
+
+        return new MachineSpec(name, cpuRef, regions, vectors, specVersion, unmappedBehavior);
     }
 
     private static MemoryRegion ParseMemoryRegion(JsonElement el)
@@ -153,9 +196,57 @@ public static class MachineSpecLoader
             }
         }
 
+        // N4.1 — schema v2 fields. All optional with sensible defaults.
+        string? handler = null;
+        if (el.TryGetProperty("handler", out var hEl) && hEl.ValueKind == JsonValueKind.String)
+            handler = hEl.GetString();
+        // Back-compat: if handler not specified but side_effects[0] exists,
+        // use side_effects[0] as the routing key (v1 implicit behavior).
+        if (handler is null && sideEffects.Count > 0) handler = sideEffects[0];
+
+        List<int>? allowedWidths = null;
+        if (el.TryGetProperty("allowed_widths", out var awEl) && awEl.ValueKind == JsonValueKind.Array)
+        {
+            allowedWidths = new List<int>();
+            foreach (var w in awEl.EnumerateArray())
+            {
+                if (w.ValueKind == JsonValueKind.Number) allowedWidths.Add(w.GetInt32());
+            }
+        }
+
+        bool? readable = null;
+        if (el.TryGetProperty("readable", out var rEl) && rEl.ValueKind != JsonValueKind.Null)
+            readable = rEl.GetBoolean();
+
+        bool? volatileFlag = null;
+        if (el.TryGetProperty("volatile", out var volEl) && volEl.ValueKind != JsonValueKind.Null)
+            volatileFlag = volEl.GetBoolean();
+
+        List<string>? observers = null;
+        if (el.TryGetProperty("observers", out var obsEl) && obsEl.ValueKind == JsonValueKind.Array)
+        {
+            observers = new List<string>();
+            foreach (var o in obsEl.EnumerateArray())
+            {
+                var str = o.GetString();
+                if (str != null) observers.Add(str);
+            }
+        }
+
+        int? waitSeq = null, waitNonseq = null;
+        if (el.TryGetProperty("wait_states", out var wsEl) && wsEl.ValueKind == JsonValueKind.Object)
+        {
+            if (wsEl.TryGetProperty("seq", out var ws1) && ws1.ValueKind == JsonValueKind.Number)
+                waitSeq = ws1.GetInt32();
+            if (wsEl.TryGetProperty("nonseq", out var ws2) && ws2.ValueKind == JsonValueKind.Number)
+                waitNonseq = ws2.GetInt32();
+        }
+
         return new MemoryRegion(
             name, addrStart, addrEnd, kind, mirrorMask,
-            fastmem, forcesEnd, smcNotify, writable, sideEffects);
+            fastmem, forcesEnd, smcNotify, writable, sideEffects,
+            handler, allowedWidths, readable, volatileFlag, observers,
+            waitSeq, waitNonseq);
     }
 
     /// <summary>Parse a JSON value as uint — accepts integer, decimal string, or "0x..." hex string.</summary>

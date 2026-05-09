@@ -1,15 +1,20 @@
 {
     "$schema": "../schema/machine-spec.schema.json",
+    "spec_version": "2.0",
     "name": "nes-ntsc",
     "cpu": "Ricoh2A03",
+    "unmapped_behavior": "zero",
     "memory_regions": [
         {
             "name": "wram",
             "addr_start": "0x0000",
             "addr_end_exclusive": "0x2000",
             "type": "ram",
+            "handler": "wram",
             "mirror_mask": "0x07FF",
-            "fastmem_eligible": true,
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8],
             "smc_notify": true
         },
         {
@@ -17,23 +22,29 @@
             "addr_start": "0x2000",
             "addr_end_exclusive": "0x4000",
             "type": "io",
-            "mirror_mask": "0x2007",
-            "side_effects": ["ppu"]
+            "handler": "ppu",
+            "mirror_mask": "0x0007",
+            "allowed_widths": [8],
+            "volatile": true
         },
         {
             "name": "apu_io",
             "addr_start": "0x4000",
             "addr_end_exclusive": "0x4020",
             "type": "io",
-            "side_effects": ["apu", "oam_dma", "joypad"]
+            "handler": "apu",
+            "allowed_widths": [8],
+            "volatile": true,
+            "observers": ["oam_dma", "joypad"]
         },
         {
             "name": "cart_prg",
             "addr_start": "0x4020",
             "addr_end_exclusive": "0x10000",
             "type": "io",
-            "side_effects": ["mapper"],
-            "forces_end_of_block": true
+            "handler": "mapper",
+            "allowed_widths": [8],
+            "volatile": true
         }
     ],
     "interrupt_vectors": {
