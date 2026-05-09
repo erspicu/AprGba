@@ -276,12 +276,15 @@ AprGba/
 │   │                                  runner (GbaMemoryBus / GbaScheduler /
 │   │                                  GbaSystemRunner)
 │   ├── AprCpu.Compiler/         ← CLI: `aprcpu --spec X.json --output Y.ll`
-│   ├── AprCpu.Tests/            ← xUnit (360 tests)
+│   ├── AprCpu.Tests/            ← xUnit (455 tests)
 │   ├── AprGba.Cli/              ← `apr-gba` GBA harness (Program/Video/RomPatcher)
-│   └── AprGb.Cli/               ← `apr-gb` Game Boy harness (legacy + json-llvm)
+│   ├── AprGb.Cli/               ← `apr-gb` Game Boy harness (legacy + json-llvm)
+│   └── AprNes.Cli/              ← `apr-nes` NES harness (legacy + json + json-block)
 ├── spec/
 │   ├── arm7tdmi/                ← cpu.json + arm/thumb sub-specs
-│   └── lr35902/                 ← cpu.json + 25 group files (block0/1/2/3 + cb-*)
+│   ├── lr35902/                 ← cpu.json + 25 group files (block0/1/2/3 + cb-*)
+│   ├── 2a03/                    ← cpu.json + 7 cc-pattern groups + unofficial
+│   └── machines/                ← MachineSpec — nes-ntsc / gba / gb-dmg memory maps
 ├── test-roms/                   ← gba-tests/ + gb-tests/
 ├── BIOS/                        ← gba_bios.bin (LLE)
 ├── ref/                         ← vendor manuals + datasheets (gitignored 大檔)

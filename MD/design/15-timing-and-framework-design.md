@@ -1,6 +1,9 @@
 # 進階 timing 準確處理 + 框架通用結構 — 設計觀念與方法
 
-> **Status**: design synthesis (2026-05-04)
+> **Status**: design synthesis (2026-05-04)；**2026-05-09 update**：N0
+> 系列加進第三顆 CPU（Ricoh 2A03 / NES）後，本 doc 預測的「sync / defer /
+> SMC / region inline framework-level 抽象」在新 CPU 上 reuse 良好，
+> Mos6502Emitters 沒重新發明任何 timing pattern。
 > **Scope**: 解釋 AprCpu framework 在 block-JIT 模式下如何在「保持
 > cycle-accurate timing」跟「保持 framework 通用性」之間取得平衡的設計
 > 觀念、方法、跟取捨。
@@ -9,7 +12,7 @@
 > `14-irq-sync-fastslow.md`、`12-gb-block-jit-roadmap.md`）；本檔是
 > synthesis，把底層觀念 + 通用化方法寫清楚。
 >
-> **目標讀者**：未來要 (a) 移植第三顆 CPU 的人、(b) 維護 timing 行為的
+> **目標讀者**：未來要 (a) 移植第 4 顆 CPU 的人、(b) 維護 timing 行為的
 > 人、(c) 想理解「為何要設計成這樣」的 future me。
 
 ---
@@ -25,7 +28,8 @@ behaviour 在 block-JIT 模式下都會被破壞。
 行業裡解這題的方案各家都有（QEMU TCG、Dynarmic、mGBA、Dolphin），但都是
 **arch-specific**：一套 ARM 邏輯、一套 PowerPC 邏輯、再一套 SH-4 邏輯。
 我們的不同：**JSON-driven framework**——同一個 BlockFunctionBuilder 跑
-ARM、Thumb、LR35902，未來再加 6502 / Z80 / 8080 也走同一條路。
+ARM、Thumb、LR35902、**6502 (NES，N0 系列加進)**，未來再加 Z80 / 8080 /
+8086 也走同一條路。
 
 這 doc 紀錄的是「**怎麼把 timing-accurate 機制設計成 framework-level，而
 不是每顆 CPU 重寫一遍**」的觀念跟方法。寫下來的價值：

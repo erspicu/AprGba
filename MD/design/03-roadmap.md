@@ -4,8 +4,9 @@
 
 業餘投入估計：每週 8–15 小時。
 
-> **狀態快照**（2026-05-03 更新）：Phase 0/1/2/2.5/2.6/3/4.1/4.2/4.3/4.4/
-> 4.5/5/7（部分）/8 ✅ 完成。
+> **狀態快照**（2026-05-09 更新）：Phase 0/1/2/2.5/2.6/3/4.1/4.2/4.3/4.4/
+> 4.5/5/7（部分）/8 ✅ 完成；**N0-N11 (NES 2A03 + spec-driven runtime
+> 系列)** ✅ 完成（2026-05-09）。詳見本文件最後新增的「N 系列」段。
 >
 > - **MVP**：GBA 端 test-ROM → 真 Nintendo BIOS LLE → 完整 PPU pipeline
 >   (Mode 0/1/2/3/4 + OBJ + BLDCNT + WIN)。GB 端 BIOS LLE + DMG Nintendo®
@@ -23,12 +24,14 @@
 >   characteristic + followup。C.b lazy flag deferred (correctness regression
 >   in BJIT/BIOS-LLE，main 的版本不適合 recovery 分支結構)。
 > - **QA 流程**：所有 commit 依改動性質跑對應 tier，見
->   [`MD/process/01-commit-qa-workflow.md`](/MD/process/01-commit-qa-workflow.md)（T0 docs / T1 360 unit tests /
+>   [`MD/process/01-commit-qa-workflow.md`](/MD/process/01-commit-qa-workflow.md)（T0 docs / T1 unit tests /
 >   T2 8-combo screenshot matrix / T3 3-run loop100 bench / T4 baseline
 >   update）。
 >
-> 360 個 unit test 全綠；跨 GB + GBA 兩 CLI 操作介面 (`--bios` / `--cycles`
-> / `--frames` / `--seconds` / `--screenshot` / `--block-jit`) 一致。
+> 截至 2026-05-09 為 **455 個 unit test 全綠**；跨 GB + GBA + **NES** 三個
+> CLI 操作介面（`--bios` / `--cycles` / `--frames` / `--seconds` /
+> `--screenshot` / `--block-jit` / NES 端 `--nestest` / `--diff` / `--diff-block` /
+> `--max-cycles` / `--backend=legacy|json|json-block`）一致。
 >
 > 完整收工筆記：[`MD/note/phase5.7-bios-lle-and-ppu-2026-05.md`](/MD/note/phase5.7-bios-lle-and-ppu-2026-05.md)；refactor
 > 進度：[`MD/design/11-emitter-library-refactor.md`](/MD/design/11-emitter-library-refactor.md)；Phase 7 perf 紀錄：
@@ -1040,9 +1043,11 @@ T2 fail = 不准 commit；T3 退步 > 5% 要追 root cause 再決定 ship/revert
 - 商業遊戲相容性測試與 bug fix
 - 開源、文件、社群
 - AOT 預編譯 `.bc` 快取（避開 cold-start LLVM 編譯成本）
-- 第三顆 CPU 驗證（Phase 4.5 GB 之後若想再驗證一次，可考慮 MIPS R3000、
+- ~~第三顆 CPU 驗證（Phase 4.5 GB 之後若想再驗證一次，可考慮 MIPS R3000、
   RISC-V RV32I 之類；6502 因為太簡單，覆蓋不到 framework 已驗證的點，
-  不特別優先）
+  不特別優先）~~ → **2026-05-09 update**：6502 / NES 還是做了（N0-N11
+  系列），實際發現邊際效益遠超預估。詳見本 doc 末「N 系列」段。下一顆
+  候選：8086（segmented memory + 16-bit CISC）。
 
 ### 明確不打算做的事（避免 scope creep）
 
@@ -1102,10 +1107,73 @@ GBA 端 MVP 全收完（2026-05-02）：BIOS LLE + jsmolka arm/thumb/bios
 3. **Audio (APU)** — hand-written，跟 PPU 同套寫法
 4. **Phase 7 block-JIT** — 把 GBA 4.4 MIPS 拉到 ≥ real-time（test ROM
    截圖不需要，但跑商業遊戲或加 GUI 必要）
-5. **第三顆 CPU 移植** — MIPS R3000 / RISC-V RV32I 之類，加碼驗證
-   framework 通用性
+5. ~~**第三顆 CPU 移植** — MIPS R3000 / RISC-V RV32I 之類，加碼驗證
+   framework 通用性~~ → **已完成 2026-05-09**（6502 / NES，N0-N11）；
+   下一顆候選 = Intel 8086
 6. **AOT 預編譯 `.bc` 快取** — 避開 cold-start LLVM 編譯成本（~250ms）
 
 完整收工筆記見：
 - [`MD/note/phase5-gba-mvp-complete-2026-05.md`](/MD/note/phase5-gba-mvp-complete-2026-05.md)（5.1–5.4）
 - [`MD/note/phase5.7-bios-lle-and-ppu-2026-05.md`](/MD/note/phase5.7-bios-lle-and-ppu-2026-05.md)（5.5–5.7 + Phase 8）
+
+---
+
+## N 系列：NES 2A03 + spec-driven runtime 深化（2026-05-09）✅ 完成
+
+Phase 9 之後新增的 milestone series — 以加第三顆 CPU（Ricoh 2A03 / NES）為
+切入點，把 framework 的宣告式比例從 ~50% 推到 ~85%，期間找出多個 spec
+format / 通用 pattern 的缺口並補齊。共 32 個 N-tagged commits 跨 11 個
+sub-series。
+
+| Series | 內容 | 範圍 |
+|---|---|---|
+| **N0** | Ricoh 2A03 第三顆 CPU bootstrap | 3rd CPU JSON spec validation, NesMemoryBus + nestest PASS, NesPpu + Mapper000/001 + blargg cpu_test5 PASS |
+| **N1** | NesJsonCpu (per-instr + block-JIT) | Mos6502Emitters + spec.steps + LAX/SHY/SHX/illegal opcodes; nestest + blargg 三 backend 全 PASS |
+| **N2** | Framework primitives + 三 CPU isa_metadata | MachineSpec / Immediate / pageShift / forces_end_of_block；ARM7TDMI / LR35902 / 2A03 isa_metadata 對齊；imm-bake fast path |
+| **N3** | Spec-driven runtime | NES interrupt vectors / memory bus dispatch / per-instr cycle table 全部從 MachineSpec 讀；N3.3 起初標 BLOCKED（per-(mnem,addr-mode) cycle granularity）後在 N3.3-finally RESOLVED |
+| **N4** | Memory spec v2 | handler registry + page-table O(1) dispatch + offset semantics；GBA + GB DMG spec 升級 v2；perf 從 N3.2 7% 退步救回 |
+| **N5** | 通用 lockstep diff toolkit | `ISteppableCpu` + `LockstepDiff.Run`；NES adapter；toy CPU divergence test 證明 toolkit 真的能 catch 分歧 |
+| **N7** | N4 closeout §3 follow-ups | `TryGetHostPointer` / `IsAccessWidthAllowed` / `GetWaitStates` 三個 query API 上線 |
+| **N8** | ARM page-table for GbaMemoryBus | 256-entry table indexed by `addr >> 24`；spec-driven build；MachineSpec cross-validation 測試 |
+| **N9** | Spec format — dynamic cycle penalties | `extra_when_taken` / `extra_when_page_cross` 加進 Cycles record；6502 branches 全部 declarative |
+| **N10** | allowed_widths debug enforcement | GbaMemoryBus 的 EnforceAllowedWidths flag；spec ↔ runtime invariant 強制 |
+| **N11** | fastmem block-JIT integration | Mos6502WramBase extern + 6502 inline GEP-load fastpath；env var gate (`APR_MOS6502_FASTMEM`)，foundation 證明 |
+
+### N3.3 BLOCKED → RESOLVED：學術洞察
+
+N3 收尾原本把 cycle table 限制歸類為「framework 抽象到頂、需要 spec
+format 改造的結構性 blocker」、悲觀估「framework 上限 ~70%」。實際上完
+N4-N11 之後回頭看，schema 改造只需 12 行 C# resolver（`CycleTable.Resolve`）
++ mechanical 填表：
+
+- `MD/performance/202605091804-n3-declarative-ratio.md` 把 ratio 標 70%
+- `MD/performance/202605091900-n4-memory-spec-v2.md` 推到 78%
+- `MD/performance/202605092000-n33-full-spec-cycles.md` 補完到 ~85%
+
+「真正 fundamental 的 escape hatch」估計從 30% 縮到約 10% — 只剩 mapper
+state machine、PPU/APU heavy side effects、NMI procedural sequence
+(~500 LOC C#) 真的出 framework 邊界。
+
+### Perf 跨 milestone 對照（blargg cpu_test5, 3-run avg, MIPS）
+
+| Backend | N1 baseline | N3.4 | N4.6 | N3.3-finally | N9-end (now) |
+|---|---:|---:|---:|---:|---:|
+| legacy | 1.69 | 1.57 | 1.65 | 1.64 | 1.66 |
+| json (per-instr) | 0.83 | 0.81 | 0.82 | 0.83 | 0.83 |
+| json-block | 0.78 | 0.80 | 0.80 | 0.82 | 0.81 |
+
+整 4 milestone 累積結果：legacy 距 N1 baseline ~3%，per-instr 持平，
+block-JIT 反超 N1 約 5%。**每一步都同時提升 declarativity 而 perf 沒退步**。
+
+### 剩下還沒做的根基相關項目
+
+- 第 4 顆 CPU（候選 Intel 8086 — 用以前寫過的 emulator 當 reference oracle）
+- ARM 2-level page table sub-grain（N8 1-level 已涵蓋 GBA，2-level 等
+  NDS dual CPU 或 cart 內 sub-page tricks 才需要）
+- spec format 進階（per-(mode) page-cross +1 declarative 描述；N9 已加
+  top-level metadata，per-mode 還沒）
+- fastmem inline path 在 6502 是 perf-neutral（cond-br + phi-merge 開
+  銷壓過 extern call savings）；其他 CPU 受惠潛力留給未來
+
+完整 commit list 見 `git log --oneline | grep -E "feat|docs.*N[0-9]"`；
+詳細 closeout 文件在 `MD/performance/2026050[89]*.md`。

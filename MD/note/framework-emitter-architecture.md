@@ -2,10 +2,12 @@
 
 > **原寫於 Phase 4.5 完工**（ARM7TDMI + LR35902 兩顆 CPU 都跑通的時點），
 > **2026-05-03 大改：反映 Phase 5.8 emitter library refactor + Phase 7
-> JIT 優化進行中的現況**。
+> JIT 優化進行中的現況**。**2026-05-09 update：N0 系列加進第三顆 CPU
+> （Ricoh 2A03 / NES，`Mos6502Emitters.cs`）— 同套 framework，emit
+> pipeline 沒有任何 per-CPU 變更**。
 >
 > 紀錄整套框架是怎麼把「JSON CPU 描述」變成「跑得起 ROM 的 JIT」，
-> 兩顆 CPU 各自的 emitter 真正在做什麼事，以及 Phase 5.8 通用化把
+> 三顆 CPU 各自的 emitter 真正在做什麼事，以及 Phase 5.8 通用化把
 > LR35902 端的 emitter 量從 ~2620 行壓到 1346 行（−49%）後，剩下
 > 的真正 L3 intrinsic 是哪些。
 
@@ -486,15 +488,19 @@ mem-bus fast path / dispatcher cleanup / .NET AOT），順序低風險到高
 
 **JSON 描述 CPU 的「形狀」，emitter 描述「動詞的精確語義」。Phase 5.8
 之後 emitter 又分成 L0/L1（跨 CPU 共用）跟 L3（CPU-unique），讓
-「換 CPU = 換 JSON」承諾的可信度從「ARM/LR35902 兩顆驗證」推到「真要
-加第三顆只剩寫 ~5-10 個 L3 op + 配置 metadata」。**
+「換 CPU = 換 JSON」承諾的可信度從「ARM/LR35902 兩顆驗證」**先推到三顆**
+（2026-05-09 N0 系列加進 Ricoh 2A03 / NES，`Mos6502Emitters.cs` 也是
+~5-10 個 L3 op 等級）— **第 3 顆驗證後，下一顆 (8086 候選) 預估只剩
+寫 ~5-10 個 L3 op + 配置 metadata**。
 
-兩者加上通用的框架程式碼（SpecCompiler / HostRuntime / DecoderTable），
+三者加上通用的框架程式碼（SpecCompiler / HostRuntime / DecoderTable），
 就能把一顆 CPU 的 spec 變成 JIT-compiled 的 native code。框架本身不需要
-為新 CPU 修改，新 CPU 只要寫 spec + 越來越薄的 emitter，前一顆 CPU 不
+為新 CPU 修改，新 CPU 只要寫 spec + 越來越薄的 emitter，前面的 CPU 不
 會被影響。
 
 這個論點在 ARM7TDMI（已經跑通 jsmolka armwrestler / arm.gba / thumb.gba
-全綠）跟 LR35902（已經跑通 Blargg cpu_instrs 11/11 + master "Passed all
-tests"）兩顆完全不同的 CPU 上得到驗證；Phase 5.8 emitter library refactor
-進一步把每顆新 CPU 的 emitter 工作量降到「~5-10 個 L3 ops + 配置」級別。
+全綠）、LR35902（已經跑通 Blargg cpu_instrs 11/11 + master "Passed all
+tests"）、**Ricoh 2A03**（已經跑通 nestest 三 backend + blargg cpu_test5
+PC=$8003 全 11 subtests）三顆完全不同的 CPU 上得到驗證；Phase 5.8 +
+N0-N11 systematic 把每顆新 CPU 的 emitter 工作量降到「~5-10 個 L3 ops +
+配置」級別 + 把 framework runtime 宣告式比例推到 ~85%。

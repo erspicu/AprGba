@@ -9,19 +9,20 @@
 | Tier | 改動性質 | 必跑 QA | 紀錄 |
 |---|---|---|---|
 | **0** | 註解 / typo / docs / `.md` only | 直接 commit | — |
-| **1** | refactor / rename / debug helper / non-semantic | T1: 360 unit tests | — |
+| **1** | refactor / rename / debug helper / non-semantic | T1: 455 unit tests | — |
 | **2** | bug fix / 新 emitter / spec 改動 / runtime 邏輯 | T1 + T2: 8-combo screenshot matrix | 不必，commit msg 寫驗證結果 |
 | **3** | 影響效能的 hot-path 改動 (JIT IR、dispatcher、bus) | T1 + T2 + T3: 3-run loop100 bench | `MD/performance/<時戳>-<topic>.md` |
 | **4** | 大型架構變更 (block-JIT phase、新 optimization、cycle accounting) | T1 + T2 + T3 + T4: 完整 matrix + baseline 對比 | 同 Tier 3 + 更新 `MD/note/loop100-bench-*.md` baseline |
 
-## T1: Logic — 360 unit tests
+## T1: Logic — 455 unit tests (截至 2026-05-09)
 
 ```bash
 timeout 30 dotnet test AprGba.slnx --nologo --verbosity minimal > temp/t1-tests.log 2>&1
 tail -3 temp/t1-tests.log    # 確認 "失敗: 0"
 ```
 
-**通過標準：** `失敗: 0，通過: 360`。任何測試 fail = 不准 commit。
+**通過標準：** `失敗: 0`，通過數 = 當下 test count（455 截至 2026-05-09）。
+任何測試 fail = 不准 commit。
 
 ## T2: Visual — 8-combo screenshot matrix
 

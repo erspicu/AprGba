@@ -18,11 +18,12 @@
 
 | 視角 | 目前位置 |
 |---|---|
-| **Framework demo** (主要目的) | ✅ 達成 — 同框架跑 ARM7TDMI + LR35902 兩 ISA、jsmolka + Blargg PASS |
-| **CPU correctness** | ✅ 達成 — Blargg cpu_instrs 11/11、jsmolka arm/thumb 全 PASS |
+| **Framework demo** (主要目的) | ✅ 達成 — 同框架跑 ARM7TDMI + LR35902 + **Ricoh 2A03** 三 ISA、jsmolka + Blargg + nestest 全 PASS |
+| **CPU correctness** | ✅ 達成 — Blargg cpu_instrs 11/11、jsmolka arm/thumb 全 PASS、nestest + blargg cpu_test5 三 backend PASS |
 | **GBA homebrew test ROM** | ✅ 跑得起 — 含 BIOS LLE |
 | **GBA 商業遊戲** | ❌ 大多數會掛 — 缺 audio / 部分 timer / save / input |
 | **GB 商業遊戲** | ❌ 幾乎都掛 — 缺 sprite / window / sound / MBC3+/input |
+| **NES 商業遊戲** | ❌ 大多會掛 — 只有 Mapper000/001 + APU stub-only + 沒 input |
 | **互動性** | ❌ 純 CLI — 跑完輸出 PNG，沒有即時視窗、沒有鍵盤輸入 |
 
 **對應 README 的 §2 "What this project is NOT"**：刻意不追 mGBA-grade 的完整

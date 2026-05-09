@@ -1,17 +1,19 @@
 # Memory spec v2 — handler registry + offset semantics + page-table dispatch
 
-> **Status (2026-05-09)**：N4 設計階段。N3 把 NES bus 改成 spec-driven 後
-> 暴露多個架構 issue：(a) string→C# handler hardcode dispatch、(b) brittle
-> mirror_mask 套絕對 addr、(c) 4-region linear scan 比 hardcoded 4-way
-> if-else 慢 7%、(d) 缺 access widths / permissions / wait states 等 GBA/ARM
-> critical 欄位。
+> **Status (2026-05-09 末更新)**：N4 系列全部 ✅ 完成（N4.0-N4.6 + 後續
+> N7/N8 follow-ups + N3.3-finally）。本 doc 描述 schema v2 + dispatch v2，
+> 吸收 Gemini 諮詢的 7 點 critique（紀錄
+> `tools/knowledgebase/message/20260509_181033.txt`）。
 >
-> 本 doc 描述 schema v2 + dispatch v2，吸收 Gemini 諮詢的 7 點 critique
-> （紀錄 `tools/knowledgebase/message/20260509_181033.txt`）。
+> **目標達成**：framework declarative ratio 從 N3 的 ~70% 推到 ~85%
+> （超過原本 80% 目標）；perf 救回 N3.2 7% 退步、距 N1 baseline 只剩
+> ~3%（legacy）/ 持平（per-instr）/ 反超 5%（block-JIT）。schema 為
+> GBA/ARM 加第 4 個 CPU 鋪好路。
 >
-> **目標**：framework declarative ratio 從 N3 的 70% 推到 80%+；perf 救
-> 回 N3.2 7% 退步且**反超** N1 baseline；schema 為 GBA/ARM 加第 4 個
-> CPU 鋪好路。
+> **N5/N7/N8 follow-up**：N4 closeout §3 提的 fastmem TryGetHostPointer
+> + allowed_widths runtime enforce + ARM 2-level page table 都已 ship
+> （N7 query API、N10 GBA debug enforce、N8 GBA 1-level page table；
+> ARM 2-level 留 future，N8 1-level 已涵蓋 GBA target）。
 
 ---
 
@@ -29,7 +31,7 @@
 | (none) | — | **`wait_states: { seq, nonseq }`** (optional) | future-proof GBA cart timing |
 | machine root: (none) | — | **`unmapped_behavior: zero\|ignore\|fault\|last_bus_value`** | ARM/m68k 有 gaps；NES 沒 (#3) |
 
-**Backwards compat**：N4 解析 v1 fields 並 emit deprecation 警告（記 doc，未來 N5 移除）。Existing machine specs（nes-ntsc / gba / gb-dmg）逐一升級到 v2，但解析 v1 仍 work — 不破 build。
+**Backwards compat**：N4 解析 v1 fields；existing machine specs（nes-ntsc / gba / gb-dmg）N4.5 已逐一升級到 v2，但解析 v1 仍 work — 不破 build。v1 fields 移除留 future（無強制驅動力，目前所有 spec 都 v2）。
 
 ---
 
@@ -177,27 +179,33 @@ JIT block-JIT emitter wants to inline GEP-store: query `bus.TryGetHostPointer(ad
 
 ---
 
-## 4. 不在 N4 範圍
+## 4. 不在 N4 範圍（後續處理狀態）
 
-按 Gemini #4 提的 ARM 32-bit 2-level page table — N4 只做 NES，ARM 維持 hardcoded GbaMemoryBus（已驗證 perf-OK 的 hot path）。N5 / 後續可決定 GBA bus 是否走 spec-driven。
-
-按 Gemini #7-add 的 wait_states — 加 schema 但不實作邏輯，留 future。
+| 原本「未來」項目 | 後續實際做了 | 狀態 |
+|---|---|---|
+| ARM 32-bit 2-level page table（Gemini #4） | **N8** GBA 走 1-level page table（256 entries × 16 MB pages 對 GBA 已足夠） | ✅ 1-level 完成；2-level 真有 sub-region 需求才做 |
+| `wait_states` runtime 強制（Gemini #7-add） | **N7** GetWaitStates query API + N10 schema declared | 部分 — query API 在；NES 沒 wait state、GBA 還沒實際 enforce timing |
+| fastmem `TryGetHostPointer` query API（§3.4） | **N7** API 上線 + **N11** 6502 inline GEP-load (opt-in) | ✅ 完成；6502 perf-neutral，等其他 CPU 受惠 |
+| spec format `extra_when_taken` / `extra_when_page_cross`（dynamic cycle penalties） | **N9** 加 top-level field 並 annotate branches | ✅ 完成（per-mode page-cross 留 future） |
+| `allowed_widths` runtime enforce | **N10** GbaMemoryBus debug-mode flag | ✅ 完成（debug-mode 不影響 release perf） |
 
 ---
 
-## 5. Migration plan（N4.0 - N4.6）
+## 5. Migration plan（N4.0 - N4.6） ✅ 全部完工
 
-| Step | 內容 | 風險 | 結束條件 |
-|---|---|---|---|
-| **N4.0** | 本 doc 落地 | 0 | commit |
-| **N4.1** | Schema v2 fields + parser；nes-ntsc.json 升級 v2 fields；保留 v1 解析 backwards-compat | 低 | T1 + nestest 三 backend |
-| **N4.2** | Handler registry；NesMemoryBus 改成 registry-driven dispatch；NesPpu/Mapper 在 Program.cs 註冊 handler | 中（碰 bus 跟 program 接線） | T1 + nestest + blargg |
-| **N4.3** | Page-table dispatch 替換 linear scan | 中（hot path 變動） | T1 + nestest + blargg + perf bench → 預期 legacy 1.69+ MIPS |
-| **N4.4** | offset semantics — handlers 接 offset；NesPpu/NesApu 改簽名 | 中（碰 register handlers） | T1 + nestest + blargg |
-| **N4.5** | spec/machines/gba.json + gb-dmg.json 升級 v2 fields | 低（純 JSON） | T1 |
-| **N4.6** | 3-run perf bench；perf doc + 更新 doc #21 N3.4 結論 | 0 | bench + commit |
+| Step | 內容 | Commit |
+|---|---|---|
+| **N4.0** | 本 doc 落地 | (本 doc init commit) |
+| **N4.1** | Schema v2 fields + parser；nes-ntsc.json 升級 v2 fields | `914cda0` |
+| **N4.2** | Handler registry；ClassifyRegion 改用 v2 explicit Handler | `81103d8` |
+| **N4.3** | Page-table O(1) dispatch（32-byte pages, 2048 entries）替換 linear scan | `61066a2` |
+| **N4.4** | offset semantics — handlers 接 region-local offset | `101ae98` |
+| **N4.5** | spec/machines/gba.json + gb-dmg.json 升級 v2 fields | `abad579` |
+| **N4.6** | 3-run perf bench + perf doc + N3.4 invalidations | `4367154` |
 
 每 step 一個 commit、push 後再下一步。**5 分鐘 timeout cap on tests**。
+
+詳細 perf 數據：`MD/performance/202605091900-n4-memory-spec-v2.md`
 
 ---
 

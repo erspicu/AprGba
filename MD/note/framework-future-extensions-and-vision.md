@@ -1,6 +1,7 @@
 # 框架未來延伸 + 設計願景 — 給接手者的進階挑戰地圖
 
-> **Status**: vision / handover note (2026-05-05)
+> **Status**: vision / handover note
+> **Last updated**: 2026-05-09（N0-N11 系列完工後修訂）
 > **Source**: 整理自 2026-05 跟 Gemini 的長篇諮詢（討論記錄在
 > [`tools/knowledgebase/message/`](/tools/knowledgebase/message/)）
 > **Scope**: 把「想接手把框架推到更廣應用範圍」的人會關心的所有議題
@@ -10,6 +11,16 @@
 > **目標讀者**：(a) 想接手 AprCpu / AprGba 推進的人；(b) 想拿同套
 > JSON-driven 思路做別的東西的人；(c) 想理解這個框架的學術 / 工程
 > 獨特性的人。
+>
+> **2026-05-09 update note**：本 doc 原本寫於 framework 只有 ARM7TDMI +
+> LR35902 兩顆 CPU 的時期。期間 N0-N11 系列加進第三顆 CPU（Ricoh 2A03
+> / NES）並深化 spec-driven runtime 到 ~85% 宣告式比例，比本 doc 寫作
+> 時的預估更高。本 doc 內提到「framework 通用性 claim 從 2 顆 CPU 推
+> 到 3 顆」的目標已達成；下一個目標是第 4 顆（候選 Intel 8086，用
+> 以前寫過的 emulator 當 reference oracle）。詳見
+> `MD/design/03-roadmap.md` 的 N 系列段、
+> `MD/performance/202605092000-n33-full-spec-cycles.md` 的 declarative
+> ratio 量化、`MD/design/20-adding-a-new-cpu.md` 的加新 CPU SOP。
 
 ---
 
@@ -561,8 +572,29 @@ framework 已經到了「能跑、能驗證、能延伸」的狀態。**剩下�
 這份 doc 把所有跟 Gemini 討論過的進階方向都寫下來了，挑你最有興趣的一條
 推；或者你看完之後覺得有完全不同的方向也行。
 
-**最高建議**：先挑 §9 Level 2 加一顆新 CPU（N64 或 PS1 是很好的選擇），把
-framework 的「通用性」claim 從 2 顆 CPU 推到 3 顆。這是檢驗 framework 真
-正泛用性的最直接 milestone。
+**最高建議**：~~先挑 §9 Level 2 加一顆新 CPU（N64 或 PS1 是很好的選擇），把
+framework 的「通用性」claim 從 2 顆 CPU 推到 3 顆。~~
+
+**2026-05-09 update**：上述目標已達成 — Ricoh 2A03 / NES 已是第 3 顆
+（N0-N11 系列）。原本 N64 / PS1 是當時的候選，最後選擇 NES 的理由：(1) 8-bit
+變寬 CISC-ish ISA 跟 ARM (32-bit RISC) + LR35902 (8-bit RISC-ish) 形成完
+整覆蓋；(2) 6502 的 unofficial opcodes + page-cross +1 cycle quirks 是極
+端 framework 壓力測試。
+
+第 4 顆候選：**Intel 8086**（segmented memory + 16-bit CISC，用以前寫過的
+emulator 當 reference oracle）。framework 已 ready，根基都打完了
+（spec-driven memory bus 兩種 page-table、generic lockstep diff、255
+declarative cycle table、access widths runtime enforcement、fastmem
+JIT inline path）。
+
+**接手步驟**：
+1. 讀 [`MD/design/20-adding-a-new-cpu.md`](/MD/design/20-adding-a-new-cpu.md) — SOP，含 ARM/LR35902/2A03 三個對照範例
+2. 讀 [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) 的 N 系列段了解 framework 現狀
+3. 讀 [`MD/performance/202605092000-n33-full-spec-cycles.md`](/MD/performance/202605092000-n33-full-spec-cycles.md) 了解 declarative ratio 推進路徑
+
+加新 CPU 是檢驗 framework 真正泛用性的最直接 milestone — 第 3 顆驗證的
+過程暴露了 5+ 個 spec format / 通用 pattern 缺口（per-(mnem,addr-mode)
+cycles、page-table dispatch 通用化、handler registry 等），補完之後現在
+加第 4 顆應該流程順很多。
 
 更詳盡的對話原文：[`tools/knowledgebase/message/`](/tools/knowledgebase/message/)。
