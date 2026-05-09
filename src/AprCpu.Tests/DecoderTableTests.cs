@@ -1109,4 +1109,41 @@ public class DecoderTableTests
             Assert.True(decoded is not null, $"CB opcode 0x{op:X2} did not decode.");
         }
     }
+
+    // ---------------- 24.6.2 — Intel 8086 smoke decode ----------------
+
+    private static InstructionSetSpec Load8086Main() =>
+        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "x86-16", "i8086", "main.json"));
+
+    /// <summary>0x90 NOP — single-byte, identity.</summary>
+    [Fact]
+    public void Decode_Intel8086_Nop()
+    {
+        var t = new DecoderTable(Load8086Main());
+        var d = t.Decode(0x90u);
+        Assert.NotNull(d);
+        Assert.Equal("Nop", d!.Format.Name);
+        Assert.Equal("NOP", d.Instruction.Mnemonic);
+        Assert.Empty(d.Instruction.Steps);
+    }
+
+    /// <summary>0xF4 HLT — emits a single x86_halt micro-op.</summary>
+    [Fact]
+    public void Decode_Intel8086_Hlt()
+    {
+        var t = new DecoderTable(Load8086Main());
+        var d = t.Decode(0xF4u);
+        Assert.NotNull(d);
+        Assert.Equal("Hlt", d!.Format.Name);
+        Assert.Equal("HLT", d.Instruction.Mnemonic);
+        Assert.Equal("x86_halt", d.Instruction.Steps.Single().Op);
+    }
+
+    /// <summary>An undefined byte (0x00) returns null since 24.6.2 only wired NOP/HLT.</summary>
+    [Fact]
+    public void Decode_Intel8086_UndefinedByteIsNull()
+    {
+        var t = new DecoderTable(Load8086Main());
+        Assert.Null(t.Decode(0x00u));
+    }
 }

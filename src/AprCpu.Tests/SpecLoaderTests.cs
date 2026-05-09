@@ -196,10 +196,19 @@ public class SpecLoaderTests
         foreach (var seg in new[] { "ES", "CS", "SS", "DS" })
             Assert.Equal(16, status.Single(s => s.Name == seg).WidthBits);
 
-        // Variable-length (1-15 byte) main set, no encodings yet.
+        // First-byte-dispatch (8-bit) main set; multi-byte operands consumed
+        // by each instruction's own steps. 24.6.2 smoke group is wired in.
         var main = loaded.InstructionSets["Main"];
-        Assert.True(main.WidthBits.IsVariable);
+        Assert.Equal(8, main.WidthBits.Fixed);
         Assert.Equal(1, main.AlignmentBytes);
-        Assert.Empty(main.EncodingGroups);
+
+        var formats = main.EncodingGroups.SelectMany(g => g.Formats).ToList();
+        Assert.Contains(formats, f => f.Name == "Nop"
+                                    && f.Mask == 0xFF
+                                    && f.Match == 0x90);
+        Assert.Contains(formats, f => f.Name == "Hlt"
+                                    && f.Mask == 0xFF
+                                    && f.Match == 0xF4
+                                    && f.Instructions.Single().Steps.Single().Op == "x86_halt");
     }
 }

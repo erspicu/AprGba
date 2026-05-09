@@ -2,26 +2,32 @@
   "$schema": "../../schema/cpu-spec.schema.json",
   "spec_version": "1.0",
   "name": "Main",
-  "width_bits": "variable",
+  "width_bits": 8,
   "alignment_bytes": 1,
   "pc_offset_bytes": 0,
   "endian_within_word": "little",
   "decode_strategy": "mask_match_priority",
 
   "comment": [
-    "Intel 8086 main instruction set — 1-15 byte variable-length encoding.",
-    "First byte is the opcode (or prefix). ModR/M / SIB / displacement / immediate",
-    "follow per the well-known x86 grammar; those are consumed by emitters via",
-    "custom micro-ops (x86_modrm_decode, x86_fetch_imm8/16, x86_fetch_disp).",
+    "Intel 8086 main instruction set. Decoder dispatches on the first byte;",
+    "additional bytes (ModR/M / SIB / displacement / immediate / second imm)",
+    "are consumed by each instruction's own steps via emitter micro-ops",
+    "(x86_modrm_decode, x86_fetch_imm8/16, x86_fetch_disp). width_bits=8",
+    "matches the dispatch byte width — the same convention 6502 / LR35902",
+    "use for their variable-length 1-3 byte instructions.",
     "",
     "Group ordering (decode_strategy=mask_match_priority): more-specific masks",
-    "win over broader patterns. Single-opcode entries (mask=0xFF) come first;",
+    "win over broader patterns. Single-opcode entries (mask=0xFF) come first,",
     "broader 3-bit-reg-field patterns (mask=0xF8) and ALU-class patterns (mask=0xC7)",
-    "follow. Group group/ files are loaded in the order listed below.",
+    "follow. Group files are loaded in the order listed below.",
     "",
-    "24.6.1 — scaffolding only. Group files added incrementally in later",
-    "sub-phases (24.6.2 NOP/HLT smoke, 24.6.5 MOV, 24.6.6 ALU, 24.6.7 rest)."
+    "24.6.2 — minimal smoke group: NOP + HLT only, to prove the full",
+    "SpecLoader → DecoderTable → emitter dispatch pipeline accepts x86",
+    "encodings. Real groups (data-transfer, arithmetic, control-flow,",
+    "shift/rotate, string-ops, misc) are added in later sub-phases."
   ],
 
-  "encoding_groups": []
+  "encoding_groups": [
+    { "$include": "groups/smoke.json" }
+  ]
 }
