@@ -127,8 +127,17 @@ public sealed class BlockDetector
     /// Walk memory starting at <paramref name="startPc"/>, decode instructions,
     /// and return a <see cref="Block"/> bounded by the first natural
     /// boundary (or <paramref name="maxInstructions"/>).
+    ///
+    /// <para>N2.1 — optional <paramref name="forcesEndOfBlock"/> predicate is
+    /// invoked after each successfully-added instruction. When it returns
+    /// true the block ends with that instruction included. Used by Machine
+    /// spec to declare regions like cart_prg whose writes can change the
+    /// memory map (mapper bank switch); any store to such a region forces
+    /// the block to end so the next dispatch re-detects against fresh
+    /// state. Default null = legacy behavior (no extra boundary).</para>
     /// </summary>
-    public Block Detect(IMemoryBus bus, uint startPc, int maxInstructions = DefaultMaxInstructions)
+    public Block Detect(IMemoryBus bus, uint startPc, int maxInstructions = DefaultMaxInstructions,
+        Func<DecodedBlockInstruction, bool>? forcesEndOfBlock = null)
     {
         if (maxInstructions <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxInstructions), "Must be positive.");
@@ -301,8 +310,23 @@ public sealed class BlockDetector
                 && i + 1 < maxInstructions
                 && (crossJumpRam || isRomToRom);
 
+            // N2.1 — pre-extract immediate for variable-width ISAs.
+            // Operand bytes (length - 1 trailing bytes after the opcode)
+            // are little-endian; pack into uint. Length-1 (no operand) →
+            // null. Fixed-width (no length oracle, _instrSizeBytes != 0)
+            // → null (encoding has imm in bit fields, not after opcode).
+            uint? immediate = null;
+            if (_instrSizeBytes == 0u && thisLength > 1)
+            {
+                uint imm = 0;
+                for (int b = 1; b < thisLength; b++)
+                {
+                    imm |= (uint)bus.ReadByte(pc + (uint)b) << ((b - 1) * 8);
+                }
+                immediate = imm;
+            }
             instrs.Add(new DecodedBlockInstruction(pc, word, decoded, (byte)thisLength,
-                IsFollowedBranch: willFollow));
+                IsFollowedBranch: willFollow, Immediate: immediate));
 
             if (willFollow)
             {
@@ -312,6 +336,18 @@ public sealed class BlockDetector
             }
 
             pc += thisLength;
+
+            // N2.1 — Machine-spec-driven block boundary. When the active
+            // MachineSpec declares a region with forces_end_of_block=true
+            // (typically cart IO whose writes can change PRG mapping),
+            // any store to that region ends the block here so the next
+            // dispatch re-detects against the new mapping. Predicate is
+            // null in legacy callers — no behavior change.
+            if (forcesEndOfBlock is not null && forcesEndOfBlock(instrs[^1]))
+            {
+                endReason = BlockEndReason.WritesPc;   // closest existing reason
+                break;
+            }
 
             // Block-end checks on this instruction (POST-add — the boundary
             // instruction IS in the block; control transfer happens AS

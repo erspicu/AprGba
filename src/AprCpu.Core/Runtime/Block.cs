@@ -101,7 +101,17 @@ public sealed record DecodedBlockInstruction(
     uint InstructionWord,
     DecodedInstruction Decoded,
     byte LengthBytes,
-    bool IsFollowedBranch = false);
+    bool IsFollowedBranch = false,
+    // N2.1 — pre-extracted immediate. For variable-width ISAs (LR35902,
+    // MOS6502) BlockDetector mechanically reads the operand bytes after
+    // the opcode and packs them little-endian into Immediate; emitters
+    // can consume this as a compile-time constant (skipping the
+    // BuildLShr+BuildTrunc dance over InstructionWord). For fixed-width
+    // ISAs (ARM/Thumb) the imm is encoded in bit fields inside the
+    // instruction word — leave null and let arch-specific emitters
+    // extract via the existing pattern. Length-1 instructions (no
+    // operand) also leave this null.
+    uint? Immediate = null);
 
 /// <summary>Why <see cref="BlockDetector"/> stopped collecting instructions.</summary>
 public enum BlockEndReason

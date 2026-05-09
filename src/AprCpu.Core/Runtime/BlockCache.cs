@@ -131,15 +131,25 @@ public sealed class BlockCache
     private readonly Dictionary<uint, LinkedListNode<Entry>> _map;
     private readonly LinkedList<Entry> _lru;   // head = MRU, tail = LRU
 
-    // Phase 7 A.5 SMC support — per-byte coverage count. Each entry
-    // is the number of cached blocks whose CoverageStartPc..CoverageEndPcExclusive
-    // range includes this address. Bus.WriteByte calls NotifyMemoryWrite
-    // which checks this counter; if >0, scans cached blocks for any
-    // overlapping the address and invalidates them. Memory-bounded by
-    // the addressable space (e.g. LR35902 = 64KB → 64KB counter array).
-    // Per-write fast-path = 1 byte read + branch (~1ns).
+    // Phase 7 A.5 / N2.1 SMC support — per-page coverage count. Each
+    // entry is the number of cached blocks whose
+    // CoverageStartPc..CoverageEndPcExclusive range overlaps this page.
+    // Bus.WriteByte calls NotifyMemoryWrite which checks this counter;
+    // if >0, scans cached blocks for any overlapping the address and
+    // invalidates them. Memory-bounded by (addressSpaceBytes >> pageShift)
+    // entries — for 64KB addr space + pageShift=0 (default), 64KB counter
+    // array (per-byte, original Phase 7 A.5 behavior). For 4GB addr space
+    // + pageShift=12, 1M counter array (1 entry per 4KB page) — feasible
+    // for ARM 32-bit.
+    //
+    // pageShift=0 (default) keeps full Phase 7 A.5 byte-level granularity
+    // for backwards compatibility (LR35902 P1 #5b SMC V2 IR baked the
+    // CoverageCountBuffer base + indexed by raw addr — works unchanged).
+    // Callers that opt for pageShift>0 must shift addr accordingly when
+    // accessing the buffer.
     private readonly byte[] _coverageCount;
     private readonly uint _addressSpaceBytes;
+    private readonly int _pageShift;
 
     private struct Entry
     {
@@ -147,16 +157,28 @@ public sealed class BlockCache
         public CachedBlock Block;
     }
 
-    public BlockCache(int capacity = DefaultCapacity, uint addressSpaceBytes = 0x10000)
+    public BlockCache(int capacity = DefaultCapacity, uint addressSpaceBytes = 0x10000, int pageShift = 0)
     {
         if (capacity <= 0)
             throw new ArgumentOutOfRangeException(nameof(capacity), capacity, "capacity must be > 0");
+        if (pageShift < 0 || pageShift > 30)
+            throw new ArgumentOutOfRangeException(nameof(pageShift), pageShift, "pageShift must be in [0, 30]");
         _capacity = capacity;
         _map = new Dictionary<uint, LinkedListNode<Entry>>(capacity);
         _lru = new LinkedList<Entry>();
         _addressSpaceBytes = addressSpaceBytes;
-        _coverageCount = new byte[addressSpaceBytes];
+        _pageShift = pageShift;
+        // Number of pages: ceil(addressSpace / pageSize). With pageShift=0
+        // this is just addressSpaceBytes (1 byte per "page"), preserving
+        // Phase 7 A.5 array shape exactly.
+        uint pageCount = (addressSpaceBytes + (1u << pageShift) - 1) >> pageShift;
+        _coverageCount = new byte[pageCount];
     }
+
+    /// <summary>Page shift used for SMC coverage counter indexing.
+    /// 0 = byte-level (default, 16-bit address spaces). >0 = page-level
+    /// for larger address spaces (e.g. 12 = 4KB pages for 32-bit).</summary>
+    public int PageShift => _pageShift;
 
     /// <summary>Number of currently-cached entries.</summary>
     public int Count => _map.Count;
@@ -246,7 +268,10 @@ public sealed class BlockCache
     public bool NotifyMemoryWrite(uint addr)
     {
         if (addr >= _addressSpaceBytes) return false;
-        if (_coverageCount[addr] == 0) return false;
+        // N2.1 — page-indexed coverage; pageShift=0 is per-byte (default).
+        uint pageIdx = addr >> _pageShift;
+        if (pageIdx >= (uint)_coverageCount.Length) return false;
+        if (_coverageCount[pageIdx] == 0) return false;
 
         // Slow path: linear scan to find blocks covering this addr.
         // Cached blocks at this point: typically 100s-1000s in steady
@@ -306,23 +331,11 @@ public sealed class BlockCache
     {
         if (blk.CoverageInstrPcs is { } pcs && blk.CoverageInstrLens is { } lens)
         {
-            // Precise per-instr increment — skips gaps in cross-jump blocks
-            // so data writes between source ROM and target RAM don't hit
-            // the SMC fast-path counter.
             for (int i = 0; i < pcs.Length; i++)
-            {
-                uint p = pcs[i];
-                uint end = p + lens[i];
-                for (uint a = p; a < end && a < _addressSpaceBytes; a++)
-                    if (_coverageCount[a] < byte.MaxValue) _coverageCount[a]++;
-            }
+                BumpRange(pcs[i], pcs[i] + lens[i], +1);
             return;
         }
-        // Legacy convex-hull increment.
-        for (uint a = blk.CoverageStartPc; a < blk.CoverageEndPcExclusive && a < _addressSpaceBytes; a++)
-        {
-            if (_coverageCount[a] < byte.MaxValue) _coverageCount[a]++;
-        }
+        BumpRange(blk.CoverageStartPc, blk.CoverageEndPcExclusive, +1);
     }
 
     private void DecrementCoverage(CachedBlock blk)
@@ -330,17 +343,30 @@ public sealed class BlockCache
         if (blk.CoverageInstrPcs is { } pcs && blk.CoverageInstrLens is { } lens)
         {
             for (int i = 0; i < pcs.Length; i++)
-            {
-                uint p = pcs[i];
-                uint end = p + lens[i];
-                for (uint a = p; a < end && a < _addressSpaceBytes; a++)
-                    if (_coverageCount[a] > 0) _coverageCount[a]--;
-            }
+                BumpRange(pcs[i], pcs[i] + lens[i], -1);
             return;
         }
-        for (uint a = blk.CoverageStartPc; a < blk.CoverageEndPcExclusive && a < _addressSpaceBytes; a++)
+        BumpRange(blk.CoverageStartPc, blk.CoverageEndPcExclusive, -1);
+    }
+
+    /// <summary>
+    /// Increment (or decrement, when delta < 0) coverage counts for every
+    /// page touched by [byteStart, byteEnd). Saturates at 0 (no underflow)
+    /// and 255 (no overflow). Page index = byteAddr >> _pageShift; with
+    /// _pageShift=0 this is per-byte (Phase 7 A.5 baseline).
+    /// </summary>
+    private void BumpRange(uint byteStart, uint byteEnd, int delta)
+    {
+        if (byteEnd <= byteStart) return;
+        uint pageStart = byteStart >> _pageShift;
+        uint pageEndIncl = (byteEnd - 1u) >> _pageShift;
+        uint maxIdx = (uint)_coverageCount.Length - 1u;
+        if (pageStart > maxIdx) return;
+        if (pageEndIncl > maxIdx) pageEndIncl = maxIdx;
+        for (uint p = pageStart; p <= pageEndIncl; p++)
         {
-            if (_coverageCount[a] > 0) _coverageCount[a]--;
+            if (delta > 0) { if (_coverageCount[p] < byte.MaxValue) _coverageCount[p]++; }
+            else           { if (_coverageCount[p] > 0)            _coverageCount[p]--; }
         }
     }
 }

@@ -1,0 +1,63 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "machine-spec.schema.json",
+    "title": "Machine Spec — board-level memory map + per-region JIT policy",
+    "description": "Pairs with a CpuSpec to fully describe a target machine. See MD/design/19-declarative-jit-policy.md.",
+    "type": "object",
+    "required": ["name", "cpu"],
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "Machine identifier (e.g. 'nes-ntsc', 'gba', 'gb-dmg')"
+        },
+        "cpu": {
+            "type": "string",
+            "description": "CPU id from spec/<arch>/cpu.json's architecture.id"
+        },
+        "memory_regions": {
+            "type": "array",
+            "description": "Tile of CPU-bus address ranges with per-region policy",
+            "items": { "$ref": "#/$defs/MemoryRegion" }
+        },
+        "interrupt_vectors": {
+            "type": "object",
+            "description": "Named interrupt vector addresses (e.g. nmi/reset/irq for 6502)",
+            "additionalProperties": {
+                "oneOf": [
+                    { "type": "integer", "minimum": 0 },
+                    { "type": "string", "pattern": "^(0x)?[0-9a-fA-F]+$" }
+                ]
+            }
+        }
+    },
+    "additionalProperties": false,
+
+    "$defs": {
+        "MemoryRegion": {
+            "type": "object",
+            "required": ["name", "addr_start", "addr_end_exclusive", "type"],
+            "properties": {
+                "name": { "type": "string" },
+                "addr_start": { "$ref": "#/$defs/UintLike" },
+                "addr_end_exclusive": { "$ref": "#/$defs/UintLike" },
+                "type": { "enum": ["ram", "rom", "io"] },
+                "mirror_mask": { "$ref": "#/$defs/UintLike" },
+                "fastmem_eligible": { "type": "boolean", "default": false },
+                "forces_end_of_block": { "type": "boolean" },
+                "smc_notify": { "type": "boolean" },
+                "writable": { "type": "boolean" },
+                "side_effects": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                }
+            },
+            "additionalProperties": false
+        },
+        "UintLike": {
+            "oneOf": [
+                { "type": "integer", "minimum": 0 },
+                { "type": "string", "pattern": "^(0x)?[0-9a-fA-F]+$" }
+            ]
+        }
+    }
+}

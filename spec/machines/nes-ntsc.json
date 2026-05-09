@@ -1,0 +1,44 @@
+{
+    "$schema": "../schema/machine-spec.schema.json",
+    "name": "nes-ntsc",
+    "cpu": "Ricoh2A03",
+    "memory_regions": [
+        {
+            "name": "wram",
+            "addr_start": "0x0000",
+            "addr_end_exclusive": "0x2000",
+            "type": "ram",
+            "mirror_mask": "0x07FF",
+            "fastmem_eligible": true,
+            "smc_notify": true
+        },
+        {
+            "name": "ppu_io",
+            "addr_start": "0x2000",
+            "addr_end_exclusive": "0x4000",
+            "type": "io",
+            "mirror_mask": "0x2007",
+            "side_effects": ["ppu"]
+        },
+        {
+            "name": "apu_io",
+            "addr_start": "0x4000",
+            "addr_end_exclusive": "0x4020",
+            "type": "io",
+            "side_effects": ["apu", "oam_dma", "joypad"]
+        },
+        {
+            "name": "cart_prg",
+            "addr_start": "0x4020",
+            "addr_end_exclusive": "0x10000",
+            "type": "io",
+            "side_effects": ["mapper"],
+            "forces_end_of_block": true
+        }
+    ],
+    "interrupt_vectors": {
+        "nmi": "0xFFFA",
+        "reset": "0xFFFC",
+        "irq": "0xFFFE"
+    }
+}
