@@ -6,5 +6,6 @@
     <Project Path="src/AprGb.Cli/AprGb.Cli.csproj" />
     <Project Path="src/AprGba.Cli/AprGba.Cli.csproj" />
     <Project Path="src/AprNes.Cli/AprNes.Cli.csproj" />
+    <Project Path="src/AprX86.Cli/AprX86.Cli.csproj" />
   </Folder>
 </Solution>

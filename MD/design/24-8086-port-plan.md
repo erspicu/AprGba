@@ -34,7 +34,7 @@
 
 | 元件 | Apr86 狀態 | 對 AprX86 移植的意義 |
 |---|---|---|
-| **CPU 核心** | `Apr8086Core` 3139 行 single-file，261 個 opcode case | 行為 reference；不是 oracle（自己有 bug） |
+| **CPU 核心** | `Apr8086Core` 3139 行 single-file，261 個 opcode case | 行為 reference；**不是 oracle**（自己有 bug — 見 §2.1） |
 | **1MB PA_mem** | byte[0x100000] linear，segmented (seg<<4)+offset | **直接借用結構** |
 | **CGA text 80x25** | 已實作！256 個 PNG glyph (8x14)、16-color palette、Parallel.For 渲染 | **font 跟 palette 都直接拿來用** |
 | **System BIOS load** | 0xFFFF0 area；VGA BIOS 0xC0000 | AprX86 不走這條（不需要真 BIOS） |
@@ -43,6 +43,27 @@
 
 **結論**：Apr86 的 **1MB memory 結構 + CGA font + 16-color palette** 直接
 拿來用；**CPU core / IO replay** 不採用，從 framework 重做。
+
+### 2.1 Apr86 已知 CPU bug 清單（移植時順便修）
+
+掃一輪 source 後找到的 bug — Tom Harte SST 會 catch 全部，移植到
+AprX86 時直接寫對：
+
+| # | 位置 | Bug | 修正 |
+|---|---|---|---|
+| 1 | `CPU.cs:1247-1255` AAM (0xD4) | `Reg_IP++; ... Reg_A.L / 10` — 跳過 imm8 base byte，hardcoded 10 | `byte b = Mem_CS_r8(Reg_IP++); ... Reg_A.L / b` |
+| 2 | `CPU.cs:1257-1268` AAD (0xD5) | 同上，imm8 base 被忽略 | 同上 |
+| 3 | `CPU.cs:1265` AAD flag_S | 用 `& 0x8000` 但結果是 8-bit AL，永遠 false | `& 0x80` |
+| 4 | `CPU.cs:1644` IMUL byte | `(short)modreg_ReadTool()` zero-extend；應 sign-extend from byte | `(short)(sbyte)modreg_ReadTool()` |
+| 5 | `CPU.cs:1623, 1668` MUL/IMUL CF/OF | 用 `Reg_D.X > 0` 判斷；IMUL 應該是「upper half ≠ sign extension of lower half」 | 對 IMUL: `cf = of = (DX != (AX bit15 ? 0xFFFF : 0))` |
+| 6 | `Interrupt.cs:25` | 作者自註 "interrupt unfinish !"；flag_T/I 處理疑慮 | 從頭做，照 8086 datasheet |
+| 7 | `IO.cs` (全 4 函數) | IO replay 從 `io_step.dat` 回放，非真 emulation | AprX86 用 magic ports (OUT 0xE9 / 0xF4) + ignore 其他 |
+| 8 | `MEM.cs:53` | `0x410 hack patch return 0x41` — BIOS Equipment Word 暴力 bypass | AprX86 不需要真 BIOS，這個 hack 自動消失 |
+
+**移植策略**：AprX86 的 8086 spec + emitter **不參考 Apr86 的有 bug 段
+落**（AAM/AAD/IMUL/MUL flag）；那些直接從 8086 datasheet + Tom Harte SST
+expected output 對著寫。Apr86 的非 buggy 段落（基本 ALU、ModR/M decoder、
+segment override 處理）可以對著看當作 implementation hint。
 
 ---
 

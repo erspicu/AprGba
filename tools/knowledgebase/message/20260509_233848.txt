@@ -1,0 +1,160 @@
+Timestamp: 2026-05-09T23:38:48
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I'm designing a JSON-driven CPU emulation framework (AprCpu — JIT-compiled via LLVM 20 + .NET 10) and want your review on a proposed spec inheritance feature. The framework already runs three CPUs (ARM7TDMI, LR35902, Ricoh 2A03 / NES 6502) through one shared pipeline (decoder + IR emitter + block-JIT). Each CPU's ISA is pure JSON; only thin per-arch C# emitters exist for primitives that don't reduce to declarative form.
+
+PROBLEM
+We're about to port the Intel x86 family. Within a sub-family (e.g. 8086 → 80186 → 80286) the CPUs share ~94-96% of their opcodes. Greenfield-writing each ~3000-line spec is wasteful and creates a maintenance trap (one shared-opcode bug = three fixes). I'm proposing OO-style spec inheritance: child cpu.json declares `extends: <parent-id>` plus an `instruction_set_diff` block (added_groups / added_instructions / overridden_instructions / removed_instructions). SpecLoader merges parent + child at load time; SpecCompiler / decoder / runtime see only the merged result.
+
+I want your input on FOUR specific topics:
+
+(1) DESIGN CONCEPT REVIEW — Compare this approach to industry references like MAME (CPU device classes, factored into device_t hierarchies), QEMU TCG (each target dir is hand-written; no inheritance), Ghidra SLEIGH (.sla inherits via `define endian` etc.), ArchC (uses pure C++ inheritance for ISA models). Where does my "diff-based inheritance with load-time merge" fit on the spectrum? Are there pitfalls these projects hit that I should learn from?
+
+(2) JSON SPEC FORMAT — My current schema sketch:
+```
+{
+  "architecture": { "id": "i80186", "extends": "i8086" },
+  "instruction_set_diff": {
+    "Main": {
+      "added_groups": [...],
+      "added_instructions": [...],
+      "overridden_instructions": [
+        { "selector": {"opcode_byte": "0x69"}, "from": "i8086",
+          "replace_with": { ...full instruction-def... } }
+      ],
+      "removed_instructions": [{"selector": {"opcode_byte": "0xD6"}}]
+    }
+  }
+}
+```
+Is "selector by opcode_byte + replace_with full instruction-def" the right granularity? Should I support partial-field merge (e.g. only override cycles, keep rest)? Should `from` be a hard validation (reject if parent didn't declare that opcode) or just documentation?
+
+(3) IMPLEMENTATION RECOMMENDATIONS — At load time, my SpecLoader recursively loads the parent then deep-copies and applies the child diff. Concerns:
+  (a) Debug visibility — should each merged instruction carry `_inherited_from: "i8086"` metadata so a `--dump-merged` CLI flag traces provenance?
+  (b) Cyclic inheritance — should I just hard-fail, or allow some kind of multi-parent override?
+  (c) Schema evolution — current schema has `spec_version: "1.0"` (data format version); do I need a separate `inheritance_protocol_version` to signal the merge algorithm changed?
+  (d) Validation — should overrides require the parent to actually have the targeted opcode, or just silently no-op?
+
+(4) INTEL FAMILY SPLIT POINTS — Where exactly should I break the inheritance chain? My current proposal is:
+  - `spec/x86-16/`   — i8086 → i80186 → i80286 (one chain)
+  - `spec/x86-32/`   — i80386 → i80486 → Pentium → ... (NEW chain, NOT extends i80286)
+  - `spec/x86-mmx/`  — Pentium MMX, Pentium II/III (extends or new?)
+  - `spec/x86-sse/`  — Pentium III/4 with SSE (new chain — XMM register file added)
+  - `spec/x86-64/`   — AMD64 / Intel64 (new chain — REX prefix, R8-R15, long mode)
+
+My break rules are:
+  R1: word size change → new chain
+  R2: register file shape change (added MMX/XMM/YMM regs) → new chain
+  R3: prefix-encoding scheme change (66h/67h size override; REX prefix) → new chain
+  R4: cross-vendor / cross-family → never inherit
+
+Specifically uncertain about:
+  (a) MMX: it adds 8 MM0-MM7 registers ALIASED with x87 FPU — should this break the chain (R2 says yes) or is "register aliasing" not a real shape change?
+  (b) 80386 protected mode: real-mode 80386 is 95% compatible with 80286 real-mode, but 32-bit protected mode is fundamentally different. Should 80386 extends i80286, or fresh chain?
+  (c) 8086 ↔ 8088: ISA-identical, only external bus width differs. Single combined spec or sibling specs?
+  (d) Pentium → Pentium Pro (P6): adds CMOV, SYSENTER, RDTSC — minor opcode additions, but huge microarchitectural change. Doesn't matter for ISA-level emulation, but does it matter for spec organization?
+
+For each Intel transition you think is BORDERLINE, give me the technical reasoning so I can decide. I prefer pragmatic answers grounded in what a maintainable codebase would look like 5+ years from now.
+
+Reply in a structured form (one section per topic) with concrete recommendations and "do this / don't do that" verdicts where appropriate. ~1500 words is plenty. No need to cite my framework's existing decisions back at me — focus on what's specific to inheritance design.
+
+========================================================================
+RESPONSE
+========================================================================
+Here is a review of your proposed JSON spec inheritance feature for AprCpu, structured exactly to address your four topics.
+
+### 1. Design Concept Review
+
+Your approach is a **"Data-Driven Overlay/Mixin"** model. It sits uniquely on the spectrum compared to industry standard approaches:
+
+*   **MAME** uses C++ OOP inheritance. It’s great for sharing I/O and state, but ISA execution often degrades into macro-heavy C++ copy-paste or massive `switch` statements peppered with `if (has_feature_X)`. 
+*   **QEMU (TCG)** uses single, monolithic target directories (e.g., `target/i386`). It handles generations via runtime feature flags (e.g., checking `CPUID_EXT_SSE41` inside the translation loop). It has no concept of declarative inheritance.
+*   **Ghidra (SLEIGH)** uses a preprocessor (`@include`) and constructor overrides. It is powerful but famously difficult to debug because include chains become "spaghetti," and resolving which `.sinc` file defined a specific bit-pattern requires deep mental stack-tracing.
+
+**Where AprCpu fits:** You are effectively building something akin to **JSON Patch (RFC 6902)** or Kubernetes `kustomize`, but tailored for ISAs. Because the merge happens entirely at load-time, your JIT and decoder remain blissfully unaware of the hierarchy, keeping runtime performance optimal. 
+
+**Pitfalls to avoid:**
+*   **The "God Base Class" Trap:** Do not put 8086-specific quirks into an abstract base if the 286 removes them. 
+*   **Feature Flags vs. Inheritance:** If the *only* difference between two CPUs is the presence of an FPU (e.g., 8086 vs 8086+8087), using inheritance creates combinatorial explosion. 
+*   **DO:** Treat your JSON inheritance strictly as a *build/load-time AST macro* system, not runtime OOP.
+*   **DON'T:** Fall into deep inheritance trees. Keep it shallow (Max depth 3 or 4).
+
+### 2. JSON Spec Format
+
+Your proposed schema is clean, but the selector design and override granularity need adjustment for x86.
+
+**Granularity (Partial vs. Full Replace):**
+*   **DO support partial field merges.** In the x86 family, instruction encodings almost never change between generations, but **cycle counts change drastically** (e.g., 8086 `MUL` takes ~118 cycles; 286 `MUL` takes ~21). If you require full replacements, you will copy-paste massive blocks of IR-emitter metadata just to change a `"cycles": 21` field.
+*   Adopt JSON Merge Patch (RFC 7386) semantics for the `replace_with` block. If a key is provided, it overwrites; if omitted, it inherits.
+
+**The Selector:**
+*   **DON'T use `"opcode_byte"` as your primary selector.** x86 is a variable-length nightmare. Many instructions share the same primary opcode byte and use the ModR/M `reg` field as an opcode extension (e.g., `0x80` is shared by `ADD`, `OR`, `ADC`, `SBB`, `AND`, `SUB`, `XOR`, `CMP`).
+*   **DO use a stable, unique ID string** for every instruction (e.g., `"id": "ADD_rm8_imm8"`). Use this ID as the dictionary key for inheritance overrides. 
+
+**Validation of `from`:**
+*   **DO make it a hard validation.** If `from: "i8086"` is specified, the loader *must* crash if `i8086` did not declare that instruction. If it is just documentation, it will drift, and you will end up with silent no-ops where an override failed to apply because of a typo in the selector.
+
+**Refined Schema Suggestion:**
+```json
+{
+  "architecture": { "id": "i80186", "extends": "i8086" },
+  "instruction_set_diff": {
+    "overrides": {
+      "MUL_rm16": {
+        "cycles": { "base": 35, "mem_penalty": 4 } 
+        // Emits merged instruction: keeps 8086 encoding/IR, updates cycles
+      }
+    },
+    "removals": [ "POP_CS_0F" ],
+    "additions": {
+      "PUSHA_60": { "opcode": ["0x60"], "ir_emitter": "emit_pusha" }
+    }
+  }
+}
+```
+
+### 3. Implementation Recommendations
+
+**(a) Debug visibility:** 
+**DO** include `_inherited_from` and `_overridden_by` metadata in the merged, in-memory JSON DOM. When an emulator bug occurs, running `aprcpu --dump-merged i80286` to see exactly *why* a specific instruction has a certain IR emitter is invaluable. Strip this metadata only at the final JIT phase.
+
+**(b) Cyclic inheritance and Multiple Parents:**
+**DON'T** allow multi-parent inheritance (`extends: ["i8086", "i8087"]`). The diamond problem in JSON merges is impossible to resolve cleanly. 
+**DO** hard-fail on cyclic inheritance. 
+*Alternative:* If you need to mix in FPU or SSE instructions without creating combinatorial branches (e.g., `386+387`, `486`, `486SX`), implement a `traits` or `includes` array that only allows *additive* overlays (no overrides permitted from traits).
+
+**(c) Schema evolution:**
+**DON'T** create a separate `inheritance_protocol_version`. Since inheritance is resolved at load-time to produce a finalized spec, any change to how merging works fundamentally changes the resulting ISA data. Tie it to the main `spec_version`.
+
+**(d) Validation Strictness:**
+**DO** fail fast and hard. If a child spec tries to remove an instruction that doesn't exist in the parent, throw a load-time exception. Strictness is the only way to prevent a 3000-line JSON file from silently rotting over 5 years of maintenance.
+
+### 4. Intel Family Split Points
+
+Your rules (R1 to R4) are excellent heuristics. Here is how they apply to your specific uncertainties:
+
+**(a) MMX: Aliasing vs Shape Change**
+*   **Verdict:** Break the chain (New chain for MMX).
+*   *Reasoning:* While MMX registers physically alias the x87 FPU stack, logically and architecturally, they introduce a massive state-management difference. Using MMX requires the `EMMS` instruction to clear FPU tag bits. The data types shift from 80-bit floats to packed integers. Attempting to shoehorn this via JSON overrides into an older CPU spec will pollute the FPU definitions. 
+
+**(b) 80386 protected mode vs 80286**
+*   **Verdict:** Break the chain (Fresh chain for 386).
+*   *Reasoning:* The 386 completely redefines memory addressing. It introduces the SIB byte, 32-bit offsets, a totally new descriptor table format, paging (CR0-CR4), and changes the default address/operand sizes. Even if real-mode 386 looks like a 286, your decoder logic for fetching operands will be completely rewritten. Inheriting 286 here is a trap.
+
+**(c) 8086 ↔ 8088**
+*   **Verdict:** Sibling specs extending an abstract base.
+*   *Reasoning:* The ISA is 100% identical. The only difference is the 8-bit external bus on the 8088, which alters cycle timing (memory accesses take longer) and the prefetch queue size (4 bytes vs 6 bytes). 
+*   *Action:* Create `spec/x86-16/_base_808x.json`. Have `i8086.json` and `i8088.json` extend it, applying only `instruction_set_diff.overrides` to patch their specific cycle timings.
+
+**(d) Pentium → Pentium Pro (P6)**
+*   **Verdict:** Do NOT break the chain. `PPro` extends `Pentium`.
+*   *Reasoning:* Microarchitectural changes (Out-of-Order execution, register renaming) are completely invisible to an ISA-level JIT emulator. At the declarative JSON level, P6 just adds `CMOVcc`, `FCMOV`, `SYSENTER`, and a few others. The register shape, word size, and prefixes remain identical. 
+
+**Summary of recommended Intel split points:**
+1.  **x86-16 Chain:** `_base_808x` -> `8086` & `8088`. Then `8086` -> `80186` -> `80286`.
+2.  **x86-32 Base Chain:** `80386` -> `80486` -> `Pentium`. (New chain due to 32-bit addressing, SIB, paging).
+3.  **x86-MMX Chain:** `Pentium_MMX` -> `Pentium_II`. (New chain due to MMX state/tag semantics).
+4.  **x86-SSE Chain:** `Pentium_III` -> `Pentium_4`. (New chain due to XMM registers and fundamentally new execution units).
+5.  **x86-64 Chain:** `AMD64`. (New chain due to REX prefixes, unified general-purpose register expansion to R8-R15, and RIP-relative addressing).
