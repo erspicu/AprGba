@@ -25,6 +25,14 @@
     }
   ],
 
+  "isa_metadata": {
+    "comment":               "N2.4 — block-JIT policy hints. 6502 spec uses RAW CPU cycles in cycles.form (\"3m\" means 3 cycles, not 12). cycles_per_spec_unit=1 distinguishes this from GB/ARM's m-cycle×4 convention. Variable 1-3 byte; pc_update_policy=lazy under block-JIT alloca+mem2reg.",
+    "endianness":            "little",
+    "cycles_per_spec_unit":  1,
+    "pc_update_policy":      "lazy",
+    "interrupt_check_policy":"end_of_block"
+  },
+
   "register_file": {
     "general_purpose": {
       "count":      3,

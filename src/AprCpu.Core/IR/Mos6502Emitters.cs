@@ -145,41 +145,85 @@ public static class Mos6502Emitters
 
     /// <summary>
     /// Read a byte from PC and advance PC by 1. Returns the i8 value.
-    /// Equivalent inline body of read_imm8 (used when callers need both
-    /// the read value and to hand-roll the PC advance flow).
+    ///
+    /// <para>N2.4 — block-JIT fast path: when <c>ctx.CurrentInstructionBaseAddress</c>
+    /// is set (block-JIT mode), the instruction word constant carries
+    /// every byte at compile time. Extract imm8 directly via shift+trunc
+    /// over <c>ctx.Instruction</c>, skipping the bus extern call. PC alloca
+    /// IS still advanced by 1 — downstream emitter steps inside the same
+    /// instruction (e.g. <c>mos_branch_rel</c>'s post-FetchImm8 PC read for
+    /// target = PC + sext(off)) depend on the advance. mem2reg + LLVM
+    /// constant-folding collapse the load+add+store chain to SSA-register
+    /// arithmetic, so the in-block PC bookkeeping is essentially free.</para>
     /// </summary>
     internal static LLVMValueRef FetchImm8(EmitContext ctx, string label)
     {
+        var i8 = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
         var pcPtr = ctx.GepStatusRegister("PC");
         var pc16 = ctx.Builder.BuildLoad2(i16, pcPtr, $"{label}_pc");
-        var pc32 = ctx.Builder.BuildZExt(pc16, i32, $"{label}_pc32");
-        var b = BusRead8(ctx, pc32, label);
+
+        LLVMValueRef b;
+        // Block-JIT fast path — extract from instruction word constant
+        // instead of calling memory_read_8 extern.
+        if (ctx.CurrentInstructionBaseAddress is not null)
+        {
+            // 6502 layout: opcode at byte 0, imm8 at byte 1.
+            var shifted = ctx.Builder.BuildLShr(ctx.Instruction,
+                LLVMValueRef.CreateConstInt(i32, 8, false), $"{label}_instr_shr8");
+            b = ctx.Builder.BuildTrunc(shifted, i8, $"{label}_imm");
+        }
+        else
+        {
+            // Per-instr fallback: bus.ReadByte at PC.
+            var pc32 = ctx.Builder.BuildZExt(pc16, i32, $"{label}_pc32");
+            b = BusRead8(ctx, pc32, label);
+        }
+
+        // PC advance is shared between both modes — see doc comment above.
         var newPc = ctx.Builder.BuildAdd(pc16,
             LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_pc_next");
         ctx.Builder.BuildStore(newPc, pcPtr);
         return b;
     }
 
-    /// <summary>Fetch i16 little-endian from PC, advance PC by 2.</summary>
+    /// <summary>
+    /// Fetch i16 little-endian from PC, advance PC by 2. Block-JIT fast
+    /// path mirrors <see cref="FetchImm8"/> — extract the 16-bit imm
+    /// directly from <c>ctx.Instruction</c>, skipping two bus.ReadByte
+    /// extern calls.
+    /// </summary>
     internal static LLVMValueRef FetchImm16(EmitContext ctx, string label)
     {
         var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
         var pcPtr = ctx.GepStatusRegister("PC");
         var pc16 = ctx.Builder.BuildLoad2(i16, pcPtr, $"{label}_pc");
-        var pc32Lo = ctx.Builder.BuildZExt(pc16, i32, $"{label}_pcz");
-        var lo8 = BusRead8(ctx, pc32Lo, $"{label}_lo");
-        var pcPlus1 = ctx.Builder.BuildAdd(pc16,
-            LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_pc1");
-        var pc32Hi = ctx.Builder.BuildZExt(pcPlus1, i32, $"{label}_pc1z");
-        var hi8 = BusRead8(ctx, pc32Hi, $"{label}_hi");
-        var loZ = ctx.Builder.BuildZExt(lo8, i16, $"{label}_loz");
-        var hiZ = ctx.Builder.BuildZExt(hi8, i16, $"{label}_hiz");
-        var hiSh = ctx.Builder.BuildShl(hiZ,
-            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi_shl");
-        var word = ctx.Builder.BuildOr(hiSh, loZ, label);
+
+        LLVMValueRef word;
+        if (ctx.CurrentInstructionBaseAddress is not null)
+        {
+            // 6502 layout: opcode at byte 0, imm16 little-endian at bytes 1-2.
+            var shifted = ctx.Builder.BuildLShr(ctx.Instruction,
+                LLVMValueRef.CreateConstInt(i32, 8, false), $"{label}_instr_shr8");
+            word = ctx.Builder.BuildTrunc(shifted, i16, $"{label}_imm");
+        }
+        else
+        {
+            var pc32Lo = ctx.Builder.BuildZExt(pc16, i32, $"{label}_pcz");
+            var lo8 = BusRead8(ctx, pc32Lo, $"{label}_lo");
+            var pcPlus1 = ctx.Builder.BuildAdd(pc16,
+                LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_pc1");
+            var pc32Hi = ctx.Builder.BuildZExt(pcPlus1, i32, $"{label}_pc1z");
+            var hi8 = BusRead8(ctx, pc32Hi, $"{label}_hi");
+            var loZ = ctx.Builder.BuildZExt(lo8, i16, $"{label}_loz");
+            var hiZ = ctx.Builder.BuildZExt(hi8, i16, $"{label}_hiz");
+            var hiSh = ctx.Builder.BuildShl(hiZ,
+                LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi_shl");
+            word = ctx.Builder.BuildOr(hiSh, loZ, label);
+        }
+
         var newPc = ctx.Builder.BuildAdd(pc16,
             LLVMValueRef.CreateConstInt(i16, 2, false), $"{label}_pc_next");
         ctx.Builder.BuildStore(newPc, pcPtr);
