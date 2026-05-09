@@ -1,0 +1,27 @@
+{
+  "$schema": "../../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+  "name": "Main",
+  "width_bits": "variable",
+  "alignment_bytes": 1,
+  "pc_offset_bytes": 0,
+  "endian_within_word": "little",
+  "decode_strategy": "mask_match_priority",
+
+  "comment": [
+    "Intel 8086 main instruction set — 1-15 byte variable-length encoding.",
+    "First byte is the opcode (or prefix). ModR/M / SIB / displacement / immediate",
+    "follow per the well-known x86 grammar; those are consumed by emitters via",
+    "custom micro-ops (x86_modrm_decode, x86_fetch_imm8/16, x86_fetch_disp).",
+    "",
+    "Group ordering (decode_strategy=mask_match_priority): more-specific masks",
+    "win over broader patterns. Single-opcode entries (mask=0xFF) come first;",
+    "broader 3-bit-reg-field patterns (mask=0xF8) and ALU-class patterns (mask=0xC7)",
+    "follow. Group group/ files are loaded in the order listed below.",
+    "",
+    "24.6.1 — scaffolding only. Group files added incrementally in later",
+    "sub-phases (24.6.2 NOP/HLT smoke, 24.6.5 MOV, 24.6.6 ALU, 24.6.7 rest)."
+  ],
+
+  "encoding_groups": []
+}

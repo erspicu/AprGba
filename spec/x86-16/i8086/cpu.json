@@ -1,0 +1,107 @@
+{
+  "$schema": "../../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+
+  "architecture": {
+    "id":             "Intel8086",
+    "family":         "x86-16",
+    "extends":        null,
+    "endianness":     "little",
+    "word_size_bits": 16
+  },
+
+  "variants": [
+    {
+      "id":       "i8086",
+      "core":     "Intel8086",
+      "features": [],
+      "notes":    "Intel 8086 (1978) — 16-bit CPU, 20-bit segmented address space (1 MiB), 9 architectural flags. The 8088 silicon variant has the same ISA but an 8-bit external bus; flag-set behaviour is 8088-accurate (Tom Harte SingleStepTests use 8088 v2)."
+    },
+    {
+      "id":       "i8088",
+      "core":     "Intel8086",
+      "features": [],
+      "notes":    "Intel 8088 — 8086 with an 8-bit external data bus. ISA-identical at the architectural level; cycle counts differ (more bus accesses). Validation source for AprGba is 8088 v2 SST (10000 random tests/opcode)."
+    }
+  ],
+
+  "isa_metadata": {
+    "comment":               "24.6 — block-JIT policy hints. 8086 is variable 1-15 byte (ModR/M + SIB + disp + imm); cycles.form is left informational at this stage (8088 cycle accuracy is not the goal). pc_update_policy=lazy is safe under the alloca+mem2reg block path because no instruction reads its own IP except CALL/JMP-relative which compute target before commit.",
+    "endianness":            "little",
+    "cycles_per_spec_unit":  1,
+    "pc_update_policy":      "lazy",
+    "interrupt_check_policy":"end_of_block"
+  },
+
+  "register_file": {
+    "general_purpose": {
+      "count":      8,
+      "width_bits": 16,
+      "names":      ["AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI"],
+      "aliases": {
+        "AL": "AX[7:0]",
+        "AH": "AX[15:8]",
+        "CL": "CX[7:0]",
+        "CH": "CX[15:8]",
+        "DL": "DX[7:0]",
+        "DH": "DX[15:8]",
+        "BL": "BX[7:0]",
+        "BH": "BX[15:8]"
+      },
+      "pc_index":   null
+    },
+
+    "register_pairs": [],
+
+    "stack_pointer": "SP",
+
+    "status": [
+      {
+        "name":       "FLAGS",
+        "width_bits": 16,
+        "fields": {
+          "CF": "0",
+          "PF": "2",
+          "AF": "4",
+          "ZF": "6",
+          "SF": "7",
+          "TF": "8",
+          "IF": "9",
+          "DF": "10",
+          "OF": "11"
+        }
+      },
+      { "name": "IP", "width_bits": 16, "fields": {} },
+      { "name": "ES", "width_bits": 16, "fields": {} },
+      { "name": "CS", "width_bits": 16, "fields": {} },
+      { "name": "SS", "width_bits": 16, "fields": {} },
+      { "name": "DS", "width_bits": 16, "fields": {} }
+    ]
+  },
+
+  "exception_vectors": [
+    { "name": "DIVIDE_ERROR",      "address": "0x00000000" },
+    { "name": "SINGLE_STEP",       "address": "0x00000004" },
+    { "name": "NMI",               "address": "0x00000008" },
+    { "name": "BREAKPOINT",        "address": "0x0000000C" },
+    { "name": "INTO_OVERFLOW",     "address": "0x00000010" }
+  ],
+
+  "instruction_sets": [
+    { "name": "Main", "file": "main.json" }
+  ],
+
+  "instruction_set_dispatch": {
+    "selector":         "single",
+    "selector_values":  { "main": "Main" },
+    "switch_via":       []
+  },
+
+  "memory_model": {
+    "default_endianness": "little",
+    "alignment_policy": {
+      "load_unaligned":  "permit",
+      "store_unaligned": "permit"
+    }
+  }
+}

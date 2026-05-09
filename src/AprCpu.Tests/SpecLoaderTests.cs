@@ -148,4 +148,58 @@ public class SpecLoaderTests
         Assert.Contains(formats, f => f.Name == "LdHlInd_Reg");
         Assert.Contains(formats, f => f.Name == "LdReg_HlInd");
     }
+
+    /// <summary>
+    /// 24.6.1 — 8086 spec scaffolding. Validates that the cpu.json + main.json
+    /// pair parses with the expected register file (8 GPRs in ModR/M order),
+    /// segment registers as status registers, and the 9-field FLAGS layout.
+    /// No groups are populated yet (24.6.2 onwards); this just proves the
+    /// framework's SpecLoader accepts the new architecture.
+    /// </summary>
+    [Fact]
+    public void Loads_Intel8086_CpuJson_With9FlagsAndSegmentRegisters()
+    {
+        var loaded = SpecLoader.LoadCpuSpec(Path.Combine(SpecRoot, "x86-16", "i8086", "cpu.json"));
+
+        Assert.Equal("Intel8086", loaded.Cpu.Architecture.Id);
+        Assert.Equal("x86-16",    loaded.Cpu.Architecture.Family);
+        Assert.Equal("little",    loaded.Cpu.Architecture.Endianness);
+        Assert.Equal(16,          loaded.Cpu.Architecture.WordSizeBits);
+
+        // 8 GPRs in ModR/M reg-field order: 000=AX..111=DI.
+        var gpr = loaded.Cpu.RegisterFile.GeneralPurpose;
+        Assert.Equal(8,  gpr.Count);
+        Assert.Equal(16, gpr.WidthBits);
+        Assert.Equal(new[] { "AX", "CX", "DX", "BX", "SP", "BP", "SI", "DI" }, gpr.Names);
+
+        // 8-bit byte-half aliases (AL/AH/CL/CH/DL/DH/BL/BH) carried as informational strings.
+        Assert.Equal(8, gpr.Aliases.Count);
+        Assert.Equal("AX[7:0]",  gpr.Aliases["AL"]);
+        Assert.Equal("AX[15:8]", gpr.Aliases["AH"]);
+
+        // FLAGS register has all 9 architectural 8086 flags at the canonical bit positions.
+        var status = loaded.Cpu.RegisterFile.Status;
+        var flags  = status.Single(s => s.Name == "FLAGS");
+        Assert.Equal(16, flags.WidthBits);
+        Assert.Equal(new BitRange(0,  0),  flags.Fields["CF"]);
+        Assert.Equal(new BitRange(2,  2),  flags.Fields["PF"]);
+        Assert.Equal(new BitRange(4,  4),  flags.Fields["AF"]);
+        Assert.Equal(new BitRange(6,  6),  flags.Fields["ZF"]);
+        Assert.Equal(new BitRange(7,  7),  flags.Fields["SF"]);
+        Assert.Equal(new BitRange(8,  8),  flags.Fields["TF"]);
+        Assert.Equal(new BitRange(9,  9),  flags.Fields["IF"]);
+        Assert.Equal(new BitRange(10, 10), flags.Fields["DF"]);
+        Assert.Equal(new BitRange(11, 11), flags.Fields["OF"]);
+
+        // 4 segment registers + IP all live as 16-bit status registers.
+        Assert.Equal(16, status.Single(s => s.Name == "IP").WidthBits);
+        foreach (var seg in new[] { "ES", "CS", "SS", "DS" })
+            Assert.Equal(16, status.Single(s => s.Name == seg).WidthBits);
+
+        // Variable-length (1-15 byte) main set, no encodings yet.
+        var main = loaded.InstructionSets["Main"];
+        Assert.True(main.WidthBits.IsVariable);
+        Assert.Equal(1, main.AlignmentBytes);
+        Assert.Empty(main.EncodingGroups);
+    }
 }
