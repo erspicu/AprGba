@@ -1,6 +1,9 @@
 # 8086 移植計畫 — 最低環境 CPU 驗證 + 截圖證明
 
-> **Status**：**DRAFT**（2026-05-10）— 構想階段，等開工。
+> **Status**：**IN PROGRESS**（2026-05-10）— 24.0–24.5 完工 (13 commits, 6
+> paper-quality screenshots, 1.31M Tom Harte SST cases 全綠)；24.6
+> JSON-driven port 待做。
+>
 > **Trigger**：第 4 顆 CPU 候選 = Intel 8086（用以前寫的 Apr86 emulator
 > 當 reference oracle 的部分）。要解決的核心問題：8086 是 CISC、segmented
 > memory、ModR/M、需要 PC 周邊環境才能跑大部分軟體 — 怎麼用最低成本只
@@ -9,6 +12,11 @@
 > **核心觀念**：截圖是 framework 通用性 claim 的最有力證據（mirror NES /
 > GBA / GB 三顆既有 CPU 的截圖路線）。**沒有截圖 = 沒有 paper-quality
 > demo**。
+>
+> **重要更新 (2026-05-10)**：v1 phase plan 漏掉了「JSON-driven port」這
+> 個關鍵 sub-phase。目前 (24.5 末) 的狀態是 **legacy backend 完整 + 截圖
+> 完整**，但 8086 還沒走 framework 的 SpecCompiler + LLVM JIT pipeline —
+> 那是 24.6 phase 要做的事，是 framework genericity 真正成立的關鍵。
 >
 > **目標讀者**：(a) 真要開工 8086 port 的人；(b) 跟接手者 / 學術
 > peer 解釋「framework 真的支援 4 顆 CPU」時的 visual evidence 來源
@@ -281,21 +289,42 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 
 ## 8. Phase plan
 
-| Phase | 內容 | 成果 |
-|---|---|---|
-| **24.0** | 本 doc 落地 | DRAFT → APPROVED |
-| **24.1** | AprX86.Cli skeleton + 1MB memory + CS:IP fetch loop | hello-cga.com 跑得起來但只 stub Step() |
-| **24.2** | 8086 spec phase 1：基本 ALU + MOV + 基本 ModR/M | 通過 Tom Harte ADD/MOV/AND/OR/XOR 全綠 |
-| **24.3** | CGA text framebuffer + PNG 截圖 + magic IO | hello-cga.com 第一張截圖出來 |
-| **24.4** | 8086 spec 完整 256 opcode | 通過 Tom Harte 全 256 opcode |
-| **24.5** | 5-10 個 hand-crafted demo + 截圖 | primes / fibonacci / mandelbrot ASCII 截圖完整 |
-| **24.6** | (可選) lockstep AprX86 vs Apr86 (限 .com 程式範圍) | Apr86 reference cross-check |
-| **24.7** | 80186 spec — 透過 inheritance (#23) | ENTER/LEAVE demo 截圖 |
-| **24.8** | 80286 real-mode + protected-mode demos | 4 顆 CPU 全綠 + paper-quality screenshot 集 |
+| Phase | 內容 | 成果 | 狀態 | Commit / 紀錄 |
+|---|---|---|---|---|
+| **24.0** | 本 doc 落地 | DRAFT → APPROVED | ✅ | `eb82331` |
+| **24.1** | AprX86.Cli skeleton + 1MB memory + CS:IP fetch loop（legacy backend） | hello-cga.com 跑得起來但只 stub Step() | ✅ | `8b9a4ba` |
+| **24.2.1** | ModR/M decoder + EA computation + register-by-encoding accessors | 18 unit tests，所有 mod×r/m combo 覆蓋 | ✅ | `6ab3f4c` |
+| **24.2.2** | MOV 全 forms + segment override prefix | 12 MOV unit tests + smoke ROM | ✅ | `f81581a` |
+| **24.2.3** | ALU + 完整 9-flag computation (ADD/SUB/AND/OR/XOR/CMP/ADC/SBB) | 32 ALU unit tests + 32-bit ripple add demo | ✅ | `0c8176b` |
+| **24.2.4** | Tom Harte SST 8088 v2 test runner + 第一個 opcode 全綠 | 23 op × 10k cases = 230k SST validations | ✅ | `7d70610` |
+| **24.3** | CGA text framebuffer + PNG 截圖 + magic IO | result/x86-16/hello-cga-i8086.png 第一張截圖 | ✅ | `3433fd3` |
+| **24.4.1** | PUSH/POP/INC/DEC/XCHG（28 ops） | T1 568, 510k SST cases (8086 SP quirk fixed) | ✅ | `6faac55` |
+| **24.4.2** | Control flow JMP/JCC/CALL/RET/LOOP/JCXZ（32 ops） | T1 600, 830k SST cases | ✅ | `cf5dd8c` |
+| **24.4.3** | Shifts/rotates groups D0-D3 + flag manipulation（28 ops） | 1.03M SST; 8088 silicon AF/OF rules reverse-engineered | ✅ | `538877f` |
+| **24.4.4** | TEST/NOT/NEG/MUL/IMUL（12 ops；DIV/IDIV functional but SST-deferred） | 1.15M SST; 8088 MUL high-byte flag quirk decoded | ✅ | `223ff47` |
+| **24.4.5** | String ops MOVSB/CMPSB/SCASB/LODSB/STOSB（10 ops）+ REP/REPNE prefix | 1.17M SST | ✅ | `44220a7` |
+| **24.4.6** | INT/IRET/INTO + CBW/CWD + IN/OUT + BCD（functional） | 1.31M SST cases (BCD silicon-quirk SST deferred) | ✅ | `0927832` |
+| **24.5** | 5-10 個 hand-crafted demo + 截圖 | 6 paper-quality screenshots: hello-cga / primes / fibonacci / mandelbrot / string-copy / factorial | ✅ | `a897276`, `acf685a` |
+| **24.6** | **JSON-driven port** — `spec/x86-16/i8086/cpu.json` + groups + `X86_16Emitters.cs` (LLVM IR) + `X86JsonCpu` per-instr / block-JIT；三 backend (legacy / json / json-block) 全綠 Tom Harte | 8086 真正成為 framework 第 4 顆 CPU；同 pipeline 跑 | ⏳ | — |
+| **24.6b** | (optional) Lockstep diff legacy vs Apr86（限 .com 程式範圍） | Apr86 reference cross-check | ⏳ | — |
+| **24.7** | 80186 spec — 透過 inheritance (#23) | ENTER/LEAVE demo + result/x86-16/enter-leave-i80186.png | ⏳ | — |
+| **24.8** | 80286 real-mode + protected-mode demos | 4 顆 CPU 全綠 + result/x86-16/protmode-msr-i80286.png | ⏳ | — |
 
-**最早可截圖 milestone**：**24.3 結束**（hello-cga.com → PNG）。
-**最早 paper-quality milestone**：**24.5 結束**（5+ demo 截圖 + Tom Harte
-全綠 + cycle accuracy 對齊）。
+**重要 update (2026-05-10)**：phase 24.6 在 doc 原版 v1 裡漏掉 **「JSON-driven
+port」** 這個關鍵 sub-phase — 直接從 24.5 demo 跳到 24.7 inheritance 是錯
+的，因為 inheritance 機制（doc #23）要 base 是 JSON spec 才能對。原 24.6
+標的「lockstep vs Apr86」改放在 24.6b（optional）。
+
+**進度**：phase 24.0–24.5 全部 ✅ 完成（13 commits + 6 screenshots + 1.31M
+Tom Harte SST cases 全綠）。**legacy backend 已是「8086 emulator 並排存
+在」狀態**，但要讓 8086 真正成為 framework 第 4 顆 CPU、走同一條 SpecCompiler
++ LLVM JIT pipeline，**24.6 JSON-driven port 是必做的下一步**。
+
+**最早可截圖 milestone**：**24.3 結束**（hello-cga.com → PNG）— 已達成。
+**最早 paper-quality milestone**：**24.5 結束**（6 個 demo 截圖 + Tom Harte
+1.31M SST 全綠）— 已達成。
+**Framework genericity milestone**：**24.6 結束**（三 backend 全綠 = 真正
+透過框架驗證 8086）— 待做。
 
 ---
 
