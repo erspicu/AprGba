@@ -137,13 +137,6 @@ public unsafe class Ricoh2A03Cpu
     bool nmi_delayed = false; // NMI edge detected on last CPU cycle, delay 1 instruction
     bool irq_pending = false; // IRQ should fire before next instruction
     public byte FlagI_public { get { return flagI; } }
-    int nmi_trace_count = 0; // trace instructions after NMI
-
-    // Debug logging — stripped during port; dbgWrite kept as no-op so the
-    // ported switch body compiles unchanged. dbgInit / dbgLog / HeadlessMode
-    // were tied to a per-process StreamWriter that has no place in an oracle.
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    void dbgWrite(string s) { /* no-op for oracle build */ }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     byte GetFlag()
@@ -166,7 +159,6 @@ public unsafe class Ricoh2A03Cpu
     public void NmiInterrupt()
     {
         byte pushed_flags = (byte)(GetFlag() | 0x20);
-        dbgWrite("NMI_PUSH: PC=$" + r_PC.ToString("X4") + " flags=$" + pushed_flags.ToString("X2") + " SP=$" + r_SP.ToString("X2") + " vec=$" + (Mem_r(0xfffa) | (Mem_r(0xfffb) << 8)).ToString("X4"));
         Mem_w((ushort)(0x100 | r_SP--), (byte)(r_PC >> 8));
         Mem_w((ushort)(0x100 | r_SP--), (byte)r_PC);
         Mem_w((ushort)(0x100 | r_SP--), pushed_flags);
@@ -184,7 +176,6 @@ public unsafe class Ricoh2A03Cpu
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     void ResetInterrupt()
     {
-        Console.WriteLine("soft reset !");
         r_SP -= 3;
         r_PC = (ushort)(Mem_r(0xfffc) | (Mem_r(0xfffd) << 8));
         flagI = 1;
@@ -221,23 +212,12 @@ public unsafe class Ricoh2A03Cpu
 
 
         byte prevFlagI = flagI;
-        ushort trace_pc = r_PC; // save PC before opcode fetch for tracing
         opcode = Mem_r(r_PC++);
         cpu_cycles = cycle_table[opcode];
-
-        //debug();
 
         cpu_cycles += Interrupt_cycle;
         Interrupt_cycle = 0;
 
-        // Pre-instruction trace when tracking NMI handler
-        if (nmi_trace_count > 0)
-            dbgWrite("TRACE: PC=$" + trace_pc.ToString("X4") + " op=$" + opcode.ToString("X2")
-                + " A=$" + r_A.ToString("X2") + " X=$" + r_X.ToString("X2")
-                + " Y=$" + r_Y.ToString("X2") + " SP=$" + r_SP.ToString("X2")
-                + " P=$" + (GetFlag() | 0x20).ToString("X2"));
-
-        //參考了 mynes 去修正與debug許多錯誤 http://sourceforge.net/projects/mynes 
         switch (opcode)
         {
             case 0x69: //ADC  Immediate  fix
@@ -2545,22 +2525,6 @@ public unsafe class Ricoh2A03Cpu
             #endregion
 #endif
             default: throw new NotImplementedException("unkonw opcode ! - 0x" + opcode.ToString("X2")); break;
-        }
-
-        // Post-instruction trace for NMI handler debugging
-        if (nmi_trace_count > 0)
-        {
-            nmi_trace_count--;
-            if (opcode == 0x68) // PLA
-                dbgWrite("  PLA -> A=$" + r_A.ToString("X2"));
-            else if (opcode == 0x85) // STA zp
-                dbgWrite("  STA_ZP: addr=$" + Mem_r((ushort)(trace_pc + 1)).ToString("X2") + " val=$" + r_A.ToString("X2") + " verify=$" + ZP_r((byte)(Mem_r((ushort)(trace_pc + 1)))).ToString("X2"));
-            else if (opcode == 0x86) // STX zp
-                dbgWrite("  STX_ZP: addr=$" + Mem_r((ushort)(trace_pc + 1)).ToString("X2") + " val=$" + r_X.ToString("X2"));
-            else if (opcode == 0x40) // RTI
-                dbgWrite("  RTI -> PC=$" + r_PC.ToString("X4") + " P=$" + (GetFlag() | 0x20).ToString("X2"));
-            else if (opcode == 0xa5) // LDA zp
-                dbgWrite("  LDA_ZP: addr=$" + Mem_r((ushort)(trace_pc + 1)).ToString("X2") + " val=$" + r_A.ToString("X2"));
         }
 
         // IRQ polling moved to run loop (Main.cs) for correct NMI/IRQ priority
