@@ -65,6 +65,147 @@ public sealed class GbaMemoryBus : IMemoryBus
     public GbaMemoryBus()
     {
         Dma = new GbaDmaController(this);
+        BuildPageTable();
+    }
+
+    // ---------------- N8 page-table dispatch ----------------
+    //
+    // 256-entry table indexed by (addr >> 24). Each entry encodes the
+    // region kind, mirror mode (sub-page bounds-check / power-of-2 wrap /
+    // generic modulo), and base addr.
+    //
+    // Most regions are power-of-2 sized so the fast path is `(addr -
+    // base) & wrapMask`. Sub-1-MB regions (BIOS, IO) use a bounds-check
+    // returning Unmapped past their end. VRAM is the only non-power-of-2
+    // region (96 KB) and falls through to a `% Size` slow path.
+    //
+    // Replaces the prior switch-based Locate. Same dispatch shape, same
+    // results — but the table is now spec-aligned (cross-validated
+    // against MachineSpec in tests) and ready to host wait-state /
+    // allowed-width metadata when those become enforced.
+
+    private enum MirrorMode : byte
+    {
+        None      = 0,    // sub-page valid, return Unmapped past end
+        PowerOf2  = 1,    // (addr - base) & wrapMask
+        Modulo    = 2,    // (addr - base) % size — only used for VRAM
+    }
+
+    private struct GbaPageEntry
+    {
+        public Region Kind;
+        public MirrorMode Mode;
+        public byte _pad0;
+        public byte _pad1;
+        public uint Base;
+        public uint Size;        // region size (used by Modulo + bounds check)
+        public uint WrapMask;    // size - 1 (only valid when Mode == PowerOf2)
+    }
+
+    private readonly GbaPageEntry[] _pageTable = new GbaPageEntry[256];
+
+    private void BuildPageTable()
+    {
+        // All entries default to (Region.Unmapped, Mode.None, ...) — the
+        // unmapped sentinel which Locate returns 0/0 for.
+
+        // BIOS — page 0x00, valid only for the low 16 KB.
+        _pageTable[0x00] = new GbaPageEntry
+        {
+            Kind = Region.Bios,
+            Mode = MirrorMode.None,
+            Base = GbaMemoryMap.BiosBase,
+            Size = GbaMemoryMap.BiosSize,
+        };
+
+        // EWRAM — page 0x02, 256 KB mirrors fill the page.
+        _pageTable[0x02] = new GbaPageEntry
+        {
+            Kind = Region.Ewram,
+            Mode = MirrorMode.PowerOf2,
+            Base = GbaMemoryMap.EwramBase,
+            Size = GbaMemoryMap.EwramSize,
+            WrapMask = GbaMemoryMap.EwramSize - 1,
+        };
+
+        // IWRAM — page 0x03, 32 KB mirrors fill the page.
+        _pageTable[0x03] = new GbaPageEntry
+        {
+            Kind = Region.Iwram,
+            Mode = MirrorMode.PowerOf2,
+            Base = GbaMemoryMap.IwramBase,
+            Size = GbaMemoryMap.IwramSize,
+            WrapMask = GbaMemoryMap.IwramSize - 1,
+        };
+
+        // IO — page 0x04, valid only for the low 1 KB.
+        _pageTable[0x04] = new GbaPageEntry
+        {
+            Kind = Region.Io,
+            Mode = MirrorMode.None,
+            Base = GbaMemoryMap.IoBase,
+            Size = GbaMemoryMap.IoSize,
+        };
+
+        // Palette — page 0x05, 1 KB mirrors fill the page.
+        _pageTable[0x05] = new GbaPageEntry
+        {
+            Kind = Region.Palette,
+            Mode = MirrorMode.PowerOf2,
+            Base = GbaMemoryMap.PaletteBase,
+            Size = GbaMemoryMap.PaletteSize,
+            WrapMask = GbaMemoryMap.PaletteSize - 1,
+        };
+
+        // VRAM — page 0x06. 96 KB is NOT power-of-2, falls back to
+        // generic modulo. Real hw has a weird (32K bank A + 32K bank B
+        // + 32K bank C aliased to bank C in upper half) layout — current
+        // code matches the existing GbaMemoryBus behaviour, which is
+        // pragmatic-not-cycle-accurate.
+        _pageTable[0x06] = new GbaPageEntry
+        {
+            Kind = Region.Vram,
+            Mode = MirrorMode.Modulo,
+            Base = GbaMemoryMap.VramBase,
+            Size = GbaMemoryMap.VramSize,
+        };
+
+        // OAM — page 0x07, 1 KB mirrors fill the page.
+        _pageTable[0x07] = new GbaPageEntry
+        {
+            Kind = Region.Oam,
+            Mode = MirrorMode.PowerOf2,
+            Base = GbaMemoryMap.OamBase,
+            Size = GbaMemoryMap.OamSize,
+            WrapMask = GbaMemoryMap.OamSize - 1,
+        };
+
+        // ROM — pages 0x08-0x0D, all 6 wait-state aliases share the
+        // same 32 MB ROM, indexed via (addr - RomBase) & (32MB-1).
+        for (uint p = 0x08; p <= 0x0D; p++)
+        {
+            _pageTable[p] = new GbaPageEntry
+            {
+                Kind = Region.Rom,
+                Mode = MirrorMode.PowerOf2,
+                Base = GbaMemoryMap.RomBase,        // shared region base, NOT page base
+                Size = GbaMemoryMap.RomMaxSize,
+                WrapMask = GbaMemoryMap.RomMaxSize - 1,
+            };
+        }
+
+        // Pages 0x01, 0x0E, 0x0F, and everything 0x10+ stay Unmapped.
+        // (Real GBA: 0x0E/0x0F = SRAM, currently not modelled.)
+    }
+
+    /// <summary>Test-only: read a page-table entry as a tuple keyed by the
+    /// Region's name string (since the Region enum is private). Used by
+    /// GbaMemoryBusN8Tests to assert the build matches MachineSpec.</summary>
+    public (string kindName, uint baseAddr, uint size, bool powerOf2Mirror)
+        GetPageEntryForTest(int pageIndex)
+    {
+        var p = _pageTable[pageIndex];
+        return (p.Kind.ToString(), p.Base, p.Size, p.Mode == MirrorMode.PowerOf2);
     }
 
     /// <summary>
@@ -360,32 +501,36 @@ public sealed class GbaMemoryBus : IMemoryBus
 
     private enum Region { Unmapped, Bios, Ewram, Iwram, Io, Palette, Vram, Oam, Rom }
 
-    // Phase 7 B.g: AggressiveInlining hints on the hot bus methods.
-    // GbaMemoryBus is sealed so JIT already devirtualises through the
-    // IMemoryBus interface; this just nudges the inliner to actually
-    // pull Locate / ReadWord / NotifyExecutingPc into CpuExecutor.Step's
-    // body. Each tag adds at most 2× the function body to the caller —
-    // these are short enough that it's a net win.
+    // N8: page-table dispatch. (addr >> 24) indexes into a 256-entry
+    // table populated at construction; each entry holds the region kind
+    // + region base + mirror mode. Hot path is 1 array load + 1 enum
+    // switch on Mode — vs the prior switch's 4-9 conditional branches
+    // depending on the page hit. JIT can speculate on the dominant
+    // hot region (typically ROM during execution).
+    //
+    // Instance method (was static) because _pageTable is per-instance —
+    // GbaMemoryBus is sealed so devirt still kicks in.
     [System.Runtime.CompilerServices.MethodImpl(
         System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-    private static (Region region, int offset) Locate(uint addr)
+    private (Region region, int offset) Locate(uint addr)
     {
-        var page = addr >> 24;
-        return page switch
+        ref var p = ref _pageTable[(addr >> 24) & 0xFF];
+        if (p.Kind == Region.Unmapped) return (Region.Unmapped, 0);
+
+        uint local = addr - p.Base;
+
+        switch (p.Mode)
         {
-            0x00 when addr < GbaMemoryMap.BiosBase + GbaMemoryMap.BiosSize
-                => (Region.Bios, (int)(addr - GbaMemoryMap.BiosBase)),
-            0x02 => (Region.Ewram, (int)((addr - GbaMemoryMap.EwramBase) % GbaMemoryMap.EwramSize)),
-            0x03 => (Region.Iwram, (int)((addr - GbaMemoryMap.IwramBase) % GbaMemoryMap.IwramSize)),
-            0x04 when addr < GbaMemoryMap.IoBase + GbaMemoryMap.IoSize
-                => (Region.Io, (int)(addr - GbaMemoryMap.IoBase)),
-            0x05 => (Region.Palette, (int)((addr - GbaMemoryMap.PaletteBase) % GbaMemoryMap.PaletteSize)),
-            0x06 => (Region.Vram, (int)((addr - GbaMemoryMap.VramBase) % GbaMemoryMap.VramSize)),
-            0x07 => (Region.Oam, (int)((addr - GbaMemoryMap.OamBase) % GbaMemoryMap.OamSize)),
-            0x08 or 0x09 or 0x0A or 0x0B or 0x0C or 0x0D
-                => (Region.Rom, (int)((addr - GbaMemoryMap.RomBase) & (GbaMemoryMap.RomMaxSize - 1))),
-            _   => (Region.Unmapped, 0),
-        };
+            case MirrorMode.PowerOf2:
+                return (p.Kind, (int)(local & p.WrapMask));
+            case MirrorMode.None:
+                if (local < p.Size) return (p.Kind, (int)local);
+                return (Region.Unmapped, 0);    // sub-page bounds → unmapped
+            case MirrorMode.Modulo:
+                return (p.Kind, (int)(local % p.Size));
+            default:
+                return (Region.Unmapped, 0);
+        }
     }
 
     // ---------------- IO stub ----------------
