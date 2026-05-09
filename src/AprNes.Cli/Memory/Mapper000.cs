@@ -98,5 +98,8 @@ namespace AprNes.Cli.Memory
         // changes at runtime. The interface property is here for protocol
         // conformance — Mapper001 (MMC1) actually uses it.
         public Action<int>? MirroringChanged { get; set; }
+
+        // NROM has no PRG bank switching — bank-switch callback never fires.
+        public Action<uint, uint>? PrgBankSwitched { get; set; }
     }
 }

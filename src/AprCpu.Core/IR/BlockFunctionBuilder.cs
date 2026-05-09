@@ -103,73 +103,59 @@ public sealed unsafe class BlockFunctionBuilder
             Layout, set,
             firstInsDef.Format, firstInsDef.Instruction);
 
-        // Phase 7 GB block-JIT P1 #5 — block-local register shadowing.
-        // For LR35902 (8-bit narrow GPRs) we allocate one alloca per GPR
-        // and selected status registers (F, SP), pre-load state→shadow at
-        // entry, and drain shadow→state at every exit. All emitter calls
-        // to ctx.GepGpr / ctx.GepStatusRegister transparently route to
-        // the shadow alloca, which mem2reg promotes to SSA values that
-        // the register allocator keeps in x86 GPRs across the entire
-        // block — eliminating reload-from-memory after every bus call.
+        // N1.B' — block-local state shadowing via the alloca + mem2reg
+        // pattern (see MD/design/18-block-jit-state-abstraction.md).
         //
-        // Gated on GprWidthBits==8 (LR35902 only) for V1 because:
-        // (1) ARM uses GepGprDynamic (runtime-computed register index)
-        //     which doesn't shadow cleanly without per-write drain+reload.
-        // (2) ARM perf (~10 MIPS) isn't the current bottleneck.
-        // PC is NOT shadowed: every PC write exits the block, so caching
-        // it has zero benefit and complicates the sync-emitter ret-void
-        // path (it writes nextPcConst directly to the state's PC slot).
-        var enableShadow = Environment.GetEnvironmentVariable("APR_DISABLE_SHADOW") is null
-                           && Layout.GprWidthBits == 8;
-        if (enableShadow)
+        // Allocates one entry-block alloca per state slot, pre-loads
+        // each from the state buffer, and registers them with an
+        // <see cref="AllocaSlotProvider"/> that EmitContext's GepGpr /
+        // GepStatusRegister route through. Spec emitters never see the
+        // alloca pointer directly — they continue to call ctx.GepGpr /
+        // ctx.GepStatusRegister, which now hits the alloca instead of
+        // the state-struct field. After mem2reg, the alloca + load/store
+        // chains promote to pure SSA values: PC arithmetic in registers,
+        // GPR/F/SP threaded through the block without reload-from-memory
+        // after every bus call.
+        //
+        // Sync points (block exit, sync-emitter mid-block ret) call
+        // ctx.DrainShadowsToState() which routes to AllocaSlotProvider.
+        // SyncToState — emits one load+store per dirty slot back to the
+        // state buffer.
+        //
+        // Slot coverage:
+        //   GPRs    — all (Layout.GprCount entries)
+        //   Status  — all non-banked (LR35902: F/SP/PC, MOS6502: P/SP/PC)
+        // ARM mode-banked SPSR is excluded for V1 (mode-banked accesses
+        // are rare in block-internal code; can be added if profiling
+        // shows it matters).
+        //
+        // Architecture gating:
+        //   enableAllocaProvider gate: GprWidthBits ∈ {8, 16}. ARM (32-bit
+        //   GPRs) uses GepGprDynamic (runtime-computed register index)
+        //   which doesn't fit alloca shadowing without per-write
+        //   drain+reload. Skipping the provider preserves the prior ARM
+        //   block-JIT IR exactly (StateBufferProvider via the null-Slots
+        //   fallthrough path in EmitContext).
+        var enableAllocaProvider = Environment.GetEnvironmentVariable("APR_DISABLE_SHADOW") is null
+                                   && Layout.GprWidthBits <= 16;
+        AllocaSlotProvider? allocaProvider = null;
+        if (enableAllocaProvider)
         {
-            // Phase 7 GB block-JIT P1 #5 V1 — allocate shadow allocas for
-            // ALL 7 LR35902 GPRs (A,B,C,D,E,H,L) + status regs F + SP.
-            // mem2reg promotes them to SSA values. For long blocks this
-            // wins; for small Blargg-style blocks (avg 3-5 instr) the
-            // entry-load + exit-drain overhead actually loses ~4% on
-            // cpu_instrs bench. V2 will add per-block live-range analysis
-            // (scan ops to find which regs are touched, only shadow those)
-            // — the framework here is the foundation that lets V2 prune
-            // without further code changes.
-            var gprShadows = new LLVMValueRef?[Layout.GprCount];
+            allocaProvider = new AllocaSlotProvider(builder, statePtr, Layout,
+                fallback: new StateBufferProvider(builder, statePtr, Layout));
+
             for (int r = 0; r < Layout.GprCount; r++)
-            {
-                var alloca = builder.BuildAlloca(Layout.GprType, $"r{r}_shadow");
-                var statePtrR = Layout.GepGpr(builder, statePtr, r);
-                var initial = builder.BuildLoad2(Layout.GprType, statePtrR, $"r{r}_init");
-                builder.BuildStore(initial, alloca);
-                gprShadows[r] = alloca;
-            }
-            ctx.GprShadowSlots = gprShadows;
+                allocaProvider.RegisterGpr(r);
 
-            // Status register shadows: F (flag byte) + SP (stack pointer).
-            // PC excluded — every PC write is terminal (block exits via
-            // PcWritten=1, so caching PC has no benefit and complicates
-            // the sync-emitter ret-void path).
-            var statusShadows = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
-            foreach (var statusName in new[] { "F", "SP" })
+            // Register every NON-banked status reg. Banked status regs
+            // (ARM SPSR_*) are excluded — see comment above.
+            foreach (var s in Layout.RegisterFile.Status)
             {
-                bool present = false;
-                foreach (var s in Layout.RegisterFile.Status)
-                    if (s.Name == statusName) { present = true; break; }
-                if (!present) continue;
-
-                var def = Layout.GetStatusRegisterDef(statusName);
-                var t = def.WidthBits switch
-                {
-                    8 => LLVMTypeRef.Int8,
-                    16 => LLVMTypeRef.Int16,
-                    32 => LLVMTypeRef.Int32,
-                    _ => throw new NotSupportedException($"Status reg {statusName} width {def.WidthBits}"),
-                };
-                var alloca = builder.BuildAlloca(t, $"{statusName.ToLowerInvariant()}_shadow");
-                var statePtrS = Layout.GepStatusRegister(builder, statePtr, statusName);
-                var initial = builder.BuildLoad2(t, statePtrS, $"{statusName.ToLowerInvariant()}_init");
-                builder.BuildStore(initial, alloca);
-                statusShadows[statusName] = alloca;
+                if (s.BankedPerMode.Count == 0)
+                    allocaProvider.RegisterStatus(s.Name, mode: null);
             }
-            ctx.StatusShadowSlots = statusShadows;
+
+            ctx.Slots = allocaProvider;
         }
 
         // The block-exit BB is the only "ret void" point. Pre-create it
@@ -266,6 +252,43 @@ public sealed unsafe class BlockFunctionBuilder
             builder.BuildStore(
                 LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false),
                 Layout.GepPcWritten(builder, statePtr));
+
+            // N1.B' — for architectures whose emitters always read+advance
+            // state PC (no block-JIT bake path) — currently MOS6502 — pre-
+            // write PC = bi.Pc + 1 here. Mirrors per-instr Step's "fetch
+            // opcode + advance PC" dance (the host fetches opcode and
+            // advances PC by 1 before invoking the emitter). With the
+            // alloca + mem2reg slot provider this store hits the PC alloca,
+            // which mem2reg promotes — subsequent in-emitter PC loads
+            // become pure SSA-constant arithmetic, no aliasing penalty.
+            //
+            // Gating: only when the alloca provider is active AND PC is
+            // alloca-backed AND the architecture is variable-width
+            // (lengthOracle present, i.e. block.InstrSizeBytes == 0).
+            // Fixed-width sets (ARM/Thumb) keep the existing
+            // CurrentInstructionBaseAddress / PipelinePcConstant emitter
+            // path; their emitters never bump PC inside the body, so a
+            // pre-write would be wrong.
+            if (allocaProvider is not null
+                && block.InstrSizeBytes == 0u
+                && Layout.RegisterFile.GeneralPurpose.PcIndex is null
+                && allocaProvider.HasStatus("PC", null)
+                && Environment.GetEnvironmentVariable("APR_NO_PC_PREWRITE") is null)
+            {
+                // PC type from spec — typically i16 (LR35902 / MOS6502).
+                var pcDef = Layout.GetStatusRegisterDef("PC");
+                var pcType = pcDef.WidthBits switch
+                {
+                    16 => LLVMTypeRef.Int16,
+                    32 => LLVMTypeRef.Int32,
+                    _ => throw new NotSupportedException($"PC width {pcDef.WidthBits} unsupported")
+                };
+                var pcPtrAlloca = ctx.GepStatusRegister("PC");
+                var pcPreWrite = (uint)((bi.Pc + 1u) & ((1u << pcDef.WidthBits) - 1));
+                builder.BuildStore(
+                    LLVMValueRef.CreateConstInt(pcType, pcPreWrite, false),
+                    pcPtrAlloca);
+            }
 
             // Cond gate: only if instr-set has global cond AND instr is
             // not marked unconditional. If no gate, fall straight to exec.
@@ -392,7 +415,7 @@ public sealed unsafe class BlockFunctionBuilder
             if (i + 1 < block.Instructions.Count)
             {
                 uint nextPc = block.Instructions[i + 1].Pc;
-                WritePcConst(builder, statePtr, nextPc);
+                WritePcConst(ctx, nextPc);
                 builder.BuildStore(
                     LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false),
                     Layout.GepPcWritten(builder, statePtr));
@@ -455,21 +478,30 @@ public sealed unsafe class BlockFunctionBuilder
     private LLVMValueRef ConstU32(uint v) =>
         LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, v, SignExtend: false);
 
-    private void WritePcConst(LLVMBuilderRef builder, LLVMValueRef statePtr, uint pcValue)
+    /// <summary>
+    /// Write <paramref name="pcValue"/> into the PC slot. Routes through
+    /// the active <see cref="IStateSlotProvider"/> (via <paramref name="ctx"/>)
+    /// so when the block-JIT alloca provider is in effect, the write hits
+    /// the PC alloca — that way the block-exit drain reads back the just-
+    /// written value. Without this routing, a direct state-buffer write
+    /// would be silently overwritten by the alloca's stale init value
+    /// when SyncToState ran.
+    /// </summary>
+    private void WritePcConst(EmitContext ctx, uint pcValue)
     {
         // PC location is spec-driven (see StackOps.LocateProgramCounter).
-        // For ARM PC is GPR[15] (i32); for LR35902 it's status reg "PC" (i16).
+        // For ARM PC is GPR[15] (i32); for LR35902/MOS6502 it's status reg "PC" (i16).
         var pcIdx = Layout.RegisterFile.GeneralPurpose.PcIndex;
         if (pcIdx is int idx)
         {
             // GPR-resident PC (ARM)
-            var ptr = Layout.GepGpr(builder, statePtr, idx);
-            builder.BuildStore(LLVMValueRef.CreateConstInt(Layout.GprType, pcValue, false), ptr);
+            var ptr = ctx.GepGpr(idx);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(Layout.GprType, pcValue, false), ptr);
         }
         else
         {
-            // Status-reg PC (LR35902)
-            var ptr = Layout.GepStatusRegister(builder, statePtr, "PC");
+            // Status-reg PC (LR35902 / MOS6502)
+            var ptr = ctx.GepStatusRegister("PC");
             var def = Layout.GetStatusRegisterDef("PC");
             var t = def.WidthBits switch
             {
@@ -477,7 +509,7 @@ public sealed unsafe class BlockFunctionBuilder
                 32 => LLVMTypeRef.Int32,
                 _ => throw new NotSupportedException($"PC width {def.WidthBits} unsupported")
             };
-            builder.BuildStore(LLVMValueRef.CreateConstInt(t, pcValue, false), ptr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(t, pcValue, false), ptr);
         }
     }
 

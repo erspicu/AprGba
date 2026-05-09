@@ -54,5 +54,18 @@ namespace AprNes.Cli.Memory
         /// Set by the harness after Reset().
         /// </summary>
         Action<int>? MirroringChanged { get; set; }
+
+        /// <summary>
+        /// N1.B' — fired when a CPU write changes the PRG-ROM bank
+        /// mapping for any CPU address in the cartridge window. Args are
+        /// (addrStart, addrEndExclusive). Mappers that bank-switch (MMC1,
+        /// MMC3, UxROM, ...) raise this so the block-JIT cache can
+        /// invalidate any compiled blocks whose source bytes just changed
+        /// underneath them. Mappers without bank switching (NROM/000)
+        /// leave it unset. Conservative implementations may report the
+        /// entire $8000-$FFFF range on any PRG-affecting write rather
+        /// than tracking which bank window changed.
+        /// </summary>
+        Action<uint, uint>? PrgBankSwitched { get; set; }
     }
 }

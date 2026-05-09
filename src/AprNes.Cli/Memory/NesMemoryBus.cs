@@ -297,6 +297,7 @@ namespace AprNes.Cli.Memory
             public byte PpuRead(ushort addr) => 0;
             public void PpuWrite(ushort addr, byte value) { }
             public Action<int>? MirroringChanged { get; set; }
+            public Action<uint, uint>? PrgBankSwitched { get; set; }
         }
     }
 }

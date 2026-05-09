@@ -30,26 +30,21 @@ public sealed unsafe class EmitContext
     public Dictionary<string, LLVMValueRef> Values { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Phase 7 GB block-JIT P1 #5 — block-local GPR shadow slots. When non-null
-    /// for a given index, <see cref="GepGpr"/> returns the shadow alloca pointer
-    /// instead of the state-struct field. <see cref="BlockFunctionBuilder"/>
-    /// pre-loads state→shadow at block entry and drains shadow→state at every
-    /// exit point, so spec emitters are unaware of the shadowing — they just
-    /// see a stable pointer per register, but mem2reg can promote the
-    /// alloca-based loads/stores to SSA values that the register allocator
-    /// keeps in x86 GPRs across the entire block (no reload from memory
-    /// between uses, even across bus.Read/Write extern calls).
+    /// N1.B' — abstraction for "where does a state-slot read/write
+    /// resolve?". Default = <see cref="StateBufferProvider"/> (per-instr;
+    /// every GEP goes straight into the state struct). Block-JIT mode
+    /// swaps in an <see cref="AllocaSlotProvider"/> so emitters' loads/
+    /// stores hit function-entry alloca slots that mem2reg promotes to
+    /// pure SSA values. See <c>MD/design/18-block-jit-state-abstraction.md</c>.
+    ///
+    /// Spec emitters never construct or replace this themselves — they
+    /// always go through <see cref="GepGpr"/> /
+    /// <see cref="GepStatusRegister"/> / <see cref="GepBankedGpr"/>.
+    /// <see cref="BlockFunctionBuilder"/> sets it for the block-emit
+    /// duration; instruction-level builders leave it null (which means
+    /// "use the lazy-built default StateBufferProvider").
     /// </summary>
-    public LLVMValueRef?[]? GprShadowSlots { get; set; }
-
-    /// <summary>
-    /// Phase 7 GB block-JIT P1 #5 — block-local status-register shadow slots
-    /// (key = status register name, e.g. "F" / "SP"). Same role as
-    /// <see cref="GprShadowSlots"/> but for the named status registers
-    /// (LR35902 F flag byte, SP stack pointer). PC is intentionally NOT
-    /// shadowed — every PC write is terminal (block exits via PcWritten=1).
-    /// </summary>
-    public Dictionary<string, LLVMValueRef>? StatusShadowSlots { get; set; }
+    public IStateSlotProvider? Slots { get; set; }
 
     public EmitContext(
         LLVMModuleRef module,
@@ -220,79 +215,47 @@ public sealed unsafe class EmitContext
            : null;
 
     /// <summary>
-    /// Phase 7 GB block-JIT P1 #5 — return the GEP pointer for GPR <paramref name="idx"/>,
-    /// preferring the shadow alloca slot if one is registered. Falls back to
-    /// the state-struct field GEP otherwise. Spec emitters should call this
-    /// instead of <c>Layout.GepGpr</c> directly so block-local shadowing
-    /// transparently kicks in when enabled.
+    /// N1.B' — return the pointer for GPR <paramref name="idx"/> through
+    /// the active <see cref="IStateSlotProvider"/>. Per-instr / non-block
+    /// callers leave <see cref="Slots"/> null and we fall through to a
+    /// direct state-buffer GEP (same IR as before this refactor).
     /// </summary>
     public LLVMValueRef GepGpr(int idx)
-    {
-        if (GprShadowSlots is { } slots && idx >= 0 && idx < slots.Length && slots[idx] is { } shadow)
-            return shadow;
-        return Layout.GepGpr(Builder, StatePtr, idx);
-    }
+        => Slots is { } slots
+            ? slots.GprPtr(idx)
+            : Layout.GepGpr(Builder, StatePtr, idx);
 
     /// <summary>
-    /// Phase 7 GB block-JIT P1 #5 — return the GEP pointer for the named
-    /// status register, preferring the shadow alloca slot if one is registered.
-    /// Falls back to the state-struct field GEP otherwise. Banked status
-    /// registers (mode != null) are never shadowed because mode-banked SPSR
-    /// is rare in block-internal accesses; pass-through to Layout.
+    /// N1.B' — return the pointer for the named status register through
+    /// the active <see cref="IStateSlotProvider"/>. Per-instr / non-block
+    /// callers leave <see cref="Slots"/> null and we fall through to a
+    /// direct state-buffer GEP (same IR as before this refactor).
     /// </summary>
     public LLVMValueRef GepStatusRegister(string name, string? mode = null)
-    {
-        if (mode is null && StatusShadowSlots is { } slots && slots.TryGetValue(name, out var shadow))
-            return shadow;
-        return Layout.GepStatusRegister(Builder, StatePtr, name, mode);
-    }
+        => Slots is { } slots
+            ? slots.StatusRegPtr(name, mode)
+            : Layout.GepStatusRegister(Builder, StatePtr, name, mode);
 
     /// <summary>
-    /// Phase 7 GB block-JIT P1 #5 — emit IR that writes every shadow slot's
-    /// current value back to its corresponding state-struct field. Called at
-    /// every block exit point (block_exit, pre-exit branch-taken, budget exit,
-    /// sync-emitter mid-block ret) so the host runtime sees up-to-date register
-    /// values. Drains in a fixed order (GPRs by index, then status by name)
-    /// for IR diff stability.
-    ///
-    /// Performance: each shadow writeback is one i8/i16 store; LLVM's
-    /// instcombine + DSE will eliminate writebacks for slots that the block
-    /// only read (no write). For a block that writes all 7 LR35902 GPRs,
-    /// this is 7 i8 stores at exit (~3 ns total) vs the savings of avoiding
-    /// reload-from-memory after every bus call (typically 4-12 ns saved per
-    /// memory op).
+    /// N1.B' — return the pointer for a banked GPR through the active
+    /// <see cref="IStateSlotProvider"/>. Per-instr / non-block callers
+    /// leave <see cref="Slots"/> null and we fall through to a direct
+    /// state-buffer GEP.
     /// </summary>
-    public void DrainShadowsToState()
-    {
-        if (GprShadowSlots is { } gprSlots)
-        {
-            for (int i = 0; i < gprSlots.Length; i++)
-            {
-                if (gprSlots[i] is not { } shadow) continue;
-                var statePtr = Layout.GepGpr(Builder, StatePtr, i);
-                var v = Builder.BuildLoad2(Layout.GprType, shadow, $"r{i}_drain");
-                Builder.BuildStore(v, statePtr);
-            }
-        }
-        if (StatusShadowSlots is { } statusSlots)
-        {
-            foreach (var name in statusSlots.Keys.OrderBy(k => k, StringComparer.Ordinal))
-            {
-                var shadow = statusSlots[name];
-                var statePtr = Layout.GepStatusRegister(Builder, StatePtr, name);
-                var def = Layout.GetStatusRegisterDef(name);
-                var t = def.WidthBits switch
-                {
-                    8 => LLVMTypeRef.Int8,
-                    16 => LLVMTypeRef.Int16,
-                    32 => LLVMTypeRef.Int32,
-                    _ => throw new NotSupportedException($"Status reg {name} width {def.WidthBits}"),
-                };
-                var v = Builder.BuildLoad2(t, shadow, $"{name.ToLowerInvariant()}_drain");
-                Builder.BuildStore(v, statePtr);
-            }
-        }
-    }
+    public LLVMValueRef GepBankedGpr(string mode, int idxInGroup)
+        => Slots is { } slots
+            ? slots.BankedGprPtr(mode, idxInGroup)
+            : Layout.GepBankedGpr(Builder, StatePtr, mode, idxInGroup);
+
+    /// <summary>
+    /// N1.B' — flush any provider-managed in-register slot values back
+    /// to the live state buffer. Called at every block exit point (block
+    /// epilogue, pre-exit branch-taken, budget exit, sync-emitter
+    /// mid-block ret) and at any mid-block sync hook. No-op when
+    /// <see cref="Slots"/> is the default <see cref="StateBufferProvider"/>
+    /// (writes already hit live memory).
+    /// </summary>
+    public void DrainShadowsToState() => Slots?.SyncToState();
 }
 
 /// <summary>

@@ -1,0 +1,123 @@
+Timestamp: 2026-05-09T13:54:53
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I'm building a multi-CPU JIT emulation framework in C# (.NET) using LLVM (via LLVMSharp.Interop / ORC LLJIT). The framework supports per-instruction JIT and block JIT modes. Currently I have three CPUs implemented:
+
+- ARM7TDMI (32-bit fixed-width, GBA)
+- LR35902 (8-bit Sharp/GB, variable 1/2/3 byte)
+- Ricoh 2A03 (8-bit MOS 6502 family, NES, variable 1/2/3 byte)
+
+CPU semantics are 'JSON-driven' — each CPU has spec/<arch>/cpu.json + groups/*.json declaring instruction encodings + 'steps' arrays of micro-ops (e.g. {op:'add', in:['a','b'], out:'sum'}). A SpecCompiler walks the spec and emits LLVM IR per instruction by dispatching each step to a registered IMicroOpEmitter implementation.
+
+Architecture: shared layer (AprCpu.Core) provides:
+- Generic micro-op emitters (StandardEmitters: add/sub/and/or/xor/shl/lsr/asr/branch/branch_cc/load_byte/store_byte/sext/trunc/etc.) — width-agnostic LLVM ops
+- Per-arch emitters (ArmEmitters / Lr35902Emitters / Mos6502Emitters) — register additional ops the spec needs (architecture-specific addressing modes, flag combos, instruction set mechanics)
+- Block-JIT pipeline: BlockDetector (walks PC, finds basic-block boundary based on writes_pc spec metadata + length oracle for variable-width), BlockCache (compiled block cache), BlockFunctionBuilder (emits one LLVM function containing N back-to-back instructions), HostRuntime (ORC LLJIT wrapper + AddModule)
+- Per-CPU JsonCpu host class (per-arch) — wires bus externs, owns state buffer, runs the dispatch loop
+
+Per-instr mode is solid: all three CPUs pass their reference test ROMs (nestest, blargg cpu_test5, etc.).
+
+PROBLEM: My LR35902 (GB) block-JIT works in production. When I tried to wire 6502 (NES) into block-JIT, the 6502 emitters didn't fit the framework's block-JIT contract:
+
+- LR35902 emitters read pipeline PC from `ctx.PipelinePcConstant` (set by BlockFunctionBuilder per-instruction at compile time as a constant) and read immediates via `ctx.CurrentInstructionBaseAddress` baked into IR. They set `state.PcWritten = 1` when they actually write PC. This lets the block JIT keep PC in IR registers across instructions, enabling LLVM to CSE / fold / DCE across instruction boundaries.
+
+- MOS6502 emitters (written when block-JIT wasn't on the radar) directly load/store `state.PC` for every PC operation. They never set `PcWritten`. They're per-instr-mode-only.
+
+The naive workaround was adding a flag `BlockFunctionBuilder.PerInstructionPcPreWrite` that pre-writes `state.PC = bi.Pc + 1` at every instruction's exec block, then lets the 6502 emitters work unchanged. This defeats the entire point of block JIT (PC store-load pair per instruction kills LLVM optimization across the block) AND has a real bug because mid-instruction PC advances (e.g. read_imm8) interact badly with the pre-write ordering. blargg cpu_test5 fails with this workaround. nestest passes because it's a smaller workload that doesn't hit the bad ordering.
+
+The framework's emitter-author 'contract' for block-JIT compatibility was never written down — it emerged organically from GB development and is implicit in how Lr35902Emitters happen to be written.
+
+QUESTION: I want to maximize sharing across CPUs. The core principle of my framework is 'avoid rework — if N CPUs do something similar, lift it to the shared layer; only keep arch-specific code where genuinely arch-specific.' My current direction is to (a) write a formal 'block-JIT emitter contract' design doc, (b) refactor MOS6502Emitters to follow that contract (use ctx.CurrentInstructionBaseAddress / PipelinePcConstant / PcWritten — mirror what Lr35902Emitters does), (c) audit framework for any per-CPU duplication that should be lifted.
+
+Is there a better architectural decomposition I'm missing? Specifically:
+- Should the block-JIT contract be enforced by an interface / opt-in marker (so emitters that don't satisfy it can be auto-rejected from block mode at registration time, falling back gracefully)?
+- Is there a way to make the contract less burdensome on emitter authors — maybe a code-generation layer that synthesizes block-JIT-aware variants from per-instr-only emitters?
+- Are there well-known patterns from production multi-arch JIT frameworks (QEMU TCG, Rosetta 2, RPCS3 PPU recompiler, etc.) for splitting per-instr vs block-JIT emitter responsibilities cleanly?
+- Any other concerns I should think about — e.g. how to handle CPUs whose ISA is fundamentally hostile to block-JIT (delay slots like MIPS/SPARC, self-modifying code patterns common in 6502 game ROMs, page-cross cycle penalties that depend on runtime values)?
+
+The framework value increases with each new CPU; I'd like to nail the contract now before adding a 4th.
+
+========================================================================
+RESPONSE
+========================================================================
+This is a fantastic architectural challenge. Building a multi-architecture JIT that scales cleanly is notoriously difficult because every ISA has that *one* quirk that breaks your abstractions. 
+
+The core issue you've hit with the 6502 transition to block-JIT is the classic **"Translation-Time vs. Execution-Time"** state management problem. 
+
+To answer your questions, let's look at how mature multi-arch JITs (QEMU TCG, Dolphin, RPCS3, PCSX2) handle this, and how you can apply those patterns to your C# LLVM framework to avoid rewriting emitters or creating messy "opt-in" contracts.
+
+---
+
+### 1. The Architectural Fix: Don't Make Emitters "Block Aware"
+*Regarding: "Should the block-JIT contract be enforced by an interface?" and "Is there a way to make the contract less burdensome?"*
+
+**The golden rule of JIT emitter design: An individual micro-op emitter should not know whether it is part of a single-instruction JIT or a block JIT.** 
+
+Right now, your 6502 emitters are explicitly loading/storing from `state.PC` (memory). Your GB emitters are reading `ctx.PipelinePcConstant` (SSA/Registers). You are asking the *emitters* to manage the JIT environment. 
+
+Instead, you should **abstract the CPU State Accessor**. 
+
+Inject an `IStateAccessor` or let the `EmitterContext` handle state reads/writes. 
+*   **Per-Instruction Mode:** `ctx.ReadPC()` emits an LLVM load from the `state.PC` struct pointer. `ctx.WritePC(val)` emits an LLVM store.
+*   **Block-JIT Mode:** `ctx.ReadPC()` returns the current virtual SSA value representing the PC (`PipelinePcConstant`). `ctx.WritePC(val)` updates an internal C# variable in the `BlockFunctionBuilder` tracking the *latest* PC value, and sets a `PendingPcSync = true` flag.
+
+**How this fixes the 6502:**
+When the 6502 spec micro-ops say "advance PC by 1 to read an immediate," the emitter calls `ctx.WritePC(ctx.ReadPC() + 1)`. 
+In block mode, the JIT framework catches this. It updates the SSA representation of the PC, but **emits no memory stores**. At the very end of the basic block (or before an exception/memory-mapped I/O read that might need the exact PC), the `BlockFunctionBuilder` looks at the final virtual PC and emits *one* LLVM store back to `state.PC`.
+
+This entirely eliminates the need for an implicit contract. The emitters just use the API, and the pipeline decides how to materialize it.
+
+### 2. Prior Art: QEMU TCG & RPCS3 Patterns
+*Regarding: "Are there well-known patterns from production multi-arch JIT frameworks for splitting per-instr vs block-JIT?"*
+
+Production JITs solve this using a few standard patterns that you should adopt:
+
+#### A. Translation-Time Constants (The "Known PC" pattern)
+In QEMU, the PC of the instruction being translated is known at *translation time*. 
+When the 6502 fetches an immediate (e.g., `LDA #$44`), the execution engine shouldn't be reading from the simulated RAM at runtime. The block builder knows the instruction is at `0x8000`, so the immediate is at `0x8001`. 
+The block compiler should read `0x44` from guest memory *during compilation* and bake it into the LLVM IR as a literal constant. 
+
+Your JSON `steps` array for 6502 should reflect this: instead of a runtime micro-op for `read_memory_at_pc`, use an architecture-agnostic step like `fetch_immediate_byte`. The BlockBuilder handles this natively by advancing its compilation-time PC oracle, and the execution-time IR never even sees a PC manipulation.
+
+#### B. The `alloca` + `mem2reg` Pattern (If you must use memory)
+If you want to be slightly lazy and avoid complex C# SSA tracking for CPU state, rely on LLVM.
+At the top of your block function, emit an LLVM `alloca` for the PC and load the initial `state.PC` into it. 
+Pass the pointer to this `alloca` to your emitters. Your 6502 emitters can load/store from this pointer to their heart's content. At the end of the block, load from the `alloca` and store back to `state.PC`. 
+Run LLVM's `mem2reg` pass. LLVM will instantly promote all those local loads and stores into pure SSA registers and optimize them away.
+
+#### C. Lazy Syncing (The "Escape" concept)
+QEMU defines concepts of "Globals" and "Temps". Registers (and PC, Cycles) are Globals. They live in the host CPU state struct. 
+During a block, they are cached in Temps. They are only "synced" (written back to the state struct) when:
+1. The block ends naturally.
+2. A branch is taken.
+3. A helper function is called (e.g., calling out to C# to handle a complex memory-mapped I/O read, which might trigger an interrupt and needs accurate `state.PC` to push to the stack).
+
+### 3. Other Concerns for your Framework
+*Regarding: "How to handle CPUs whose ISA is fundamentally hostile to block-JIT?"*
+
+Since you plan to add more CPUs, prepare your shared layer for these inevitable hurdles:
+
+**1. Self-Modifying Code (SMC) - Crucial for 6502/NES**
+6502 games (and NES especially, due to RAM constraints) use SMC. A block-JIT will crash and burn if an instruction modifies a block of code you've already compiled.
+*   **The Fix:** You need a Memory Management Unit (MMU) abstraction. When memory is written, you must check if that memory falls within a compiled JIT block. If it does, you must invalidate (discard) the cached LLVM function and fall back to interpreter/per-instruction until it's recompiled. Usually, this is done by page-protecting translated memory regions or keeping a hash-map of translated physical addresses.
+
+**2. Page-Cross Penalties (6502/NES)**
+6502 adds a cycle if an indexing operation (e.g., `LDA addr, X`) crosses a page boundary. 
+*   **The Fix:** Add a shared micro-op: `calculate_page_cross`. Emits LLVM IR that takes `base_addr` and `final_addr`, does `(base ^ final) >> 8`, and conditionally increments a virtual `CycleCounter` variable. Like the PC, `Cycles` should be tracked in an SSA register/alloca during the block and only synced to `state.Cycles` at block exit.
+
+**3. Delay Slots (MIPS / SPARC)**
+*   **The Fix:** Your `BlockDetector` needs to be in charge. A basic block in a JIT *cannot* end immediately on a branch if the ISA has delay slots. The BlockDetector must be aware of the ISA's `DelaySlotCount`. If it detects a branch, it must force the inclusion of `N` more instructions into the block before terminating it. Furthermore, you can no longer track a single `PC`. Your state abstraction must track `PC` and `NextPC`.
+
+### Summary Action Plan for your Refactoring
+
+1.  **Drop the `PerInstructionPcPreWrite` workaround.** It's inherently flawed for mid-instruction execution flow.
+2.  **Create an `IStateContext` interface** inside `AprCpu.Core` that is passed to all emitters. It should have `GetRegister()`, `SetRegister()`, `GetPC()`, `SetPC()`, etc.
+3.  **Implement two versions of `IStateContext`:**
+    *   `PerInstrContext`: Direct LLVM loads/stores to your memory-backed CPU state pointer.
+    *   `BlockContext`: Uses `alloca` (and relies on LLVM `mem2reg`) OR manual C# SSA tracking that emits a single store at the end of the block builder.
+4.  **Refactor both 6502 and GB emitters** to stop touching `state.PC` or `PipelinePcConstant` directly, routing all logic through the `IStateContext`.
+5.  **Lift Immediate Fetching:** Ensure that reading an instruction's payload (immediates/operands) is done at JIT-compile time via your length oracle, baked into the IR as constants, rather than emitting IR that reads memory at runtime.
+
+By enforcing the contract at the *API* level rather than the *Emitter* level, you decouple the architectural specs from the execution pipeline. This will make adding CPU #4 (like a MIPS or SuperH) significantly smoother.

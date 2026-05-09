@@ -67,6 +67,13 @@ namespace AprNes.Cli.Memory
 
         public Action<int>? MirroringChanged { get; set; }
 
+        // N1.B' — fired on any CPU write to $8000-$FFFF that may change the
+        // PRG-ROM bank mapping (control reset / control reg PRG-mode change /
+        // PRG-bank-select change). Conservative: we fire for the entire
+        // $8000-$FFFF range on any potentially PRG-affecting write rather
+        // than tracking the precise window per PRG mode.
+        public Action<uint, uint>? PrgBankSwitched { get; set; }
+
         public void Reset(byte[] prgRom, byte[] chrRom)
         {
             _prgRom = prgRom;
@@ -146,6 +153,10 @@ namespace AprNes.Cli.Memory
                     _shiftCount = 0;
                     _shiftReg = 0;
                     _ctrl |= 0x0C;
+                    // Forced PRG mode 3 may change the active bank mapping
+                    // for $8000-$BFFF (other modes might have had a different
+                    // bank pinned there).
+                    PrgBankSwitched?.Invoke(0x8000u, 0x10000u);
                     return;
                 }
 
@@ -155,11 +166,14 @@ namespace AprNes.Cli.Memory
                 if (_shiftCount < 5) return;
 
                 // 5-bit value assembled — latch into selected register.
+                bool prgMappingChanged = false;
                 if (addr < 0xA000)
                 {
                     int oldMirroring = Mirroring;
+                    int oldPrgMode = PrgMode;
                     _ctrl = _shiftReg;
                     int newMirroring = Mirroring;
+                    if (PrgMode != oldPrgMode) prgMappingChanged = true;
                     if (newMirroring != oldMirroring)
                     {
                         // Map MMC1 mirroring (0=oneL, 1=oneU, 2=V, 3=H) to
@@ -177,7 +191,22 @@ namespace AprNes.Cli.Memory
                 }
                 else if (addr < 0xC000) _chr0Select = _shiftReg;
                 else if (addr < 0xE000) _chr1Select = _shiftReg;
-                else                    _prgSelect  = _shiftReg & 0x0F;
+                else
+                {
+                    int oldPrgSelect = _prgSelect;
+                    _prgSelect = _shiftReg & 0x0F;
+                    if (_prgSelect != oldPrgSelect) prgMappingChanged = true;
+                }
+
+                if (prgMappingChanged)
+                {
+                    // Conservative: invalidate the entire $8000-$FFFF window.
+                    // Even in PRG modes 2 and 3 (only half the window switches)
+                    // the cost of over-invalidating the fixed half is one-time
+                    // recompile per stale entry — much cheaper than tracking
+                    // precise windows.
+                    PrgBankSwitched?.Invoke(0x8000u, 0x10000u);
+                }
 
                 _shiftReg = 0;
                 _shiftCount = 0;
