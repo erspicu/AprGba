@@ -1,8 +1,10 @@
 # 8086 移植計畫 — 最低環境 CPU 驗證 + 截圖證明
 
 > **Status**：**IN PROGRESS**（2026-05-10）— 24.0–24.5 完工 (13 commits, 6
-> paper-quality screenshots, 1.31M Tom Harte SST cases 全綠)；24.6
-> JSON-driven port 待做。
+> paper-quality screenshots, 1.31M Tom Harte SST cases 全綠)；
+> 24.6 JSON-driven port: **24.6.1–24.6.5c 完工** (7 commits, 24/24
+> JsonCpu tests + 697/697 T1，full MOV through framework — NOP/HLT/
+> reg-imm/reg-direct/memory ModR/M)；24.6.5d–g + 24.6.6–9 待做。
 >
 > **Trigger**：第 4 顆 CPU 候選 = Intel 8086（用以前寫的 Apr86 emulator
 > 當 reference oracle 的部分）。要解決的核心問題：8086 是 CISC、segmented
@@ -305,7 +307,22 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | **24.4.5** | String ops MOVSB/CMPSB/SCASB/LODSB/STOSB（10 ops）+ REP/REPNE prefix | 1.17M SST | ✅ | `44220a7` |
 | **24.4.6** | INT/IRET/INTO + CBW/CWD + IN/OUT + BCD（functional） | 1.31M SST cases (BCD silicon-quirk SST deferred) | ✅ | `0927832` |
 | **24.5** | 5-10 個 hand-crafted demo + 截圖 | 6 paper-quality screenshots: hello-cga / primes / fibonacci / mandelbrot / string-copy / factorial | ✅ | `a897276`, `acf685a` |
-| **24.6** | **JSON-driven port** — `spec/x86-16/i8086/cpu.json` + groups + `X86_16Emitters.cs` (LLVM IR) + `X86JsonCpu` per-instr / block-JIT；三 backend (legacy / json / json-block) 全綠 Tom Harte | 8086 真正成為 framework 第 4 顆 CPU；同 pipeline 跑 | ⏳ | — |
+| **24.6** | **JSON-driven port** — `spec/x86-16/i8086/cpu.json` + groups + `X86_16Emitters.cs` (LLVM IR) + `X86JsonCpu` per-instr / block-JIT；三 backend (legacy / json / json-block) 全綠 Tom Harte | 8086 真正成為 framework 第 4 顆 CPU；同 pipeline 跑 | ⏳ partial | (子項見下) |
+| 24.6.1 | Spec scaffolding：`spec/x86-16/i8086/{cpu.json,main.json}`，8 GPRs in ModR/M order，9-flag FLAGS，4 segment regs + IP + HALTED | SpecLoader test green | ✅ | `4730945` |
+| 24.6.2 | Smoke group：NOP (0x90) + HLT (0xF4) decode through DecoderTable | 4 decode tests | ✅ | `9a43c73` |
+| 24.6.3 | `X86_16Emitters.cs` scaffolding：family dispatch + halt emitter + helpers (FetchImm8/16, SegmentedRead/Write8/16, ReadGpr8/16, WriteGpr8/16, byte-half preservation rule) | 5 spec compile tests | ✅ | `24e5e70` |
+| 24.6.4 | `X86JsonCpu` per-instr backend：SpecCompiler → ORC LLJIT → live fn pointers, NOP/HLT roundtrip, State getter/LoadState | 7 e2e tests | ✅ | `01cdeb3` |
+| 24.6.5a | MOV r, imm (B0-BF) — 16 opcodes through field-dispatched write_reg{8,16} + fetch_imm{8,16} | 5 tests | ✅ | `1e992a3` |
+| 24.6.5b | MOV r/m, r 與 r, r/m (88-8B) — fetch_modrm + read_reg{8,16}_field with mod=11 register-direct only | 5 tests | ✅ | `06d9dab` |
+| 24.6.5c | Memory ModR/M — `x86_modrm_compute_ea` (full 8086 EA grammar：BX+SI/BP+disp/disp16/etc.) + `x86_modrm_load/store_w{8,16}` mod-aware emitters | 7 mem tests | ✅ | `384eca5` |
+| 24.6.5d | Segment override prefixes (0x26 ES / 0x2E CS / 0x36 SS / 0x3E DS) | — | ⏳ | — |
+| 24.6.5e | MOV r/m, imm (C6/C7) + MOV moffs (A0-A3) + MOV sreg/r,r (8C/8E) | — | ⏳ | — |
+| 24.6.5f | PUSH/POP r16 (50-5F) + PUSH/POP sreg + PUSHF/POPF + PUSH r/m (FF /6) + POP r/m (8F) | — | ⏳ | — |
+| 24.6.5g | XCHG r/m,r (86/87) + XCHG AX,r16 (90-97) + LEA (8D) + LDS/LES (C4/C5) | — | ⏳ | — |
+| 24.6.6 | ALU group — ADD/OR/ADC/SBB/AND/SUB/XOR/CMP across 6 forms × 8-bit/16-bit + 9-flag IR computation (CF/PF/AF/ZF/SF/OF rules in LLVM IR mirroring `X86Alu.cs`) | Tom Harte SST 8088 v2 全綠子集 | ⏳ | — |
+| 24.6.7 | Control flow (JMP/Jcc/CALL/RET/LOOP/JCXZ) + shift/rotate (D0-D3) + string ops + REP prefix + INT/IRET + BCD + IO | Tom Harte 1.31M 全綠 through json backend | ⏳ | — |
+| 24.6.8 | Block-JIT mode — alloca + mem2reg + IR-level cycle budget (à la N1.B' for NES) | 三 backend (legacy / json-instr / json-block) 同步 | ⏳ | — |
+| 24.6.9 | Re-run 24.5 demos through json-block backend | result/x86-16/jit-*.png 與 legacy pixel-identical | ⏳ | — |
 | **24.6b** | (optional) Lockstep diff legacy vs Apr86（限 .com 程式範圍） | Apr86 reference cross-check | ⏳ | — |
 | **24.7** | 80186 spec — 透過 inheritance (#23) | ENTER/LEAVE demo + result/x86-16/enter-leave-i80186.png | ⏳ | — |
 | **24.8** | 80286 real-mode + protected-mode demos | 4 顆 CPU 全綠 + result/x86-16/protmode-msr-i80286.png | ⏳ | — |
@@ -320,11 +337,18 @@ Tom Harte SST cases 全綠）。**legacy backend 已是「8086 emulator 並排�
 在」狀態**，但要讓 8086 真正成為 framework 第 4 顆 CPU、走同一條 SpecCompiler
 + LLVM JIT pipeline，**24.6 JSON-driven port 是必做的下一步**。
 
+**24.6 進度 (2026-05-10)**：sub-phase **24.6.1 → 24.6.5c 完成** — JSON-driven
+8086 已能透過 framework SpecCompiler + LLVM JIT 跑 NOP / HLT / 全套 MOV
+(B0-BF reg/imm + 88-8B reg-to-reg + 88-8B 全 ModR/M memory grammar)。
+697/697 T1 tests 全綠。剩 24.6.5d-g + 24.6.6-9 = ALU / 控流 / 移位 /
+字串 / block-JIT / demo 重跑。
+
 **最早可截圖 milestone**：**24.3 結束**（hello-cga.com → PNG）— 已達成。
 **最早 paper-quality milestone**：**24.5 結束**（6 個 demo 截圖 + Tom Harte
 1.31M SST 全綠）— 已達成。
-**Framework genericity milestone**：**24.6 結束**（三 backend 全綠 = 真正
-透過框架驗證 8086）— 待做。
+**Framework genericity milestone (partial)**：JSON-driven 8086 backend 已
+存在並能跑 MOV-only 子集；剩 ALU / 控流 / 移位 / 字串 ops 補完後 = 真正
+透過框架驗證 8086。
 
 ---
 
