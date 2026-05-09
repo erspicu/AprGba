@@ -18,7 +18,12 @@ public sealed record CpuSpec(
     IReadOnlyList<InstructionSetRef> InstructionSets,
     InstructionSetDispatch? InstructionSetDispatch,
     MemoryModel? MemoryModel,
-    IReadOnlyList<CustomMicroOp> CustomMicroOps);
+    IReadOnlyList<CustomMicroOp> CustomMicroOps,
+    // N2.5 — declarative block-JIT policy hints. Optional; null defaults
+    // to framework-baseline behaviour (cycles_per_spec_unit=4 m-cycle×4
+    // GB/ARM convention, lazy PC, end-of-block IRQ check). See
+    // MD/design/19-declarative-jit-policy.md.
+    IsaMetadata? IsaMetadata = null);
 
 /// <summary>Loaded instruction-set file (e.g. `arm.json`, `thumb.json`).</summary>
 public sealed record InstructionSetSpec(
@@ -279,5 +284,21 @@ public readonly record struct BitRange(int High, int Low)
         return new BitRange(hi, lo);
     }
 }
+
+#endregion
+
+#region IsaMetadata — declarative block-JIT policy
+
+/// <summary>
+/// N2.5 — block-JIT optimization hints from <c>cpu.json::isa_metadata</c>.
+/// Read by HostRuntime / BlockFunctionBuilder to configure framework
+/// behaviour without per-CPU host-class hardcoding. See
+/// <c>MD/design/19-declarative-jit-policy.md</c>.
+/// </summary>
+public sealed record IsaMetadata(
+    string? Endianness,
+    int CyclesPerSpecUnit,
+    string PcUpdatePolicy,
+    string InterruptCheckPolicy);
 
 #endregion

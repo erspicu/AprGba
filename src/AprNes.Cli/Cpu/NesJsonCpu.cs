@@ -375,10 +375,12 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
             module, _compileResult.Layout,
             _compileResult.EmitterRegistry, _compileResult.ResolverRegistry)
         {
-            // 6502 spec's "3m" form means 3 raw cycles, NOT 12 (m-cycle×4).
-            // Override the default GB/ARM multiplier so cycles_left
-            // decrements match real 6502 cycle costs.
-            CyclesPerSpecUnit = 1
+            // N2.5 — read cycles_per_spec_unit from spec/2a03/cpu.json's
+            // isa_metadata section instead of hardcoding 1. 6502 spec
+            // uses raw CPU cycles in cycles.form ("3m" = 3 cycles), so
+            // isa_metadata declares cycles_per_spec_unit=1; default 4
+            // (GB/ARM m-cycle×4) is the fallback if spec omits the field.
+            CyclesPerSpecUnit = _spec.Cpu.IsaMetadata?.CyclesPerSpecUnit ?? 4
         };
         var mainSetSpec = _spec.InstructionSets["Main"];
         bfb.Build(mainSetSpec, block, generation);

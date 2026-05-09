@@ -113,6 +113,25 @@ public class MachineSpecTests
     }
 
     [Fact]
+    public void IsaMetadata_LoadsForAllThreeCpus_WithExpectedValues()
+    {
+        var arm = SpecLoader.LoadCpuSpec(Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "cpu.json"));
+        Assert.NotNull(arm.Cpu.IsaMetadata);
+        Assert.Equal("little", arm.Cpu.IsaMetadata!.Endianness);
+        Assert.Equal(4, arm.Cpu.IsaMetadata.CyclesPerSpecUnit);
+        Assert.Equal("lazy", arm.Cpu.IsaMetadata.PcUpdatePolicy);
+
+        var gb = SpecLoader.LoadCpuSpec(Path.Combine(TestPaths.SpecRoot, "lr35902", "cpu.json"));
+        Assert.NotNull(gb.Cpu.IsaMetadata);
+        Assert.Equal(4, gb.Cpu.IsaMetadata!.CyclesPerSpecUnit);
+
+        var nes = SpecLoader.LoadCpuSpec(Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json"));
+        Assert.NotNull(nes.Cpu.IsaMetadata);
+        Assert.Equal(1, nes.Cpu.IsaMetadata!.CyclesPerSpecUnit);
+        Assert.Equal("lazy", nes.Cpu.IsaMetadata.PcUpdatePolicy);
+    }
+
+    [Fact]
     public void RegionTypeDefaults_AreSensible()
     {
         // io region: forces_end_of_block default-on, smc_notify default-off,

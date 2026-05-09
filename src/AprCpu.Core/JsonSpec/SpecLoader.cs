@@ -104,8 +104,36 @@ public static class SpecLoader
         var dispatch = TryGetObject(root, "instruction_set_dispatch", out var d) ? ParseDispatch(d, filePath) : null;
         var memory   = TryGetObject(root, "memory_model", out var mm) ? ParseMemoryModel(mm, filePath) : null;
         var custom   = ParseList(root, "custom_micro_ops", ParseCustomMicroOp, filePath, "$.custom_micro_ops");
+        var isaMeta  = TryGetObject(root, "isa_metadata", out var im) ? ParseIsaMetadata(im, filePath) : null;
 
-        return new CpuSpec(specVer, arch, variants, regFile, modes, vectors, sets, dispatch, memory, custom);
+        return new CpuSpec(specVer, arch, variants, regFile, modes, vectors, sets, dispatch, memory, custom, isaMeta);
+    }
+
+    /// <summary>
+    /// N2.5 — parse optional <c>isa_metadata</c> section into typed
+    /// IsaMetadata. Defaults: cycles_per_spec_unit=4 (GB/ARM m-cycle×4
+    /// convention; NES sets to 1 explicitly), pc_update_policy=lazy,
+    /// interrupt_check_policy=end_of_block.
+    /// </summary>
+    private static IsaMetadata ParseIsaMetadata(JsonElement el, string filePath)
+    {
+        EnsureObject(el, filePath, "$.isa_metadata");
+        string? endianness = null;
+        if (el.TryGetProperty("endianness", out var en) && en.ValueKind == JsonValueKind.String)
+            endianness = en.GetString();
+        int cyclesPerUnit = 4;
+        if (el.TryGetProperty("cycles_per_spec_unit", out var cpu)
+            && cpu.ValueKind == JsonValueKind.Number)
+        {
+            cyclesPerUnit = cpu.GetInt32();
+        }
+        string pcPolicy = "lazy";
+        if (el.TryGetProperty("pc_update_policy", out var pcp) && pcp.ValueKind == JsonValueKind.String)
+            pcPolicy = pcp.GetString() ?? "lazy";
+        string irqPolicy = "end_of_block";
+        if (el.TryGetProperty("interrupt_check_policy", out var ip) && ip.ValueKind == JsonValueKind.String)
+            irqPolicy = ip.GetString() ?? "end_of_block";
+        return new IsaMetadata(endianness, cyclesPerUnit, pcPolicy, irqPolicy);
     }
 
     private static Architecture ParseArchitecture(JsonElement el, string filePath)
