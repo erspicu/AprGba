@@ -1,0 +1,217 @@
+Timestamp: 2026-05-09T16:38:28
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I'm refining a multi-CPU JIT emulation framework (C# / .NET 10 / LLVM 20 via LLVMSharp.Interop / ORC LLJIT) and want your feedback on a design proposal.
+
+CONTEXT (where we are now):
+
+The framework drives CPU semantics from JSON spec files (spec/<arch>/cpu.json + groups/*.json). Each instruction has a 'steps' array of micro-ops dispatched to registered IMicroOpEmitter implementations. We have 3 CPUs in production: ARM7TDMI (GBA, 32-bit fixed-width), LR35902 (Game Boy, 8-bit variable 1-3 byte), Ricoh 2A03 (NES, 8-bit MOS6502 family, variable 1-3 byte).
+
+We just shipped a refactor (N1.B') that lifted block-JIT state access to the framework via the alloca + mem2reg pattern. EmitContext.GepStatusRegister / GepGpr now route through an IStateSlotProvider — per-instr mode returns a state-buffer GEP, block-JIT mode returns a function-entry alloca pointer that LLVM mem2reg promotes to SSA. Result: per-CPU emitters are mode-agnostic — Mos6502Emitters.cs is byte-identical between per-instr and block-JIT modes. GB block-JIT continued passing blargg cpu_instrs 11/11 through the new path; NES blargg cpu_test5 passes 'All tests complete' on all three backends (legacy / json per-instr / json-block).
+
+THE NEXT DESIGN CHALLENGE:
+
+After this refactor, several block-JIT optimizations that AREN'T part of state access are still hard-coded per-CPU in C# emitter code. Examples:
+
+1. LR35902's FetchImmediate (Lr35902Emitters.cs:798) checks ctx.CurrentInstructionBaseAddress and, when set (block-JIT mode), shift-extracts imm8 directly from ctx.Instruction (the cached instruction word constant), skipping the bus.ReadByte extern call. This is a real perf optimization for variable-width ISAs where the instruction word holds operand bytes. NES could benefit from the same pattern but its emitter doesn't do this — it always calls bus.ReadByte.
+
+2. LR35902's EmitWriteByteWithSyncAndRamFastPath (line 1141) emits a region-check + direct GEP-store for WRAM/HRAM addresses, bypassing the bus extern. The region addr ranges and 'safe to inline' decisions are LR35902-specific (other CPUs have different memory maps).
+
+3. Cycle accounting nuance: LR35902/ARM use m-cycle × 4 = t-cycle convention; 6502 uses raw CPU cycles directly. Currently I have a BlockFunctionBuilder.CyclesPerSpecUnit property (default 4, NES sets to 1) but it's set in C# host code, not in the spec.
+
+4. SMC notification: NES needs RAM-write hooks (blargg's instr_template is RAM-resident, gets rewritten between subtests). GB doesn't (test code is in PRG-ROM). Currently NesMemoryBus has a SmcWriteHook field set in NesJsonCpu.
+
+5. Block-boundary extra rules: MMC1 mapper writes potentially change PRG bank → cached blocks at $8000+ become stale. We have IMapper.PrgBankSwitched callback wired in; but the framework's BlockDetector doesn't itself know to end blocks at mapper writes (it relies on writes_pc:always spec metadata).
+
+Each of these adds per-CPU C# code that the framework doesn't visibility into. New CPU authors have to learn the C# emitter pattern + figure out which optimizations are appropriate for their ISA. Conflicts with our 'maximize framework reuse, JSON-driven philosophy.
+
+PROPOSAL: 'Declarative block-JIT policy in JSON'
+
+Add a new section to spec/<arch>/cpu.json called 'block_jit_policy' that lets the spec author declare optimization preferences. Framework reads this at SpecCompiler.Compile() time and configures BlockFunctionBuilder / BlockDetector / per-CPU JsonCpu host accordingly. Sensible defaults if absent.
+
+Schema sketch:
+
+```json
+{
+  "block_jit_policy": {
+    "cycles_per_spec_unit": 1,
+    "max_block_size": 64,
+    "alloca_pc_prewrite": "auto",
+    "imm_bake_from_instruction_word": true,
+    "ram_region_inline": [
+      { "name": "wram", "addr_start": 0, "addr_end_exclusive": 8192, "mirror_mask": "0x07FF", "side_effect_free": true, "writable": true }
+    ],
+    "smc_notify_ranges": [{ "addr_start": 0, "addr_end_exclusive": 8192 }],
+    "block_boundary_extra": [{ "kind": "mapper_write", "addr_start": 32768, "addr_end_exclusive": 65536 }],
+    "cycle_extras": { "branch_taken": 1, "page_cross_indexed": 1 },
+    "compile_passes": ["mem2reg", "instcombine", "gvn", "dse", "simplifycfg"]
+  }
+}
+```
+
+Goal: new CPU authors write JSON declaratively; existing CPUs migrate incrementally; framework's core C# stays small.
+
+DESIGN CONSIDERATIONS I HAVE:
+
+A. **Schema validation** — JSON-Schema lint + clear error messages tied to JSON path; CI gate.
+
+B. **Defaults strategy** — 3 options:
+   1. Framework-hardcoded sensible defaults
+   2. Defaults derived from architecture.family (ARM → fixed-width, MOS6502 → raw cycles, etc.)
+   3. Hybrid (framework default + family-override)
+   I lean toward (1) — pure declarative, no implicit family-policy binding.
+
+C. **Build-time vs runtime override** — JSON sets compile-time policy, but should env vars / CLI flags be allowed to override (current state has APR_NES_BLOCK_MAX as a hack; should be normalised)?
+
+D. **What NOT to put in JSON** — true ISA-specific IR shape decisions (the actual region-check IR, the actual bus extern bypass condition, etc.) should stay in C# emitter — JSON only toggles whether to enable + parametric values. Otherwise JSON becomes mini-language → Greenspun's tenth rule.
+
+E. **Migration path** — existing 3 CPUs have implicit hardcoded policy. Two options:
+   - Keep hardcode + JSON (JSON overrides if present), conservative
+   - Migrate hardcoded values into JSON, delete C# hardcode, framework one-path. Aligns with N1.B' philosophy.
+
+QUESTIONS FOR YOU:
+
+1. Are there block-JIT optimization categories I'm missing in my schema sketch? (Looking at QEMU TCG / Dynarmic / mGBA backends, what other declarative knobs do production multi-arch JITs expose to CPU/architecture authors?)
+
+2. Is 'block_boundary_extra' kind a valid abstraction? Could end-of-block rules be more declarative — e.g. expressing 'instruction X potentially modifies code memory therefore end the block here'? This would obviate the need for bespoke mapper-write callbacks.
+
+3. The SMC notification approach (per-byte coverage counter in BlockCache, callback from bus.WriteByte) works but has a 1-byte L1 miss per write. Are there better approaches in production JITs for SMC handling that scale to 16-bit/24-bit address spaces without per-byte tracking? (For NES the address space is 16-bit so 64KB counter is fine; ARM 32-bit might be different)
+
+4. For the 'imm_bake_from_instruction_word' optimization — when block-JIT compiles a 6502 LDA #imm8, the operand byte is the second byte of the cached InstructionWord. This works for variable-width ISAs but creates a coupling between BlockDetector (which fetches the word) and emitter (which knows where to extract). Is this coupling acceptable, or is there a cleaner separation pattern?
+
+5. Are there design pitfalls in this 'declarative optimization policy' approach you've seen in production frameworks? E.g., spec authors over-optimize / mis-configure / bit-rot, or framework code paths multiplying as new options accrete.
+
+6. From a 'spec-driven framework' design philosophy perspective, is this the right level of declarative abstraction? Or am I going too far / not far enough?
+
+Please don't hold back on critique. The framework currently has 3 CPUs and we're at the point where adding a 4th would be a real test of the design — better to nail the declarative layer now than after committing the wrong shape.
+
+========================================================================
+RESPONSE
+========================================================================
+This is a fascinating architectural stage for your emulator. Lifting the block-JIT state access to `mem2reg` was clearly a huge win. Moving toward a declarative optimization policy is the right next step, but you are hovering right on the edge of a common emulation anti-pattern: **conflating the CPU with the System (Machine/Board).**
+
+Here is a deep-dive critique of your proposal, answering your questions and offering architectural adjustments based on patterns used in QEMU, Dynarmic, and Dolphin.
+
+---
+
+### The Big Picture (Addressing Q2 & Q6)
+
+**Critique:** You are putting System/Board logic into `cpu.json`.
+
+The Ricoh 2A03 (NES 6502) has no concept of a "mapper write" at address `32768`. It also has no concept of "WRAM from 0 to 8192". If you put `ram_region_inline` and `block_boundary_extra` into `spec/6502/cpu.json`, you have locked your 6502 implementation to the NES. If you want to emulate the Commodore 64 or Apple II tomorrow, your CPU spec is now wrong.
+
+**The Solution:** Split your declarative policy into two domains: **ISA Semantic Spec** (`cpu.json`) and **Machine/System Policy** (`machine_nes.json`, `machine_gb.json`).
+
+*   **`cpu.json` (ISA Spec):** Knows about registers, variable-length instructions, delay slots, PC alignment, and cycle multipliers.
+*   **`machine.json` (System Spec):** Knows about memory maps, RAM fast-paths, SMC watch ranges, and I/O registers that cause side effects.
+
+Your framework compiler should ingest *both* to instantiate the `JsonCpu` + `BlockFunctionBuilder`.
+
+---
+
+### Answering Your Questions
+
+#### 1. Missing Block-JIT Optimizations? (Look at QEMU/Dynarmic)
+If you look at production JITs, here are the declarative knobs you are missing that belong in either the CPU or Machine spec:
+
+*   **Page Boundary Crossing Behavior:** (Machine) Blocks usually *must* end at a memory page boundary (e.g., 4KB). Why? Because the next page might be unmapped, mapped to I/O, or trigger a page fault. Crossing pages mid-block without a lookup is dangerous.
+*   **Interrupt Polling Interval/Policy:** (CPU) Does the CPU poll for interrupts every instruction, every $N$ cycles, or only on backwards branches? E.g., `interrupt_check: "end_of_block"`.
+*   **PC Update Laziness:** (CPU) Does the framework update the backing PC memory location every instruction, or is it deferred to block exit / exception points? (This is a huge perf win).
+*   **Static Block Chaining:** (Framework/CPU) Can a direct branch in a block be patched to jump directly to the memory address of the next compiled LLVM block, bypassing the C# dispatcher?
+
+#### 2. Is `block_boundary_extra` valid? Mapper callbacks?
+As mentioned, CPU-level `block_boundary_extra` for mappers is an abstraction leak.
+
+Instead of bespoke mapper callbacks, memory accesses should be mapped with **Flags**. In a system config, memory regions are tagged: `IsRam`, `IsRom`, `IsIo`, `IsMirrored`.
+*   A write to `IsRam` triggers SMC checks.
+*   A write to `IsIo` (like a mapper) instructs the framework: *"This is a side-effecting operation that might change the memory map. End the block immediately after this instruction."*
+
+You don't need a `mapper_write` string in JSON. You just need a rule: **"Any store to memory mapped as `IsIo` forces an end-of-block."**
+
+#### 3. SMC Notification for 16-bit vs 32/64-bit Address Spaces
+A 1-byte per-address array works for 64KB (NES/GB), but as you noted, fails instantly for 32-bit (ARM) which requires 4GB.
+
+**Production Approaches:**
+1.  **Software MMU (SoftMMU) / Fastmem:** You maintain a software page table. The "WriteByte" fast-path does a bitwise check on a Page Table Entry (PTE). If the PTE is flagged as `ContainsCompiledCode`, it falls back to a slow C# path to invalidate the block.
+2.  **Page-Level Bitsets:** Instead of tracking per byte, track per *page* (e.g., 4KB blocks). You have an array of bits (1 bit per 4KB page). A write shifts the address `>> 12` and checks the bit. If 1, call C# to invalidate *all* blocks overlapping that page.
+3.  **Host Page Protection (mprotect):** (What QEMU/Dolphin do). Map the guest RAM using OS APIs. Mark pages containing JIT blocks as Read-Only. When the guest writes to it, it throws a hardware segfault. Your C# framework catches the exception (via `VectoredExceptionHandler`), invalidates the JIT block, restores Read/Write, and resumes. *(Note: Very fast, but brutally difficult to implement cleanly in managed C# across OSes).*
+
+**Recommendation for your Framework:** Implement a Page-Level Bitset/SoftMMU. It keeps the LLVM IR tiny (one shift, one load, one branch), scales to 32-bit easily, and removes the need for `smc_notify_ranges` in JSON entirely. The framework just automatically tracks which pages have active blocks.
+
+#### 4. The `imm_bake_from_instruction_word` Coupling
+Coupling the `BlockDetector` (memory fetcher) and `Emitter` (byte extractor) is a symptom of skipping the **Decode Phase**.
+
+In a strict pipeline, it goes: `Fetch` -> `Decode` -> `Emit`.
+Your framework should handle immediate baking invisibly.
+
+1.  `BlockDetector` fetches bytes.
+2.  `Decoder` (driven by JSON `opcode_mask`) parses the bytes into an intermediate `Instruction` struct in C#: `struct Instruction { int Opcode; ulong Immediate; int Length; }`.
+3.  The `Emitter` receives this struct. It uses `instruction.Immediate` directly as an LLVM constant.
+
+If you structure it this way, you don't need `imm_bake_from_instruction_word` in JSON at all. The framework *always* bakes immediates because the Decoder provides them as values, decoupling the LLVM IR generation from the memory fetch.
+
+#### 5. Pitfalls of Declarative Policies
+*   **LLVM Pass Management in JSON:** Do *not* put `compile_passes: ["mem2reg", "instcombine", ...]` in your CPU spec. LLVM pass pipelines are highly dependent on compiler theory and the specific LLVM version, not the CPU architecture. If a pass pipeline crashes LLVM 20 but worked in LLVM 19, you don't want to edit `cpu.json`. Instead, expose an `OptimizationLevel` enum to the user (None, Fast, Aggressive) and manage the passes natively in C#.
+*   **Greenspun's 10th Rule:** By adding `side_effect_free: true` and `mirror_mask` to JSON, you are slowly writing a bad C compiler in JSON. Keep the JSON for *what* is there, use C# for *how* to optimize it.
+*   **Testing State-Space Explosion:** Every boolean toggle in your JSON doubles the number of test configurations. If you have 5 booleans, you have 32 ways the JIT can compile a block. Guaranteeing Blargg passes on all 32 is a nightmare.
+
+### Recommended JSON Schema Architecture
+
+Based on the above, here is how you should split and structure your configuration.
+
+**Delete `compile_passes` and `imm_bake_from_instruction_word`. Move RAM maps to a Machine spec.**
+
+**1. `spec/6502/cpu.json` (Only ISA semantics)**
+```json
+{
+  "isa_metadata": {
+    "endianness": "little",
+    "pc_alignment_bytes": 1,
+    "cycles_per_spec_unit": 1,
+    "cycle_nuances": {
+      "branch_taken_penalty": 1,
+      "page_cross_penalty": 1
+    },
+    "pc_update_policy": "lazy"
+  }
+}
+```
+
+**2. `spec/machines/nes.json` (System/Board Semantics)**
+```json
+{
+  "system_memory": [
+    {
+      "name": "wram",
+      "range": [0, 8192],
+      "type": "ram",
+      "mirror_mask": "0x07FF",
+      "fastmem_eligible": true
+    },
+    {
+      "name": "ppu_io",
+      "range": [8192, 16384],
+      "type": "io",
+      "mirror_mask": "0x2007",
+      "forces_end_of_block": false
+    },
+    {
+      "name": "mapper_io",
+      "range": [32768, 65536],
+      "type": "io",
+      "forces_end_of_block": true
+    }
+  ]
+}
+```
+
+### Summary of Next Steps
+
+1.  **Yes, migrate hardcoded C# values into JSON (Option E2).** Delete the C# hardcode entirely to force the framework to rely strictly on the spec pipeline.
+2.  **Separate the Machine from the CPU.** Implement a `MachineSpec` to hold memory maps and mapper block-boundaries.
+3.  **Upgrade your SMC handling.** Move from a byte-level array to a Page-Level Bitset/SoftMMU approach to prepare for 32-bit architectures like ARM.
+4.  **Strengthen your Decoder.** Pass an `Instruction` struct (with extracted immediates) to your emitters, rendering the immediate-baking optimization an automatic framework feature rather than a configurable toggle.
+
+You are building an incredibly clean engine. By drawing a hard line between "CPU properties", "Machine properties", and "LLVM Framework internals", you will ensure that adding your 4th, 5th, and 6th architectures will be remarkably smooth.
