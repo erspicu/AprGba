@@ -79,28 +79,57 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
     // Block-JIT-only — cycles_left budget slot + PcWritten flag slot.
     private readonly int _cyclesLeftOff, _pcWrittenOff;
 
-    // Per-opcode cycle table mirroring LegacyCpu.cycle_tableData. Used
-    // for cycle accounting since the 2A03 spec only carries per-mnemonic
-    // coarse cycle forms.
-    private static readonly byte[] s_cycleTable =
+    // N3.3 (finally) — per-opcode cycle table now derived from spec at
+    // construction. Walks 256 opcodes through the decoder; for each, looks
+    // up cycles.table (per-(mnemonic, addressing-mode) granularity) or
+    // falls back to cycles.form. The result is byte-identical to the
+    // LegacyCpu oracle that was hardcoded here pre-N3.3, but now the spec
+    // is the source of truth.
+    //
+    // Built per-instance because the CpuSpec instance lives on the JIT
+    // pipeline; static caching across NesJsonCpu instances would need a
+    // (CpuSpec, Decoder) keyed cache and isn't worth the complexity for
+    // typical usage (one CPU per emulator).
+    private readonly byte[] _specCycleTable;
+
+    private static byte[] BuildSpecCycleTable(
+        AprCpu.Core.Decoder.DecoderTable decoder,
+        int cyclesPerSpecUnit)
     {
-        7,6,2,8,3,3,5,5,3,2,2,2,4,4,6,6,
-        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
-        6,6,2,8,3,3,5,5,4,2,2,2,4,4,6,6,
-        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
-        6,6,2,8,3,3,5,5,3,2,2,2,3,4,6,6,
-        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
-        6,6,2,8,3,3,5,5,4,2,2,2,5,4,6,6,
-        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
-        2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,
-        2,6,2,6,4,4,4,4,2,5,2,5,5,5,5,5,
-        2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,
-        2,5,2,5,4,4,4,4,2,4,2,4,4,4,4,4,
-        2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,
-        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
-        2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,
-        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7
-    };
+        var table = new byte[256];
+        for (int op = 0; op < 256; op++)
+        {
+            var d = decoder.Decode((uint)op);
+            if (d?.Instruction.Cycles is not { } cyc)
+            {
+                throw new InvalidOperationException(
+                    $"NesJsonCpu: spec missing cycles for opcode 0x{op:X2}");
+            }
+
+            int? cycles = null;
+            if (cyc.Table is { } ct &&
+                ct.Resolve(d.Format, (uint)op) is int tableValue)
+            {
+                cycles = tableValue;
+            }
+            else if (!string.IsNullOrEmpty(cyc.Form))
+            {
+                int n = 0;
+                foreach (var ch in cyc.Form)
+                {
+                    if (ch >= '0' && ch <= '9') { n = n * 10 + (ch - '0'); continue; }
+                    if (n > 0) break;
+                }
+                if (n > 0) cycles = n * cyclesPerSpecUnit;
+            }
+
+            if (cycles is not int v)
+                throw new InvalidOperationException(
+                    $"NesJsonCpu: opcode 0x{op:X2} has cycles spec but neither table nor form is resolvable");
+            table[op] = (byte)v;
+        }
+        return table;
+    }
 
     // Bookkeeping cycle count carried over from interrupt entry — mirrors
     // LegacyCpu.Interrupt_cycle. Folded into the cycle count on the next
@@ -136,6 +165,10 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
                 "NesJsonCpu: spec must declare a 'Main' instruction set.");
         }
         _mainDecoder = mainDecoder;
+
+        // N3.3 (finally) — derive 256-byte cycle table from spec.
+        int cyclesPerSpecUnit = _spec.Cpu.IsaMetadata?.CyclesPerSpecUnit ?? 1;
+        _specCycleTable = BuildSpecCycleTable(_mainDecoder, cyclesPerSpecUnit);
 
         _rt = HostRuntime.Build(compileResult.Module,
             new CpuStateLayout(
@@ -322,11 +355,11 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
         fn(_statePtr, opcode);
 
-        // Cycle accounting via the 256-byte per-opcode table (matches
-        // LegacyCpu byte-for-byte). The spec carries per-mnemonic forms
-        // only ("3m" for ADC regardless of addressing mode), which would
-        // perturb PPU NMI delivery vs the oracle.
-        int cycles = s_cycleTable[opcode] + _interruptCycle;
+        // N3.3 (finally) — cycle accounting via the spec-derived 256-byte
+        // table. Each opcode's count comes from cycles.table (multi-mode
+        // groups: cc=01/cc=00/cc=10/cc=11) or cycles.form (unique opcodes).
+        // Byte-identical to the prior hardcoded LegacyCpu mirror.
+        int cycles = _specCycleTable[opcode] + _interruptCycle;
         _interruptCycle = 0;
 
         int dmaStall = _bus.ConsumeStallCycles();

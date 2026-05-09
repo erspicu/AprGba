@@ -150,6 +150,100 @@ public class MachineSpecTests
     /// rely on the hardcoded fallback in NesJsonCpu — converting them is
     /// follow-up work.
     /// </summary>
+    /// <summary>
+    /// Helper for the cycle-table tests: derive a single opcode's cycle
+    /// count from the spec — first checking <c>cycles.table</c> (multi-mode
+    /// instructions), then falling back to the <c>cycles.form</c> single
+    /// value (unique-opcode instructions). Returns null if neither is
+    /// declared.
+    /// </summary>
+    private static int? DeriveSpecCycles(
+        AprCpu.Core.Decoder.DecoderTable decoder,
+        uint opcode,
+        int cyclesPerSpecUnit = 1)
+    {
+        var d = decoder.Decode(opcode);
+        if (d?.Instruction.Cycles is not { } cyc) return null;
+
+        if (cyc.Table is { } table &&
+            table.Resolve(d.Format, opcode) is int tableValue)
+            return tableValue;
+
+        if (!string.IsNullOrEmpty(cyc.Form))
+        {
+            int n = 0;
+            foreach (var ch in cyc.Form)
+            {
+                if (ch >= '0' && ch <= '9') { n = n * 10 + (ch - '0'); continue; }
+                if (n > 0) break;
+            }
+            if (n > 0) return n * cyclesPerSpecUnit;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Hardcoded LegacyCpu oracle — kept as a private constant so each
+    /// test that needs it doesn't re-declare. Mirrors NesJsonCpu.s_cycleTable.
+    /// </summary>
+    private static readonly byte[] s_oracleCycles =
+    {
+        7,6,2,8,3,3,5,5,3,2,2,2,4,4,6,6,
+        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+        6,6,2,8,3,3,5,5,4,2,2,2,4,4,6,6,
+        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+        6,6,2,8,3,3,5,5,3,2,2,2,3,4,6,6,
+        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+        6,6,2,8,3,3,5,5,4,2,2,2,5,4,6,6,
+        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+        2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,
+        2,6,2,6,4,4,4,4,2,5,2,5,5,5,5,5,
+        2,6,2,6,3,3,3,3,2,2,2,2,4,4,4,4,
+        2,5,2,5,4,4,4,4,2,4,2,4,4,4,4,4,
+        2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,
+        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7,
+        2,6,2,8,3,3,5,5,2,2,2,2,4,4,6,6,
+        2,5,2,8,4,4,6,6,2,4,2,7,4,4,7,7
+    };
+
+    /// <summary>
+    /// N3.3 (full coverage) — for every opcode that the spec can derive a
+    /// cycle count for (via cycle_table OR cycles.form), the derived value
+    /// must agree with the LegacyCpu oracle. Opcodes the spec doesn't yet
+    /// cover are reported as gaps but don't fail the test (incremental
+    /// conversion path).
+    ///
+    /// As more groups gain cycle_table / correct cycles.form, the
+    /// "covered" count grows; full conversion is when covered == 256.
+    /// </summary>
+    [Fact]
+    public void Mos6502CycleTable_FullSpec_MatchesOracleWhereCovered()
+    {
+        var compiled = AprCpu.Core.Compilation.SpecCompiler.Compile(
+            Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json"));
+        Assert.True(compiled.DecoderTables.TryGetValue("Main", out var dec));
+
+        int covered = 0;
+        var mismatches = new List<string>();
+        for (int op = 0; op < 256; op++)
+        {
+            var derived = DeriveSpecCycles(dec!, (uint)op);
+            if (derived is null) continue;
+            covered++;
+            if (derived.Value != s_oracleCycles[op])
+                mismatches.Add(
+                    $"opcode 0x{op:X2}: spec={derived.Value} oracle={s_oracleCycles[op]}");
+        }
+
+        // Every covered opcode must agree with the oracle. Mismatches mean
+        // the spec is wrong, not just incomplete.
+        Assert.True(mismatches.Count == 0,
+            $"spec/oracle cycle mismatches:\n  {string.Join("\n  ", mismatches)}");
+
+        // N3.3 (full conversion goal): all 256 opcodes spec-derivable.
+        Assert.Equal(256, covered);
+    }
+
     [Fact]
     public void Mos6502CycleTable_DerivedFromSpec_MatchesOracleForCc01()
     {
