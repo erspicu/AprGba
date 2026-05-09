@@ -224,7 +224,14 @@ public sealed record Cycles(
     // field gives a coarse default; `Table` maps a decoder field's bit
     // pattern to an exact cycle count, breaking the 1D limitation that
     // motivated the original BLOCKED status of N3.3.
-    CycleTable? Table = null);
+    CycleTable? Table = null,
+    // N9 — dynamic cycle penalties encoded declaratively. Currently
+    // runtime IR steps (mos_branch_rel, mos_load_operand_*) handle
+    // these inline; spec metadata is a declarative source-of-truth so
+    // future runtime can read penalty values from spec instead of
+    // hardcoding them.
+    int? ExtraWhenTaken = null,             // conditional branch taken — 6502 branches: +1
+    int? ExtraWhenPageCross = null);        // load addressing-mode page boundary — 6502 read abs,X / abs,Y / (zp),Y: +1
 
 /// <summary>
 /// N3.3 — selector-driven cycle count map.

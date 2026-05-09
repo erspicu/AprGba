@@ -467,13 +467,30 @@ public static class SpecLoader
                 cycleTable = new CycleTable(fieldName, values);
             }
 
+            // N9 — dynamic cycle penalties (optional ints).
+            int? extraWhenTaken = null;
+            if (cEl.TryGetProperty("extra_when_taken", out var etEl) &&
+                etEl.ValueKind == JsonValueKind.Number)
+            {
+                extraWhenTaken = etEl.GetInt32();
+            }
+
+            int? extraWhenPageCross = null;
+            if (cEl.TryGetProperty("extra_when_page_cross", out var epcEl) &&
+                epcEl.ValueKind == JsonValueKind.Number)
+            {
+                extraWhenPageCross = epcEl.GetInt32();
+            }
+
             cycles = new Cycles(
-                Form:              OptStringFlexible(cEl, "form"),
-                FormAlt:           ParseStringList(cEl, "form_alt"),
-                ExtraWhenDestPc:   OptString(cEl, "extra_when_dest_pc"),
-                ExtraWhenLoadPc:   OptString(cEl, "extra_when_load_pc"),
-                ComputedAt:        OptString(cEl, "computed_at"),
-                Table:             cycleTable);
+                Form:                OptStringFlexible(cEl, "form"),
+                FormAlt:             ParseStringList(cEl, "form_alt"),
+                ExtraWhenDestPc:     OptString(cEl, "extra_when_dest_pc"),
+                ExtraWhenLoadPc:     OptString(cEl, "extra_when_load_pc"),
+                ComputedAt:          OptString(cEl, "computed_at"),
+                Table:               cycleTable,
+                ExtraWhenTaken:      extraWhenTaken,
+                ExtraWhenPageCross:  extraWhenPageCross);
         }
 
         var steps = ParseList(el, "steps", ParseMicroOpStep, filePath, $"{jsonPath}.steps");

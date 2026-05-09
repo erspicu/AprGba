@@ -244,6 +244,38 @@ public class MachineSpecTests
         Assert.Equal(256, covered);
     }
 
+    /// <summary>
+    /// N9 — branches declare dynamic cycle penalties via the new
+    /// <c>extra_when_taken</c> and <c>extra_when_page_cross</c> Cycles
+    /// fields. All 8 6502 conditional branches carry +1/+1.
+    /// </summary>
+    [Fact]
+    public void Mos6502Branches_DeclareDynamicCyclePenalties()
+    {
+        var compiled = AprCpu.Core.Compilation.SpecCompiler.Compile(
+            Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json"));
+        Assert.True(compiled.DecoderTables.TryGetValue("Main", out var dec));
+
+        // 8 conditional branches at 0x10/0x30/0x50/0x70/0x90/0xB0/0xD0/0xF0.
+        var branchOpcodes = new[] { 0x10, 0x30, 0x50, 0x70, 0x90, 0xB0, 0xD0, 0xF0 };
+        foreach (var op in branchOpcodes)
+        {
+            var d = dec!.Decode((uint)op);
+            Assert.NotNull(d);
+            Assert.Equal("ConditionalBranch", d!.Format.Name);
+            var cycles = d.Instruction.Cycles;
+            Assert.NotNull(cycles);
+            Assert.Equal(1, cycles!.ExtraWhenTaken);
+            Assert.Equal(1, cycles.ExtraWhenPageCross);
+        }
+
+        // Negative case: non-branch instructions don't carry these.
+        var ldaImm = dec!.Decode(0xA9);    // LDA #imm — never taken/page-crosses
+        Assert.NotNull(ldaImm);
+        Assert.Null(ldaImm!.Instruction.Cycles?.ExtraWhenTaken);
+        Assert.Null(ldaImm.Instruction.Cycles?.ExtraWhenPageCross);
+    }
+
     [Fact]
     public void Mos6502CycleTable_DerivedFromSpec_MatchesOracleForCc01()
     {
