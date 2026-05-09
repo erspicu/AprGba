@@ -6,10 +6,20 @@
 // - $4000-$4017: APU + IO registers (joypad, OAM DMA, frame counter)
 // - $4020-$FFFF: cartridge (delegated to IMapper)
 //
+// N3.2 — region boundaries are now driven by spec/machines/nes-ntsc.json
+// (loaded into MachineSpec at construction). Side-effect handlers
+// (PPU/APU/mapper) stay C# per design doc #21 §2.2 — those are
+// procedure-heavy and don't reduce well to declarative form. The
+// migration replaces the hardcoded if-else chain with a sorted region
+// table + RegionKind dispatch; correctness preserved, declarativity for
+// memory layout up.
+//
 // PPU/APU register handling is stubbed — wire to NesPpu / NesApu when
 // those are added. OAM DMA ($4014) timing is preserved (513-cycle stall).
 
+using System.IO;
 using System.Runtime.CompilerServices;
+using AprCpu.Core.JsonSpec;
 
 namespace AprNes.Cli.Memory
 {
@@ -55,13 +65,116 @@ namespace AprNes.Cli.Memory
 
         private IMapper _mapper = new NullMapper();
 
+        // N3.2 — sorted region dispatch table built from MachineSpec.
+        // Each region maps an addr range to a RegionKind that the
+        // ReadByte/WriteByte hot path switches on. Region boundaries +
+        // mirror masks come from spec; side-effect handlers stay C#
+        // (PPU/APU/mapper logic doesn't reduce to declarative form).
+        private RegionEntry[] _regions = Array.Empty<RegionEntry>();
+        private MachineSpec? _machineSpec;
+
+        private struct RegionEntry
+        {
+            public int Start;            // CPU bus addr — int so end can hit 0x10000
+            public int End;              // exclusive (0x10000 for cart_prg ending at top)
+            public ushort MirrorMask;   // 0 = no mirror
+            public RegionKind Kind;
+            public bool SmcNotify;
+        }
+
+        private enum RegionKind : byte
+        {
+            Unmapped,
+            Wram,
+            PpuIo,
+            ApuIo,
+            CartIo,    // mapper.CpuRead / CpuWrite
+        }
+
         public NesMemoryBus()
         {
+            BuildRegionTableFromSpec();
         }
 
         public NesMemoryBus(IMapper mapper)
         {
+            BuildRegionTableFromSpec();
             Reset(mapper);
+        }
+
+        /// <summary>
+        /// N3.2 — try loading <c>spec/machines/nes-ntsc.json</c> and build
+        /// the region dispatch table from it. Falls back to the canonical
+        /// hardcoded NES layout if the spec file is absent (so existing
+        /// test harnesses + test ROMs without a machine spec keep working).
+        /// </summary>
+        private void BuildRegionTableFromSpec()
+        {
+            _machineSpec = TryLoadMachineSpec("nes-ntsc");
+            if (_machineSpec is null)
+            {
+                // Fallback to canonical NES layout — same shape the spec
+                // would have produced; used when no machine spec is found.
+                _regions = new[]
+                {
+                    new RegionEntry { Start = 0x0000, End = 0x2000,  MirrorMask = 0x07FF, Kind = RegionKind.Wram,   SmcNotify = true  },
+                    new RegionEntry { Start = 0x2000, End = 0x4000,  MirrorMask = 0x0007, Kind = RegionKind.PpuIo,  SmcNotify = false },
+                    new RegionEntry { Start = 0x4000, End = 0x4020,  MirrorMask = 0x0000, Kind = RegionKind.ApuIo,  SmcNotify = false },
+                    new RegionEntry { Start = 0x4020, End = 0x10000, MirrorMask = 0x0000, Kind = RegionKind.CartIo, SmcNotify = false },
+                };
+                return;
+            }
+
+            var list = new List<RegionEntry>();
+            foreach (var r in _machineSpec.MemoryRegions)
+            {
+                list.Add(new RegionEntry
+                {
+                    Start = (int)r.AddrStart,
+                    End = (int)Math.Min(r.AddrEndExclusive, 0x10000u),
+                    MirrorMask = (ushort)(r.MirrorMask ?? 0u),
+                    Kind = ClassifyRegion(r),
+                    SmcNotify = r.SmcNotify,
+                });
+            }
+            // Sort by Start so ReadByte/WriteByte can binary-search (or just
+            // linear-scan since N is small).
+            list.Sort((a, b) => a.Start.CompareTo(b.Start));
+            _regions = list.ToArray();
+        }
+
+        private static RegionKind ClassifyRegion(MemoryRegion r)
+        {
+            // Map MachineSpec metadata to dispatch kind. Order matters —
+            // side_effects[0] is the primary subsystem; we route based on
+            // the first matching name.
+            foreach (var s in r.SideEffects)
+            {
+                if (s == "ppu") return RegionKind.PpuIo;
+                if (s == "apu" || s == "oam_dma" || s == "joypad") return RegionKind.ApuIo;
+                if (s == "mapper") return RegionKind.CartIo;
+            }
+            // No side_effects → infer from type. ram → Wram (NES has only one
+            // RAM region in the CPU bus); rom → CartIo (mapper handles ROM
+            // via PRG bank lookup).
+            return r.Kind switch
+            {
+                MemoryRegionKind.Ram => RegionKind.Wram,
+                MemoryRegionKind.Rom => RegionKind.CartIo,
+                _ => RegionKind.Unmapped,
+            };
+        }
+
+        private static MachineSpec? TryLoadMachineSpec(string name)
+        {
+            var dir = AppContext.BaseDirectory;
+            for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
+            {
+                var probe = Path.Combine(d.FullName, "spec", "machines", $"{name}.json");
+                if (File.Exists(probe)) return MachineSpecLoader.LoadFromFile(probe);
+            }
+            var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "machines", $"{name}.json");
+            return File.Exists(cwdProbe) ? MachineSpecLoader.LoadFromFile(cwdProbe) : null;
         }
 
         /// <summary>
@@ -114,27 +227,27 @@ namespace AprNes.Cli.Memory
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public byte ReadByte(ushort addr)
         {
-            byte val;
-            if (addr < 0x2000)
+            // N3.2 — sorted region table dispatch; linear scan is fine for
+            // ~4-11 regions and keeps tight branch-predictor-friendly code.
+            // mirror_mask=0 means no mirror; use raw addr for handler call.
+            // mirror_mask>0 means handler sees `(addr & mirror_mask) | start`.
+            byte val = 0;
+            for (int i = 0; i < _regions.Length; i++)
             {
-                // $0000-$1FFF: 2KB WRAM mirrored every 0x800.
-                val = _wram[addr & 0x07FF];
-            }
-            else if (addr < 0x4000)
-            {
-                // $2000-$3FFF: PPU registers, mirrored every 8 bytes.
-                val = ReadPpu((ushort)(0x2000 | (addr & 0x0007)));
-            }
-            else if (addr < 0x4020)
-            {
-                // $4000-$401F: APU + IO. $4014 is OAM DMA (write-only),
-                // $4016/$4017 are joypad reads, the rest are stubbed.
-                val = ReadApu(addr);
-            }
-            else
-            {
-                // $4020-$FFFF: cartridge.
-                val = _mapper.CpuRead(addr);
+                ref var r = ref _regions[i];
+                if (addr < r.End)
+                {
+                    if (addr < r.Start) break;   // sorted; gap = unmapped
+                    val = r.Kind switch
+                    {
+                        RegionKind.Wram   => _wram[(addr - r.Start) & (r.MirrorMask != 0 ? r.MirrorMask : (ushort)0xFFFF)],
+                        RegionKind.PpuIo  => ReadPpu((ushort)(r.Start | (addr & (r.MirrorMask != 0 ? r.MirrorMask : (ushort)0x0007)))),
+                        RegionKind.ApuIo  => ReadApu(addr),
+                        RegionKind.CartIo => _mapper.CpuRead(addr),
+                        _                 => _cpubus,
+                    };
+                    break;
+                }
             }
             _cpubus = val;
             return val;
@@ -150,21 +263,30 @@ namespace AprNes.Cli.Memory
             // actually has coverage. Routes RAM-resident SMC (blargg's
             // instr_template self-rewrite) to JIT cache invalidation.
             SmcWriteHook?.Invoke(addr);
-            if (addr < 0x2000)
+
+            for (int i = 0; i < _regions.Length; i++)
             {
-                _wram[addr & 0x07FF] = value;
-            }
-            else if (addr < 0x4000)
-            {
-                WritePpu((ushort)(0x2000 | (addr & 0x0007)), value);
-            }
-            else if (addr < 0x4020)
-            {
-                WriteApu(addr, value);
-            }
-            else
-            {
-                _mapper.CpuWrite(addr, value);
+                ref var r = ref _regions[i];
+                if (addr < r.End)
+                {
+                    if (addr < r.Start) break;
+                    switch (r.Kind)
+                    {
+                        case RegionKind.Wram:
+                            _wram[(addr - r.Start) & (r.MirrorMask != 0 ? r.MirrorMask : (ushort)0xFFFF)] = value;
+                            break;
+                        case RegionKind.PpuIo:
+                            WritePpu((ushort)(r.Start | (addr & (r.MirrorMask != 0 ? r.MirrorMask : (ushort)0x0007))), value);
+                            break;
+                        case RegionKind.ApuIo:
+                            WriteApu(addr, value);
+                            break;
+                        case RegionKind.CartIo:
+                            _mapper.CpuWrite(addr, value);
+                            break;
+                    }
+                    break;
+                }
             }
         }
 
