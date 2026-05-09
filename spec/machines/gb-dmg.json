@@ -1,0 +1,95 @@
+{
+    "$schema": "../schema/machine-spec.schema.json",
+    "name": "gb-dmg",
+    "cpu": "LR35902",
+    "memory_regions": [
+        {
+            "name": "cart_rom_bank0",
+            "addr_start": "0x0000",
+            "addr_end_exclusive": "0x4000",
+            "type": "rom",
+            "fastmem_eligible": true
+        },
+        {
+            "name": "cart_rom_bankN",
+            "addr_start": "0x4000",
+            "addr_end_exclusive": "0x8000",
+            "type": "rom",
+            "fastmem_eligible": true,
+            "side_effects": ["mbc_bank_switch"]
+        },
+        {
+            "name": "vram",
+            "addr_start": "0x8000",
+            "addr_end_exclusive": "0xA000",
+            "type": "ram",
+            "side_effects": ["ppu_vram"]
+        },
+        {
+            "name": "cart_ram",
+            "addr_start": "0xA000",
+            "addr_end_exclusive": "0xC000",
+            "type": "ram",
+            "fastmem_eligible": true,
+            "side_effects": ["mbc_cart_ram"]
+        },
+        {
+            "name": "wram",
+            "addr_start": "0xC000",
+            "addr_end_exclusive": "0xE000",
+            "type": "ram",
+            "fastmem_eligible": true,
+            "smc_notify": true
+        },
+        {
+            "name": "echo_ram",
+            "addr_start": "0xE000",
+            "addr_end_exclusive": "0xFE00",
+            "type": "ram",
+            "side_effects": ["echo_wram_mirror"]
+        },
+        {
+            "name": "oam",
+            "addr_start": "0xFE00",
+            "addr_end_exclusive": "0xFEA0",
+            "type": "ram",
+            "side_effects": ["ppu_oam"]
+        },
+        {
+            "name": "unusable",
+            "addr_start": "0xFEA0",
+            "addr_end_exclusive": "0xFF00",
+            "type": "io",
+            "side_effects": ["open_bus"]
+        },
+        {
+            "name": "io_regs",
+            "addr_start": "0xFF00",
+            "addr_end_exclusive": "0xFF80",
+            "type": "io",
+            "side_effects": ["joypad", "serial", "timer", "if", "apu", "ppu_regs", "boot_rom_disable"]
+        },
+        {
+            "name": "hram",
+            "addr_start": "0xFF80",
+            "addr_end_exclusive": "0xFFFF",
+            "type": "ram",
+            "fastmem_eligible": true,
+            "smc_notify": true
+        },
+        {
+            "name": "ie_register",
+            "addr_start": "0xFFFF",
+            "addr_end_exclusive": "0x10000",
+            "type": "io",
+            "side_effects": ["ie"]
+        }
+    ],
+    "interrupt_vectors": {
+        "vblank":  "0x0040",
+        "lcd":     "0x0048",
+        "timer":   "0x0050",
+        "serial":  "0x0058",
+        "joypad":  "0x0060"
+    }
+}

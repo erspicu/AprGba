@@ -79,6 +79,40 @@ public class MachineSpecTests
     }
 
     [Fact]
+    public void Loads_GbDmg_MachineSpec_WithExpectedRegions()
+    {
+        var spec = MachineSpecLoader.LoadFromFile(MachineSpecPath("gb-dmg"));
+
+        Assert.Equal("gb-dmg", spec.Name);
+        Assert.Equal("LR35902", spec.CpuRef);
+        Assert.Equal(11, spec.MemoryRegions.Count);
+
+        // ROM bank 0 + N together cover 0x0000-0x8000.
+        var bank0 = spec.MemoryRegions.Single(r => r.Name == "cart_rom_bank0");
+        Assert.Equal(0x0000u, bank0.AddrStart);
+        Assert.Equal(0x4000u, bank0.AddrEndExclusive);
+        Assert.Equal(MemoryRegionKind.Rom, bank0.Kind);
+        Assert.True(bank0.FastmemEligible);
+
+        // WRAM 0xC000-0xE000 — 8KB, fastmem + smc.
+        var wram = spec.MemoryRegions.Single(r => r.Name == "wram");
+        Assert.Equal(0xC000u, wram.AddrStart);
+        Assert.Equal(0xE000u, wram.AddrEndExclusive);
+        Assert.True(wram.FastmemEligible);
+        Assert.True(wram.SmcNotify);
+
+        // HRAM 0xFF80-0xFFFF — 127B, fastmem + smc.
+        var hram = spec.MemoryRegions.Single(r => r.Name == "hram");
+        Assert.Equal(0xFF80u, hram.AddrStart);
+        Assert.Equal(0xFFFFu, hram.AddrEndExclusive);
+        Assert.True(hram.FastmemEligible);
+
+        // GB has 5 interrupt vectors (vblank/lcd/timer/serial/joypad).
+        Assert.Equal(0x0040u, spec.InterruptVectors["vblank"]);
+        Assert.Equal(0x0060u, spec.InterruptVectors["joypad"]);
+    }
+
+    [Fact]
     public void RegionTypeDefaults_AreSensible()
     {
         // io region: forces_end_of_block default-on, smc_notify default-off,

@@ -19,6 +19,14 @@
     }
   ],
 
+  "isa_metadata": {
+    "comment":               "N2.3 — block-JIT policy hints (additive; ignored by current SpecLoader but read by future MachineSpec-aware host). LR35902: variable 1-3 byte; cycles.form 'Nm' parses as N×4 t-cycles (m-cycle = 4 t-cycles per Sharp SM83 timing). PC lazy-update is safe under the block-JIT alloca+mem2reg path.",
+    "endianness":            "little",
+    "cycles_per_spec_unit":  4,
+    "pc_update_policy":      "lazy",
+    "interrupt_check_policy":"end_of_block"
+  },
+
   "register_file": {
     "general_purpose": {
       "count":      7,
