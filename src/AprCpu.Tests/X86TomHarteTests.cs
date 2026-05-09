@@ -214,4 +214,17 @@ public class X86TomHarteTests
     // [Fact] public void Tom_F6_7_Idiv_Rm8()   => RunOpcodeOrSkip("F6.7");
     // [Fact] public void Tom_F7_6_Div_Rm16()   => RunOpcodeOrSkip("F7.6");
     // [Fact] public void Tom_F7_7_Idiv_Rm16()  => RunOpcodeOrSkip("F7.7");
+
+    // ===== 24.4.5 — string ops + REP/REPNE prefix =====
+
+    [Fact] public void Tom_A4_Movsb()           => RunOpcodeOrSkip("A4");
+    [Fact] public void Tom_A5_Movsw()           => RunOpcodeOrSkip("A5");
+    [Fact] public void Tom_A6_Cmpsb()           => RunOpcodeOrSkip("A6");
+    [Fact] public void Tom_A7_Cmpsw()           => RunOpcodeOrSkip("A7");
+    [Fact] public void Tom_AA_Stosb()           => RunOpcodeOrSkip("AA");
+    [Fact] public void Tom_AB_Stosw()           => RunOpcodeOrSkip("AB");
+    [Fact] public void Tom_AC_Lodsb()           => RunOpcodeOrSkip("AC");
+    [Fact] public void Tom_AD_Lodsw()           => RunOpcodeOrSkip("AD");
+    [Fact] public void Tom_AE_Scasb()           => RunOpcodeOrSkip("AE");
+    [Fact] public void Tom_AF_Scasw()           => RunOpcodeOrSkip("AF");
 }

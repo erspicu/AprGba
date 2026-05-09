@@ -165,9 +165,9 @@ public sealed class X86LegacyCpu : IX86CpuBackend
     {
         if (_halted) return 0;
 
-        // Prefix loop — segment override is the only prefix we honour
-        // in phase 24.2.2 (REP / LOCK come with string ops in 24.2.3+).
+        // Prefix loop — segment override + REP/REPNE for string ops.
         SegReg? segOverride = null;
+        byte? repPrefix = null;       // 0xF2 (REPNE) or 0xF3 (REP/REPE)
         byte opcode;
         while (true)
         {
@@ -178,12 +178,14 @@ public sealed class X86LegacyCpu : IX86CpuBackend
                 case 0x2E: segOverride = SegReg.CS; continue;
                 case 0x36: segOverride = SegReg.SS; continue;
                 case 0x3E: segOverride = SegReg.DS; continue;
+                case 0xF2: repPrefix = 0xF2; continue;
+                case 0xF3: repPrefix = 0xF3; continue;
                 default: goto exec;
             }
         }
     exec:
 
-        return Execute(opcode, segOverride);
+        return Execute(opcode, segOverride, repPrefix);
     }
 
     /// <summary>
@@ -191,8 +193,19 @@ public sealed class X86LegacyCpu : IX86CpuBackend
     /// Phase 24.2.2 implements: NOP / HLT / OUT 0xE9 / JMP far / full
     /// MOV set. Anything else throws with diagnostic info.
     /// </summary>
-    private int Execute(byte opcode, SegReg? segOverride)
+    private int Execute(byte opcode, SegReg? segOverride, byte? repPrefix = null)
     {
+        // ===== String ops (0xA4-0xA7, 0xAA-0xAF) — handle REP prefix =====
+        if (opcode is 0xA4 or 0xA5 or 0xA6 or 0xA7
+                  or 0xAA or 0xAB or 0xAC or 0xAD or 0xAE or 0xAF)
+        {
+            return ExecuteStringOp(opcode, segOverride, repPrefix);
+        }
+        // For non-string opcodes, REP prefix is reserved/ignored on 8086.
+        // (Tom Harte SST sometimes captures interesting behaviour for
+        // misused REP, but real software doesn't emit it; we ignore.)
+
+
         // ===== NOP / HLT / magic-port stubs / JMP far =====
         switch (opcode)
         {
@@ -1037,6 +1050,107 @@ public sealed class X86LegacyCpu : IX86CpuBackend
             default:
                 throw new NotImplementedException($"F6/F7 /{f.Reg} undefined on 8086");
         }
+    }
+
+    /// <summary>
+    /// Execute one of the string opcodes 0xA4-0xA7, 0xAA-0xAF, optionally
+    /// wrapped in a REP / REPNE prefix loop. The string ops use:
+    ///   SI (with DS source segment, segment-overrideable) — for source
+    ///   DI (with ES destination segment, NOT overrideable on 8086)
+    ///   DF (direction flag) — selects increment or decrement of SI/DI
+    ///
+    /// REP semantics:
+    ///   No prefix:        single iteration, set flags as appropriate
+    ///   0xF3 (REP/REPE):  loop while CX != 0; for CMPS/SCAS also requires ZF=1
+    ///   0xF2 (REPNE):     loop while CX != 0; for CMPS/SCAS also requires ZF=0
+    /// </summary>
+    private int ExecuteStringOp(byte opcode, SegReg? segOverride, byte? rep)
+    {
+        bool isWord = (opcode & 0x01) != 0;          // bit 0 differentiates byte/word forms
+        int delta = _state.FlagD
+            ? (isWord ? -2 : -1)
+            : (isWord ?  2 :  1);
+        SegReg srcSeg = segOverride ?? SegReg.DS;    // DS for source, override allowed
+        bool isConditional = opcode is 0xA6 or 0xA7 or 0xAE or 0xAF;
+        int cycles = 0;
+
+        do
+        {
+            // REP loop entry: stop when CX == 0
+            if (rep.HasValue)
+            {
+                if (_state.C.X == 0) break;
+                _state.C.X = (ushort)(_state.C.X - 1);
+            }
+
+            switch (opcode)
+            {
+                case 0xA4:    // MOVSB — [ES:DI] ← [DS:SI]
+                    WriteMem8(SegReg.ES, _state.DI, ReadMem8(srcSeg, _state.SI));
+                    break;
+                case 0xA5:    // MOVSW
+                    WriteMem16(SegReg.ES, _state.DI, ReadMem16(srcSeg, _state.SI));
+                    break;
+                case 0xA6:    // CMPSB — flags from [DS:SI] - [ES:DI]
+                    X86Alu.Execute8(AluOp.Cmp,
+                        ReadMem8(srcSeg, _state.SI),
+                        ReadMem8(SegReg.ES, _state.DI),
+                        _state);
+                    break;
+                case 0xA7:    // CMPSW
+                    X86Alu.Execute16(AluOp.Cmp,
+                        ReadMem16(srcSeg, _state.SI),
+                        ReadMem16(SegReg.ES, _state.DI),
+                        _state);
+                    break;
+                case 0xAA:    // STOSB — [ES:DI] ← AL
+                    WriteMem8(SegReg.ES, _state.DI, _state.A.L);
+                    break;
+                case 0xAB:    // STOSW
+                    WriteMem16(SegReg.ES, _state.DI, _state.A.X);
+                    break;
+                case 0xAC:    // LODSB — AL ← [DS:SI]
+                    _state.A.L = ReadMem8(srcSeg, _state.SI);
+                    break;
+                case 0xAD:    // LODSW
+                    _state.A.X = ReadMem16(srcSeg, _state.SI);
+                    break;
+                case 0xAE:    // SCASB — flags from AL - [ES:DI]
+                    X86Alu.Execute8(AluOp.Cmp, _state.A.L, ReadMem8(SegReg.ES, _state.DI), _state);
+                    break;
+                case 0xAF:    // SCASW — flags from AX - [ES:DI]
+                    X86Alu.Execute16(AluOp.Cmp, _state.A.X, ReadMem16(SegReg.ES, _state.DI), _state);
+                    break;
+            }
+
+            // SI/DI update — depends on which registers the op touches.
+            switch (opcode)
+            {
+                case 0xAA: case 0xAB: case 0xAE: case 0xAF:    // STOS / SCAS — DI only
+                    _state.DI = (ushort)(_state.DI + delta);
+                    break;
+                case 0xAC: case 0xAD:                          // LODS — SI only
+                    _state.SI = (ushort)(_state.SI + delta);
+                    break;
+                default:                                        // MOVS / CMPS — both
+                    _state.SI = (ushort)(_state.SI + delta);
+                    _state.DI = (ushort)(_state.DI + delta);
+                    break;
+            }
+            cycles += 4;
+
+            // Conditional REP early-exit (for CMPS/SCAS):
+            //   0xF3 (REP/REPE): continue while ZF=1; exit when ZF=0
+            //   0xF2 (REPNE):    continue while ZF=0; exit when ZF=1
+            if (rep.HasValue && isConditional)
+            {
+                if (rep.Value == 0xF3 && !_state.FlagZ) break;
+                if (rep.Value == 0xF2 &&  _state.FlagZ) break;
+            }
+        }
+        while (rep.HasValue);
+
+        return cycles;
     }
 
     /// <summary>
