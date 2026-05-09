@@ -121,6 +121,109 @@ public class X86JsonCpuTests
         Assert.False(cpu.Halted);
     }
 
+    // ---------------- 24.6.5 — MOV r, imm (B0-BF) ----------------
+
+    /// <summary>0xB0 12  → MOV AL, 0x12. AL is byte-half of AX[7:0]; AH untouched.</summary>
+    [Fact]
+    public void Step_MovAlImm8_LoadsLowByteOfAx_PreservesAh()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xB0, 0x12, 0xF4 });
+        // Pre-load AH=0x99 so we can verify it stays put.
+        var s = cpu.State;
+        s.A.H = 0x99;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        cpu.Step();   // MOV AL, 0x12
+
+        Assert.Equal(0x12, cpu.State.A.L);
+        Assert.Equal(0x99, cpu.State.A.H);
+        Assert.Equal(0x9912, cpu.State.A.X);
+        Assert.Equal(0x102, cpu.State.IP);
+    }
+
+    /// <summary>0xB4 7F → MOV AH, 0x7F. AH is byte-half of AX[15:8]; AL untouched.</summary>
+    [Fact]
+    public void Step_MovAhImm8_LoadsHighByteOfAx_PreservesAl()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xB4, 0x7F, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0xCC;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        cpu.Step();
+
+        Assert.Equal(0x7F, cpu.State.A.H);
+        Assert.Equal(0xCC, cpu.State.A.L);
+        Assert.Equal(0x7FCC, cpu.State.A.X);
+    }
+
+    /// <summary>0xB8 34 12 → MOV AX, 0x1234. Little-endian imm16.</summary>
+    [Fact]
+    public void Step_MovAxImm16_LoadsWholeAx()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xB8, 0x34, 0x12, 0xF4 });
+        cpu.Step();
+        Assert.Equal(0x1234, cpu.State.A.X);
+        Assert.Equal(0x103, cpu.State.IP);
+    }
+
+    /// <summary>0xBE EF BE → MOV SI, 0xBEEF. Tests SI (high index, encoding 110).</summary>
+    [Fact]
+    public void Step_MovSiImm16()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xBE, 0xEF, 0xBE, 0xF4 });
+        cpu.Step();
+        Assert.Equal(0xBEEF, cpu.State.SI);
+    }
+
+    /// <summary>
+    /// Multiple MOVs back-to-back with mixed byte/word forms. Verifies the
+    /// IP-fetch-imm machinery handles consecutive instructions correctly
+    /// (prior bug class: imm fetch leaving IP at wrong offset).
+    /// </summary>
+    [Fact]
+    public void Step_MultipleMovsThenHlt_AllRegistersLoaded()
+    {
+        // mov al, 0x11   B0 11
+        // mov ah, 0x22   B4 22
+        // mov bx, 0xCAFE BB FE CA
+        // mov cx, 0x0001 B9 01 00
+        // mov dx, 0x000A BA 0A 00
+        // mov si, 0x0100 BE 00 01
+        // mov di, 0x0200 BF 00 02
+        // mov bp, 0xBEEF BD EF BE
+        // mov sp, 0xF000 BC 00 F0
+        // hlt            F4
+        var code = new byte[]
+        {
+            0xB0, 0x11,
+            0xB4, 0x22,
+            0xBB, 0xFE, 0xCA,
+            0xB9, 0x01, 0x00,
+            0xBA, 0x0A, 0x00,
+            0xBE, 0x00, 0x01,
+            0xBF, 0x00, 0x02,
+            0xBD, 0xEF, 0xBE,
+            0xBC, 0x00, 0xF0,
+            0xF4
+        };
+        var (cpu, _) = Setup(code);
+        for (int i = 0; i < 32 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+
+        var s = cpu.State;
+        Assert.Equal(0x2211, s.A.X);
+        Assert.Equal(0xCAFE, s.B.X);
+        Assert.Equal(0x0001, s.C.X);
+        Assert.Equal(0x000A, s.D.X);
+        Assert.Equal(0x0100, s.SI);
+        Assert.Equal(0x0200, s.DI);
+        Assert.Equal(0xBEEF, s.BP);
+        Assert.Equal(0xF000, s.SP);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

@@ -28,6 +28,7 @@
   ],
 
   "encoding_groups": [
-    { "$include": "groups/smoke.json" }
+    { "$include": "groups/smoke.json" },
+    { "$include": "groups/data-transfer.json" }
   ]
 }

@@ -1,0 +1,49 @@
+{
+  "name": "DataTransfer",
+  "comment": "8086 MOV / data-transfer family. 24.6.5 lands incrementally; this initial cut covers MOV r,imm (B0-BF). Later sub-steps fill in MOV r/m forms, segment-register moves, PUSH/POP, XCHG, LEA, LDS/LES.",
+  "formats": [
+
+    {
+      "name":  "MovR8Imm8",
+      "comment": "0xB0-0xB7 MOV r8, imm8 — destination byte register is encoded in the opcode's low 3 bits. 000=AL 001=CL 010=DL 011=BL 100=AH 101=CH 110=DH 111=BH.",
+      "fields": { "reg": "2:0" },
+      "mask":  "0xF8",
+      "match": "0xB0",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "4" },
+          "steps": [
+            { "op": "x86_fetch_imm8",       "out": "imm" },
+            { "op": "x86_write_reg8_field", "field": "reg", "in": ["imm"] }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovR16Imm16",
+      "comment": "0xB8-0xBF MOV r16, imm16 — destination word register is encoded in the opcode's low 3 bits. 000=AX 001=CX 010=DX 011=BX 100=SP 101=BP 110=SI 111=DI.",
+      "fields": { "reg": "2:0" },
+      "mask":  "0xF8",
+      "match": "0xB8",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "4" },
+          "steps": [
+            { "op": "x86_fetch_imm16",       "out": "imm" },
+            { "op": "x86_write_reg16_field", "field": "reg", "in": ["imm"] }
+          ]
+        }
+      ]
+    }
+
+  ]
+}

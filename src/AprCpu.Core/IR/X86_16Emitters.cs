@@ -38,6 +38,12 @@ public static class X86_16Emitters
         // loop until an external interrupt clears it.
         reg.Register(new X86HaltEmitter());
 
+        // 24.6.5 — immediate fetch + field-dispatched register write.
+        reg.Register(new X86FetchImm8Emitter());
+        reg.Register(new X86FetchImm16Emitter());
+        reg.Register(new X86WriteReg8FieldEmitter());
+        reg.Register(new X86WriteReg16FieldEmitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -302,5 +308,146 @@ internal sealed class X86HaltEmitter : IMicroOpEmitter
         var i8 = LLVMTypeRef.Int8;
         var ptr = ctx.GepStatusRegister("HALTED");
         ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), ptr);
+    }
+}
+
+// ============================================================================
+// x86_fetch_imm8 — read one byte at CS:IP, advance IP by 1, store the i8 in
+// step.out so subsequent steps can reference it via ctx.Resolve(name).
+//
+// JSON shape: { "op": "x86_fetch_imm8", "out": "<name>" }
+// ============================================================================
+
+internal sealed class X86FetchImm8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fetch_imm8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var outName = step.Raw.GetProperty("out").GetString()!;
+        var v = X86_16Emitters.FetchImm8(ctx, outName);
+        ctx.Values[outName] = v;
+    }
+}
+
+// ============================================================================
+// x86_fetch_imm16 — read two little-endian bytes at CS:IP, advance IP by 2,
+// store the i16 in step.out.
+//
+// JSON shape: { "op": "x86_fetch_imm16", "out": "<name>" }
+// ============================================================================
+
+internal sealed class X86FetchImm16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fetch_imm16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var outName = step.Raw.GetProperty("out").GetString()!;
+        var v = X86_16Emitters.FetchImm16(ctx, outName);
+        ctx.Values[outName] = v;
+    }
+}
+
+// ============================================================================
+// x86_write_reg8_field — runtime-dispatched 8-bit register write keyed off
+// a 3-bit instruction-word field. Used by encodings like MOV r8, imm8
+// (0xB0-0xB7) where the destination byte register is encoded in the low
+// 3 bits of the opcode.
+//
+// Encoding: 000=AL 001=CL 010=DL 011=BL 100=AH 101=CH 110=DH 111=BH.
+// Maps onto X86_16Emitters.WriteGpr8 by byte index — parent GPR =
+// (idx & 3), upper-half flag = (idx &gt;= 4). The runtime switch produces
+// 8 small basic blocks, one per byte register; LLVM's optimizer may
+// collapse these in subsequent block-JIT passes.
+//
+// JSON shape:
+//   { "op": "x86_write_reg8_field", "field": "<name>", "in": ["<value>"] }
+// ============================================================================
+
+internal sealed class X86WriteReg8FieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_write_reg8_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var inArr     = step.Raw.GetProperty("in");
+        var valueName = inArr[0].GetString()!;
+
+        var i8  = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+
+        var sel   = ctx.Resolve(fieldName);     // i32, 0..7
+        var value = ctx.Resolve(valueName);     // i8
+
+        var endBB     = ctx.Function.AppendBasicBlock("wreg8_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("wreg8_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"wreg8_{i}");
+
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            X86_16Emitters.WriteGpr8(ctx, i, value);
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        // Default: undefined 3-bit value (cannot happen with a 2:0 field) —
+        // fall through silently.
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+// ============================================================================
+// x86_write_reg16_field — runtime-dispatched 16-bit register write keyed off
+// a 3-bit instruction-word field. Used by MOV r16, imm16 (0xB8-0xBF).
+//
+// Encoding: 000=AX 001=CX 010=DX 011=BX 100=SP 101=BP 110=SI 111=DI.
+// Maps directly to spec GPR index — no byte-half splitting. Same switch
+// structure as x86_write_reg8_field.
+//
+// JSON shape:
+//   { "op": "x86_write_reg16_field", "field": "<name>", "in": ["<value>"] }
+// ============================================================================
+
+internal sealed class X86WriteReg16FieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_write_reg16_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var inArr     = step.Raw.GetProperty("in");
+        var valueName = inArr[0].GetString()!;
+
+        var i32 = LLVMTypeRef.Int32;
+
+        var sel   = ctx.Resolve(fieldName);     // i32, 0..7
+        var value = ctx.Resolve(valueName);     // i16
+
+        var endBB     = ctx.Function.AppendBasicBlock("wreg16_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("wreg16_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"wreg16_{i}");
+
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            X86_16Emitters.WriteGpr16(ctx, i, value);
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
     }
 }
