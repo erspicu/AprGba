@@ -534,6 +534,42 @@ public sealed class X86LegacyCpu : IX86CpuBackend
                     WriteRm16(f, disp, segOverride, X86Alu.Dec16(v, _state));
                     return f.IsRegister ? 3 : 15;
                 }
+                case 2:    // CALL near (indirect): IP ← r/m16, push old IP
+                {
+                    ushort target = ReadRm16(f, disp, segOverride);
+                    PushWord(_state.IP);
+                    _state.IP = target;
+                    return f.IsRegister ? 16 : 21;
+                }
+                case 3:    // CALL far (indirect): m16:16 — IP/CS ← memory
+                {
+                    if (f.IsRegister)
+                        throw new InvalidOperationException("0xFF /3 with mod=11 is undefined (CALL far needs memory)");
+                    var ea = ModRm.ComputeEffectiveAddress(f, disp, _state);
+                    SegReg seg = segOverride ?? ea.DefaultSegment;
+                    ushort newIp = ReadMem16(seg, ea.Offset);
+                    ushort newCs = ReadMem16(seg, (ushort)(ea.Offset + 2));
+                    PushWord(_state.CS);
+                    PushWord(_state.IP);
+                    _state.IP = newIp;
+                    _state.CS = newCs;
+                    return 37;
+                }
+                case 4:    // JMP near (indirect): IP ← r/m16
+                {
+                    _state.IP = ReadRm16(f, disp, segOverride);
+                    return f.IsRegister ? 11 : 18;
+                }
+                case 5:    // JMP far (indirect): m16:16
+                {
+                    if (f.IsRegister)
+                        throw new InvalidOperationException("0xFF /5 with mod=11 is undefined (JMP far needs memory)");
+                    var ea = ModRm.ComputeEffectiveAddress(f, disp, _state);
+                    SegReg seg = segOverride ?? ea.DefaultSegment;
+                    _state.IP = ReadMem16(seg, ea.Offset);
+                    _state.CS = ReadMem16(seg, (ushort)(ea.Offset + 2));
+                    return 24;
+                }
                 case 6:    // PUSH r/m16
                 {
                     // 8086 quirk also applies via FF /6 when r/m = SP:
@@ -551,9 +587,125 @@ public sealed class X86LegacyCpu : IX86CpuBackend
                     return f.IsRegister ? 11 : 16;
                 }
                 default:
-                    throw new NotImplementedException(
-                        $"0xFF /{f.Reg} (CALL/JMP indirect) lands in phase 24.4.2");
+                    throw new NotImplementedException($"0xFF /{f.Reg} undefined on 8086");
             }
+        }
+
+        // ===== Conditional jumps (Jcc rel8) — 0x70-0x7F =====
+        //
+        // Each opcode tests a flag predicate; if true, IP += sign-extended
+        // disp8 (added to the post-fetched IP, i.e. relative to the
+        // instruction following Jcc).
+        if (opcode >= 0x70 && opcode <= 0x7F)
+        {
+            sbyte disp = (sbyte)FetchByte();
+            bool taken = opcode switch
+            {
+                0x70 => _state.FlagO,                                            // JO
+                0x71 => !_state.FlagO,                                           // JNO
+                0x72 => _state.FlagC,                                            // JB / JC / JNAE
+                0x73 => !_state.FlagC,                                           // JNB / JAE / JNC
+                0x74 => _state.FlagZ,                                            // JE / JZ
+                0x75 => !_state.FlagZ,                                           // JNE / JNZ
+                0x76 => _state.FlagC || _state.FlagZ,                            // JBE / JNA
+                0x77 => !_state.FlagC && !_state.FlagZ,                          // JA / JNBE
+                0x78 => _state.FlagS,                                            // JS
+                0x79 => !_state.FlagS,                                           // JNS
+                0x7A => _state.FlagP,                                            // JP / JPE
+                0x7B => !_state.FlagP,                                           // JNP / JPO
+                0x7C => _state.FlagS != _state.FlagO,                            // JL / JNGE
+                0x7D => _state.FlagS == _state.FlagO,                            // JGE / JNL
+                0x7E => _state.FlagZ || (_state.FlagS != _state.FlagO),          // JLE / JNG
+                0x7F => !_state.FlagZ && (_state.FlagS == _state.FlagO),         // JG / JNLE
+                _ => false,
+            };
+            if (taken) _state.IP = (ushort)(_state.IP + disp);
+            return taken ? 16 : 4;
+        }
+
+        // ===== Unconditional near/short jumps =====
+        if (opcode == 0xEB)        // JMP rel8
+        {
+            sbyte disp = (sbyte)FetchByte();
+            _state.IP = (ushort)(_state.IP + disp);
+            return 15;
+        }
+        if (opcode == 0xE9)        // JMP rel16
+        {
+            short disp = (short)FetchWord();
+            _state.IP = (ushort)(_state.IP + disp);
+            return 15;
+        }
+
+        // ===== JCXZ rel8 — branch if CX == 0 =====
+        if (opcode == 0xE3)
+        {
+            sbyte disp = (sbyte)FetchByte();
+            if (_state.C.X == 0) _state.IP = (ushort)(_state.IP + disp);
+            return _state.C.X == 0 ? 18 : 6;
+        }
+
+        // ===== LOOP / LOOPE/LOOPZ / LOOPNE/LOOPNZ — 0xE0/E1/E2 =====
+        // CX -= 1 ; branch if CX != 0 (LOOP), or CX != 0 && ZF==1 (LOOPE),
+        // or CX != 0 && ZF==0 (LOOPNE).
+        if (opcode is 0xE0 or 0xE1 or 0xE2)
+        {
+            sbyte disp = (sbyte)FetchByte();
+            _state.C.X = (ushort)(_state.C.X - 1);
+            bool taken = _state.C.X != 0 && opcode switch
+            {
+                0xE0 => !_state.FlagZ,    // LOOPNE / LOOPNZ
+                0xE1 => _state.FlagZ,     // LOOPE  / LOOPZ
+                0xE2 => true,             // LOOP
+                _ => false,
+            };
+            if (taken) _state.IP = (ushort)(_state.IP + disp);
+            return taken ? 17 : 5;
+        }
+
+        // ===== CALL near rel16 — 0xE8 =====
+        if (opcode == 0xE8)
+        {
+            short disp = (short)FetchWord();
+            PushWord(_state.IP);
+            _state.IP = (ushort)(_state.IP + disp);
+            return 19;
+        }
+
+        // ===== CALL far ptr16:16 — 0x9A =====
+        if (opcode == 0x9A)
+        {
+            ushort newIp = FetchWord();
+            ushort newCs = FetchWord();
+            PushWord(_state.CS);
+            PushWord(_state.IP);
+            _state.IP = newIp;
+            _state.CS = newCs;
+            return 28;
+        }
+
+        // ===== RET / RETF =====
+        if (opcode == 0xC3) { _state.IP = PopWord(); return 16; }   // RET near
+        if (opcode == 0xC2)                                          // RET imm16 (near, with stack adjust)
+        {
+            ushort imm = FetchWord();
+            _state.IP = PopWord();
+            _state.SP = (ushort)(_state.SP + imm);
+            return 20;
+        }
+        if (opcode == 0xCB)                                          // RETF
+        {
+            _state.IP = PopWord();
+            _state.CS = PopWord();
+            return 26;
+        }
+        if (opcode == 0xCA)                                          // RETF imm16
+        {
+            ushort imm = FetchWord();
+            _state.IP = PopWord();
+            _state.CS = PopWord();
+            _state.SP = (ushort)(_state.SP + imm);
+            return 25;
         }
 
         // ===== 0x8F /0 — POP r/m16 =====

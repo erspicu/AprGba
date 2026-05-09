@@ -118,4 +118,39 @@ public class X86TomHarteTests
     [Fact] public void Tom_FF_0_Inc_Rm16()      => RunOpcodeOrSkip("FF.0");
     [Fact] public void Tom_FF_1_Dec_Rm16()      => RunOpcodeOrSkip("FF.1");
     [Fact] public void Tom_FF_6_Push_Rm16()     => RunOpcodeOrSkip("FF.6");   // 8086 SP quirk via mem path too
+
+    // ===== 24.4.2 — control flow (JMP/JCC/CALL/RET/LOOP) =====
+
+    [Fact] public void Tom_70_Jo()              => RunOpcodeOrSkip("70");
+    [Fact] public void Tom_71_Jno()             => RunOpcodeOrSkip("71");
+    [Fact] public void Tom_72_Jc()              => RunOpcodeOrSkip("72");
+    [Fact] public void Tom_73_Jnc()             => RunOpcodeOrSkip("73");
+    [Fact] public void Tom_74_Jz()              => RunOpcodeOrSkip("74");
+    [Fact] public void Tom_75_Jnz()             => RunOpcodeOrSkip("75");
+    [Fact] public void Tom_76_Jbe()             => RunOpcodeOrSkip("76");
+    [Fact] public void Tom_77_Ja()              => RunOpcodeOrSkip("77");
+    [Fact] public void Tom_78_Js()              => RunOpcodeOrSkip("78");
+    [Fact] public void Tom_79_Jns()             => RunOpcodeOrSkip("79");
+    [Fact] public void Tom_7A_Jp()              => RunOpcodeOrSkip("7A");
+    [Fact] public void Tom_7B_Jnp()             => RunOpcodeOrSkip("7B");
+    [Fact] public void Tom_7C_Jl()              => RunOpcodeOrSkip("7C");
+    [Fact] public void Tom_7D_Jge()             => RunOpcodeOrSkip("7D");
+    [Fact] public void Tom_7E_Jle()             => RunOpcodeOrSkip("7E");
+    [Fact] public void Tom_7F_Jg()              => RunOpcodeOrSkip("7F");
+    [Fact] public void Tom_E0_Loopnz()          => RunOpcodeOrSkip("E0");
+    [Fact] public void Tom_E1_Loopz()           => RunOpcodeOrSkip("E1");
+    [Fact] public void Tom_E2_Loop()            => RunOpcodeOrSkip("E2");
+    [Fact] public void Tom_E3_Jcxz()            => RunOpcodeOrSkip("E3");
+    [Fact] public void Tom_E8_CallRel16()       => RunOpcodeOrSkip("E8");
+    [Fact] public void Tom_E9_JmpRel16()        => RunOpcodeOrSkip("E9");
+    [Fact] public void Tom_EB_JmpRel8()         => RunOpcodeOrSkip("EB");
+    [Fact] public void Tom_9A_CallFar()         => RunOpcodeOrSkip("9A");
+    [Fact] public void Tom_C2_RetNearImm()      => RunOpcodeOrSkip("C2");
+    [Fact] public void Tom_C3_RetNear()         => RunOpcodeOrSkip("C3");
+    [Fact] public void Tom_CA_RetFarImm()       => RunOpcodeOrSkip("CA");
+    [Fact] public void Tom_CB_RetFar()          => RunOpcodeOrSkip("CB");
+    [Fact] public void Tom_FF_2_CallNearInd()   => RunOpcodeOrSkip("FF.2");
+    [Fact] public void Tom_FF_3_CallFarInd()    => RunOpcodeOrSkip("FF.3");
+    [Fact] public void Tom_FF_4_JmpNearInd()    => RunOpcodeOrSkip("FF.4");
+    [Fact] public void Tom_FF_5_JmpFarInd()     => RunOpcodeOrSkip("FF.5");
 }
