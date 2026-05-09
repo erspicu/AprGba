@@ -55,7 +55,9 @@ public sealed class X86LegacyCpu : IX86CpuBackend
 
     private ushort FetchWord()
     {
-        // 8086 fetches little-endian; two byte fetches.
+        // 8086 fetches little-endian; two byte fetches. FetchByte
+        // increments IP within ushort, so 0xFFFF → 0x0000 wrap within
+        // the code segment is automatic.
         byte lo = FetchByte();
         byte hi = FetchByte();
         return (ushort)(lo | (hi << 8));
@@ -81,11 +83,26 @@ public sealed class X86LegacyCpu : IX86CpuBackend
     private void WriteMem8(SegReg seg, ushort offset, byte value)
         => _mem.WriteByte(X86Memory.LinearAddr(_state.GetSeg(seg), offset), value);
 
+    /// <summary>
+    /// Read a 16-bit word from <c>seg:offset</c>. The 16-bit OFFSET wraps
+    /// from 0xFFFF → 0x0000 within the same segment — the segment base is
+    /// recomputed for each byte separately so we DON'T accidentally cross
+    /// segments via 20-bit linear arithmetic.
+    /// </summary>
     private ushort ReadMem16(SegReg seg, ushort offset)
-        => _mem.ReadWord(X86Memory.LinearAddr(_state.GetSeg(seg), offset));
+    {
+        ushort segBase = _state.GetSeg(seg);
+        byte lo = _mem.ReadByte(X86Memory.LinearAddr(segBase, offset));
+        byte hi = _mem.ReadByte(X86Memory.LinearAddr(segBase, (ushort)(offset + 1)));
+        return (ushort)(lo | (hi << 8));
+    }
 
     private void WriteMem16(SegReg seg, ushort offset, ushort value)
-        => _mem.WriteWord(X86Memory.LinearAddr(_state.GetSeg(seg), offset), value);
+    {
+        ushort segBase = _state.GetSeg(seg);
+        _mem.WriteByte(X86Memory.LinearAddr(segBase, offset),                 (byte)(value & 0xFF));
+        _mem.WriteByte(X86Memory.LinearAddr(segBase, (ushort)(offset + 1)),   (byte)((value >> 8) & 0xFF));
+    }
 
     /// <summary>
     /// Read an 8-bit operand specified by ModR/M (register or memory).
@@ -279,17 +296,17 @@ public sealed class X86LegacyCpu : IX86CpuBackend
             return 10;
         }
 
-        // ===== MOV r/m8, imm8  (0xC6, ModR/M reg=000)
-        //       MOV r/m16, imm16 (0xC7, ModR/M reg=000) =====
+        // ===== MOV r/m8, imm8  (0xC6)
+        //       MOV r/m16, imm16 (0xC7) =====
+        //
+        // Officially these are /0 group opcodes (ModR/M reg=000), but
+        // on real 8086 silicon the reg field is NOT decoded — any reg
+        // value executes as MOV r/m, imm. Tom Harte SST confirms this.
         if (opcode is 0xC6 or 0xC7)
         {
             byte modrm = FetchByte();
             var f = ModRmFields.Decode(modrm);
             ushort disp = FetchDisplacement(f.DisplacementBytes);
-            // ModR/M reg field MUST be 0 for MOV r/m, imm
-            if (f.Reg != 0)
-                throw new NotImplementedException(
-                    $"opcode 0x{opcode:X2} with ModR/M reg={f.Reg} is reserved/unused on 8086 at CS:IP={_state.CS:X4}:{(ushort)(_state.IP - 2):X4}");
 
             if (opcode == 0xC6)
             {

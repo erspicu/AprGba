@@ -9,6 +9,7 @@ using System;
 using System.IO;
 using AprX86.Cli.Cpu;
 using AprX86.Cli.Memory;
+using AprX86.Cli.Tests;
 
 if (args.Length == 0)
 {
@@ -17,6 +18,10 @@ if (args.Length == 0)
 }
 
 string? romPath = null;
+string? tomHartePath = null;
+int? tomHarteLimit = null;
+bool tomHarteStopOnFail = false;
+int tomHarteMaxFailures = 10;
 ushort entrySeg = 0x0000;
 ushort entryOff = 0x0100;     // CP/M .com convention
 long maxCycles = 5_000_000L;
@@ -25,18 +30,65 @@ bool verbose = false;
 
 foreach (var arg in args)
 {
-    if      (arg.StartsWith("--rom="))          romPath = arg.Substring("--rom=".Length);
-    else if (arg.StartsWith("--entry-seg="))    entrySeg = ParseHex16(arg.Substring("--entry-seg=".Length));
-    else if (arg.StartsWith("--entry-off="))    entryOff = ParseHex16(arg.Substring("--entry-off=".Length));
-    else if (arg.StartsWith("--max-cycles="))   maxCycles = long.Parse(arg.Substring("--max-cycles=".Length));
-    else if (arg.StartsWith("--backend="))      backend  = arg.Substring("--backend=".Length);
-    else if (arg == "--verbose" || arg == "-v") verbose = true;
+    if      (arg.StartsWith("--rom="))               romPath = arg.Substring("--rom=".Length);
+    else if (arg.StartsWith("--tomharte="))          tomHartePath = arg.Substring("--tomharte=".Length);
+    else if (arg.StartsWith("--tomharte-limit="))    tomHarteLimit = int.Parse(arg.Substring("--tomharte-limit=".Length));
+    else if (arg == "--tomharte-stop-on-fail")       tomHarteStopOnFail = true;
+    else if (arg.StartsWith("--tomharte-max-failures=")) tomHarteMaxFailures = int.Parse(arg.Substring("--tomharte-max-failures=".Length));
+    else if (arg.StartsWith("--entry-seg="))         entrySeg = ParseHex16(arg.Substring("--entry-seg=".Length));
+    else if (arg.StartsWith("--entry-off="))         entryOff = ParseHex16(arg.Substring("--entry-off=".Length));
+    else if (arg.StartsWith("--max-cycles="))        maxCycles = long.Parse(arg.Substring("--max-cycles=".Length));
+    else if (arg.StartsWith("--backend="))           backend  = arg.Substring("--backend=".Length);
+    else if (arg == "--verbose" || arg == "-v")      verbose = true;
     else { Console.Error.WriteLine($"unknown arg: {arg}"); PrintUsage(); return 2; }
 }
 
+// ============================================================
+// Tom Harte SST mode: load + run one opcode's worth of tests.
+// ============================================================
+if (tomHartePath != null)
+{
+    if (!File.Exists(tomHartePath))
+    {
+        Console.Error.WriteLine($"error: Tom Harte test file not found: {tomHartePath}");
+        return 3;
+    }
+    Console.WriteLine($"AprX86 — Tom Harte SST runner");
+    Console.WriteLine($"  test file:    {tomHartePath}");
+    if (tomHarteLimit.HasValue)
+        Console.WriteLine($"  limit:        {tomHarteLimit.Value}");
+    Console.WriteLine();
+
+    var runner = new TomHarteRunner();
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var result = runner.RunFile(tomHartePath, tomHarteLimit, tomHarteStopOnFail);
+    sw.Stop();
+
+    Console.WriteLine($"  total:        {result.Total}");
+    Console.WriteLine($"  passed:       {result.Passed}  ({100.0 * result.Passed / Math.Max(result.Total, 1):F1}%)");
+    Console.WriteLine($"  failed:       {result.Failed}");
+    Console.WriteLine($"  elapsed:      {sw.Elapsed.TotalSeconds:F2}s");
+
+    if (result.Failed > 0)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"  first {Math.Min(tomHarteMaxFailures, result.Failures.Count)} failure(s):");
+        foreach (var f in result.Failures.Take(tomHarteMaxFailures))
+        {
+            Console.WriteLine($"    [{f.Index,5}] {f.Name}");
+            foreach (var d in f.Diffs.Take(6))
+                Console.WriteLine($"      {d}");
+        }
+    }
+    return result.Failed == 0 ? 0 : 6;
+}
+
+// ============================================================
+// ROM mode: load + run a flat .com binary.
+// ============================================================
 if (romPath is null)
 {
-    Console.Error.WriteLine("error: --rom=<path> is required");
+    Console.Error.WriteLine("error: --rom=<path> or --tomharte=<path> is required");
     PrintUsage();
     return 2;
 }
@@ -109,9 +161,10 @@ static ushort ParseHex16(string s)
 
 static void PrintUsage()
 {
-    Console.Error.WriteLine("usage: apr-x86 --rom=<path> [--entry-seg=<hex>] [--entry-off=<hex>]");
-    Console.Error.WriteLine("              [--max-cycles=N] [--backend=legacy] [--verbose]");
+    Console.Error.WriteLine("usage:");
+    Console.Error.WriteLine("  apr-x86 --rom=<path> [--entry-seg=<hex>] [--entry-off=<hex>]");
+    Console.Error.WriteLine("          [--max-cycles=N] [--backend=legacy] [--verbose]");
     Console.Error.WriteLine();
-    Console.Error.WriteLine("phase 24.1 stub — only NOP / HLT / OUT 0xE9 / JMP far recognised.");
-    Console.Error.WriteLine("real ISA lands in phase 24.2.");
+    Console.Error.WriteLine("  apr-x86 --tomharte=<.json[.gz]> [--tomharte-limit=N]");
+    Console.Error.WriteLine("          [--tomharte-stop-on-fail] [--tomharte-max-failures=N]");
 }
