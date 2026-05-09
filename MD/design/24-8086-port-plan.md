@@ -1,0 +1,324 @@
+# 8086 移植計畫 — 最低環境 CPU 驗證 + 截圖證明
+
+> **Status**：**DRAFT**（2026-05-10）— 構想階段，等開工。
+> **Trigger**：第 4 顆 CPU 候選 = Intel 8086（用以前寫的 Apr86 emulator
+> 當 reference oracle 的部分）。要解決的核心問題：8086 是 CISC、segmented
+> memory、ModR/M、需要 PC 周邊環境才能跑大部分軟體 — 怎麼用最低成本只
+> 驗證 CPU correctness，同時產出**有說服力的截圖證明**？
+>
+> **核心觀念**：截圖是 framework 通用性 claim 的最有力證據（mirror NES /
+> GBA / GB 三顆既有 CPU 的截圖路線）。**沒有截圖 = 沒有 paper-quality
+> demo**。
+>
+> **目標讀者**：(a) 真要開工 8086 port 的人；(b) 跟接手者 / 學術
+> peer 解釋「framework 真的支援 4 顆 CPU」時的 visual evidence 來源
+> 設計依據。
+
+---
+
+## 1. 三個方法支柱
+
+跟 NES / GBA / GB 同樣的「驗證金字塔」，套到 8086：
+
+| 支柱 | 對應 NES | 8086 對應 | 用途 |
+|---|---|---|---|
+| **Per-opcode oracle test** | nestest + blargg 三 backend | **Tom Harte SingleStepTests 8088_v2** | 純 CPU correctness — 256 opcode × 10k tests/opcode = 數百萬 case |
+| **Synthetic test ROM** | nes test ROMs (.nes) | **Hand-crafted .com (raw 8086 binary)** | 端到端執行驗證，不需要 BIOS / 周邊 |
+| **Visual screenshot** | NesPpu → PNG (`--screenshot=`) | **CGA text mode 80x25 → PNG (`--screenshot=`)** | 視覺證明 framework 真的能跑 8086 |
+
+---
+
+## 2. Apr86 現況參考（OldProject/Apr86）
+
+> 已 clone 在 `OldProject/Apr86/`（commit 之前的整理）。
+
+| 元件 | Apr86 狀態 | 對 AprX86 移植的意義 |
+|---|---|---|
+| **CPU 核心** | `Apr8086Core` 3139 行 single-file，261 個 opcode case | 行為 reference；不是 oracle（自己有 bug） |
+| **1MB PA_mem** | byte[0x100000] linear，segmented (seg<<4)+offset | **直接借用結構** |
+| **CGA text 80x25** | 已實作！256 個 PNG glyph (8x14)、16-color palette、Parallel.For 渲染 | **font 跟 palette 都直接拿來用** |
+| **System BIOS load** | 0xFFFF0 area；VGA BIOS 0xC0000 | AprX86 不走這條（不需要真 BIOS） |
+| **IO port** | `io_step.dat` 預錄真 PC trace 回放（hack） | **不採用** — 不是真驗證、是 bypass |
+| **Interrupt** | push FLAGS/CS/IP + 取 vector，但作者標 "unfinish" | 從頭做（CPU 本身的 INT 指令，不靠周邊） |
+
+**結論**：Apr86 的 **1MB memory 結構 + CGA font + 16-color palette** 直接
+拿來用；**CPU core / IO replay** 不採用，從 framework 重做。
+
+---
+
+## 3. 支柱 #1 — Tom Harte SingleStepTests 8088_v2
+
+### 3.1 來源
+- GitHub: https://github.com/SingleStepTests/8088_v2
+- 業界用過：PCjs / 8086tiny / FreeDOS / 多個現代 8086 emulator
+- 免費 / open licence
+
+### 3.2 結構
+每個 opcode 一個 JSON 檔，每個檔 ~10000 個 test case。一個 case：
+
+```json
+{
+  "name": "01.0",
+  "bytes": [0x01, 0xC8],     // ADD AX, CX
+  "initial": {
+    "regs": { "ax": 0x1234, "cx": 0xABCD, "ip": 0x0100, ... },
+    "ram": [[0x100, 0x01], [0x101, 0xC8], ...]
+  },
+  "final": {
+    "regs": { "ax": 0xBE01, "cx": 0xABCD, "ip": 0x0102, ... },
+    "ram": [...]
+  },
+  "cycles": [...]
+}
+```
+
+### 3.3 Test runner 設計
+
+```csharp
+public class TomHarteTestRunner
+{
+    public TestResult Run(string opcodeJsonPath, IX86Cpu cpu) {
+        foreach (var test in LoadTests(opcodeJsonPath)) {
+            cpu.LoadState(test.Initial);
+            cpu.Step();   // execute exactly one instruction
+            var diff = DiffState(cpu.Snapshot(), test.Final);
+            if (diff.HasDiffs) return Fail(test, diff);
+        }
+        return Pass();
+    }
+}
+```
+
+### 3.4 Phased coverage 策略
+
+| Phase | 範圍 | 預期 fail rate（剛開始） |
+|---|---|---|
+| 24.A.1 | 基本 ALU (ADD/SUB/AND/OR/XOR) | 高 — flag 先行 stress test |
+| 24.A.2 | Data movement (MOV / LEA / XCHG / PUSH / POP) | 中 — addressing mode 全覆蓋 |
+| 24.A.3 | Control flow (Jcc / CALL / RET / LOOP) | 低 — segmented JMP 需 careful |
+| 24.A.4 | String ops (MOVS / CMPS / SCAS / LODS / STOS + REP prefix) | 中 — REP loop 跟 flag interaction |
+| 24.A.5 | MUL / DIV / IMUL / IDIV | 高 — flag 後遺症，DIV exception |
+| 24.A.6 | BCD ops (DAA / DAS / AAA / AAS / AAM / AAD) | **極高** — corner case 集中地，Gemini 也警告 |
+| 24.A.7 | INT / IRET / segment override prefix | 中 — segmented flag handling |
+| 24.A.8 | Shift / rotate (SAL/SAR/SHL/SHR/RCL/RCR/ROL/ROR) | 中 — count masking, flag cases |
+
+**目標**：256 opcode 全綠。**沒有 display 也能跑這層**。
+
+---
+
+## 4. 支柱 #2 — Magic IO + CGA framebuffer
+
+### 4.1 Magic IO port
+
+```
+OUT 0xE9, AL   →  emulator 把 AL 印到 stdout (用 Bochs port 慣例)
+OUT 0xF4, AL   →  emulator 收到 AL=0 即 PASS-exit，AL≠0 即 FAIL-exit (qemu isa-debug-exit 慣例)
+```
+
+兩個 port 借既有業界慣例，未來如果想跟 qemu / Bochs 對拍直接通用。
+
+### 4.2 CGA text mode 0xB8000 framebuffer
+
+8086 / DOS 程式寫文字到 0xB8000（80x25 char/attr pair, 4000 bytes total）。
+emulator 不需要實作 INT 10h，**程式直接寫記憶體**：
+
+```asm
+; 在 row 12, col 30 寫白底紅字 'A'
+mov ax, 0xB800
+mov es, ax
+mov word [es:12*160 + 30*2], 0x4F41   ; attr=0x4F (red bg, white fg), char='A'
+```
+
+framebuffer 一直存在 emulator memory；`--screenshot=out.png` flag 觸發
+時 walk 80×25 → 渲染 PNG。
+
+### 4.3 截圖 PNG 渲染演算法
+
+```csharp
+public void RenderTextModeScreenshot(byte[] mem, string outPath)
+{
+    const int CELLS_W = 80, CELLS_H = 25;
+    const int FONT_W = 8, FONT_H = 16;       // CGA standard 8x16 font
+    const int IMG_W = CELLS_W * FONT_W;     // 640
+    const int IMG_H = CELLS_H * FONT_H;     // 400
+
+    using var bmp = new Bitmap(IMG_W, IMG_H);
+    for (int y = 0; y < CELLS_H; y++)
+    for (int x = 0; x < CELLS_W; x++)
+    {
+        int cellOff = 0xB8000 + (y * CELLS_W + x) * 2;
+        byte ch    = mem[cellOff];
+        byte attr  = mem[cellOff + 1];
+        Color fg = CgaPalette[attr & 0x0F];
+        Color bg = CgaPalette[(attr >> 4) & 0x07];   // bit 7 = blink, ignore
+        DrawGlyph(bmp, ch, x * FONT_W, y * FONT_H, fg, bg);
+    }
+    bmp.Save(outPath, ImageFormat.Png);
+}
+```
+
+`CgaPalette[16]` 標準 IBM CGA 16-color values（Apr86 既有 `TableColor`
+數值正確，直接抄）：
+```
+0x000000 0x0000aa 0x00aa00 0x00aaaa 0xaa0000 0xaa00aa 0xaa5500 0xaaaaaa
+0x555555 0x5555ff 0x55ff55 0x55ffff 0xff5555 0xff55ff 0xffff55 0xffffff
+```
+
+`DrawGlyph` 從 256-glyph CGA font 取 8x16 bitmap → 對每 pixel 寫 fg / bg。
+Font 來源：
+- **首選**：Apr86 既有 `OldProject/Apr86/Apr8086/ASII_FONT/*.png`（256 個
+  PNG，作者已 dump 好）
+- 備選：IBM PC ROM Font (free，GitHub `viler-int10h/vga-text-mode-fonts`
+  之類)
+
+### 4.4 為什麼 CGA 80x25 text mode 夠
+
+- BIOS POST 畫面、DOS prompt、大部分 8086-era utility 都是這個 mode
+- 視覺辨識度 100%（"PC BIOS / DOS look"，paper / talk 一秒看出是什麼）
+- 不需要 graphics mode 那些細節（Mode 4 / 6 / 13h / planar）
+- 對 CPU correctness 驗證，**文字輸出 = 計算結果輸出**，已足
+
+未來如果要做 graphics mode demo（Mandelbrot 320x200 之類）— 是 phase E
+nice-to-have，不在初版範圍。
+
+---
+
+## 5. 支柱 #3 — Hand-crafted .com test ROMs
+
+### 5.1 載入慣例
+
+借 CP/M `.com` 慣例：raw binary 載到 `0x0000:0x0100`（segment 0，offset
+0x100）；emulator 設 CS:IP = 0:0x100，DS / ES = 0，SS:SP = 0:0xFFFE，
+**不需要任何 BIOS / 周邊**。
+
+```
+apr-x86 --rom=test-roms/8086/hello-cga.com --screenshot=temp/hello-cga.png
+```
+
+收尾條件：
+- 程式跑 `HLT` 指令 → emulator 偵測到就 stop + 截圖
+- 或 `OUT 0xF4, AL` (qemu isa-debug-exit pattern) → 即時退出
+- Or `--max-cycles=N` 上限保險
+
+### 5.2 候選 test ROM 清單（按複雜度）
+
+| ROM | 內容 | 視覺 | 驗證重點 |
+|---|---|---|---|
+| **hello-cga.com** | "Hello, AprX86 8086!" 寫 0xB8000 + HLT | 文字白底藍字置中 | basic ModR/M / segment / HLT |
+| **primes-100.com** | 質數篩 < 100 印出 | 多行數字輸出 | 迴圈 / 算術 / DIV / 比較 |
+| **factorial-12.com** | 12! 跨 32-bit 算 + 印 | 一個大數字 | MUL 16-bit / 32-bit accumulate |
+| **fibonacci.com** | 前 20 個 Fibonacci 數印 | 表格 | 遞迴 / SP 操作 / CALL/RET |
+| **bcd-demo.com** | BCD 加法（DAA / AAA） | 結果 + flag dump | DAA/AAA flag corner cases |
+| **string-copy.com** | MOVSB + REP 把 source 複製到 dest | 兩段相同字串 | REP prefix + ES:DI / DS:SI |
+| **mandelbrot-ascii.com** | 用 ASCII char (40x20) 印 Mandelbrot set | 圖案 | 大量算術 + 巢狀迴圈 |
+| **interrupt-demo.com** | INT 0x03 (debug) → 自定 handler 寫文字 → IRET | 文字行 | INT push 順序、IRET pop 順序、flag I 處理 |
+| **80186-enter-leave.com** | 80186 ENTER/LEAVE 指令 demo | "ENTER OK" | inheritance 第一個 child spec 的證明 |
+
+每個 .com 用 NASM 編：
+```bash
+nasm -f bin hello-cga.asm -o hello-cga.com
+```
+
+預期單檔 < 256 bytes。
+
+---
+
+## 6. 跟 spec inheritance (doc #23) 的關係
+
+8086 port 是 **doc #23 inheritance 機制的第一個真實 stress test**：
+
+| Phase | 跟 #23 對應 |
+|---|---|
+| 24.A 寫 8086 base spec | **#23 phase 23.1**（base spec，不開 inheritance） |
+| 24.A 用 Tom Harte 驗 base | base spec 對齊 reference；inheritance 動工前先有 known-good base |
+| 24.B 加 inheritance + 寫 80186 | **#23 phase 23.2-23.3**；80186 ENTER/LEAVE demo 截圖證 inheritance work |
+| 24.C 80286 real-mode | **#23 phase 23.4** |
+| 24.D 80286 protected-mode | **#23 phase 23.5** |
+| 24.E (optional) 8087 FPU as trait | **#23 phase 23.6**；trait composition 第一個範例 |
+
+每個 family 子 CPU 都用同一條 截圖驗證 pipeline (CGA text mode + Tom
+Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
+
+---
+
+## 7. 範圍明確排除（v1 不做）
+
+避免 over-scope：
+
+| 項目 | 不做的理由 |
+|---|---|
+| **真 BIOS LLE** | Apr86 卡這條；對 CPU correctness 沒貢獻；對截圖也只是延後（CGA text mode 直接寫就有截圖） |
+| **PIC (8259) / PIT (8254) / DMA (8237)** | 跟 CPU correctness 完全不相關；測試 ROM 不靠這些 |
+| **CGA graphics modes (4 / 6 / 13h)** | 文字 mode 已夠視覺證明；graphics mode 是 nice-to-have，等 8086 base 完工再說 |
+| **VGA planar modes (Mode 0Dh/10h/12h)** | 跟 8086-era unrelated；286/386 才開始普及 |
+| **音訊 (PC Speaker / SB)** | 跟視覺證明跟 CPU correctness 都無關 |
+| **Real DOS / FreeDOS** | 需要完整 BIOS + filesystem + 數百 INT 21h functions；100x scope |
+| **8087 FPU** | trait 機制（doc #23）已預留；初版 8086 不裝 |
+| **Multi-cycle exact timing** | 對 CPU correctness 加分有限；Tom Harte 已給 cycle count，但不該為了 cycle 完美延期 ROM 驗證 |
+
+---
+
+## 8. Phase plan
+
+| Phase | 內容 | 成果 |
+|---|---|---|
+| **24.0** | 本 doc 落地 | DRAFT → APPROVED |
+| **24.1** | AprX86.Cli skeleton + 1MB memory + CS:IP fetch loop | hello-cga.com 跑得起來但只 stub Step() |
+| **24.2** | 8086 spec phase 1：基本 ALU + MOV + 基本 ModR/M | 通過 Tom Harte ADD/MOV/AND/OR/XOR 全綠 |
+| **24.3** | CGA text framebuffer + PNG 截圖 + magic IO | hello-cga.com 第一張截圖出來 |
+| **24.4** | 8086 spec 完整 256 opcode | 通過 Tom Harte 全 256 opcode |
+| **24.5** | 5-10 個 hand-crafted demo + 截圖 | primes / fibonacci / mandelbrot ASCII 截圖完整 |
+| **24.6** | (可選) lockstep AprX86 vs Apr86 (限 .com 程式範圍) | Apr86 reference cross-check |
+| **24.7** | 80186 spec — 透過 inheritance (#23) | ENTER/LEAVE demo 截圖 |
+| **24.8** | 80286 real-mode + protected-mode demos | 4 顆 CPU 全綠 + paper-quality screenshot 集 |
+
+**最早可截圖 milestone**：**24.3 結束**（hello-cga.com → PNG）。
+**最早 paper-quality milestone**：**24.5 結束**（5+ demo 截圖 + Tom Harte
+全綠 + cycle accuracy 對齊）。
+
+---
+
+## 9. 截圖 paper-quality 目標 examples
+
+最終要產出的「8086 framework demo」截圖集合：
+
+```
+result/x86-16/
+├── hello-cga-i8086.png              ← 「Hello AprX86」基本驗證
+├── primes-i8086.png                 ← 質數列表
+├── mandelbrot-ascii-i8086.png       ← 用 ASCII 字符畫 Mandelbrot set
+├── fibonacci-i8086.png              ← Fibonacci 數列
+├── enter-leave-i80186.png           ← 80186 ENTER/LEAVE 證明 inheritance work
+└── protmode-msr-i80286.png          ← 80286 LMSW/SMSW protected mode setup demo
+```
+
+這 6 張截圖跟既有的：
+- `result/gb/json-llvm/cpu_instrs.png`（Blargg 11/11）
+- `result/gba/bios_lle_arm.png`（jsmolka ARM）
+- `result/gba/bios_lle_thumb.png`（jsmolka Thumb）
+- `result/nes/nestest.png`（assumed — 之後加）
+
+**4 顆 CPU + 多個 ISA mode + inheritance proof of concept**，就是 framework
+完整通用性的視覺證據集。
+
+---
+
+## 10. 風險 + Mitigation
+
+| 風險 | 嚴重度 | Mitigation |
+|---|---|---|
+| **Tom Harte tests 解析複雜 / API mismatch** | 中 | 先驗一個 opcode (ADD) 通了再規模化；JSON parsing 是已知技術 |
+| **8086 ModR/M 解碼難度** | 高 | Apr86 既有 ModR/M code 拿來看；Tom Harte 給的 trace 含解碼後 effective addr，可比對 |
+| **DAA / AAA 等 BCD 卡關** | 中 | 預期會卡幾天；Tom Harte 給 corner case 全覆蓋，逐一 fix |
+| **Font / palette 版權** | 低 | Apr86 既有 PNG 已 dump（IBM PC ROM 1981 font 早超 copyright），或用 GPL'd vga-text-mode-fonts |
+| **Inheritance 機制設計沒驗到** | 中 | 必須先做完 8086 base + Tom Harte 全綠（24.4），才開始 80186 (24.7) — 不要兩件事一起做 |
+| **過度 over-scope（想做 graphics / 真 BIOS）** | 高 | 嚴守第 7 節「不做」清單；想做 graphics 等 24.5 完工後再開新 phase |
+
+---
+
+## 11. 跟既有 doc 的關係
+
+- **#20 adding-a-new-cpu.md** — 8086 是第 4 顆 CPU 的 SOP execution；本 doc 是針對 8086 的具體 phase plan
+- **#23 cpu-spec-inheritance.md** — 提供 inheritance 機制；本 doc phase 24.7+ 是 inheritance 的 stress test
+- **既有 NES / GBA / GB 截圖慣例** — 本 doc CGA framebuffer + PNG 渲染走同一路徑；未來 paper / framework demo 截圖集合擴張到 4 CPU
+- **既有 lockstep diff toolkit (N5)** — phase 24.6 的可選 cross-check 機制
