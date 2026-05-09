@@ -1,6 +1,7 @@
 # Framework future extensions + design vision — an advanced challenge map for whoever takes over
 
-> **Status**: vision / handover note (2026-05-05)
+> **Status**: vision / handover note
+> **Last updated**: 2026-05-09 (revised after the N0-N11 series wrapped)
 > **Source**: synthesized from a long 2026-05 consultation with Gemini
 > (discussion logs at
 > [`tools/knowledgebase/message/`](/tools/knowledgebase/message/))
@@ -13,6 +14,19 @@
 > AprCpu / AprGba forward; (b) anyone who wants to apply the same
 > JSON-driven approach to something else; (c) anyone who wants to
 > understand the academic / engineering uniqueness of this framework.
+>
+> **2026-05-09 update note**: this doc was originally written when the
+> framework had only ARM7TDMI + LR35902 (two CPUs). Since then the
+> N0-N11 series added a third CPU (Ricoh 2A03 / NES) and deepened the
+> spec-driven runtime to a ~85% declarative ratio — higher than this
+> doc's original estimate. The "push framework generality from 2 CPUs
+> to 3" goal mentioned in this doc is now achieved; the next target is
+> a 4th CPU (candidate **Intel 8086**, using a previously hand-written
+> emulator as the reference oracle). See the N-series section in
+> `MD/design/03-roadmap.md`,
+> `MD/performance/202605092000-n33-full-spec-cycles.md` for the
+> declarative-ratio quantification, and
+> `MD/design/20-adding-a-new-cpu.md` for the SOP for adding a new CPU.
 
 ---
 
@@ -618,9 +632,34 @@ Gemini; pick whichever interests you most and push it forward; or if
 after reading you have a completely different direction in mind, that's
 fine too.
 
-**Top recommendation**: first take §9 Level 2 and add a new CPU (N64 or
+**Top recommendation**: ~~first take §9 Level 2 and add a new CPU (N64 or
 PS1 are excellent choices), pushing the framework's "generality" claim
-from 2 CPUs to 3. This is the most direct milestone for verifying
-real-world generality of the framework.
+from 2 CPUs to 3.~~
+
+**2026-05-09 update**: the above goal is done — Ricoh 2A03 / NES is
+now the third CPU (N0-N11 series). N64 / PS1 were the original
+candidates at the time; the reasons NES was chosen in the end:
+(1) an 8-bit variable-width CISC-ish ISA forms full coverage together
+with ARM (32-bit RISC) + LR35902 (8-bit RISC-ish); (2) 6502's
+unofficial opcodes + page-cross +1 cycle quirks are an extreme
+framework stress test.
+
+Next 4th-CPU candidate: **Intel 8086** (segmented memory + 16-bit
+CISC, using a previously hand-written emulator as the reference
+oracle). The framework is ready — the foundation work is done
+(spec-driven memory bus with two page-table flavours, generic
+lockstep diff, 255-entry declarative cycle table, runtime access
+widths enforcement, fastmem JIT inline path).
+
+**Takeover steps**:
+1. Read [`MD/design/20-adding-a-new-cpu.md`](/MD/design/20-adding-a-new-cpu.md) — SOP, with three reference examples (ARM/LR35902/2A03)
+2. Read the N-series section in [`MD/design/03-roadmap.md`](/MD/design/03-roadmap.md) for the framework's current state
+3. Read [`MD/performance/202605092000-n33-full-spec-cycles.md`](/MD/performance/202605092000-n33-full-spec-cycles.md) for the declarative-ratio progression
+
+Adding a new CPU is the most direct milestone for verifying the
+framework's real-world generality — the 3rd CPU validation exposed
+5+ spec format / generic-pattern gaps (per-(mnem, addr-mode) cycles,
+generalising page-table dispatch, handler registry, etc.); after
+closing them the 4th CPU should be considerably smoother.
 
 Fuller original conversation logs: [`tools/knowledgebase/message/`](/tools/knowledgebase/message/).

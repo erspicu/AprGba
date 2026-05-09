@@ -3,10 +3,12 @@
 > **Originally written at Phase 4.5 wrap-up** (when both ARM7TDMI +
 > LR35902 CPUs were running), **2026-05-03 major rewrite: reflects
 > Phase 5.8 emitter library refactor + Phase 7 JIT optimisation in
-> progress**.
+> progress**. **2026-05-09 update**: the N0 series added a third CPU
+> (Ricoh 2A03 / NES, `Mos6502Emitters.cs`) — same framework, the emit
+> pipeline required no per-CPU changes.
 >
 > Documents how the framework turns "JSON CPU description" into
-> "JIT capable of running ROMs", what the two CPUs' emitters actually
+> "JIT capable of running ROMs", what the three CPUs' emitters actually
 > do, and after Phase 5.8 generalisation reduced LR35902-side emitter
 > volume from ~2620 lines to 1346 lines (-49%), which ops are the
 > remaining true L3 intrinsics.
@@ -523,8 +525,11 @@ canonical baseline `202605030002-...`.
 semantics of each verb". After Phase 5.8, emitters are further split
 into L0/L1 (cross-CPU shared) and L3 (CPU-unique), pushing the
 credibility of the "swap CPU = swap JSON" promise from "verified on
-ARM/LR35902 two CPUs" to "adding the third CPU only requires writing
-~5-10 L3 ops + configuring metadata".**
+ARM/LR35902 two CPUs" to **three CPUs** (2026-05-09: the N0 series
+added Ricoh 2A03 / NES, and `Mos6502Emitters.cs` is also at the
+~5-10 L3-op scale) — **after the 3rd-CPU validation, the next CPU
+(8086 candidate) is expected to need only ~5-10 L3 ops + metadata
+configuration**.**
 
 Together with the generic framework code (SpecCompiler / HostRuntime /
 DecoderTable), a CPU's spec becomes JIT-compiled native code. The
@@ -533,8 +538,11 @@ only needs spec + an increasingly thin emitter, and the previous CPU
 remains unaffected.
 
 This thesis is verified on ARM7TDMI (already passes jsmolka armwrestler
-/ arm.gba / thumb.gba green) and LR35902 (already passes Blargg
-cpu_instrs 11/11 + master "Passed all tests"), two completely
-different CPUs. The Phase 5.8 emitter library refactor further
-brought the emitter workload of each new CPU down to "~5-10 L3 ops
-+ configuration".
+/ arm.gba / thumb.gba green), LR35902 (already passes Blargg
+cpu_instrs 11/11 + master "Passed all tests"), and **Ricoh 2A03**
+(passes nestest on three backends + blargg cpu_test5 PC=$8003 with
+all 11 subtests) — three completely different CPUs. The Phase 5.8
+emitter library refactor + N0-N11 systematic work brought the
+emitter workload of each new CPU down to "~5-10 L3 ops +
+configuration", and pushed the framework runtime declarative ratio
+to ~85%.

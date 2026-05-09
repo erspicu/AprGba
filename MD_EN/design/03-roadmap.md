@@ -4,8 +4,10 @@ Adopting **Plan B: phased deliverables**. Each phase is independently shippable,
 
 Hobby-time estimate: 8–15 hours per week.
 
-> **Status snapshot** (updated 2026-05-03): Phase 0/1/2/2.5/2.6/3/4.1/4.2/4.3/4.4/
-> 4.5/5/7 (partial)/8 done.
+> **Status snapshot** (updated 2026-05-09): Phase 0/1/2/2.5/2.6/3/4.1/4.2/4.3/4.4/
+> 4.5/5/7 (partial)/8 done; **N0-N11 (NES 2A03 + spec-driven runtime
+> series)** ✅ done (2026-05-09). See the new "N series" section appended
+> at the bottom of this document.
 >
 > - **MVP**: GBA-side test ROM → real Nintendo BIOS LLE → full PPU pipeline
 >   (Mode 0/1/2/3/4 + OBJ + BLDCNT + WIN). GB-side BIOS LLE + DMG Nintendo(R)
@@ -26,19 +28,22 @@ Hobby-time estimate: 8–15 hours per week.
 >   main-branch version doesn't fit the recovery branch's structure).
 > - **QA workflow**: every commit runs the corresponding tier based on the
 >   change profile, see [`MD_EN/process/01-commit-qa-workflow.md`](/MD_EN/process/01-commit-qa-workflow.md) (T0 docs /
->   T1 360 unit tests / T2 8-combo screenshot matrix / T3 3-run loop100
+>   T1 unit tests / T2 8-combo screenshot matrix / T3 3-run loop100
 >   bench / T4 baseline update).
 >
-> All 360 unit tests green; CLI flags consistent across GB + GBA
-> (`--bios` / `--cycles` / `--frames` / `--seconds` / `--screenshot` /
-> `--block-jit`).
+> As of 2026-05-09: **455 unit tests all green**; CLI flags consistent
+> across GB + GBA + **NES** three CLI surfaces (`--bios` / `--cycles` /
+> `--frames` / `--seconds` / `--screenshot` / `--block-jit` / NES-side
+> `--nestest` / `--diff` / `--diff-block` / `--max-cycles` /
+> `--backend=legacy|json|json-block`).
 >
 > Full closeout notes: [`MD_EN/note/phase5.7-bios-lle-and-ppu-2026-05.md`](/MD_EN/note/phase5.7-bios-lle-and-ppu-2026-05.md);
 > refactor progress: [`MD_EN/design/11-emitter-library-refactor.md`](/MD_EN/design/11-emitter-library-refactor.md); Phase 7
 > perf records: `MD/performance/`.
 >
-> Possible next steps: (a) Phase 5.8/5.9 third-CPU validation
-> (RISC-V / MIPS); (b) Phase 7 follow-ups: A.5 SMC invalidation,
+> Possible next steps: (a) ~~Phase 5.8/5.9 third-CPU validation
+> (RISC-V / MIPS)~~ → done as N0-N11 with NES 2A03; next is 4th CPU
+> (8086 candidate); (b) Phase 7 follow-ups: A.5 SMC invalidation,
 > A.7 block linking, E.c IR-level region check, fix BIOS LLE bjit
 > short-block problem (detector follows through unconditional B);
 > (c) Phase 9 APU.
@@ -322,7 +327,7 @@ Progress (live; one commit per step + cleanup commit):
 | 5.5 | Done | Memory IO region unified (Binary auto-coerce + LDH/LD-(C) switched to generic `or` chain) + cleanup |
 | 5.6 | Done | Removed cb_dispatch no-op; tagged IME/HALT/DAA as L3 intrinsics with reasons |
 | 5.7 | Done | flag micro-ops (CCF/CPL) + INC/DEC family + 16-bit selector splits + L3 marker for operand resolver / compound ALU |
-| 5.8/5.9 | Pending | Third-CPU validation (RISC-V RV32I or MIPS R3000) |
+| 5.8/5.9 | ~~Pending~~ Superseded | ~~Third-CPU validation (RISC-V RV32I or MIPS R3000)~~ → **2026-05-09 update**: 6502 / NES done (N0-N11), see "N series" section at end of this doc; next candidate is 8086 |
 
 **5.7 closeout snapshot**:
 
@@ -352,15 +357,20 @@ is perf-neutral on the main framework path (json-llvm)**, accomplishing
 the "clean structure vs neutral speed" trade-off.
 
 **Remaining work**:
-- 5.8/5.9 third-CPU validation (RISC-V RV32I or MIPS R3000) — actually
+- ~~5.8/5.9 third-CPU validation (RISC-V RV32I or MIPS R3000) — actually
   proves whether the L3 floor is reasonable. Won't know whether we need
   spec schema extensions like an "operand resolver registry" until the
-  third CPU port is attempted.
-- Until that third CPU lands, the refactor phase is essentially done.
+  third CPU port is attempted.~~
+- ~~Until that third CPU lands, the refactor phase is essentially done.
   Next phase: third CPU. (Phase 7 block-JIT and APU are paused —
   neither affects validation of the "JSON-driven CPU framework"
   research thesis; commercial-game compatibility / real-time 60fps
-  are not in MVP scope.)
+  are not in MVP scope.)~~
+- **2026-05-09 update**: third-CPU validation was done with **6502 /
+  NES (Ricoh 2A03)** instead of MIPS / RISC-V (N0-N11 series). The L3
+  floor turned out reasonable — Mos6502Emitters is on the same ~5-10
+  L3 ops + configuration scale as LR35902. See the "N series" section
+  at the bottom of this doc. Next candidate: 8086.
 
 ---
 
@@ -1139,7 +1149,7 @@ brought the gain.
 **Pre-commit QA**: run the appropriate tier based on the change type,
 defined in [`MD_EN/process/01-commit-qa-workflow.md`](/MD_EN/process/01-commit-qa-workflow.md):
 - T0 = pure docs / comments → no QA
-- T1 = refactor / debug helper → 360 unit tests
+- T1 = refactor / debug helper → 455 unit tests (as of 2026-05-09)
 - T2 = bug fix / new emitter / spec change → T1 + 8-combo screenshot
        matrix
 - T3 = hot path / JIT IR / dispatcher / bus change → T1 + T2 + 3-run
@@ -1229,10 +1239,14 @@ Possible future directions:
 - Commercial-game compatibility testing and bug fixes
 - Open source, docs, community
 - AOT-precompiled `.bc` cache (avoid cold-start LLVM compile cost)
-- Third-CPU validation (after Phase 4.5 GB, if we want one more
+- ~~Third-CPU validation (after Phase 4.5 GB, if we want one more
   validation, MIPS R3000 or RISC-V RV32I are candidates; 6502 is too
   simple, doesn't cover what the framework already validates, no
-  particular priority)
+  particular priority)~~
+  → **2026-05-09 update**: 6502 / NES was done after all (N0-N11
+  series), and the marginal benefit far exceeded the original estimate.
+  See the "N series" section at the end of this doc. Next candidate is
+  Intel 8086.
 
 ### Explicitly not planning to do (avoid scope creep)
 
@@ -1246,3 +1260,71 @@ Possible future directions:
   validation may happen, but full-system emulators are out of scope
 
 ---
+
+## N series: NES 2A03 + spec-driven runtime deepening (2026-05-09) ✅ Complete
+
+A milestone series added after Phase 9 — using "add a third CPU
+(Ricoh 2A03 / NES)" as the entry point, the framework's declarative
+ratio was pushed from ~50% to ~85%, and along the way several
+spec format / generic-pattern gaps were identified and closed. 32
+N-tagged commits across 11 sub-series.
+
+| Series | Topic | Scope |
+|---|---|---|
+| **N0** | Ricoh 2A03 third-CPU bootstrap | 3rd CPU JSON spec validation, NesMemoryBus + nestest PASS, NesPpu + Mapper000/001 + blargg cpu_test5 PASS |
+| **N1** | NesJsonCpu (per-instr + block-JIT) | Mos6502Emitters + spec.steps + LAX/SHY/SHX/illegal opcodes; nestest + blargg all PASS on three backends |
+| **N2** | Framework primitives + three-CPU isa_metadata | MachineSpec / Immediate / pageShift / forces_end_of_block; ARM7TDMI / LR35902 / 2A03 isa_metadata aligned; imm-bake fast path |
+| **N3** | Spec-driven runtime | NES interrupt vectors / memory bus dispatch / per-instr cycle table all read from MachineSpec; N3.3 was originally tagged BLOCKED (per-(mnem, addr-mode) cycle granularity) and later RESOLVED in N3.3-finally |
+| **N4** | Memory spec v2 | handler registry + page-table O(1) dispatch + offset semantics; GBA + GB DMG specs upgraded to v2; recovered the 7% perf regression introduced in N3.2 |
+| **N5** | Generic lockstep diff toolkit | `ISteppableCpu` + `LockstepDiff.Run`; NES adapter; toy-CPU divergence test proves the toolkit actually catches divergences |
+| **N7** | N4 closeout §3 follow-ups | `TryGetHostPointer` / `IsAccessWidthAllowed` / `GetWaitStates` — three query APIs landed |
+| **N8** | ARM page-table for GbaMemoryBus | 256-entry table indexed by `addr >> 24`; spec-driven build; MachineSpec cross-validation tests |
+| **N9** | Spec format — dynamic cycle penalties | `extra_when_taken` / `extra_when_page_cross` added to the Cycles record; all 6502 branches are now declarative |
+| **N10** | allowed_widths debug enforcement | GbaMemoryBus EnforceAllowedWidths flag; spec ↔ runtime invariant enforced |
+| **N11** | fastmem block-JIT integration | Mos6502WramBase extern + 6502 inline GEP-load fastpath; env-var gate (`APR_MOS6502_FASTMEM`); foundation proven |
+
+### N3.3 BLOCKED → RESOLVED: the academic insight
+
+At N3 closeout, the cycle-table limitation was originally classified
+as a "framework abstraction has hit the ceiling, structural blocker
+that requires a spec-format overhaul" and the framework ratio was
+pessimistically estimated at "~70% ceiling". In hindsight after
+N4-N11, the schema change took only a 12-line C# resolver
+(`CycleTable.Resolve`) + mechanical table fill-in:
+
+- `MD/performance/202605091804-n3-declarative-ratio.md` marked the ratio at 70%
+- `MD/performance/202605091900-n4-memory-spec-v2.md` pushed it to 78%
+- `MD/performance/202605092000-n33-full-spec-cycles.md` filled it out to ~85%
+
+The "truly fundamental escape hatch" estimate shrank from ~30% down
+to roughly 10% — the only things now genuinely outside the framework
+boundary are mapper state machines, PPU/APU heavy side effects, and
+the NMI procedural sequence (~500 LOC of C#).
+
+### Perf cross-milestone comparison (blargg cpu_test5, 3-run avg, MIPS)
+
+| Backend | N1 baseline | N3.4 | N4.6 | N3.3-finally | N9-end (now) |
+|---|---:|---:|---:|---:|---:|
+| legacy | 1.69 | 1.57 | 1.65 | 1.64 | 1.66 |
+| json (per-instr) | 0.83 | 0.81 | 0.82 | 0.83 | 0.83 |
+| json-block | 0.78 | 0.80 | 0.80 | 0.82 | 0.81 |
+
+Cumulative result across all 4 milestones: legacy is within ~3% of
+N1 baseline, per-instr is flat, block-JIT comes in ~5% ahead of N1.
+**Each step raised declarativity without regressing perf.**
+
+### Foundation-related items still outstanding
+
+- 4th CPU (candidate Intel 8086 — using a previously hand-written
+  emulator as the reference oracle)
+- ARM 2-level page-table sub-grain (N8's 1-level already covers GBA;
+  2-level only needed when NDS dual-CPU or in-cart sub-page tricks
+  appear)
+- Spec format advanced features (per-(mode) page-cross +1 declarative
+  description; N9 added top-level metadata, per-mode is still TODO)
+- The fastmem inline path is perf-neutral for 6502 (cond-br + phi-merge
+  overhead overwhelms extern-call savings); other CPUs may benefit —
+  potential left for the future
+
+Full commit list: `git log --oneline | grep -E "feat|docs.*N[0-9]"`;
+detailed closeout docs in `MD/performance/2026050[89]*.md`.

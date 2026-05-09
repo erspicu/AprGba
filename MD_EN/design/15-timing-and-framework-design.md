@@ -1,6 +1,10 @@
 # Advanced timing accuracy + framework-generic structure — design concepts and methods
 
-> **Status**: design synthesis (2026-05-04)
+> **Status**: design synthesis (2026-05-04); **2026-05-09 update**:
+> after the N0 series added a third CPU (Ricoh 2A03 / NES), the
+> framework-level "sync / defer / SMC / region inline" abstractions
+> predicted by this doc reused cleanly on the new CPU —
+> Mos6502Emitters did not have to reinvent any timing pattern.
 > **Scope**: Explains the design concepts, methods, and tradeoffs the
 > AprCpu framework uses in block-JIT mode to balance "preserve cycle-accurate
 > timing" against "preserve framework genericity".
@@ -10,7 +14,7 @@
 > `12-gb-block-jit-roadmap.md`); this doc is the synthesis that lays out
 > the underlying concepts + generalization methods clearly.
 >
-> **Target audience**: future readers who want to (a) port a third CPU,
+> **Target audience**: future readers who want to (a) port a 4th CPU,
 > (b) maintain timing behaviour, (c) understand "why was it designed this
 > way" — including future me.
 
@@ -29,8 +33,9 @@ under block-JIT mode.
 The industry has solutions for this (QEMU TCG, Dynarmic, mGBA, Dolphin),
 but they're all **arch-specific**: one set for ARM, another for PowerPC,
 yet another for SH-4. We're different: a **JSON-driven framework** —
-the same BlockFunctionBuilder runs ARM, Thumb, LR35902, and adding 6502
-/ Z80 / 8080 in the future follows the same path.
+the same BlockFunctionBuilder runs ARM, Thumb, LR35902, **6502 (NES,
+added in the N0 series)**, and adding Z80 / 8080 / 8086 in the future
+follows the same path.
 
 What this doc records is the concepts and methods for "**how to design
 timing-accurate mechanisms at framework level rather than rewriting them

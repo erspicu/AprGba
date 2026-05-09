@@ -10,19 +10,19 @@
 | Tier | Change nature | QA required | Record |
 |---|---|---|---|
 | **0** | Comment / typo / docs / `.md` only | Commit directly | — |
-| **1** | refactor / rename / debug helper / non-semantic | T1: 360 unit tests | — |
+| **1** | refactor / rename / debug helper / non-semantic | T1: 455 unit tests | — |
 | **2** | bug fix / new emitter / spec change / runtime logic | T1 + T2: 8-combo screenshot matrix | Not needed, write verification result in commit msg |
 | **3** | hot-path change affecting perf (JIT IR, dispatcher, bus) | T1 + T2 + T3: 3-run loop100 bench | `MD/performance/<timestamp>-<topic>.md` |
 | **4** | Major architectural change (block-JIT phase, new optimization, cycle accounting) | T1 + T2 + T3 + T4: full matrix + baseline comparison | Same as Tier 3 + update `MD/note/loop100-bench-*.md` baseline |
 
-## T1: Logic — 360 unit tests
+## T1: Logic — 455 unit tests (as of 2026-05-09)
 
 ```bash
 timeout 30 dotnet test AprGba.slnx --nologo --verbosity minimal > temp/t1-tests.log 2>&1
 tail -3 temp/t1-tests.log    # confirm "Failed: 0"
 ```
 
-**Pass criterion**: `Failed: 0, Passed: 360`. Any test failure = no commit.
+**Pass criterion**: `Failed: 0`, Passed = current test count (455 as of 2026-05-09). Any test failure = no commit.
 
 ## T2: Visual — 8-combo screenshot matrix
 

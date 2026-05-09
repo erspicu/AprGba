@@ -20,11 +20,12 @@ Positioning first:
 
 | Perspective | Current state |
 |---|---|
-| **Framework demo** (primary goal) | ✅ achieved — same framework runs both ARM7TDMI and LR35902 ISAs; jsmolka + Blargg PASS |
-| **CPU correctness** | ✅ achieved — Blargg cpu_instrs 11/11, jsmolka arm/thumb all PASS |
+| **Framework demo** (primary goal) | ✅ achieved — same framework runs ARM7TDMI + LR35902 + **Ricoh 2A03** three ISAs; jsmolka + Blargg + nestest all PASS |
+| **CPU correctness** | ✅ achieved — Blargg cpu_instrs 11/11, jsmolka arm/thumb all PASS, nestest + blargg cpu_test5 PASS on three backends |
 | **GBA homebrew test ROMs** | ✅ runs — including BIOS LLE |
 | **GBA commercial games** | ❌ most will fail — missing audio / parts of timer / save / input |
 | **GB commercial games** | ❌ almost all fail — missing sprite / window / sound / MBC3+ / input |
+| **NES commercial games** | ❌ most will fail — only Mapper000/001 + APU stub-only + no input |
 | **Interactivity** | ❌ pure CLI — outputs PNG when finished, no real-time window, no keyboard input |
 
 **Corresponds to README §2 "What this project is NOT"**: deliberately not
