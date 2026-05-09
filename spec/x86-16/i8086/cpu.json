@@ -75,7 +75,8 @@
       { "name": "ES", "width_bits": 16, "fields": {} },
       { "name": "CS", "width_bits": 16, "fields": {} },
       { "name": "SS", "width_bits": 16, "fields": {} },
-      { "name": "DS", "width_bits": 16, "fields": {} }
+      { "name": "DS", "width_bits": 16, "fields": {} },
+      { "name": "HALTED", "width_bits": 8, "fields": {} }
     ]
   },
 

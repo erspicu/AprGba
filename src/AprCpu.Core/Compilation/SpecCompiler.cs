@@ -67,6 +67,10 @@ public sealed unsafe class SpecCompiler
         {
             Mos6502Emitters.RegisterAll(registry);
         }
+        else if (string.Equals(family, "x86-16", StringComparison.OrdinalIgnoreCase))
+        {
+            X86_16Emitters.RegisterAll(registry);
+        }
 
         var decoderTables = new Dictionary<string, DecoderTable>(StringComparer.Ordinal);
         var functions = new Dictionary<string, LLVMValueRef>(StringComparer.Ordinal);
