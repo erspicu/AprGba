@@ -70,8 +70,30 @@ namespace AprNes.Cli.Memory
         // ReadByte/WriteByte hot path switches on. Region boundaries +
         // mirror masks come from spec; side-effect handlers stay C#
         // (PPU/APU/mapper logic doesn't reduce to declarative form).
+        //
+        // N4.3 — _regions is now build-time scaffolding only; hot-path
+        // dispatch uses _pageTable[addr >> PageShift] for O(1) lookup.
         private RegionEntry[] _regions = Array.Empty<RegionEntry>();
         private MachineSpec? _machineSpec;
+
+        // N4.3 — 32-byte page table for O(1) region dispatch. PageShift=5
+        // is the largest page size that doesn't split any NES region:
+        // smallest region (apu_io) is 32 bytes wide and starts at 0x4000,
+        // cart_prg starts at 0x4020 — both 32-byte aligned. 0x10000/32 =
+        // 2048 entries × 8 bytes = 16KB scratch, built once at boot.
+        private const int PageShift = 5;
+        private const int PageCount = 0x10000 >> PageShift;   // 2048
+
+        private PageEntry[] _pageTable = new PageEntry[PageCount];
+
+        private struct PageEntry
+        {
+            public RegionKind Kind;     // 1 byte (default Unmapped = 0)
+            public bool SmcNotify;      // 1 byte
+            public ushort Start;        // 2 bytes — region start (always < 0x10000)
+            public ushort MirrorMask;   // 2 bytes — 0 = no mirror
+            // 8-byte struct (1+1+2+2 + 2 padding); cache-line friendly.
+        }
 
         private struct RegionEntry
         {
@@ -141,6 +163,43 @@ namespace AprNes.Cli.Memory
             // linear-scan since N is small).
             list.Sort((a, b) => a.Start.CompareTo(b.Start));
             _regions = list.ToArray();
+
+            // N4.3 — populate the page table from the now-finalised region
+            // list. Done once at boot; hot path then dispatches in O(1).
+            BuildPageTable();
+        }
+
+        /// <summary>
+        /// N4.3 — populate <see cref="_pageTable"/> from <see cref="_regions"/>.
+        /// For each 32-byte page, find the region whose [Start, End) covers
+        /// the page's start address; copy that region's Kind / Start /
+        /// MirrorMask / SmcNotify into the page entry. Pages with no
+        /// covering region default to <see cref="RegionKind.Unmapped"/>.
+        /// </summary>
+        private void BuildPageTable()
+        {
+            // Reset to all-Unmapped (default for the struct).
+            Array.Clear(_pageTable, 0, _pageTable.Length);
+
+            for (int p = 0; p < PageCount; p++)
+            {
+                int pageAddr = p << PageShift;
+                for (int i = 0; i < _regions.Length; i++)
+                {
+                    ref var r = ref _regions[i];
+                    if (pageAddr >= r.Start && pageAddr < r.End)
+                    {
+                        _pageTable[p] = new PageEntry
+                        {
+                            Kind = r.Kind,
+                            SmcNotify = r.SmcNotify,
+                            Start = (ushort)r.Start,
+                            MirrorMask = r.MirrorMask,
+                        };
+                        break;
+                    }
+                }
+            }
         }
 
         private static RegionKind ClassifyRegion(MemoryRegion r)
@@ -257,28 +316,20 @@ namespace AprNes.Cli.Memory
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public byte ReadByte(ushort addr)
         {
-            // N3.2 — sorted region table dispatch; linear scan is fine for
-            // ~4-11 regions and keeps tight branch-predictor-friendly code.
-            // mirror_mask=0 means no mirror; use raw addr for handler call.
-            // mirror_mask>0 means handler sees `(addr & mirror_mask) | start`.
-            byte val = 0;
-            for (int i = 0; i < _regions.Length; i++)
+            // N4.3 — O(1) page-table dispatch. The page table was built from
+            // the spec at boot, so a single array index reaches the region
+            // descriptor. Hot path: 1 array load + 1 enum switch. Compared
+            // to N3.2's linear scan (~2.5 iters average for NES), this drops
+            // ~3 conditional branches per access.
+            ref var p = ref _pageTable[addr >> PageShift];
+            byte val = p.Kind switch
             {
-                ref var r = ref _regions[i];
-                if (addr < r.End)
-                {
-                    if (addr < r.Start) break;   // sorted; gap = unmapped
-                    val = r.Kind switch
-                    {
-                        RegionKind.Wram   => _wram[(addr - r.Start) & (r.MirrorMask != 0 ? r.MirrorMask : (ushort)0xFFFF)],
-                        RegionKind.PpuIo  => ReadPpu((ushort)(r.Start | (addr & (r.MirrorMask != 0 ? r.MirrorMask : (ushort)0x0007)))),
-                        RegionKind.ApuIo  => ReadApu(addr),
-                        RegionKind.CartIo => _mapper.CpuRead(addr),
-                        _                 => _cpubus,
-                    };
-                    break;
-                }
-            }
+                RegionKind.Wram   => _wram[(addr - p.Start) & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0xFFFF)],
+                RegionKind.PpuIo  => ReadPpu((ushort)(p.Start | (addr & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0x0007)))),
+                RegionKind.ApuIo  => ReadApu(addr),
+                RegionKind.CartIo => _mapper.CpuRead(addr),
+                _                 => _cpubus,
+            };
             _cpubus = val;
             return val;
         }
@@ -294,29 +345,22 @@ namespace AprNes.Cli.Memory
             // instr_template self-rewrite) to JIT cache invalidation.
             SmcWriteHook?.Invoke(addr);
 
-            for (int i = 0; i < _regions.Length; i++)
+            ref var p = ref _pageTable[addr >> PageShift];
+            switch (p.Kind)
             {
-                ref var r = ref _regions[i];
-                if (addr < r.End)
-                {
-                    if (addr < r.Start) break;
-                    switch (r.Kind)
-                    {
-                        case RegionKind.Wram:
-                            _wram[(addr - r.Start) & (r.MirrorMask != 0 ? r.MirrorMask : (ushort)0xFFFF)] = value;
-                            break;
-                        case RegionKind.PpuIo:
-                            WritePpu((ushort)(r.Start | (addr & (r.MirrorMask != 0 ? r.MirrorMask : (ushort)0x0007))), value);
-                            break;
-                        case RegionKind.ApuIo:
-                            WriteApu(addr, value);
-                            break;
-                        case RegionKind.CartIo:
-                            _mapper.CpuWrite(addr, value);
-                            break;
-                    }
+                case RegionKind.Wram:
+                    _wram[(addr - p.Start) & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0xFFFF)] = value;
                     break;
-                }
+                case RegionKind.PpuIo:
+                    WritePpu((ushort)(p.Start | (addr & (p.MirrorMask != 0 ? p.MirrorMask : (ushort)0x0007))), value);
+                    break;
+                case RegionKind.ApuIo:
+                    WriteApu(addr, value);
+                    break;
+                case RegionKind.CartIo:
+                    _mapper.CpuWrite(addr, value);
+                    break;
+                // RegionKind.Unmapped: drop write (open-bus latch already updated above)
             }
         }
 
