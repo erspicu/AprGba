@@ -1,6 +1,36 @@
 # Block-JIT state abstraction — alloca + mem2reg
 
-> **Status (2026-05-09)**：設計階段。現有狀況：LR35902 (GB) block-JIT
+> **Status (2026-05-09 update — N1 closeout)**：設計 + 實作 + 驗證全
+> 完工。三個 backend (legacy / json per-instr / json-block) 都通過
+> nestest + blargg cpu_test5；GB block-JIT 跑在新框架沒回歸。perf
+> measurement 在 `MD/performance/202605091559-nes-blockjit-vs-perinstr.md`。
+>
+> **B'.7 audit 結論（追記）**：
+> 既有的 `PipelinePcConstant` / `CurrentInstructionBaseAddress` 路徑
+> **不是 legacy** — 它們是 block-JIT-only 的「編譯期已知 PC」標記，
+> 啟用三個跟 alloca+mem2reg **正交** 的優化：
+>
+> 1. **編譯期 imm 抽取** (`FetchImmediate` Lr35902:798)：從 `ctx.Instruction`
+>    的 instruction word 直接 shift-extract imm8，**跳過 bus.ReadByte
+>    extern call**。block-JIT 一條 ALU+imm8 指令省 1 個 indirect call
+>    per instr。
+> 2. **WRAM/HRAM region inline** (`EmitWriteByteWithSyncAndRamFastPath`
+>    Lr35902:1141)：bus.WriteByte 在 block-JIT 模式下做 region 檢查 +
+>    direct GEP store，跳過 extern call 跟 sync-flag 機制（per-instr
+>    模式不需要這些）。
+> 3. **Sync-exit PC pre-write** (Lr35902:1345)：block-JIT 中段 ret 前
+>    把 next-PC 寫成 const store + PcWritten=1，讓 outer loop 接管。
+>
+> 這些都是 alloca+mem2reg **無法替代** 的 — alloca 處理 *state 存取*，
+> PipelinePcConstant 處理 *IR 形狀變體（什麼時候插 const、什麼時候
+> inline 區段）*。兩者並用才是完整的 block-JIT 工具箱。
+>
+> 因此 B'.7 結論：**保留 PipelinePcConstant 路徑作為 framework 一級
+> feature**，**不刪、不 deprecate**。Future generalisation 方向（加進
+> task #163）：把編譯期 imm 抽取也 port 到 Mos6502Emitters，省掉 NES
+> block-JIT 每個 imm fetch 的 bus extern call — 是 perf 優化、不是 cleanup。
+>
+> 設計階段（保留下方歷史內容）。現有狀況：LR35902 (GB) block-JIT
 > 已 ship；MOS6502 (NES) per-instr 已通過所有 ROM。試圖把 NES emitter
 > 接到 block-JIT 失敗 — 暴露出 emitter-author contract 的隱性化問題。
 >
