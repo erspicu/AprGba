@@ -591,6 +591,70 @@ public sealed class X86LegacyCpu : IX86CpuBackend
             }
         }
 
+        // ===== Shift / rotate groups — 0xD0/0xD1/0xD2/0xD3 =====
+        //   0xD0 r/m8, 1            (count = 1)
+        //   0xD1 r/m16, 1
+        //   0xD2 r/m8, CL
+        //   0xD3 r/m16, CL
+        // ModR/M reg field selects ShiftOp (0..7).
+        if (opcode is 0xD0 or 0xD1 or 0xD2 or 0xD3)
+        {
+            byte modrm = FetchByte();
+            var f = ModRmFields.Decode(modrm);
+            ushort disp = FetchDisplacement(f.DisplacementBytes);
+            var op = (X86Alu.ShiftOp)f.Reg;
+            byte count = (opcode is 0xD2 or 0xD3) ? _state.C.L : (byte)1;
+            bool isWord = (opcode == 0xD1 || opcode == 0xD3);
+
+            if (isWord)
+            {
+                ushort v = ReadRm16(f, disp, segOverride);
+                ushort r = X86Alu.Shift16(op, v, count, _state);
+                WriteRm16(f, disp, segOverride, r);
+            }
+            else
+            {
+                byte v = ReadRm8(f, disp, segOverride);
+                byte r = X86Alu.Shift8(op, v, count, _state);
+                WriteRm8(f, disp, segOverride, r);
+            }
+            return f.IsRegister ? 8 : 20;
+        }
+
+        // ===== Flag manipulation single-byte opcodes =====
+        switch (opcode)
+        {
+            case 0xF5: _state.FlagC = !_state.FlagC; return 2;     // CMC
+            case 0xF8: _state.FlagC = false;         return 2;     // CLC
+            case 0xF9: _state.FlagC = true;          return 2;     // STC
+            case 0xFA: _state.FlagI = false;         return 2;     // CLI
+            case 0xFB: _state.FlagI = true;          return 2;     // STI
+            case 0xFC: _state.FlagD = false;         return 2;     // CLD
+            case 0xFD: _state.FlagD = true;          return 2;     // STD
+            case 0x9E:                                              // SAHF
+            {
+                // AH bits 0/2/4/6/7 → CF/PF/AF/ZF/SF
+                byte ah = _state.A.H;
+                _state.FlagC = (ah & 0x01) != 0;
+                _state.FlagP = (ah & 0x04) != 0;
+                _state.FlagA = (ah & 0x10) != 0;
+                _state.FlagZ = (ah & 0x40) != 0;
+                _state.FlagS = (ah & 0x80) != 0;
+                return 4;
+            }
+            case 0x9F:                                              // LAHF
+            {
+                byte ah = 0x02;     // bit 1 always set in 8086 AH-flag image
+                if (_state.FlagC) ah |= 0x01;
+                if (_state.FlagP) ah |= 0x04;
+                if (_state.FlagA) ah |= 0x10;
+                if (_state.FlagZ) ah |= 0x40;
+                if (_state.FlagS) ah |= 0x80;
+                _state.A.H = ah;
+                return 4;
+            }
+        }
+
         // ===== Conditional jumps (Jcc rel8) — 0x70-0x7F =====
         //
         // Each opcode tests a flag predicate; if true, IP += sign-extended

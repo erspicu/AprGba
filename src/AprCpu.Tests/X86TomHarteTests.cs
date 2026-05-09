@@ -153,4 +153,40 @@ public class X86TomHarteTests
     [Fact] public void Tom_FF_3_CallFarInd()    => RunOpcodeOrSkip("FF.3");
     [Fact] public void Tom_FF_4_JmpNearInd()    => RunOpcodeOrSkip("FF.4");
     [Fact] public void Tom_FF_5_JmpFarInd()     => RunOpcodeOrSkip("FF.5");
+
+    // ===== 24.4.3 — flag manipulation + shift/rotate groups =====
+
+    [Fact] public void Tom_9E_Sahf()            => RunOpcodeOrSkip("9E");
+    [Fact] public void Tom_9F_Lahf()            => RunOpcodeOrSkip("9F");
+    [Fact] public void Tom_F5_Cmc()             => RunOpcodeOrSkip("F5");
+    [Fact] public void Tom_F8_Clc()             => RunOpcodeOrSkip("F8");
+    [Fact] public void Tom_F9_Stc()             => RunOpcodeOrSkip("F9");
+    [Fact] public void Tom_FA_Cli()             => RunOpcodeOrSkip("FA");
+    [Fact] public void Tom_FB_Sti()             => RunOpcodeOrSkip("FB");
+    [Fact] public void Tom_FC_Cld()             => RunOpcodeOrSkip("FC");
+    [Fact] public void Tom_FD_Std()             => RunOpcodeOrSkip("FD");
+
+    // D0/D1: shift/rotate r/m8/r/m16 by 1; reg field selects op (0..7).
+    // D*.6 = SETMO (undocumented 8086) — not implemented.
+    [Fact] public void Tom_D0_0_Rol_Rm8_1()     => RunOpcodeOrSkip("D0.0");
+    [Fact] public void Tom_D0_1_Ror_Rm8_1()     => RunOpcodeOrSkip("D0.1");
+    [Fact] public void Tom_D0_2_Rcl_Rm8_1()     => RunOpcodeOrSkip("D0.2");
+    [Fact] public void Tom_D0_3_Rcr_Rm8_1()     => RunOpcodeOrSkip("D0.3");
+    [Fact] public void Tom_D0_4_Shl_Rm8_1()     => RunOpcodeOrSkip("D0.4");
+    [Fact] public void Tom_D0_5_Shr_Rm8_1()     => RunOpcodeOrSkip("D0.5");
+    [Fact] public void Tom_D0_7_Sar_Rm8_1()     => RunOpcodeOrSkip("D0.7");
+    [Fact] public void Tom_D1_0_Rol_Rm16_1()    => RunOpcodeOrSkip("D1.0");
+    [Fact] public void Tom_D1_4_Shl_Rm16_1()    => RunOpcodeOrSkip("D1.4");
+    [Fact] public void Tom_D1_5_Shr_Rm16_1()    => RunOpcodeOrSkip("D1.5");
+    [Fact] public void Tom_D1_7_Sar_Rm16_1()    => RunOpcodeOrSkip("D1.7");
+
+    // D2/D3: shift/rotate r/m8/r/m16 by CL.
+    [Fact] public void Tom_D2_0_Rol_Rm8_Cl()    => RunOpcodeOrSkip("D2.0");
+    [Fact] public void Tom_D2_4_Shl_Rm8_Cl()    => RunOpcodeOrSkip("D2.4");
+    [Fact] public void Tom_D2_5_Shr_Rm8_Cl()    => RunOpcodeOrSkip("D2.5");
+    [Fact] public void Tom_D2_7_Sar_Rm8_Cl()    => RunOpcodeOrSkip("D2.7");
+    [Fact] public void Tom_D3_0_Rol_Rm16_Cl()   => RunOpcodeOrSkip("D3.0");
+    [Fact] public void Tom_D3_4_Shl_Rm16_Cl()   => RunOpcodeOrSkip("D3.4");
+    [Fact] public void Tom_D3_5_Shr_Rm16_Cl()   => RunOpcodeOrSkip("D3.5");
+    [Fact] public void Tom_D3_7_Sar_Rm16_Cl()   => RunOpcodeOrSkip("D3.7");
 }

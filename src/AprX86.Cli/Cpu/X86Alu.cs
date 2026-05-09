@@ -214,4 +214,200 @@ public static class X86Alu
         s.FlagC = savedCf;
         return r;
     }
+
+    // ---------------- Shift / rotate operations ----------------
+    //
+    // 8086 Group D0/D1/D2/D3 ModR/M reg field:
+    //   0 ROL    1 ROR    2 RCL    3 RCR
+    //   4 SHL    5 SHR    6 SAL (alias of SHL on 8086)    7 SAR
+    //
+    // 8086 quirk: count is NOT masked (vs 80186+ where count = count & 0x1F).
+    // Tom Harte SST data is for 8088 → expects unmasked count behaviour.
+    //
+    // Flag rules:
+    //   CF — last bit shifted/rotated out
+    //   OF — only meaningful for count == 1; for shifts: SF XOR (new bit
+    //        position 7/15) for SHL ROR (more details below); UNDEFINED for
+    //        count > 1 (we still set deterministically per Tom Harte expected)
+    //   For shifts (not rotates): SF/ZF/PF computed from result; AF undefined
+    //     (we don't update AF for these — matches majority of emulators)
+    //   For rotates: SF/ZF/PF/AF UNCHANGED; only CF + OF.
+    //
+    // Note: when count == 0, NO flags change (early-return path).
+
+    public enum ShiftOp : byte
+    {
+        Rol = 0, Ror = 1, Rcl = 2, Rcr = 3,
+        Shl = 4, Shr = 5, Sal = 6, Sar = 7,    // Sal aliases Shl
+    }
+
+    public static byte Shift8(ShiftOp op, byte a, byte count, X86State s)
+    {
+        if (count == 0) return a;
+        ushort v = a;
+        bool cf = s.FlagC;
+
+        for (int i = 0; i < count; i++)
+        {
+            switch (op)
+            {
+                case ShiftOp.Rol:
+                    cf = (v & 0x80) != 0;
+                    v = (byte)((v << 1) | (cf ? 1 : 0));
+                    break;
+                case ShiftOp.Ror:
+                    cf = (v & 0x01) != 0;
+                    v = (byte)((v >> 1) | (cf ? 0x80 : 0));
+                    break;
+                case ShiftOp.Rcl:
+                {
+                    bool newCf = (v & 0x80) != 0;
+                    v = (byte)((v << 1) | (cf ? 1 : 0));
+                    cf = newCf;
+                    break;
+                }
+                case ShiftOp.Rcr:
+                {
+                    bool newCf = (v & 0x01) != 0;
+                    v = (byte)((v >> 1) | (cf ? 0x80 : 0));
+                    cf = newCf;
+                    break;
+                }
+                case ShiftOp.Shl:
+                case ShiftOp.Sal:
+                    cf = (v & 0x80) != 0;
+                    v = (byte)(v << 1);
+                    break;
+                case ShiftOp.Shr:
+                    cf = (v & 0x01) != 0;
+                    v = (byte)(v >> 1);
+                    break;
+                case ShiftOp.Sar:
+                    cf = (v & 0x01) != 0;
+                    v = (byte)((sbyte)v >> 1);
+                    break;
+            }
+        }
+
+        s.FlagC = cf;
+
+        // OF rule — Intel manual says "undefined for count > 1" but real
+        // silicon 8088 (per Tom Harte SST v2) computes deterministically:
+        //   ROL/SHL/SAL/RCL : OF = MSB(result) XOR CF        (all counts)
+        //   ROR/RCR         : OF = MSB(result) XOR MSB-1(result) (all counts)
+        //   SHR             : OF = MSB(original) when count == 1; OF = 0 otherwise
+        //   SAR             : OF = 0  (always)
+        {
+            byte r = (byte)v;
+            s.FlagO = op switch
+            {
+                ShiftOp.Rol or ShiftOp.Shl or ShiftOp.Sal or ShiftOp.Rcl
+                    => ((r & 0x80) != 0) ^ cf,
+                ShiftOp.Ror or ShiftOp.Rcr
+                    => ((r & 0x80) != 0) ^ ((r & 0x40) != 0),
+                ShiftOp.Shr
+                    => count == 1 ? ((a & 0x80) != 0) : false,
+                ShiftOp.Sar
+                    => false,
+                _ => s.FlagO,
+            };
+        }
+
+        // For shifts (not rotates), update SF/ZF/PF from result. AF rule
+        // differs per op per real-silicon 8088 (Tom Harte SST v2):
+        //   SHL/SAL: AF = bit 4 of result
+        //   SHR/SAR: AF = 0
+        //   Intel manual lumps these as "undefined" but hardware is
+        //   deterministic — and the SST exposes the deterministic value.
+        if (op == ShiftOp.Shl || op == ShiftOp.Sal || op == ShiftOp.Shr || op == ShiftOp.Sar)
+        {
+            byte r = (byte)v;
+            s.FlagS = (r & 0x80) != 0;
+            s.FlagZ = r == 0;
+            s.FlagP = ParityEven(r);
+            s.FlagA = (op == ShiftOp.Shl || op == ShiftOp.Sal)
+                ? (r & 0x10) != 0
+                : false;
+        }
+        // Rotates (ROL/ROR/RCL/RCR) leave SF/ZF/PF/AF UNCHANGED.
+
+        return (byte)v;
+    }
+
+    public static ushort Shift16(ShiftOp op, ushort a, byte count, X86State s)
+    {
+        if (count == 0) return a;
+        uint v = a;
+        bool cf = s.FlagC;
+
+        for (int i = 0; i < count; i++)
+        {
+            switch (op)
+            {
+                case ShiftOp.Rol:
+                    cf = (v & 0x8000) != 0;
+                    v = (ushort)((v << 1) | (cf ? 1U : 0));
+                    break;
+                case ShiftOp.Ror:
+                    cf = (v & 0x0001) != 0;
+                    v = (ushort)((v >> 1) | (cf ? 0x8000U : 0));
+                    break;
+                case ShiftOp.Rcl:
+                {
+                    bool newCf = (v & 0x8000) != 0;
+                    v = (ushort)((v << 1) | (cf ? 1U : 0));
+                    cf = newCf;
+                    break;
+                }
+                case ShiftOp.Rcr:
+                {
+                    bool newCf = (v & 0x0001) != 0;
+                    v = (ushort)((v >> 1) | (cf ? 0x8000U : 0));
+                    cf = newCf;
+                    break;
+                }
+                case ShiftOp.Shl:
+                case ShiftOp.Sal:
+                    cf = (v & 0x8000) != 0;
+                    v = (ushort)(v << 1);
+                    break;
+                case ShiftOp.Shr:
+                    cf = (v & 0x0001) != 0;
+                    v = (ushort)(v >> 1);
+                    break;
+                case ShiftOp.Sar:
+                    cf = (v & 0x0001) != 0;
+                    v = (ushort)((short)v >> 1);
+                    break;
+            }
+        }
+
+        s.FlagC = cf;
+        {
+            ushort r = (ushort)v;
+            s.FlagO = op switch
+            {
+                ShiftOp.Rol or ShiftOp.Shl or ShiftOp.Sal or ShiftOp.Rcl
+                    => ((r & 0x8000) != 0) ^ cf,
+                ShiftOp.Ror or ShiftOp.Rcr
+                    => ((r & 0x8000) != 0) ^ ((r & 0x4000) != 0),
+                ShiftOp.Shr
+                    => count == 1 ? ((a & 0x8000) != 0) : false,
+                ShiftOp.Sar
+                    => false,
+                _ => s.FlagO,
+            };
+        }
+        if (op == ShiftOp.Shl || op == ShiftOp.Sal || op == ShiftOp.Shr || op == ShiftOp.Sar)
+        {
+            ushort r = (ushort)v;
+            s.FlagS = (r & 0x8000) != 0;
+            s.FlagZ = r == 0;
+            s.FlagP = ParityEven((byte)r);
+            s.FlagA = (op == ShiftOp.Shl || op == ShiftOp.Sal)
+                ? (r & 0x10) != 0
+                : false;
+        }
+        return (ushort)v;
+    }
 }
