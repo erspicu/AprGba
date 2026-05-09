@@ -291,6 +291,11 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 
 ## 8. Phase plan
 
+> **目前累計**（2026-05-10）：21 個 commits（24.0 → 24.5：13 + 24.6.1 →
+> 24.6.5c：8）；T1 baseline 697/697 全綠；JSON-driven backend 已覆蓋 28
+> opcodes（NOP + HLT + B0-BF MOV r,imm 16 個 + 88-8B MOV r/m↔r 4 個，
+> 全 ModR/M mod×rm 組合）。剩 24.6.5d–g + 24.6.6–9 + 24.7 + 24.8。
+
 | Phase | 內容 | 成果 | 狀態 | Commit / 紀錄 |
 |---|---|---|---|---|
 | **24.0** | 本 doc 落地 | DRAFT → APPROVED | ✅ | `eb82331` |
@@ -315,14 +320,14 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | 24.6.5a | MOV r, imm (B0-BF) — 16 opcodes through field-dispatched write_reg{8,16} + fetch_imm{8,16} | 5 tests | ✅ | `1e992a3` |
 | 24.6.5b | MOV r/m, r 與 r, r/m (88-8B) — fetch_modrm + read_reg{8,16}_field with mod=11 register-direct only | 5 tests | ✅ | `06d9dab` |
 | 24.6.5c | Memory ModR/M — `x86_modrm_compute_ea` (full 8086 EA grammar：BX+SI/BP+disp/disp16/etc.) + `x86_modrm_load/store_w{8,16}` mod-aware emitters | 7 mem tests | ✅ | `384eca5` |
-| 24.6.5d | Segment override prefixes (0x26 ES / 0x2E CS / 0x36 SS / 0x3E DS) | — | ⏳ | — |
-| 24.6.5e | MOV r/m, imm (C6/C7) + MOV moffs (A0-A3) + MOV sreg/r,r (8C/8E) | — | ⏳ | — |
-| 24.6.5f | PUSH/POP r16 (50-5F) + PUSH/POP sreg + PUSHF/POPF + PUSH r/m (FF /6) + POP r/m (8F) | — | ⏳ | — |
-| 24.6.5g | XCHG r/m,r (86/87) + XCHG AX,r16 (90-97) + LEA (8D) + LDS/LES (C4/C5) | — | ⏳ | — |
-| 24.6.6 | ALU group — ADD/OR/ADC/SBB/AND/SUB/XOR/CMP across 6 forms × 8-bit/16-bit + 9-flag IR computation (CF/PF/AF/ZF/SF/OF rules in LLVM IR mirroring `X86Alu.cs`) | Tom Harte SST 8088 v2 全綠子集 | ⏳ | — |
-| 24.6.7 | Control flow (JMP/Jcc/CALL/RET/LOOP/JCXZ) + shift/rotate (D0-D3) + string ops + REP prefix + INT/IRET + BCD + IO | Tom Harte 1.31M 全綠 through json backend | ⏳ | — |
+| 24.6.5d | Segment override prefixes (0x26 ES / 0x2E CS / 0x36 SS / 0x3E DS) | EA emitter 接受 ea_seg override；4 prefix opcodes | ⏳ | — |
+| 24.6.5e | MOV r/m, imm (C6/C7) + MOV moffs (A0-A3) + MOV sreg/r,r (8C/8E) | 7 opcodes；reuses ModR/M + segment-reg slot routing | ⏳ | — |
+| 24.6.5f | PUSH/POP r16 (50-5F) + PUSH/POP sreg + PUSHF/POPF + PUSH r/m (FF /6) + POP r/m (8F) | 22 opcodes；SS:SP push/pop helper + 8088 PUSH SP quirk | ⏳ | — |
+| 24.6.5g | XCHG r/m,r (86/87) + XCHG AX,r16 (90-97) + LEA (8D) + LDS/LES (C4/C5) | 12 opcodes；LEA 用 EA 但不 load | ⏳ | — |
+| 24.6.6 | ALU group — ADD/OR/ADC/SBB/AND/SUB/XOR/CMP across 6 forms × 8-bit/16-bit + 9-flag IR computation (CF/PF/AF/ZF/SF/OF rules in LLVM IR mirroring `X86Alu.cs`) | ~80 opcodes；Tom Harte SST 8088 v2 ALU 子集全綠 | ⏳ | — |
+| 24.6.7 | Control flow (JMP/Jcc/CALL/RET/LOOP/JCXZ) + shift/rotate (D0-D3) + string ops + REP prefix + INT/IRET + BCD + IO | ~120 opcodes；Tom Harte 1.31M 全綠 through json backend | ⏳ | — |
 | 24.6.8 | Block-JIT mode — alloca + mem2reg + IR-level cycle budget (à la N1.B' for NES) | 三 backend (legacy / json-instr / json-block) 同步 | ⏳ | — |
-| 24.6.9 | Re-run 24.5 demos through json-block backend | result/x86-16/jit-*.png 與 legacy pixel-identical | ⏳ | — |
+| 24.6.9 | Re-run 24.5 demos through json-block backend | result/x86-16/jit-*.png 與 legacy pixel-identical 6 張新截圖 | ⏳ | — |
 | **24.6b** | (optional) Lockstep diff legacy vs Apr86（限 .com 程式範圍） | Apr86 reference cross-check | ⏳ | — |
 | **24.7** | 80186 spec — 透過 inheritance (#23) | ENTER/LEAVE demo + result/x86-16/enter-leave-i80186.png | ⏳ | — |
 | **24.8** | 80286 real-mode + protected-mode demos | 4 顆 CPU 全綠 + result/x86-16/protmode-msr-i80286.png | ⏳ | — |
