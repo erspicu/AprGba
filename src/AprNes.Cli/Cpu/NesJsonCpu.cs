@@ -107,6 +107,13 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
     // Step() call so the harness sees the +7 reset / NMI prologue.
     private int _interruptCycle;
 
+    // N3.1 — interrupt vectors loaded from spec/machines/nes-ntsc.json.
+    // Defaults match the canonical 6502 layout if MachineSpec lookup fails
+    // (so the per-instr backend keeps working without a machine spec).
+    private readonly ushort _nmiVector;
+    private readonly ushort _resetVector;
+    private readonly ushort _irqVector;
+
     public NesJsonCpu(NesMemoryBus bus, bool enableBlockJit = false)
     {
         _bus = bus ?? throw new ArgumentNullException(nameof(bus));
@@ -174,6 +181,33 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
                 prefixSubDecoders: null);   // 6502 has no prefix bytes
             _blockCache = new BlockCache();
         }
+
+        // N3.1 — load interrupt vectors from spec/machines/nes-ntsc.json
+        // when present. Defaults match canonical 6502 layout for backwards-
+        // compat (test harnesses that don't drop a machine spec still work).
+        var machineSpec = TryLoadMachineSpec("nes-ntsc");
+        _nmiVector   = LookupVector(machineSpec, "nmi",   defaultAddr: 0xFFFA);
+        _resetVector = LookupVector(machineSpec, "reset", defaultAddr: 0xFFFC);
+        _irqVector   = LookupVector(machineSpec, "irq",   defaultAddr: 0xFFFE);
+    }
+
+    private static MachineSpec? TryLoadMachineSpec(string name)
+    {
+        var dir = AppContext.BaseDirectory;
+        for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
+        {
+            var probe = Path.Combine(d.FullName, "spec", "machines", $"{name}.json");
+            if (File.Exists(probe)) return MachineSpecLoader.LoadFromFile(probe);
+        }
+        var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "machines", $"{name}.json");
+        return File.Exists(cwdProbe) ? MachineSpecLoader.LoadFromFile(cwdProbe) : null;
+    }
+
+    private static ushort LookupVector(MachineSpec? spec, string name, ushort defaultAddr)
+    {
+        if (spec is not null && spec.InterruptVectors.TryGetValue(name, out var addr))
+            return (ushort)addr;
+        return defaultAddr;
     }
 
     private static string LocateSpec()
@@ -208,8 +242,8 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
         _activeBus = _bus;
         byte sp = (byte)(_state[_spOff] - 3);
         _state[_spOff] = sp;
-        ushort lo = _bus.ReadByte(0xFFFC);
-        ushort hi = _bus.ReadByte(0xFFFD);
+        ushort lo = _bus.ReadByte(_resetVector);
+        ushort hi = _bus.ReadByte((ushort)(_resetVector + 1));
         WriteU16(_pcOff, (ushort)((hi << 8) | lo));
         // Force I=1 in P, leave other bits.
         _state[_pOff] = (byte)(_state[_pOff] | 0x04);
@@ -494,8 +528,8 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
         _bus.WriteByte((ushort)(0x100 | sp), pushedFlags);          sp--;
         _state[_spOff] = sp;
 
-        ushort lo = _bus.ReadByte(0xFFFA);
-        ushort hi = _bus.ReadByte(0xFFFB);
+        ushort lo = _bus.ReadByte(_nmiVector);
+        ushort hi = _bus.ReadByte((ushort)(_nmiVector + 1));
         WriteU16(_pcOff, (ushort)((hi << 8) | lo));
         _state[_pOff] = (byte)(_state[_pOff] | 0x04);   // I=1
         _interruptCycle = 7;
