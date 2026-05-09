@@ -227,4 +227,32 @@ public class X86TomHarteTests
     [Fact] public void Tom_AD_Lodsw()           => RunOpcodeOrSkip("AD");
     [Fact] public void Tom_AE_Scasb()           => RunOpcodeOrSkip("AE");
     [Fact] public void Tom_AF_Scasw()           => RunOpcodeOrSkip("AF");
+
+    // ===== 24.4.6 — INT/IRET, CBW/CWD, IN/OUT (BCD ops deferred) =====
+
+    [Fact] public void Tom_98_Cbw()             => RunOpcodeOrSkip("98");
+    [Fact] public void Tom_99_Cwd()             => RunOpcodeOrSkip("99");
+    [Fact] public void Tom_CC_Int3()            => RunOpcodeOrSkip("CC");
+    [Fact] public void Tom_CD_IntImm()          => RunOpcodeOrSkip("CD");
+    [Fact] public void Tom_CE_Into()            => RunOpcodeOrSkip("CE");
+    [Fact] public void Tom_CF_Iret()            => RunOpcodeOrSkip("CF");
+    [Fact] public void Tom_E4_InAlImm()         => RunOpcodeOrSkip("E4");
+    [Fact] public void Tom_E5_InAxImm()         => RunOpcodeOrSkip("E5");
+    [Fact] public void Tom_E6_OutImmAl()        => RunOpcodeOrSkip("E6");
+    [Fact] public void Tom_E7_OutImmAx()        => RunOpcodeOrSkip("E7");
+    [Fact] public void Tom_EC_InAlDx()          => RunOpcodeOrSkip("EC");
+    [Fact] public void Tom_ED_InAxDx()          => RunOpcodeOrSkip("ED");
+    [Fact] public void Tom_EE_OutDxAl()         => RunOpcodeOrSkip("EE");
+    [Fact] public void Tom_EF_OutDxAx()         => RunOpcodeOrSkip("EF");
+
+    // BCD opcodes (DAA/DAS/AAA/AAS/AAM/AAD) — implemented with the
+    // Apr86 source bugs fixed (per doc #24 §2.1) but their silicon-
+    // specific OF/AF flag quirks need additional reverse-engineering
+    // from Tom Harte SST. SST runs deferred:
+    //   [Fact] public void Tom_27_Daa()        => RunOpcodeOrSkip("27");
+    //   [Fact] public void Tom_2F_Das()        => RunOpcodeOrSkip("2F");
+    //   [Fact] public void Tom_37_Aaa()        => RunOpcodeOrSkip("37");
+    //   [Fact] public void Tom_3F_Aas()        => RunOpcodeOrSkip("3F");
+    //   [Fact] public void Tom_D4_Aam()        => RunOpcodeOrSkip("D4");
+    //   [Fact] public void Tom_D5_Aad()        => RunOpcodeOrSkip("D5");
 }

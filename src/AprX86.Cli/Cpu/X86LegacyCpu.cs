@@ -216,12 +216,11 @@ public sealed class X86LegacyCpu : IX86CpuBackend
                 _halted = true;
                 return 2;
 
-            case 0xE6:    // OUT imm8, AL — magic-port stub
+            case 0xE6:    // OUT imm8, AL — uses port-IO hook
             {
                 byte port = FetchByte();
-                if      (port == 0xE9) Console.Write((char)_state.A.L);
-                else if (port == 0xF4) _halted = true;
-                return 8;
+                WriteIoPort8(port, _state.A.L);
+                return 10;
             }
 
             case 0xEA:    // JMP far ptr16:16
@@ -602,6 +601,92 @@ public sealed class X86LegacyCpu : IX86CpuBackend
                 default:
                     throw new NotImplementedException($"0xFF /{f.Reg} undefined on 8086");
             }
+        }
+
+        // ===== INT/IRET/INTO =====
+        if (opcode == 0xCD)        // INT imm8
+        {
+            byte vec = FetchByte();
+            Interrupt(vec);
+            return 51;
+        }
+        if (opcode == 0xCC)        // INT 3
+        {
+            Interrupt(3);
+            return 52;
+        }
+        if (opcode == 0xCE)        // INTO — INT 4 if OF=1
+        {
+            if (_state.FlagO) { Interrupt(4); return 53; }
+            return 4;
+        }
+        if (opcode == 0xCF)        // IRET
+        {
+            _state.IP = PopWord();
+            _state.CS = PopWord();
+            _state.SetFlags(PopWord());
+            return 24;
+        }
+
+        // ===== BCD adjustment opcodes =====
+        if (opcode is 0x27 or 0x2F or 0x37 or 0x3F or 0xD4 or 0xD5)
+        {
+            return ExecuteBcdOp(opcode);
+        }
+
+        // ===== CBW / CWD =====
+        if (opcode == 0x98)        // CBW — sign-extend AL → AX
+        {
+            _state.A.X = (ushort)(short)(sbyte)_state.A.L;
+            return 2;
+        }
+        if (opcode == 0x99)        // CWD — sign-extend AX → DX:AX
+        {
+            _state.D.X = (_state.A.X & 0x8000) != 0 ? (ushort)0xFFFF : (ushort)0;
+            return 5;
+        }
+
+        // ===== IN / OUT (port I/O) =====
+        // Real 8086 PIC/PIT/etc not modelled — use OUT 0xE9 / 0xF4 magic
+        // ports as before; other ports return open-bus 0xFF/0xFFFF on read,
+        // silently drop on write.
+        if (opcode == 0xE4)        // IN AL, imm8
+        {
+            byte port = FetchByte();
+            _state.A.L = ReadIoPort8(port);
+            return 10;
+        }
+        if (opcode == 0xE5)        // IN AX, imm8
+        {
+            byte port = FetchByte();
+            _state.A.X = ReadIoPort16(port);
+            return 10;
+        }
+        if (opcode == 0xE7)        // OUT imm8, AX
+        {
+            byte port = FetchByte();
+            WriteIoPort16(port, _state.A.X);
+            return 10;
+        }
+        if (opcode == 0xEC)        // IN AL, DX
+        {
+            _state.A.L = ReadIoPort8(_state.D.X);
+            return 8;
+        }
+        if (opcode == 0xED)        // IN AX, DX
+        {
+            _state.A.X = ReadIoPort16(_state.D.X);
+            return 8;
+        }
+        if (opcode == 0xEE)        // OUT DX, AL
+        {
+            WriteIoPort8(_state.D.X, _state.A.L);
+            return 8;
+        }
+        if (opcode == 0xEF)        // OUT DX, AX
+        {
+            WriteIoPort16(_state.D.X, _state.A.X);
+            return 8;
         }
 
         // ===== TEST AL, imm8 / TEST AX, imm16 / TEST r/m, r =====
@@ -1151,6 +1236,159 @@ public sealed class X86LegacyCpu : IX86CpuBackend
         while (rep.HasValue);
 
         return cycles;
+    }
+
+    // ---------------- BCD adjustments ----------------
+    //
+    // 8086's BCD-adjust ops fix up AL after binary arithmetic so AL
+    // contains a valid packed/unpacked BCD digit pair. Apr86's CPU.cs
+    // had the AAM/AAD imm8 ignored bug (per doc #24 §2.1) — these are
+    // the correct implementations.
+
+    private int ExecuteBcdOp(byte opcode)
+    {
+        switch (opcode)
+        {
+            case 0x37:    // AAA
+            {
+                bool adjust = (_state.A.L & 0x0F) > 9 || _state.FlagA;
+                if (adjust)
+                {
+                    _state.A.L = (byte)((_state.A.L + 6) & 0x0F);
+                    _state.A.H = (byte)(_state.A.H + 1);
+                    _state.FlagA = true;
+                    _state.FlagC = true;
+                }
+                else
+                {
+                    _state.A.L = (byte)(_state.A.L & 0x0F);
+                    _state.FlagA = false;
+                    _state.FlagC = false;
+                }
+                _state.FlagS = (_state.A.L & 0x80) != 0;
+                _state.FlagZ = _state.A.L == 0;
+                _state.FlagP = X86Alu.ParityEven(_state.A.L);
+                return 4;
+            }
+            case 0x3F:    // AAS
+            {
+                bool adjust = (_state.A.L & 0x0F) > 9 || _state.FlagA;
+                if (adjust)
+                {
+                    _state.A.L = (byte)((_state.A.L - 6) & 0x0F);
+                    _state.A.H = (byte)(_state.A.H - 1);
+                    _state.FlagA = true;
+                    _state.FlagC = true;
+                }
+                else
+                {
+                    _state.A.L = (byte)(_state.A.L & 0x0F);
+                    _state.FlagA = false;
+                    _state.FlagC = false;
+                }
+                _state.FlagS = (_state.A.L & 0x80) != 0;
+                _state.FlagZ = _state.A.L == 0;
+                _state.FlagP = X86Alu.ParityEven(_state.A.L);
+                return 4;
+            }
+            case 0x27:    // DAA
+            {
+                byte oldAl = _state.A.L;
+                bool oldCf = _state.FlagC;
+                _state.FlagC = false;
+                if ((oldAl & 0x0F) > 9 || _state.FlagA)
+                {
+                    int t = oldAl + 6;
+                    _state.A.L = (byte)t;
+                    _state.FlagC = oldCf || (t > 0xFF);
+                    _state.FlagA = true;
+                }
+                else
+                {
+                    _state.FlagA = false;
+                }
+                if (oldAl > 0x99 || oldCf)
+                {
+                    _state.A.L = (byte)(_state.A.L + 0x60);
+                    _state.FlagC = true;
+                }
+                _state.FlagS = (_state.A.L & 0x80) != 0;
+                _state.FlagZ = _state.A.L == 0;
+                _state.FlagP = X86Alu.ParityEven(_state.A.L);
+                return 4;
+            }
+            case 0x2F:    // DAS
+            {
+                byte oldAl = _state.A.L;
+                bool oldCf = _state.FlagC;
+                _state.FlagC = false;
+                if ((oldAl & 0x0F) > 9 || _state.FlagA)
+                {
+                    int t = oldAl - 6;
+                    _state.A.L = (byte)t;
+                    _state.FlagC = oldCf || (t < 0);
+                    _state.FlagA = true;
+                }
+                else
+                {
+                    _state.FlagA = false;
+                }
+                if (oldAl > 0x99 || oldCf)
+                {
+                    _state.A.L = (byte)(_state.A.L - 0x60);
+                    _state.FlagC = true;
+                }
+                _state.FlagS = (_state.A.L & 0x80) != 0;
+                _state.FlagZ = _state.A.L == 0;
+                _state.FlagP = X86Alu.ParityEven(_state.A.L);
+                return 4;
+            }
+            case 0xD4:    // AAM imm8 — ah = al / imm; al = al % imm
+            {
+                byte imm = FetchByte();    // Apr86 ignored this — doc #24 §2.1 bug #1
+                if (imm == 0) { Interrupt(0); return 50; }
+                _state.A.H = (byte)(_state.A.L / imm);
+                _state.A.L = (byte)(_state.A.L % imm);
+                _state.FlagS = (_state.A.L & 0x80) != 0;
+                _state.FlagZ = _state.A.L == 0;
+                _state.FlagP = X86Alu.ParityEven(_state.A.L);
+                return 83;
+            }
+            case 0xD5:    // AAD imm8 — al = (ah*imm + al) & 0xFF; ah = 0
+            {
+                byte imm = FetchByte();    // Apr86 ignored this — bug #2
+                int t = _state.A.H * imm + _state.A.L;
+                _state.A.L = (byte)t;
+                _state.A.H = 0;
+                _state.FlagS = (_state.A.L & 0x80) != 0;     // Apr86 used 0x8000 — bug #3
+                _state.FlagZ = _state.A.L == 0;
+                _state.FlagP = X86Alu.ParityEven(_state.A.L);
+                return 60;
+            }
+            default:
+                throw new NotImplementedException($"BCD opcode 0x{opcode:X2} not handled");
+        }
+    }
+
+    // ---------------- I/O port hooks ----------------
+    //
+    // No real PIC/PIT/8237 modelling. Magic ports retained for
+    // host-debug bridging (Bochs 0xE9 + qemu isa-debug-exit 0xF4); all
+    // other ports return open-bus and silently drop writes.
+
+    private byte ReadIoPort8(ushort port) => 0xFF;
+    private ushort ReadIoPort16(ushort port) => 0xFFFF;
+
+    private void WriteIoPort8(ushort port, byte value)
+    {
+        if (port == 0xE9) Console.Write((char)value);
+        else if (port == 0xF4) _halted = true;
+        // else: dropped
+    }
+
+    private void WriteIoPort16(ushort port, ushort value)
+    {
+        WriteIoPort8(port, (byte)value);
     }
 
     /// <summary>
