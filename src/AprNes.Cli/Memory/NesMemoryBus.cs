@@ -145,18 +145,23 @@ namespace AprNes.Cli.Memory
 
         private static RegionKind ClassifyRegion(MemoryRegion r)
         {
-            // Map MachineSpec metadata to dispatch kind. Order matters —
-            // side_effects[0] is the primary subsystem; we route based on
-            // the first matching name.
-            foreach (var s in r.SideEffects)
+            // N4.2 — prefer v2 explicit Handler field over v1 side_effects[0]
+            // implicit-routing magic. Resolve via the bus's handler registry
+            // (which currently maps known names to internal RegionKind enum
+            // values; future N4.3 will switch to delegate-based dispatch).
+            var routingKey = r.Handler ?? (r.SideEffects.Count > 0 ? r.SideEffects[0] : null);
+            switch (routingKey)
             {
-                if (s == "ppu") return RegionKind.PpuIo;
-                if (s == "apu" || s == "oam_dma" || s == "joypad") return RegionKind.ApuIo;
-                if (s == "mapper") return RegionKind.CartIo;
+                case "wram":   return RegionKind.Wram;
+                case "ppu":    return RegionKind.PpuIo;
+                case "apu":
+                case "oam_dma":
+                case "joypad": return RegionKind.ApuIo;
+                case "mapper": return RegionKind.CartIo;
             }
-            // No side_effects → infer from type. ram → Wram (NES has only one
-            // RAM region in the CPU bus); rom → CartIo (mapper handles ROM
-            // via PRG bank lookup).
+            // No handler / known routing → infer from type. ram → Wram (NES
+            // has only one RAM region in the CPU bus); rom → CartIo (mapper
+            // handles ROM via PRG bank lookup).
             return r.Kind switch
             {
                 MemoryRegionKind.Ram => RegionKind.Wram,
@@ -164,6 +169,31 @@ namespace AprNes.Cli.Memory
                 _ => RegionKind.Unmapped,
             };
         }
+
+        /// <summary>
+        /// N4.2 — handler registry stub. Future N4.3 will use this to
+        /// drive delegate-based dispatch; for now the bus internally
+        /// routes via the RegionKind enum + switch. Components can call
+        /// <see cref="RegisterHandler"/> at boot to declare their
+        /// intent, but those registrations are only consulted by the
+        /// upcoming page-table dispatch.
+        /// </summary>
+        private readonly Dictionary<string, (Func<ushort, byte> Reader, Action<ushort, byte> Writer)> _handlers
+            = new(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Register a named read/write handler pair. Components like NesPpu,
+        /// NesApu, or a custom mapper subsystem call this at boot to declare
+        /// the routing key referenced from <c>spec/machines/*.json</c>'s
+        /// <c>handler</c> field.
+        /// </summary>
+        public void RegisterHandler(string name, Func<ushort, byte> reader, Action<ushort, byte> writer)
+        {
+            _handlers[name] = (reader, writer);
+        }
+
+        /// <summary>True if a handler with this name is registered.</summary>
+        public bool HasHandler(string name) => _handlers.ContainsKey(name);
 
         private static MachineSpec? TryLoadMachineSpec(string name)
         {
