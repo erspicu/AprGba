@@ -126,7 +126,8 @@ multi-week effort for 27b.
 | 27.10d wave 6 — segIdx tracking, unified cache lookup | ✅ | `c765352` | 2026-05-11 |
 | 27.10d wave 7 — MOV sreg updates cache (real-mode shape) | ✅ | `3851757` | 2026-05-11 |
 | 27.10d wave 8 — Descriptor-fetch path in MOV sreg (PE=1) | ✅ | `fb45845` | 2026-05-11 |
-| 27.11 New exception model | ⏳ pending | — | — |
+| 27.11a Exception state slots (EXC_PENDING/VECTOR/ERROR) | ✅ | `7249bb8` | 2026-05-11 |
+| 27.11b+ Exception model emitter wiring | ⏳ pending | — | — |
 | 27.12 TSS task switching | ⏳ pending | — | — |
 | 27.13a Protected-mode entry demo + gap surfaced | ✅ partial | `c5f51a0` | 2026-05-11 |
 | 27.13b Migrate ea_seg consumers → ea_base (closes the gap) | ✅ | `ed4b2d4` | 2026-05-11 |
