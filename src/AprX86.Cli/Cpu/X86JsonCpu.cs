@@ -229,17 +229,16 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
 
         if (Halted) return 0;
 
-        // 24.6.5d — segment override prefix loop. 8086 has 4 single-byte
-        // segment override prefixes (0x26 ES / 0x2E CS / 0x36 SS / 0x3E DS)
-        // that affect the default segment used by the immediately following
-        // instruction's memory operand. The C# dispatcher consumes them
-        // here, sets the SEG_OVERRIDE state slot (0..3 = ES/CS/SS/DS;
-        // 0xFF = none), and clears it after the next non-prefix opcode
-        // completes. Last-prefix-wins matches 8086 silicon: a sequence
-        // like 0x26 0x36 keeps SS as the active override.
+        // Prefix dispatch — consumes 0x26/0x2E/0x36/0x3E (segment override,
+        // 24.6.5d) and 0xF2/0xF3 (REP/REPE/REPNE, 24.6.7c2). All prefixes
+        // are single-byte; we accumulate any combination until we hit a
+        // real opcode. Defensive cap of 15 bytes (= 8086 max instruction
+        // length) guards against malformed input.
         ushort cs = ReadU16(_csOff);
         ushort ip = ReadU16(_ipOff);
         int prefixesConsumed = 0;
+        bool repe = false;     // 0xF3 seen
+        bool repne = false;    // 0xF2 seen
         byte opcode;
         while (true)
         {
@@ -253,13 +252,26 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
                 0x3E => (byte?)3,   // DS
                 _    => null,
             };
-            if (overrideId is null) break;
-            _state[_segOverrideOff] = overrideId.Value;
+            if (overrideId is not null)
+            {
+                _state[_segOverrideOff] = overrideId.Value;
+            }
+            else if (opcode == 0xF3)
+            {
+                repe = true;
+                repne = false;     // last-prefix-wins
+            }
+            else if (opcode == 0xF2)
+            {
+                repne = true;
+                repe = false;
+            }
+            else
+            {
+                break;
+            }
             ip = (ushort)(ip + 1);
             prefixesConsumed++;
-            // Defensive cap — shouldn't ever exceed a few prefixes in real
-            // code; bail out on absurd runs to avoid potential infinite
-            // loops with malformed input.
             if (prefixesConsumed > 15)
             {
                 _state[_segOverrideOff] = 0xFF;
@@ -276,8 +288,6 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         var decoded = _mainDecoder.Decode(opcode);
         if (decoded is null)
         {
-            // Unsupported opcode: revert IP past consumed prefixes too,
-            // so the caller can fall through cleanly.
             WriteU16(_ipOff, (ushort)(ip - prefixesConsumed));
             _state[_segOverrideOff] = 0xFF;
             return -1;
@@ -285,15 +295,58 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
 
         var fnPtr = ResolveFunctionPointer(_mainDecoder.Name, decoded);
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
-        fn(_statePtr, opcode);
+
+        // 24.6.7c2 — REP prefix dispatch. F2/F3 are only meaningful before
+        // string ops (A4-A7, AA-AF). For non-string ops they're silently
+        // ignored. For string ops:
+        //   MOVS/STOS/LODS (A4/A5/AA/AB/AC/AD): both F2 and F3 act as REP
+        //                                       (count down only, ignore ZF)
+        //   CMPS/SCAS (A6/A7/AE/AF):
+        //     F3 → REPE  (repeat while ZF=1, abort when ZF=0 OR CX=0)
+        //     F2 → REPNE (repeat while ZF=0, abort when ZF=1 OR CX=0)
+        //
+        // CX==0 at entry means zero iterations (the whole instruction
+        // becomes a no-op except for the IP advance + override clears).
+        bool isStringOp = (opcode >= 0xA4 && opcode <= 0xAF) && opcode != 0xA8 && opcode != 0xA9;
+        bool isCmpOrScas = opcode == 0xA6 || opcode == 0xA7 || opcode == 0xAE || opcode == 0xAF;
+        bool repActive = (repe || repne) && isStringOp;
+
+        if (repActive)
+        {
+            // Defensive iteration cap — well-behaved code keeps CX small;
+            // pathological inputs could wedge the loop.
+            int maxIters = 0x20000;
+            while (maxIters-- > 0)
+            {
+                ushort cx = ReadU16(_cxOff);
+                if (cx == 0) break;
+                fn(_statePtr, opcode);
+                cx = (ushort)(cx - 1);
+                WriteU16(_cxOff, cx);
+                if (cx == 0) break;
+                if (isCmpOrScas)
+                {
+                    // ZF lives at FLAGS bit 6
+                    bool zf = ((ReadU16(_flagsOff) >> 6) & 1) != 0;
+                    if (repe && !zf) break;
+                    if (repne && zf) break;
+                }
+                // Re-fetch IP after each iteration — string-op IR doesn't
+                // touch IP, so we must reset it back to the same opcode for
+                // the JIT'd function to operate on the correct state. But
+                // string-op IR ALSO does NOT advance IP (post-fetch IP was
+                // stored after the prefix-consumption). So nothing to do.
+            }
+        }
+        else
+        {
+            fn(_statePtr, opcode);
+        }
 
         // Override is per-instruction: clear after execution so the next
         // Step() starts with a clean default-segment policy.
         _state[_segOverrideOff] = 0xFF;
 
-        // Cycle accounting deferred — 8088 cycle accuracy is not the
-        // 24.6 goal. Return 1 for now so the caller has a non-zero
-        // step count to drive its outer loop.
         return 1;
     }
 

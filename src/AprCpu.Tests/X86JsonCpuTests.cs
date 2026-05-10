@@ -2400,6 +2400,134 @@ public class X86JsonCpuTests
         Assert.Equal(0x101, cpu.State.DI);
     }
 
+    // ---------------- 24.6.7c2 — REP / REPE / REPNE prefix ----------------
+
+    /// <summary>
+    /// REP MOVSB — copy 4 bytes from DS:SI to ES:DI.
+    /// Layout: src[0x100]={0x11,0x22,0x33,0x44}; CX=4; rep movsb; hlt.
+    /// After: dst[0x200]={0x11,0x22,0x33,0x44}; CX=0; SI=0x104; DI=0x204.
+    /// </summary>
+    [Fact]
+    public void Step_RepMovsb_CopiesNBytes()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xF3, 0xA4, 0xF4 });
+        var s = cpu.State;
+        s.SI = 0x100; s.DI = 0x200;
+        s.C.X = 4;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x300);
+        mem.LoadBinary(new byte[] { 0xF3, 0xA4, 0xF4 }, 0, 0x300);
+        for (int i = 0; i < 4; i++) mem.WriteByte(0x100 + i, (byte)(0x11 * (i + 1)));
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        for (int i = 0; i < 4; i++)
+            Assert.Equal((byte)(0x11 * (i + 1)), mem.ReadByte(0x200 + i));
+        Assert.Equal(0, cpu.State.C.X);
+        Assert.Equal(0x104, cpu.State.SI);
+        Assert.Equal(0x204, cpu.State.DI);
+    }
+
+    /// <summary>
+    /// REP STOSB — fill memory with AL.
+    /// </summary>
+    [Fact]
+    public void Step_RepStosb_FillsMemory()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xF3, 0xAA, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0xCC;
+        s.DI = 0x100;
+        s.C.X = 8;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x200);
+        mem.LoadBinary(new byte[] { 0xF3, 0xAA, 0xF4 }, 0, 0x200);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        for (int i = 0; i < 8; i++)
+            Assert.Equal(0xCC, mem.ReadByte(0x100 + i));
+        Assert.Equal(0, cpu.State.C.X);
+        Assert.Equal(0x108, cpu.State.DI);
+    }
+
+    /// <summary>
+    /// REP MOVSB with CX=0 — no iterations, nothing copied.
+    /// </summary>
+    [Fact]
+    public void Step_RepMovsb_CxZero_NoIterations()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xF3, 0xA4, 0xF4 });
+        var s = cpu.State;
+        s.SI = 0x100; s.DI = 0x200;
+        s.C.X = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x300);
+        mem.LoadBinary(new byte[] { 0xF3, 0xA4, 0xF4 }, 0, 0x300);
+        mem.WriteByte(0x100, 0xAA);
+        mem.WriteByte(0x200, 0x00);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x00, mem.ReadByte(0x200));   // dst untouched
+        Assert.Equal(0x100, cpu.State.SI);          // SI unchanged
+        Assert.Equal(0x200, cpu.State.DI);
+    }
+
+    /// <summary>
+    /// REPNE SCASB — search for AL=0x42 in [ES:DI..]; abort when found (ZF=1).
+    /// Buffer at 0x100: { 0x11, 0x22, 0x42, 0x99 }; AL=0x42; CX=10.
+    /// Should abort after 3 iterations: DI=0x103, CX=7, ZF=1.
+    /// </summary>
+    [Fact]
+    public void Step_RepneScasb_StopsOnMatch()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xF2, 0xAE, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x42;
+        s.DI = 0x100;
+        s.C.X = 10;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x200);
+        mem.LoadBinary(new byte[] { 0xF2, 0xAE, 0xF4 }, 0, 0x200);
+        mem.WriteByte(0x100, 0x11);
+        mem.WriteByte(0x101, 0x22);
+        mem.WriteByte(0x102, 0x42);
+        mem.WriteByte(0x103, 0x99);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(7, cpu.State.C.X);
+        Assert.Equal(0x103, cpu.State.DI);   // past the match
+        Assert.True(cpu.State.FlagZ);
+    }
+
+    /// <summary>
+    /// REPE CMPSB — keep going while bytes match; abort on mismatch.
+    /// Buffers a={0x11,0x22,0x33}, b={0x11,0x22,0x44}; CX=3.
+    /// After 3rd CMPSB: ZF=0 (third pair differs), CX=0 → loop also exits via CX.
+    /// Actually 0x33 != 0x44 → after iter 3, ZF=0, CX dropped to 0, loop exits.
+    /// </summary>
+    [Fact]
+    public void Step_RepeCmpsb_StopsOnMismatch()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xF3, 0xA6, 0xF4 });
+        var s = cpu.State;
+        s.SI = 0x100; s.DI = 0x200;
+        s.C.X = 3;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x300);
+        mem.LoadBinary(new byte[] { 0xF3, 0xA6, 0xF4 }, 0, 0x300);
+        mem.WriteByte(0x100, 0x11); mem.WriteByte(0x200, 0x11);
+        mem.WriteByte(0x101, 0x22); mem.WriteByte(0x201, 0x22);
+        mem.WriteByte(0x102, 0x33); mem.WriteByte(0x202, 0x44);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0, cpu.State.C.X);
+        Assert.False(cpu.State.FlagZ);   // last comparison was unequal
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,
