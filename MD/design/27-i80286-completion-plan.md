@@ -114,7 +114,7 @@ multi-week effort for 27b.
 | 27.6  Descriptor + selector helpers | ✅ | `11fdc98` | 2026-05-11 |
 | 27.7  Descriptor lookup (mem -> Descriptor) | ✅ | `9f819b5` | 2026-05-11 |
 | 27.8  PE bit helper + Msw struct | ✅ partial (PE detection only; segment-load fetch in 27.10) | `0dd6404` | 2026-05-11 |
-| 27.9  Privilege levels (CPL/RPL/DPL) | ⏳ pending | — | — |
+| 27.9  Privilege levels (CPL/RPL/DPL) | ✅ | `553909c` | 2026-05-11 |
 | 27.10 Segmentation rewrite | ⏳ pending | — | — |
 | 27.11 New exception model | ⏳ pending | — | — |
 | 27.12 TSS task switching | ⏳ pending | — | — |
