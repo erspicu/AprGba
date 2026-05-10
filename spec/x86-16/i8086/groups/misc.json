@@ -62,6 +62,27 @@
       "comment": "0xCF IRET — pop IP, pop CS, pop FLAGS (reverse of INT entry).",
       "fields": {}, "mask": "0xFF", "match": "0xCF",
       "instructions": [{ "mnemonic": "IRET", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §IRET", "cycles": { "form": "32" }, "steps": [{ "op": "x86_iret" }] }]
+    },
+
+    {
+      "name": "FeGroup",
+      "comment": "0xFE group: only /0=INC r/m8 and /1=DEC r/m8 valid (others 8086-undefined). Dispatcher at runtime via modrm.reg.",
+      "fields": {}, "mask": "0xFF", "match": "0xFE",
+      "instructions": [{ "mnemonic": "FE_GROUP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §INC/DEC", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8", "out": "lhs" },
+        { "op": "x86_fe_group_dispatch" }
+      ]}]
+    },
+    {
+      "name": "FfGroup",
+      "comment": "0xFF group — 16-bit operand. /0=INC, /1=DEC, /2=CALL near r/m, /3=CALL far m16:16, /4=JMP near r/m, /5=JMP far m16:16, /6=PUSH r/m, /7=invalid. /3 and /5 use the EA's far-pointer interpretation (low word→IP, high word→CS); near forms use lhs as the new IP value. writes_pc=conditional because INC/DEC/PUSH paths do NOT touch IP.",
+      "fields": {}, "mask": "0xFF", "match": "0xFF",
+      "instructions": [{ "mnemonic": "FF_GROUP", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §FF group", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16", "out": "lhs" },
+        { "op": "x86_ff_group_dispatch" }
+      ]}]
     }
   ]
 }

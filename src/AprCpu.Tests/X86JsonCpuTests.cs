@@ -2786,6 +2786,109 @@ public class X86JsonCpuTests
         Assert.Equal(0x01FA, cpu.State.SP);   // 6 bytes pushed
     }
 
+    // ---------------- 24.6.7e — FE / FF group ----------------
+
+    /// <summary>0xFE /0 INC byte ptr [BX]: FE 07. Pre-mem 0x80=0x10 → 0x11.</summary>
+    [Fact]
+    public void Step_IncMemByte_ViaFeGroup()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xFE, 0x07, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x80;
+        s.FlagC = true;   // verify CF preserved
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x80, 0x10);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x11, mem.ReadByte(0x80));
+        Assert.True(cpu.State.FlagC);   // INC preserves CF
+    }
+
+    /// <summary>
+    /// 0xFF /0 INC word ptr [BX]: FF 07.
+    /// </summary>
+    [Fact]
+    public void Step_IncMemWord_ViaFfGroup()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xFF, 0x07, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x80;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x80, 0xFF); mem.WriteByte(0x81, 0x00);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x00, mem.ReadByte(0x80));
+        Assert.Equal(0x01, mem.ReadByte(0x81));
+    }
+
+    /// <summary>
+    /// 0xFF /4 JMP near r/m16 (reg-direct): FF E0 → JMP AX.
+    /// modrm=E0: mod=11 reg=100(=JMP near) rm=000(=AX).
+    /// AX=0x500 → IP=0x500.
+    /// </summary>
+    [Fact]
+    public void Step_JmpNearIndirect_ViaFfGroup()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xFF, 0xE0, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x500;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        // Place HLT at the target so we stop cleanly
+        mem.WriteByte(0x500, 0xF4);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x501, cpu.State.IP);
+    }
+
+    /// <summary>
+    /// 0xFF /2 CALL near r/m16: FF D0 → CALL AX.
+    /// AX=0x600. After: top-of-stack = post-INT IP = 0x102, IP=0x600.
+    /// </summary>
+    [Fact]
+    public void Step_CallNearIndirect_ViaFfGroup()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xFF, 0xD0, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x600;
+        s.SP = 0x0200; s.SS = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x600, 0xF4);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x01FE, cpu.State.SP);
+        ushort retIp = (ushort)(mem.ReadByte(0x01FE) | (mem.ReadByte(0x01FF) << 8));
+        Assert.Equal(0x102, retIp);
+    }
+
+    /// <summary>
+    /// 0xFF /6 PUSH r/m16 reg-direct: FF F0 → PUSH AX.
+    /// modrm=F0: mod=11 reg=110(=PUSH) rm=000(=AX).
+    /// </summary>
+    [Fact]
+    public void Step_PushRm16_ViaFfGroup()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xFF, 0xF0, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0xCAFE;
+        s.SP = 0x0200; s.SS = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x01FE, cpu.State.SP);
+        Assert.Equal(0xFE, mem.ReadByte(0x01FE));
+        Assert.Equal(0xCA, mem.ReadByte(0x01FF));
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

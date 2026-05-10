@@ -177,6 +177,11 @@ public static class X86_16Emitters
         reg.Register(new X86IntoEmitter());
         reg.Register(new X86IretEmitter());
 
+        // 24.6.7e — FE/FF group dispatchers (INC/DEC r/m + CALL/JMP indirect
+        // + PUSH r/m). Sub-ops selected at runtime by modrm.reg.
+        reg.Register(new X86FeGroupDispatchEmitter());
+        reg.Register(new X86FfGroupDispatchEmitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -4269,6 +4274,188 @@ internal sealed class X86IretEmitter : IMicroOpEmitter
         ctx.Builder.BuildStore(newIp, ctx.GepStatusRegister("IP"));
         ctx.Builder.BuildStore(newCs, ctx.GepStatusRegister("CS"));
         ctx.Builder.BuildStore(newFl, ctx.GepStatusRegister("FLAGS"));
+    }
+}
+
+// ============================================================================
+// 24.6.7e — FE/FF group dispatchers.
+//
+// FE: only /0=INC r/m8 and /1=DEC r/m8 are valid (others are 8086-undefined;
+// silicon decodes /4=undefined for INC/DEC width=8). FE handles 8-bit INC/DEC.
+//
+// FF (16-bit operand) sub-ops:
+//   /0 INC r/m16
+//   /1 DEC r/m16
+//   /2 CALL near r/m16  (push IP, then IP = lhs)
+//   /3 CALL far m16:16  (push CS, push IP, then IP/CS from EA's far ptr)
+//   /4 JMP near r/m16   (IP = lhs)
+//   /5 JMP far m16:16   (IP/CS from EA's far ptr)
+//   /6 PUSH r/m16       (push lhs — handled here too for completeness)
+//   /7 invalid
+//
+// Both dispatchers expect the spec to have already done:
+//   fetch_modrm + compute_ea + modrm_load_w{8,16} → "lhs"
+// ============================================================================
+
+internal sealed class X86FeGroupDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fe_group_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i1  = LLVMTypeRef.Int1;
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var lhs = ctx.Resolve("lhs");        // i8
+        var sel = ctx.Resolve("modrm_reg");
+
+        var endBB     = ctx.Function.AppendBasicBlock("feg_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("feg_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"feg_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        // Helper: INC/DEC r/m8 with CF preserved (mask = 0x08D4, no CF).
+        void EmitIncDec(int idx, string kind)
+        {
+            ctx.Builder.PositionAtEnd(arms[idx]);
+            var fPtr = ctx.GepStatusRegister("FLAGS");
+            var fOld = ctx.Builder.BuildLoad2(i16, fPtr, $"feg_{kind}_fold");
+
+            var oneI8 = LLVMValueRef.CreateConstInt(i8, 1, false);
+            var r = X86AluHelpers.BuildAluW8(ctx, kind, lhs, oneI8, $"feg_{kind}");
+
+            // Restore old CF: new = (new & ~1) | (old & 1)
+            var fNew = ctx.Builder.BuildLoad2(i16, fPtr, $"feg_{kind}_fnew");
+            var keep = ctx.Builder.BuildAnd(fNew,
+                LLVMValueRef.CreateConstInt(i16, 0xFFFE, false), $"feg_{kind}_keep");
+            var oldCf = ctx.Builder.BuildAnd(fOld,
+                LLVMValueRef.CreateConstInt(i16, 0x0001, false), $"feg_{kind}_oldcf");
+            var merged = ctx.Builder.BuildOr(keep, oldCf, $"feg_{kind}_merged");
+            ctx.Builder.BuildStore(merged, fPtr);
+
+            X86ModRmMemHelpers.BuildStoreW8(ctx, r);
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        EmitIncDec(0, "add");   // /0 INC = ADD lhs, 1
+        EmitIncDec(1, "sub");   // /1 DEC = SUB lhs, 1
+
+        // /2-/7 invalid — silent no-op.
+        for (int i = 2; i <= 7; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+internal sealed class X86FfGroupDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_ff_group_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i1  = LLVMTypeRef.Int1;
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var lhs = ctx.Resolve("lhs");         // i16
+        var sel = ctx.Resolve("modrm_reg");
+
+        var endBB     = ctx.Function.AppendBasicBlock("ffg_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("ffg_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"ffg_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        void EmitIncDec(int idx, string kind)
+        {
+            ctx.Builder.PositionAtEnd(arms[idx]);
+            var nr = X86IncDecHelpers.BuildIncDecW16(ctx, kind, lhs, $"ffg_{kind}");
+            X86ModRmMemHelpers.BuildStoreW16(ctx, nr);
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        EmitIncDec(0, "add");   // /0 INC r/m16
+        EmitIncDec(1, "sub");   // /1 DEC r/m16
+
+        // /2 CALL near r/m16 — push IP (post-fetch), then IP = lhs.
+        ctx.Builder.PositionAtEnd(arms[2]);
+        {
+            var ipPtr = ctx.GepStatusRegister("IP");
+            var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "ffg2_ip");
+            X86StackHelpers.PushW16(ctx, ip, "ffg2_psh");
+            ctx.Builder.BuildStore(lhs, ipPtr);
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        // /3 CALL far m16:16 — push CS, push IP, load far ptr from EA.
+        ctx.Builder.PositionAtEnd(arms[3]);
+        {
+            var ipPtr = ctx.GepStatusRegister("IP");
+            var csPtr = ctx.GepStatusRegister("CS");
+            var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "ffg3_ip");
+            var cs = ctx.Builder.BuildLoad2(i16, csPtr, "ffg3_cs");
+            X86StackHelpers.PushW16(ctx, cs, "ffg3_psh_cs");
+            X86StackHelpers.PushW16(ctx, ip, "ffg3_psh_ip");
+            // Far pointer at ea_seg:ea_off — low word IP, high word CS.
+            var seg = ctx.Resolve("ea_seg");
+            var off = ctx.Resolve("ea_off");
+            var newIp = X86_16Emitters.SegmentedRead16(ctx, seg, off, "ffg3_newIp");
+            var off2 = ctx.Builder.BuildAdd(off,
+                LLVMValueRef.CreateConstInt(i16, 2, false), "ffg3_off2");
+            var newCs = X86_16Emitters.SegmentedRead16(ctx, seg, off2, "ffg3_newCs");
+            ctx.Builder.BuildStore(newIp, ipPtr);
+            ctx.Builder.BuildStore(newCs, csPtr);
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        // /4 JMP near r/m16 — IP = lhs.
+        ctx.Builder.PositionAtEnd(arms[4]);
+        {
+            var ipPtr = ctx.GepStatusRegister("IP");
+            ctx.Builder.BuildStore(lhs, ipPtr);
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        // /5 JMP far m16:16 — load far ptr from EA.
+        ctx.Builder.PositionAtEnd(arms[5]);
+        {
+            var seg = ctx.Resolve("ea_seg");
+            var off = ctx.Resolve("ea_off");
+            var newIp = X86_16Emitters.SegmentedRead16(ctx, seg, off, "ffg5_newIp");
+            var off2 = ctx.Builder.BuildAdd(off,
+                LLVMValueRef.CreateConstInt(i16, 2, false), "ffg5_off2");
+            var newCs = X86_16Emitters.SegmentedRead16(ctx, seg, off2, "ffg5_newCs");
+            ctx.Builder.BuildStore(newIp, ctx.GepStatusRegister("IP"));
+            ctx.Builder.BuildStore(newCs, ctx.GepStatusRegister("CS"));
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        // /6 PUSH r/m16 — push lhs.
+        ctx.Builder.PositionAtEnd(arms[6]);
+        {
+            X86StackHelpers.PushW16(ctx, lhs, "ffg6_psh");
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        // /7 invalid — silent no-op.
+        ctx.Builder.PositionAtEnd(arms[7]);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
     }
 }
 
