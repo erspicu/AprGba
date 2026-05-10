@@ -1127,6 +1127,20 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
         basePhi.AddIncoming(inBases, inBlocks, 9);
         segPhi.AddIncoming(inSegs,  inBlocks, 9);
 
+        // Sprint 27.10d wave 6 — track segIdx parallel to seg value.
+        // Each rm arm picks DS (3) or SS (2) per the architectural
+        // default. arm 6's special "mod=00 → DS" override is handled
+        // later in mod=00 join; the value here is SS to match arm 2/3
+        // semantics for mod=01/10 BP-based addressing.
+        //   rm 0/1/4/5/7 → DS = 3
+        //   rm 2/3/6     → SS = 2
+        var segIdxByRm = new uint[] { 3, 3, 2, 2, 3, 3, 2, 3 };
+        var segIdxPhi = ctx.Builder.BuildPhi(i32, "ea_seg_idx_pre");
+        var inIdxs = new LLVMValueRef[9];
+        for (int i = 0; i < 8; i++) inIdxs[i] = LLVMValueRef.CreateConstInt(i32, segIdxByRm[i], false);
+        inIdxs[8] = LLVMValueRef.CreateConstInt(i32, 0xFF, false);   // default unreachable sentinel
+        segIdxPhi.AddIncoming(inIdxs, inBlocks, 9);
+
         // Phase 2 — switch on mod to produce final ea_off (and possibly
         // override seg/base for the mod=00 rm=110 special case).
         var endModBB = ctx.Function.AppendBasicBlock("ea_mod_end");
@@ -1164,6 +1178,12 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
         var mod00Seg = ctx.Builder.BuildPhi(i16, "ea_mod00_seg");
         mod00Off.AddIncoming(new[] { directDisp, basePhi }, new[] { mod00DispBB, mod00NoDispBB }, 2);
         mod00Seg.AddIncoming(new[] { dsSeg00,    segPhi   }, new[] { mod00DispBB, mod00NoDispBB }, 2);
+        // Sprint 27.10d wave 6 — segIdx for mod=00. mod=00 rm=6 special
+        // forces DS (3); other rm uses segIdxPhi.
+        var mod00SegIdx = ctx.Builder.BuildPhi(i32, "ea_mod00_seg_idx");
+        mod00SegIdx.AddIncoming(
+            new[] { LLVMValueRef.CreateConstInt(i32, 3, false), segIdxPhi },
+            new[] { mod00DispBB, mod00NoDispBB }, 2);
         ctx.Builder.BuildBr(endModBB);
 
         // mod=01: disp = sext(fetch_imm8); ea_off = base + disp; seg = segPhi.
@@ -1196,6 +1216,14 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
             4);
         eaSegDefault.AddIncoming(
             new[] { (LLVMValueRef)mod00Seg, segPhi, segPhi, zeroI16 },
+            new[] { mod00JoinBB, mod01BB, mod10BB, mod11BB },
+            4);
+
+        // Sprint 27.10d wave 6 — segIdx through the mod join.
+        var eaSegIdxDefault = ctx.Builder.BuildPhi(i32, "ea_seg_idx_default");
+        eaSegIdxDefault.AddIncoming(
+            new[] { (LLVMValueRef)mod00SegIdx, segIdxPhi, segIdxPhi,
+                    LLVMValueRef.CreateConstInt(i32, 0xFF, false) },
             new[] { mod00JoinBB, mod01BB, mod10BB, mod11BB },
             4);
 
@@ -1253,6 +1281,16 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
         pIns[5] = eaSegDefault; pBlk[5] = ovrSkipBB;
         eaSeg.AddIncoming(pIns, pBlk, 6);
 
+        // Sprint 27.10d wave 6 — segIdx final phi: override arms set
+        // segIdx = i (0..3 = ES/CS/SS/DS); skip / default arms use the
+        // pre-override eaSegIdxDefault tracked through the rm + mod chain.
+        var segIdxFinal = ctx.Builder.BuildPhi(i32, "ea_seg_idx");
+        var idxIns = new LLVMValueRef[6];
+        for (int i = 0; i < 4; i++) idxIns[i] = LLVMValueRef.CreateConstInt(i32, (uint)i, false);
+        idxIns[4] = eaSegIdxDefault;
+        idxIns[5] = eaSegIdxDefault;
+        segIdxFinal.AddIncoming(idxIns, pBlk, 6);
+
         ctx.Values["ea_off"] = eaOff;
         ctx.Values["ea_seg"] = eaSeg;
 
@@ -1282,59 +1320,47 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
             return;
         }
 
-        // i80286+ — peek at SEG_OVERRIDE again to drive cache lookup.
-        var ovrPtr2 = ctx.GepStatusRegister("SEG_OVERRIDE");
-        var ovr8b = ctx.Builder.BuildLoad2(i8, ovrPtr2, "w5_ovr8");
-        var ovr32b = ctx.Builder.BuildZExt(ovr8b, i32, "w5_ovr32");
-        var noOvr2 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, ovr32b,
-            LLVMValueRef.CreateConstInt(i32, 0xFF, false), "w5_no_ovr");
-
-        var w5CacheBB = ctx.Function.AppendBasicBlock("ea_base_cache");
-        var w5ShiftBB = ctx.Function.AppendBasicBlock("ea_base_shift");
-        var w5JoinBB  = ctx.Function.AppendBasicBlock("ea_base_join");
-        ctx.Builder.BuildCondBr(noOvr2, w5ShiftBB, w5CacheBB);
-
-        // Cache path — 4-arm switch on override value (0..3 = ES/CS/SS/DS).
-        ctx.Builder.PositionAtEnd(w5CacheBB);
-        var w5CacheDefBB = ctx.Function.AppendBasicBlock("ea_base_cache_def");
-        var w5Arms = new LLVMBasicBlockRef[4];
-        var w5Vals = new LLVMValueRef[4];
-        for (int i = 0; i < 4; i++) w5Arms[i] = ctx.Function.AppendBasicBlock($"ea_base_cache_{i}");
-        var w5Sw = ctx.Builder.BuildSwitch(ovr32b, w5CacheDefBB, 4);
+        // Sprint 27.10d wave 6 — i80286+ unified path: switch on segIdxFinal
+        // (0..3 = ES/CS/SS/DS, derived from override OR rm-switch default
+        // tracked through the entire EA-compute chain). Loads the matching
+        // <seg>_BASE cache slot. No more shift fallback; the cache slots
+        // are kept in sync with selectors at Reset/SetEntryPoint AND will
+        // be loaded from descriptors in Phase 27b protected-mode segment-
+        // register-load IR (wave 7+).
+        var w6CacheDefBB = ctx.Function.AppendBasicBlock("ea_base_cache_def");
+        var w6JoinBB     = ctx.Function.AppendBasicBlock("ea_base_join");
+        var w6Arms = new LLVMBasicBlockRef[4];
+        var w6Vals = new LLVMValueRef[4];
+        for (int i = 0; i < 4; i++) w6Arms[i] = ctx.Function.AppendBasicBlock($"ea_base_w6_{i}");
+        var w6Sw = ctx.Builder.BuildSwitch(segIdxFinal, w6CacheDefBB, 4);
         for (int i = 0; i < 4; i++)
-            w5Sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), w5Arms[i]);
+            w6Sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), w6Arms[i]);
 
-        var w5SegMap = new[] { "ES", "CS", "SS", "DS" };
+        var w6SegMap = new[] { "ES", "CS", "SS", "DS" };
         for (int i = 0; i < 4; i++)
         {
-            ctx.Builder.PositionAtEnd(w5Arms[i]);
-            var basePtr = ctx.GepStatusRegister(w5SegMap[i] + "_BASE");
-            w5Vals[i] = ctx.Builder.BuildLoad2(i32, basePtr, $"ea_base_v_{i}");
-            ctx.Builder.BuildBr(w5JoinBB);
+            ctx.Builder.PositionAtEnd(w6Arms[i]);
+            var basePtr = ctx.GepStatusRegister(w6SegMap[i] + "_BASE");
+            w6Vals[i] = ctx.Builder.BuildLoad2(i32, basePtr, $"ea_base_w6_v_{i}");
+            ctx.Builder.BuildBr(w6JoinBB);
         }
-        ctx.Builder.PositionAtEnd(w5CacheDefBB);
-        ctx.Builder.BuildBr(w5JoinBB);
+        // Default arm — should be unreachable since segIdx ∈ {0..3} once
+        // we've passed mod=11 (which doesn't use ea_base anyway). Fall
+        // through to shift as a defensive default.
+        ctx.Builder.PositionAtEnd(w6CacheDefBB);
+        var w6DefSegZ = ctx.Builder.BuildZExt(eaSeg, i32, "ea_base_def_segz");
+        var w6DefShifted = ctx.Builder.BuildShl(w6DefSegZ,
+            LLVMValueRef.CreateConstInt(i32, 4, false), "ea_base_def_shift");
+        ctx.Builder.BuildBr(w6JoinBB);
 
-        // Shift path — fallback when no override prefix (default seg case
-        // is handled by wave-6+ when EA-compute tracks segIdx through the
-        // rm switch too; today we still use (ea_seg << 4) which equals
-        // the cache value in real mode and matches existing behavior in
-        // protected mode-without-override).
-        ctx.Builder.PositionAtEnd(w5ShiftBB);
-        var w5SegZ = ctx.Builder.BuildZExt(eaSeg, i32, "ea_base_shift_segz");
-        var w5Shifted = ctx.Builder.BuildShl(w5SegZ,
-            LLVMValueRef.CreateConstInt(i32, 4, false), "ea_base_shift_v");
-        ctx.Builder.BuildBr(w5JoinBB);
-
-        // Join phi (4 cache arms + cache-default + shift = 6 incoming).
-        ctx.Builder.PositionAtEnd(w5JoinBB);
+        // Join phi (4 cache arms + 1 default = 5 incoming).
+        ctx.Builder.PositionAtEnd(w6JoinBB);
         var eaBaseJoin = ctx.Builder.BuildPhi(i32, "ea_base");
-        var jIns = new LLVMValueRef[6];
-        var jBlk = new LLVMBasicBlockRef[6];
-        for (int i = 0; i < 4; i++) { jIns[i] = w5Vals[i]; jBlk[i] = w5Arms[i]; }
-        jIns[4] = w5Shifted; jBlk[4] = w5ShiftBB;
-        jIns[5] = LLVMValueRef.CreateConstInt(i32, 0, false); jBlk[5] = w5CacheDefBB;
-        eaBaseJoin.AddIncoming(jIns, jBlk, 6);
+        var jIns = new LLVMValueRef[5];
+        var jBlk = new LLVMBasicBlockRef[5];
+        for (int i = 0; i < 4; i++) { jIns[i] = w6Vals[i]; jBlk[i] = w6Arms[i]; }
+        jIns[4] = w6DefShifted; jBlk[4] = w6CacheDefBB;
+        eaBaseJoin.AddIncoming(jIns, jBlk, 5);
         ctx.Values["ea_base"] = eaBaseJoin;
     }
 }
