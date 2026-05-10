@@ -117,7 +117,7 @@ multi-week effort for 27b.
 | 27.9  Privilege levels (CPL/RPL/DPL) | ✅ | `553909c` | 2026-05-11 |
 | 27.10a Helper integration test | ✅ | `cefed78` | 2026-05-11 |
 | 27.10b Hidden segment cache slots (ES/CS/SS/DS Base/Limit) | ✅ | `97e19ea` | 2026-05-11 |
-| 27.10c SegmentedLinear uses cached Base | ⏳ pending | — | — |
+| 27.10c SegmentedLinear uses cached Base | ✅ infra (not activated) | `412fc7a` | 2026-05-11 |
 | 27.10d Protected-mode segment-load IR (descriptor + privilege checks) | ⏳ pending | — | — |
 | 27.11 New exception model | ⏳ pending | — | — |
 | 27.12 TSS task switching | ⏳ pending | — | — |
