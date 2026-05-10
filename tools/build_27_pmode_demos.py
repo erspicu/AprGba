@@ -61,6 +61,21 @@ CODE_DPL_GP = bytes([
 ])
 assert len(CODE_DPL_GP) == 17
 
+# Sprint 27.11f — segment-type fault demo. GDT[1] is built with access=0x9A
+# (P=1, S=1, executable=1, readable=1, DPL=0) — a CODE segment. Loading
+# this into SS in PE=1 must raise #GP because SS requires writable DATA
+# (access bit 1 = writable, bit 3 = exec must be 0). Same prologue length
+# (17 bytes) so the GDT layout offsets are unchanged.
+CODE_SS_BAD_TYPE = bytes([
+    0xB8, 0xF1, 0xFF,           # mov ax, 0xFFF1
+    0x0F, 0x01, 0x16, 0x40, 0x01,  # lgdt [0x140]
+    0x0F, 0x01, 0xF0,           # lmsw ax
+    0xB8, 0x08, 0x00,           # mov ax, 0x0008   (idx=1, RPL=0)
+    0x8E, 0xD0,                 # mov ss, ax       (#GP expected — code desc)
+    0xF4,                       # hlt
+])
+assert len(CODE_SS_BAD_TYPE) == 17
+
 # GDTR image: 6 bytes at file offset 0x40 (segment offset 0x140).
 #   limit = 0x10 (room for 2 descriptors)
 #   base  = 0x150 (segment offset where GDT lives)
@@ -101,20 +116,23 @@ def main():
     out_dir = Path(__file__).resolve().parent.parent / "test-roms" / "x86"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    entry   = build_com(access_byte=0x92)                     # P=1, S=1, writable data, DPL=0
-    np      = build_com(access_byte=0x12)                     # P=0, S=1, writable data, DPL=0
-    null_ss = build_com(access_byte=0x92, code=CODE_NULL_SS)  # GDT[1] unused (NULL load)
-    dpl_gp  = build_com(access_byte=0x92, code=CODE_DPL_GP)   # DPL=0, RPL=3 → #GP
+    entry        = build_com(access_byte=0x92)                            # P=1, S=1, writable data, DPL=0
+    np           = build_com(access_byte=0x12)                            # P=0
+    null_ss      = build_com(access_byte=0x92, code=CODE_NULL_SS)          # NULL → SS
+    dpl_gp       = build_com(access_byte=0x92, code=CODE_DPL_GP)           # DPL=0, RPL=3 → #GP
+    ss_bad_type  = build_com(access_byte=0x9A, code=CODE_SS_BAD_TYPE)      # code desc → SS → #GP
 
     (out_dir / "27-pmode-entry.com").write_bytes(entry)
     (out_dir / "27-pmode-np.com").write_bytes(np)
     (out_dir / "27-pmode-null-ss.com").write_bytes(null_ss)
     (out_dir / "27-pmode-dpl-gp.com").write_bytes(dpl_gp)
+    (out_dir / "27-pmode-ss-bad-type.com").write_bytes(ss_bad_type)
 
     print(f"wrote {len(entry)} bytes -> 27-pmode-entry.com")
     print(f"wrote {len(np)} bytes -> 27-pmode-np.com")
     print(f"wrote {len(null_ss)} bytes -> 27-pmode-null-ss.com")
     print(f"wrote {len(dpl_gp)} bytes -> 27-pmode-dpl-gp.com")
+    print(f"wrote {len(ss_bad_type)} bytes -> 27-pmode-ss-bad-type.com")
 
 
 if __name__ == "__main__":

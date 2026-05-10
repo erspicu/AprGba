@@ -2037,6 +2037,52 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
         // emitter too but MOV CS is reserved on real hardware; skip the
         // check there to avoid spurious faults from synthetic test
         // sequences that touch CS via X86WriteSregFieldEmitter.
+        // Sprint 27.11f — segment-type check (Intel 80286 PRM §6.2.1.1).
+        // Run BEFORE the privilege check so a clearly wrong-typed
+        // descriptor faults regardless of CPL/RPL/DPL alignment.
+        //   SS:    descriptor must be writable data
+        //          (access bit 4 (S)=1, bit 3 (exec)=0, bit 1 (writable)=1)
+        //          mask 0x1A == expected 0x12.
+        //   ES/DS: descriptor must NOT be system (bit 4 (S)=1).
+        //          mask 0x10 == expected 0x10. Skips the
+        //          readable-code subcheck (deferred — code loaded via
+        //          MOV DS,r/m is unusual and our demos don't exercise it).
+        //   CS:    no check (MOV CS reserved on real hardware, see below).
+        if (segName == "SS")
+        {
+            var typeMask = ctx.Builder.BuildAnd(bytes[5],
+                LLVMValueRef.CreateConstInt(i8, 0x1A, false), $"{label}_tymask");
+            var typeOk = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, typeMask,
+                LLVMValueRef.CreateConstInt(i8, 0x12, false), $"{label}_tyok");
+
+            var typeGpBB = ctx.Function.AppendBasicBlock($"{label}_tygp");
+            var typeOkBB = ctx.Function.AppendBasicBlock($"{label}_tyokbb");
+            ctx.Builder.BuildCondBr(typeOk, typeOkBB, typeGpBB);
+
+            ctx.Builder.PositionAtEnd(typeGpBB);
+            EmitRaiseException(ctx, /* vector */ 0x0D, sel16, $"{label}_tygp");
+            ctx.Builder.BuildBr(doneBB);
+
+            ctx.Builder.PositionAtEnd(typeOkBB);
+        }
+        else if (segName != "CS")  // ES / DS
+        {
+            var sMask = ctx.Builder.BuildAnd(bytes[5],
+                LLVMValueRef.CreateConstInt(i8, 0x10, false), $"{label}_smask");
+            var sOk = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, sMask,
+                LLVMValueRef.CreateConstInt(i8, 0x10, false), $"{label}_sok");
+
+            var sysGpBB = ctx.Function.AppendBasicBlock($"{label}_sysgp");
+            var sOkBB   = ctx.Function.AppendBasicBlock($"{label}_sokbb");
+            ctx.Builder.BuildCondBr(sOk, sOkBB, sysGpBB);
+
+            ctx.Builder.PositionAtEnd(sysGpBB);
+            EmitRaiseException(ctx, /* vector */ 0x0D, sel16, $"{label}_sysgp");
+            ctx.Builder.BuildBr(doneBB);
+
+            ctx.Builder.PositionAtEnd(sOkBB);
+        }
+
         if (segName != "CS")
         {
             // CPL = (visible CS) & 3
