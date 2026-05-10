@@ -128,5 +128,6 @@ multi-week effort for 27b.
 | 27.10d wave 8 — Descriptor-fetch path in MOV sreg (PE=1) | ✅ | `fb45845` | 2026-05-11 |
 | 27.11 New exception model | ⏳ pending | — | — |
 | 27.12 TSS task switching | ⏳ pending | — | — |
-| 27.13 Protected-mode entry (LMSW PE) | ⏳ pending | — | — |
+| 27.13a Protected-mode entry demo + gap surfaced | ✅ partial | `c5f51a0` | 2026-05-11 |
+| 27.13b Migrate ea_seg consumers → ea_base (closes the gap) | ⏳ pending | — | — |
 | 27.14 27b closure + visual demo | ⏳ pending | — | — |
