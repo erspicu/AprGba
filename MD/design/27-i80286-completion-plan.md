@@ -122,7 +122,9 @@ multi-week effort for 27b.
 | 27.10d wave 2 — Stack ops + by-name Read/Write overloads | ✅ | `126e2cc` | 2026-05-11 |
 | 27.10d wave 3 — PushReg/PushModRm/PushSpPreDec by-name | ✅ | `66dc4df` | 2026-05-11 |
 | 27.10d wave 4 — ea_base alias (EA-compute foundation) | ✅ | `3605c42` | 2026-05-11 |
-| 27.10d wave 5 — Protected-mode segment-load IR (the actual descriptor lookup) | ⏳ pending | — | — |
+| 27.10d wave 5 — ea_base cache lookup (override path) | ✅ partial | `7d529f3` | 2026-05-11 |
+| 27.10d wave 6 — segIdx tracking for non-override path | ⏳ pending | — | — |
+| 27.10d wave 7 — Protected-mode segment-load IR (descriptor fetch) | ⏳ pending | — | — |
 | 27.11 New exception model | ⏳ pending | — | — |
 | 27.12 TSS task switching | ⏳ pending | — | — |
 | 27.13 Protected-mode entry (LMSW PE) | ⏳ pending | — | — |
