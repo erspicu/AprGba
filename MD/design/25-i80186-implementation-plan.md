@@ -13,7 +13,7 @@
 
 | Sprint | Status | Commit | 完成日 |
 |---|---|---|---|
-| 25.1 Inheritance infra | ✅ | `3e23563` | 2026-05-10 |
+| 25.1 Inheritance infra | ✅ | `585c6b2` | 2026-05-10 |
 | 25.2 ID retrofit (8086) | ⏳ pending | — | — |
 | 25.3 i80186 spec | ⏳ pending | — | — |
 | 25.4 Emitters | ⏳ pending | — | — |
