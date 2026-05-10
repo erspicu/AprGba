@@ -119,4 +119,37 @@ public static class X86_16ProtectedMode
     /// </summary>
     public static uint DescriptorAddress(Selector sel, uint gdtrBase, uint ldtrBaseFromGdt)
         => (sel.IsLdt ? ldtrBaseFromGdt : gdtrBase) + (uint)(sel.Index * 8);
+
+    /// <summary>
+    /// Sprint 27.7 — read 8 bytes from <paramref name="bus"/> at the
+    /// descriptor address derived from <paramref name="sel"/> + the
+    /// active table base, and parse into a <see cref="Descriptor"/>.
+    /// Caller still does limit / privilege / present checks (Sprint 27.10/.11).
+    /// Address mask = 24 bits (80286 physical address space).
+    /// </summary>
+    public static Descriptor ReadDescriptor(
+        IMemoryBus bus, Selector sel, uint gdtrBase, uint ldtrBaseFromGdt)
+    {
+        ArgumentNullException.ThrowIfNull(bus);
+        uint addr = DescriptorAddress(sel, gdtrBase, ldtrBaseFromGdt) & 0x00FFFFFFu;
+        Span<byte> buf = stackalloc byte[8];
+        for (int i = 0; i < 8; i++) buf[i] = bus.ReadByte(addr + (uint)i);
+        return ParseDescriptor(buf);
+    }
+
+    /// <summary>
+    /// Sprint 27.7 — write 8 bytes representing <paramref name="d"/> to
+    /// <paramref name="bus"/> at the address derived from <paramref name="sel"/>.
+    /// Used for example by the "accessed" bit lazy update + future TSS
+    /// busy-bit toggling.
+    /// </summary>
+    public static void WriteDescriptor(
+        IMemoryBus bus, Selector sel, uint gdtrBase, uint ldtrBaseFromGdt, Descriptor d)
+    {
+        ArgumentNullException.ThrowIfNull(bus);
+        uint addr = DescriptorAddress(sel, gdtrBase, ldtrBaseFromGdt) & 0x00FFFFFFu;
+        Span<byte> buf = stackalloc byte[8];
+        BuildDescriptor(d, buf);
+        for (int i = 0; i < 8; i++) bus.WriteByte(addr + (uint)i, buf[i]);
+    }
 }

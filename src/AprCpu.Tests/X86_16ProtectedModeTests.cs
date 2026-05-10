@@ -137,4 +137,65 @@ public class X86_16ProtectedModeTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => Selector.FromParts(0, false, 4));
     }
+
+    [Fact]
+    public void ReadDescriptor_Roundtrips_Through_Bus()
+    {
+        // Sprint 27.7 — read from emulated memory at GDT[5].
+        var bus = new FlatMemoryBus(0x10000);
+        uint gdtBase = 0x1000;
+        var sel = Selector.FromParts(5, false, 0);
+        uint addr = DescriptorAddress(sel, gdtBase, 0);
+        Assert.Equal(gdtBase + 5 * 8, addr);
+
+        // Write a known descriptor at the address.
+        var written = new Descriptor(Limit: 0xABCD, BaseLow24: 0x123456, AccessRights: 0x9A);
+        Span<byte> buf = stackalloc byte[8];
+        BuildDescriptor(written, buf);
+        for (int i = 0; i < 8; i++) bus.WriteByte(addr + (uint)i, buf[i]);
+
+        var read = ReadDescriptor(bus, sel, gdtBase, 0);
+        Assert.Equal(written, read);
+    }
+
+    [Fact]
+    public void WriteDescriptor_Persists_To_Bus()
+    {
+        var bus = new FlatMemoryBus(0x10000);
+        uint gdtBase = 0x2000;
+        var sel = Selector.FromParts(2, false, 0);
+
+        var d = new Descriptor(Limit: 0x1234, BaseLow24: 0xDEADBE, AccessRights: 0x92);
+        WriteDescriptor(bus, sel, gdtBase, 0, d);
+
+        // Independent read from bus, parse, compare.
+        Span<byte> buf = stackalloc byte[8];
+        for (int i = 0; i < 8; i++) buf[i] = bus.ReadByte(gdtBase + 2 * 8 + (uint)i);
+        var roundTrip = ParseDescriptor(buf);
+        Assert.Equal(d, roundTrip);
+    }
+
+    [Fact]
+    public void ReadDescriptor_Uses_LDT_Base_When_Selector_Has_TI_Bit()
+    {
+        var bus = new FlatMemoryBus(0x10000);
+        uint gdtBase = 0x1000;
+        uint ldtBase = 0x4000;
+
+        var ldtSel = Selector.FromParts(3, ti: true, rpl: 0);
+        var written = new Descriptor(0x7777, 0x000000, 0x92);
+        WriteDescriptor(bus, ldtSel, gdtBase, ldtBase, written);
+
+        // Verify it landed at LDT base + 3*8, not GDT base + 3*8.
+        Span<byte> ldtBuf = stackalloc byte[8];
+        for (int i = 0; i < 8; i++) ldtBuf[i] = bus.ReadByte(ldtBase + 3 * 8 + (uint)i);
+        var ldtRead = ParseDescriptor(ldtBuf);
+        Assert.Equal(written, ldtRead);
+
+        // GDT slot 3 should be untouched (zeroed).
+        Span<byte> gdtBuf = stackalloc byte[8];
+        for (int i = 0; i < 8; i++) gdtBuf[i] = bus.ReadByte(gdtBase + 3 * 8 + (uint)i);
+        var gdtRead = ParseDescriptor(gdtBuf);
+        Assert.Equal(new Descriptor(0, 0, 0), gdtRead);
+    }
 }
