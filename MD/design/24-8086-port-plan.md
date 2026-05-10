@@ -2,11 +2,11 @@
 
 > **Status**：**IN PROGRESS**（2026-05-10）— 24.0–24.5 完工 (13 commits, 6
 > paper-quality screenshots, 1.31M Tom Harte SST cases 全綠)；
-> 24.6 JSON-driven port: **24.6.1–24.6.6e 完工** (17 commits, 94/94
-> JsonCpu tests + 767/767 T1，full data-transfer + ALU surface through
-> framework — 145 unique opcodes covered including all 8 ALU ops × 6
-> forms, MUL/IMUL/CBW/CWD, INC/DEC, TEST/NOT/NEG)；
-> 24.6.7-9 + 24.7 + 24.8 待做（控流 + 移位 + 字串 + DIV/IDIV + INT + BCD）。
+> 24.6 JSON-driven port: **24.6.1–24.6.6 完工 + 24.6.7a 完工** (18 commits,
+> 104/104 JsonCpu tests + 777/777 T1，~170 unique opcodes — 完整
+> data-transfer + ALU + 近控流 (JMP/Jcc/JCXZ/LOOP/CALL/RET))；
+> 24.6.7b-d (shift/rotate, string+REP, DIV/IDIV/INT/BCD/IO/flag-manip/FF group rest)
+> + 24.6.8 + 24.6.9 + 24.7 + 24.8 待做。
 >
 > **Trigger**：第 4 顆 CPU 候選 = Intel 8086（用以前寫的 Apr86 emulator
 > 當 reference oracle 的部分）。要解決的核心問題：8086 是 CISC、segmented
@@ -293,14 +293,13 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 
 ## 8. Phase plan
 
-> **目前累計**（2026-05-10）：30 個 commits（24.0 → 24.5：13 + 24.6.1 →
-> 24.6.6e：17）；T1 baseline 767/767 全綠；JSON-driven backend 已覆蓋
-> **145 unique opcodes**：完整 MOV / PUSH / POP / XCHG / LEA / LDS / LES /
-> segment override prefixes / 8 ALU ops × 6 forms (00-3D) / INC/DEC r16
-> / 0x80-0x83 ALU r/m,imm group / TEST / NOT / NEG / MUL / IMUL /
-> CBW / CWD / NOP / HLT。**24.6.5 + 24.6.6 整段 ✅ 完成**（DIV/IDIV +
-> BCD 留 24.6.7）。剩 24.6.7 (控流/移位/字串/DIV-IDIV/INT/BCD/IO) +
-> 24.6.8 (block-JIT) + 24.6.9 (demo 重跑) + 24.7 + 24.8。
+> **目前累計**（2026-05-10）：31 個 commits（24.0 → 24.5：13 + 24.6.1 →
+> 24.6.7a：18）；T1 baseline 777/777 全綠；JSON-driven backend 已覆蓋
+> **~170 unique opcodes**：完整 data-transfer + ALU + 近控流 (JMP/Jcc 16 個 /
+> JCXZ / LOOP×3 / CALL/RET near)。**24.6.5 + 24.6.6 整段 + 24.6.7a ✅**。
+> 剩 24.6.7b-d (shift/rotate / string ops + REP / DIV-IDIV+INT 0 / BCD /
+> IO / flag manip / FF group rest) + 24.6.8 (block-JIT) + 24.6.9
+> (demo 重跑) + 24.7 + 24.8。
 
 | Phase | 內容 | 成果 | 狀態 | Commit / 紀錄 |
 |---|---|---|---|---|
@@ -336,7 +335,11 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | 24.6.6c | INC/DEC r16 (40-4F) + 0x80-0x83 ALU r/m,imm group (CMP 不寫回) + 0x83 sext-imm8 + W16 logical-flag bug 修正 (24.6.6b 漏到 W16) | 8 tests；20 opcodes | ✅ | `3862d08` |
 | 24.6.6d | TEST (84/85/A8/A9) + NOT + NEG + F6/F7 group dispatcher (/0=TEST, /2=NOT, /3=NEG, /4-7 deferred) | 7 tests；6 opcodes；imm fetch 在 dispatcher arms 內避免錯誤 IP advance | ✅ | `172be20` |
 | 24.6.6e | MUL/IMUL (F6/F7 /4 /5) — 8088 high-byte SF/ZF/PF quirk + CBW (98) + CWD (99)；DIV/IDIV (/6 /7) 仍延後 | 7 tests；2 standalone + MUL/IMUL 走 dispatcher | ✅ | `e2c7e1b` |
-| 24.6.7 | Control flow (JMP/Jcc/CALL/RET/LOOP/JCXZ) + shift/rotate (D0-D3) + string ops + REP prefix + INT/IRET + DIV/IDIV (delayed from 24.6.6) + BCD + IO + FF group rest (INC/DEC/CALL/JMP/PUSH r/m) | ~140 opcodes；Tom Harte 1.31M 全綠 through json backend | ⏳ | — |
+| **24.6.7** | Control flow + shift/rotate + string ops + INT/IRET + DIV/IDIV + BCD + IO + FF group rest | ~140 opcodes；Tom Harte 1.31M 全綠 through json backend | 🚧 partial | (子項見下) |
+| 24.6.7a | Near control flow — JMP rel8/16, Jcc rel8 (16 conds via runtime cccc dispatch), JCXZ, LOOP/LOOPE/LOOPNE, CALL rel16, RET (near), RET imm16. `X86CtrlHelpers.BuildJccPredicate` 16-arm switch on cccc → i1 phi. | 10 tests；25 opcodes | ✅ | `9aa7f6c` |
+| 24.6.7b | Shift/rotate group D0-D3 (8 sub-ops × 4 widths/counts via group dispatcher) — flag rules with 8088 silicon AF/OF quirks | — | ⏳ | — |
+| 24.6.7c | String ops (MOVSB/CMPSB/SCASB/LODSB/STOSB + word forms) + REP/REPE/REPNE prefix dispatcher | — | ⏳ | — |
+| 24.6.7d | INT/IRET/INTO + DIV/IDIV (with INT 0 hookup) + BCD (DAA/DAS/AAA/AAS/AAM/AAD) + IN/OUT + flag manip (CLC/STC/CLD/STD/CLI/STI/CMC/SAHF/LAHF) + FF/FE group rest (INC/DEC/CALL/JMP indirect/PUSH r/m) | — | ⏳ | — |
 | 24.6.8 | Block-JIT mode — alloca + mem2reg + IR-level cycle budget (à la N1.B' for NES) | 三 backend (legacy / json-instr / json-block) 同步 | ⏳ | — |
 | 24.6.9 | Re-run 24.5 demos through json-block backend | result/x86-16/jit-*.png 與 legacy pixel-identical 6 張新截圖 | ⏳ | — |
 | **24.6b** | (optional) Lockstep diff legacy vs Apr86（限 .com 程式範圍） | Apr86 reference cross-check | ⏳ | — |
