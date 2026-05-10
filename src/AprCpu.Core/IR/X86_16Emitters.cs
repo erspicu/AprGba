@@ -109,8 +109,8 @@ public static class X86_16Emitters
         reg.Register(new X86FetchImm8SextW16Emitter());
 
         // 24.6.6d — TEST (84/85/A8/A9), NOT/NEG (F6 /2 /3, F7 /2 /3),
-        // and the F6/F7 group dispatcher (only /0=TEST + /2=NOT + /3=NEG
-        // for now; MUL/IMUL/DIV/IDIV in 24.6.6e).
+        // and the F6/F7 group dispatcher (24.6.6e adds MUL/IMUL too;
+        // DIV/IDIV stays no-op pending silicon-quirk verification).
         reg.Register(new X86TestW8Emitter());
         reg.Register(new X86TestW16Emitter());
         reg.Register(new X86NotW8Emitter());
@@ -119,6 +119,12 @@ public static class X86_16Emitters
         reg.Register(new X86NegW16Emitter());
         reg.Register(new X86F6GroupDispatchEmitter());
         reg.Register(new X86F7GroupDispatchEmitter());
+
+        // 24.6.6e — CBW/CWD (sign extend AL→AX, AX→DX:AX). MUL/IMUL are
+        // wired into the F6/F7 dispatchers in this same sub-step (no
+        // separate emitters — they live inside the dispatcher).
+        reg.Register(new X86CbwEmitter());
+        reg.Register(new X86CwdEmitter());
 
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
@@ -2836,8 +2842,22 @@ internal sealed class X86F6GroupDispatchEmitter : IMicroOpEmitter
         X86ModRmMemHelpers.BuildStoreW8(ctx, negV);
         ctx.Builder.BuildBr(endBB);
 
-        // /4-/7 deferred to 24.6.6e — silent no-op for now.
-        for (int i = 4; i <= 7; i++)
+        // /4 MUL r/m8: AX = AL * lhs (unsigned). 8088 flag rules:
+        //   CF = OF = (AH != 0)
+        //   SF/ZF/PF reflect AH (the high byte of the result), NOT the
+        //   full AX — the silicon "high byte quirk" caught in 24.4.4.
+        ctx.Builder.PositionAtEnd(arms[4]);
+        EmitMulW8(ctx, lhs, signed: false);
+        ctx.Builder.BuildBr(endBB);
+
+        // /5 IMUL r/m8 (signed multiply). Same flag shape, signed widening.
+        ctx.Builder.PositionAtEnd(arms[5]);
+        EmitMulW8(ctx, lhs, signed: true);
+        ctx.Builder.BuildBr(endBB);
+
+        // /6 DIV / /7 IDIV deferred — divide-by-zero exception + silicon-
+        // quirky flag behaviour need careful Tom Harte alignment in 24.6.7.
+        for (int i = 6; i <= 7; i++)
         {
             ctx.Builder.PositionAtEnd(arms[i]);
             ctx.Builder.BuildBr(endBB);
@@ -2846,6 +2866,118 @@ internal sealed class X86F6GroupDispatchEmitter : IMicroOpEmitter
         ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
         ctx.Builder.PositionAtEnd(endBB);
+    }
+
+    /// <summary>
+    /// Emit MUL or IMUL r/m8 IR at the current builder position.
+    ///   product (i16) = AL (s/zext to i16) * lhs (s/zext to i16)
+    ///   AX := product
+    ///   AH (high byte) → drives CF/OF + SF/ZF/PF (8088 high-byte quirk)
+    /// </summary>
+    private static void EmitMulW8(EmitContext ctx, LLVMValueRef lhs8, bool signed)
+    {
+        var i1  = LLVMTypeRef.Int1;
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var label = signed ? "imul8" : "mul8";
+
+        var al = X86_16Emitters.ReadGpr8(ctx, 0, $"{label}_al");
+        LLVMValueRef alW = signed
+            ? ctx.Builder.BuildSExt(al, i16, $"{label}_al_w")
+            : ctx.Builder.BuildZExt(al, i16, $"{label}_al_w");
+        LLVMValueRef rhsW = signed
+            ? ctx.Builder.BuildSExt(lhs8, i16, $"{label}_b_w")
+            : ctx.Builder.BuildZExt(lhs8, i16, $"{label}_b_w");
+        var prod = ctx.Builder.BuildMul(alW, rhsW, $"{label}_prod");
+
+        // Store full product to AX.
+        X86_16Emitters.WriteGpr16(ctx, 0, prod);
+
+        // High byte = (prod >> 8) & 0xFF
+        var ahShift = ctx.Builder.BuildLShr(prod,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_ah_sh");
+        var ah = ctx.Builder.BuildTrunc(ahShift, i8, $"{label}_ah");
+
+        // CF = OF = (ah != 0)
+        var ahNonZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, ah,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_ah_nz");
+
+        // SF/ZF/PF from AH (8088 high-byte quirk).
+        var sfMask = ctx.Builder.BuildAnd(ah,
+            LLVMValueRef.CreateConstInt(i8, 0x80, false), $"{label}_sf_mask");
+        var sf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, sfMask,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_sf");
+        var zf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, ah,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_zf");
+        // Parity from AH (low byte of FLAGS-relevant value, but the spec says
+        // the high byte of the product per Tom Harte SST analysis).
+        var pf = X86AluHelpers_BuildParityEvenPublic(ctx, ah, label);
+
+        // AF undefined — set to 0 for determinism.
+        var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
+        var packed = X86AluHelpers_BuildPackedFlagsPublic(ctx, ahNonZero, pf, i1false, zf, sf, ahNonZero, label);
+        X86AluHelpers_StoreAluFlagsPublic(ctx, packed, label);
+    }
+
+    // Bridge to the private helpers in X86AluHelpers — internal-friendly
+    // wrappers so EmitMulW8/16 can reach them.
+    internal static LLVMValueRef X86AluHelpers_BuildParityEvenPublic(EmitContext ctx, LLVMValueRef byteVal, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+        var ctpopName = "llvm.ctpop.i8";
+        var fn = ctx.Module.GetNamedFunction(ctpopName);
+        if (fn.Handle == IntPtr.Zero)
+        {
+            var fnType = LLVMTypeRef.CreateFunction(i8, new[] { i8 }, false);
+            fn = ctx.Module.AddFunction(ctpopName, fnType);
+        }
+        var fnType2 = LLVMTypeRef.CreateFunction(i8, new[] { i8 }, false);
+        var pop = ctx.Builder.BuildCall2(fnType2, fn, new[] { byteVal }, $"{label}_pop");
+        var lsb = ctx.Builder.BuildAnd(pop,
+            LLVMValueRef.CreateConstInt(i8, 1, false), $"{label}_pop_lsb");
+        return ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, lsb,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_pf");
+    }
+
+    internal static LLVMValueRef X86AluHelpers_BuildPackedFlagsPublic(
+        EmitContext ctx,
+        LLVMValueRef cf, LLVMValueRef pf, LLVMValueRef af,
+        LLVMValueRef zf, LLVMValueRef sf, LLVMValueRef of,
+        string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        LLVMValueRef ZxShl(LLVMValueRef bit, int pos, string n)
+        {
+            var z = ctx.Builder.BuildZExt(bit, i16, $"{label}_{n}_z");
+            if (pos == 0) return z;
+            return ctx.Builder.BuildShl(z,
+                LLVMValueRef.CreateConstInt(i16, (ulong)pos, false), $"{label}_{n}_sh");
+        }
+        var bcf = ZxShl(cf, 0, "cf");
+        var bpf = ZxShl(pf, 2, "pf");
+        var baf = ZxShl(af, 4, "af");
+        var bzf = ZxShl(zf, 6, "zf");
+        var bsf = ZxShl(sf, 7, "sf");
+        var bof = ZxShl(of, 11, "of");
+        var t1 = ctx.Builder.BuildOr(bcf, bpf, $"{label}_t1");
+        var t2 = ctx.Builder.BuildOr(t1, baf, $"{label}_t2");
+        var t3 = ctx.Builder.BuildOr(t2, bzf, $"{label}_t3");
+        var t4 = ctx.Builder.BuildOr(t3, bsf, $"{label}_t4");
+        return ctx.Builder.BuildOr(t4, bof, $"{label}_packed");
+    }
+
+    internal static void X86AluHelpers_StoreAluFlagsPublic(EmitContext ctx, LLVMValueRef packed, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        var current = ctx.Builder.BuildLoad2(i16, fPtr, $"{label}_flags_cur");
+        var notMask = LLVMValueRef.CreateConstInt(i16, (ulong)(unchecked((ushort)~0x08D5)), false);
+        var keep = ctx.Builder.BuildAnd(current, notMask, $"{label}_flags_keep");
+        var maskedNew = ctx.Builder.BuildAnd(packed,
+            LLVMValueRef.CreateConstInt(i16, 0x08D5, false), $"{label}_flags_new_masked");
+        var merged = ctx.Builder.BuildOr(keep, maskedNew, $"{label}_flags_merged");
+        ctx.Builder.BuildStore(merged, fPtr);
     }
 }
 
@@ -2889,7 +3021,21 @@ internal sealed class X86F7GroupDispatchEmitter : IMicroOpEmitter
         X86ModRmMemHelpers.BuildStoreW16(ctx, negV);
         ctx.Builder.BuildBr(endBB);
 
-        for (int i = 4; i <= 7; i++)
+        // /4 MUL r/m16: DX:AX = AX * lhs (unsigned). Flag rules per 8088:
+        //   CF = OF = (DX != 0)
+        //   SF/ZF/PF reflect DX (high half) per the Tom Harte high-byte
+        //   quirk (24.4.4 reverse-engineered the exact rule).
+        ctx.Builder.PositionAtEnd(arms[4]);
+        EmitMulW16(ctx, lhs, signed: false);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(arms[5]);
+        EmitMulW16(ctx, lhs, signed: true);
+        ctx.Builder.BuildBr(endBB);
+
+        // /6 DIV / /7 IDIV deferred — divide-by-zero exception + silicon
+        // quirks need careful Tom Harte alignment.
+        for (int i = 6; i <= 7; i++)
         {
             ctx.Builder.PositionAtEnd(arms[i]);
             ctx.Builder.BuildBr(endBB);
@@ -2898,5 +3044,93 @@ internal sealed class X86F7GroupDispatchEmitter : IMicroOpEmitter
         ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
         ctx.Builder.PositionAtEnd(endBB);
+    }
+
+    /// <summary>
+    /// Emit MUL/IMUL r/m16 IR.
+    ///   product i32 = AX (s/zext to i32) * lhs (s/zext to i32)
+    ///   AX = product[15:0],  DX = product[31:16]
+    ///   CF = OF = (DX != 0)
+    ///   SF/ZF/PF reflect DX (high half) — 8088 high-half quirk.
+    /// </summary>
+    private static void EmitMulW16(EmitContext ctx, LLVMValueRef lhs16, bool signed)
+    {
+        var i1  = LLVMTypeRef.Int1;
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var label = signed ? "imul16" : "mul16";
+
+        var ax = X86_16Emitters.ReadGpr16(ctx, 0, $"{label}_ax");
+        LLVMValueRef axW = signed
+            ? ctx.Builder.BuildSExt(ax, i32, $"{label}_ax_w")
+            : ctx.Builder.BuildZExt(ax, i32, $"{label}_ax_w");
+        LLVMValueRef rhsW = signed
+            ? ctx.Builder.BuildSExt(lhs16, i32, $"{label}_b_w")
+            : ctx.Builder.BuildZExt(lhs16, i32, $"{label}_b_w");
+        var prod = ctx.Builder.BuildMul(axW, rhsW, $"{label}_prod");
+
+        var lo = ctx.Builder.BuildTrunc(prod, i16, $"{label}_lo");
+        X86_16Emitters.WriteGpr16(ctx, 0, lo);   // AX
+        var hiShift = ctx.Builder.BuildLShr(prod,
+            LLVMValueRef.CreateConstInt(i32, 16, false), $"{label}_hi_sh");
+        var hi = ctx.Builder.BuildTrunc(hiShift, i16, $"{label}_hi");
+        X86_16Emitters.WriteGpr16(ctx, 2, hi);   // DX (GPR index 2)
+
+        // CF = OF = (DX != 0)
+        var dxNonZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, hi,
+            LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_dx_nz");
+
+        // SF from DX bit 15
+        var sfMask = ctx.Builder.BuildAnd(hi,
+            LLVMValueRef.CreateConstInt(i16, 0x8000, false), $"{label}_sf_mask");
+        var sf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, sfMask,
+            LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_sf");
+        // ZF from DX
+        var zf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, hi,
+            LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_zf");
+        // PF from low byte of DX
+        var dxLow = ctx.Builder.BuildTrunc(hi, i8, $"{label}_dx_lo");
+        var pf = X86F6GroupDispatchEmitter.X86AluHelpers_BuildParityEvenPublic(ctx, dxLow, label);
+
+        var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
+        var packed = X86F6GroupDispatchEmitter.X86AluHelpers_BuildPackedFlagsPublic(
+            ctx, dxNonZero, pf, i1false, zf, sf, dxNonZero, label);
+        X86F6GroupDispatchEmitter.X86AluHelpers_StoreAluFlagsPublic(ctx, packed, label);
+    }
+}
+
+// ============================================================================
+// 24.6.6e — CBW (0x98) sign-extends AL to AX, CWD (0x99) sign-extends AX
+// to DX:AX. Both don't touch flags.
+// ============================================================================
+
+internal sealed class X86CbwEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_cbw";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var al  = X86_16Emitters.ReadGpr8(ctx, 0, "cbw_al");
+        var ax  = ctx.Builder.BuildSExt(al, i16, "cbw_ax");
+        X86_16Emitters.WriteGpr16(ctx, 0, ax);
+    }
+}
+
+internal sealed class X86CwdEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_cwd";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var ax  = X86_16Emitters.ReadGpr16(ctx, 0, "cwd_ax");
+        // DX = AX bit 15 ? 0xFFFF : 0x0000 = arithmetic shift right by 15.
+        var sext32 = ctx.Builder.BuildSExt(ax, i32, "cwd_sx");
+        var dxShift = ctx.Builder.BuildLShr(sext32,
+            LLVMValueRef.CreateConstInt(i32, 16, false), "cwd_dxsh");
+        var dx = ctx.Builder.BuildTrunc(dxShift, i16, "cwd_dx");
+        X86_16Emitters.WriteGpr16(ctx, 2, dx);
     }
 }

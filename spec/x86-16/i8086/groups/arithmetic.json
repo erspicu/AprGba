@@ -448,6 +448,23 @@
         { "op": "x86_modrm_load_w16",   "out": "lhs" },
         { "op": "x86_f7_group_dispatch" }
       ]}]
+    },
+
+    {
+      "name": "Cbw",
+      "comment": "0x98 CBW (Convert Byte to Word) — sign-extend AL into AX. No flag update.",
+      "fields": {}, "mask": "0xFF", "match": "0x98",
+      "instructions": [{ "mnemonic": "CBW", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CBW", "cycles": { "form": "2" }, "steps": [
+        { "op": "x86_cbw" }
+      ]}]
+    },
+    {
+      "name": "Cwd",
+      "comment": "0x99 CWD (Convert Word to Dword) — sign-extend AX into DX:AX. No flag update.",
+      "fields": {}, "mask": "0xFF", "match": "0x99",
+      "instructions": [{ "mnemonic": "CWD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CWD", "cycles": { "form": "5" }, "steps": [
+        { "op": "x86_cwd" }
+      ]}]
     }
   ]
 }

@@ -1728,6 +1728,146 @@ public class X86JsonCpuTests
         Assert.False(cpu.State.FlagS);          // 0x1234 high bit = 0
     }
 
+    // ---------------- 24.6.6e — MUL / IMUL / CBW / CWD ----------------
+
+    /// <summary>
+    /// 0xF6 /4 MUL r/m8: F6 E3 → MUL BL.
+    /// modrm=E3: mod=11 reg=100(=MUL) rm=011(=BL). AL=0x10, BL=0x20 → AX=0x200.
+    /// AH=0x02, so CF=OF=1.
+    /// </summary>
+    [Fact]
+    public void Step_MulBl_FullProductInAx()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF6, 0xE3, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x10; s.B.L = 0x20;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0200, cpu.State.A.X);
+        Assert.True(cpu.State.FlagC);     // AH != 0
+        Assert.True(cpu.State.FlagO);
+    }
+
+    /// <summary>
+    /// MUL with small product (fits in AL): AL=0x05 * BL=0x03 = 0x0F.
+    /// AH = 0, so CF=OF=0. ZF=1 (AH zero per 8088 quirk).
+    /// </summary>
+    [Fact]
+    public void Step_MulBl_SmallProduct_ClearsCfOf()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF6, 0xE3, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x05; s.B.L = 0x03;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x000F, cpu.State.A.X);
+        Assert.False(cpu.State.FlagC);
+        Assert.False(cpu.State.FlagO);
+        Assert.True(cpu.State.FlagZ);   // ZF reflects AH=0 (8088 quirk)
+    }
+
+    /// <summary>
+    /// 0xF6 /5 IMUL r/m8: F6 EB → IMUL BL.
+    /// modrm=EB: mod=11 reg=101(=IMUL) rm=011(=BL). AL=0xFF (-1) * BL=0x05 = 0xFFFB (-5).
+    /// AH = 0xFF (sign-extended), so CF=OF=1.
+    /// </summary>
+    [Fact]
+    public void Step_ImulBl_NegativeResult()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF6, 0xEB, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0xFF;   // -1
+        s.B.L = 0x05;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xFFFB, cpu.State.A.X);   // -5 sign-extended
+        Assert.True(cpu.State.FlagC);          // AH=0xFF, non-zero per 8088 rule
+        Assert.True(cpu.State.FlagO);
+    }
+
+    /// <summary>
+    /// 0xF7 /4 MUL r/m16: F7 E3 → MUL BX.
+    /// modrm=E3: mod=11 reg=100(=MUL) rm=011(=BX). AX=0x100, BX=0x100 → DX:AX = 0x10000.
+    /// AX=0x0000, DX=0x0001. CF=OF=1.
+    /// </summary>
+    [Fact]
+    public void Step_MulBx_DxAxResult()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF7, 0xE3, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x100; s.B.X = 0x100;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0000, cpu.State.A.X);
+        Assert.Equal(0x0001, cpu.State.D.X);
+        Assert.True(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagO);
+    }
+
+    /// <summary>
+    /// 0x98 CBW: AL=0x80 (-128 signed) → AX=0xFF80.
+    /// </summary>
+    [Fact]
+    public void Step_Cbw_SignExtendNegative()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x98, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x80;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xFF80, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// CBW with AL positive: AL=0x42 → AX=0x0042 (zero-extends since high bit clear).
+    /// </summary>
+    [Fact]
+    public void Step_Cbw_ZeroExtendPositive()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x98, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x42;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0042, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// 0x99 CWD: AX=0x8000 (-32768) → DX=0xFFFF, AX unchanged.
+    /// </summary>
+    [Fact]
+    public void Step_Cwd_SignExtendNegative()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x99, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x8000;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x8000, cpu.State.A.X);
+        Assert.Equal(0xFFFF, cpu.State.D.X);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,
