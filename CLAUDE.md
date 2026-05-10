@@ -23,10 +23,14 @@ Commit 前依改動性質跑對應 tier 的 QA — 詳細流程在
 | 4 | 大型架構變更 | T1 + T2 + T3 + 完整 matrix + baseline 更新 |
 
 共通規則：
-- 任何測試 / CLI 跑超過 1 分鐘視為掛了 — **不要拉長 timeout，找 root cause**
+- **Timeout 規則（兩段式）**：
+  - **小測試 / 單 CLI run / smoke / build**：≤ 1 分鐘 (60000ms)。超過視為掛了，**不要拉長 timeout，找 root cause**。
+  - **正當的長測試**（full T1 838 tests、跨 CPU bench sweep、bench-loop 含 baseline、screenshot matrix x 多 ROM）：可設 **≤ 5 分鐘 (300000ms)**。但只能用在「明知這 N 個 task 加總會超過 1 min」的情境，且要在 prompt/comment 註明為什麼合理。
+  - **絕對不准設超過 5 分鐘**。需要更久的 → 拆成多 task / 用 `--filter` / 丟 background。
+  - 完整 T1 (838 tests, ~6 min) 一律 `run_in_background: true` + TaskOutput 等通知 — 不能 foreground 跑。
 - output 一律 `> temp/<name>.log 2>&1`
 - 強制 `--no-incremental` rebuild 避免 stale DLL
-- 遇 file lock 先 `Stop-Process -Name testhost -Force`
+- 遇 file lock 先 `Stop-Process -Name testhost,dotnet,MSBuild -Force`
 
 ## Knowledgebase — Gemini 查詢工具
 
