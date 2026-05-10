@@ -138,6 +138,97 @@ public class X86_16ProtectedModeTests
         Assert.Throws<ArgumentOutOfRangeException>(() => Selector.FromParts(0, false, 4));
     }
 
+    /// <summary>
+    /// Sprint 27.10a — integration test exercising the full helper stack
+    /// shipped through Phase 27b sprints 27.6-27.9. This is a hand-coded
+    /// scenario (no LLVM IR / emitters yet) that builds a realistic GDT
+    /// in memory + state buffer, then runs the descriptor-lookup +
+    /// privilege-check pipeline a kernel would invoke on every selector
+    /// load.
+    ///
+    /// Flow:
+    ///   1. Set up GDT with three descriptors at 0x10000:
+    ///      [0]      NULL (always required)
+    ///      [1]      ring-0 code segment, base 0x100000, limit 0xFFFF
+    ///      [2]      ring-3 data segment, base 0x200000, limit 0xFFFF
+    ///   2. Build a state buffer where MSW = ProtectedMode + CS = sel(idx=1)
+    ///   3. Verify IsProtectedMode reports true
+    ///   4. ReadDescriptor for selector idx=1 returns the code descriptor
+    ///   5. Privilege check: CPL=0 reading user data (DPL=3) → allowed
+    ///   6. Privilege check: CPL=3 trying to write kernel data (DPL=0) → denied
+    ///
+    /// This is the architectural proof that Sprint 27.10b+ doesn't need
+    /// to invent new helpers — it just routes IR through what we already have.
+    /// </summary>
+    [Fact]
+    public void Helper_Stack_Integration_GDT_Plus_Privilege_Pipeline()
+    {
+        // ----- 1. Set up GDT in a fake bus -----
+        var bus = new FlatMemoryBus(0x300000);   // 3 MB span (covers our 0x200000 segment base)
+        const uint gdtBase = 0x10000;
+
+        // GDT[0]: NULL descriptor — required by 80286 (selector 0 is invalid).
+        WriteDescriptor(bus, Selector.FromParts(0, false, 0), gdtBase, 0,
+            new Descriptor(0, 0, 0));
+
+        // GDT[1]: ring-0 code, base 0x100000, limit 0xFFFF, present + readable
+        // AccessRights 0x9A = P=1 | DPL=00 | S=1 | Type=1010 (code, readable, !accessed)
+        WriteDescriptor(bus, Selector.FromParts(1, false, 0), gdtBase, 0,
+            new Descriptor(Limit: 0xFFFF, BaseLow24: 0x100000, AccessRights: 0x9A));
+
+        // GDT[2]: ring-3 data, base 0x200000, limit 0xFFFF, writable
+        // AccessRights 0xF2 = P=1 | DPL=11 | S=1 | Type=0010 (data, writable, !accessed)
+        WriteDescriptor(bus, Selector.FromParts(2, false, 0), gdtBase, 0,
+            new Descriptor(Limit: 0xFFFF, BaseLow24: 0x200000, AccessRights: 0xF2));
+
+        // ----- 2. Build state buffer (small mock, MSW at offset 0) -----
+        var state = new byte[8];
+        var mswPM = Msw.RealMode.WithPe(true).Raw;   // 0xFFF1
+        state[0] = (byte)(mswPM & 0xFF);
+        state[1] = (byte)(mswPM >> 8);
+
+        // ----- 3. PE bit detection -----
+        Assert.True(IsProtectedMode(state, 0));
+
+        // ----- 4. Lookup GDT[1] returns the code descriptor we wrote -----
+        var codeSel = Selector.FromParts(1, false, 0);
+        var codeDesc = ReadDescriptor(bus, codeSel, gdtBase, 0);
+        Assert.Equal(0xFFFF,    codeDesc.Limit);
+        Assert.Equal(0x100000u, codeDesc.BaseLow24);
+        Assert.True(codeDesc.P);
+        Assert.True(codeDesc.S);
+        Assert.True(codeDesc.Executable);
+        Assert.True(codeDesc.CodeReadable);
+        Assert.Equal(0, codeDesc.Dpl);
+
+        // ----- 5. Read GDT[2] for the data segment -----
+        var dataSel = Selector.FromParts(2, false, 3);   // RPL=3 to test caps
+        var dataDesc = ReadDescriptor(bus, dataSel, gdtBase, 0);
+        Assert.Equal(0x200000u, dataDesc.BaseLow24);
+        Assert.True(dataDesc.S);
+        Assert.False(dataDesc.Executable);
+        Assert.True(dataDesc.DataWritable);
+        Assert.Equal(3, dataDesc.Dpl);
+
+        // ----- 6. Privilege checks -----
+        // CPL=0 (kernel) reading ring-3 data with selector RPL=0: ALLOWED
+        Assert.True(CanAccessDataSegment(cpl: 0, rpl: 0, dpl: dataDesc.Dpl));
+        // CPL=0 reading ring-3 data with RPL=3 (selector says "act as user"):
+        // max(0,3)=3 <= dpl 3 -> ALLOWED
+        Assert.True(CanAccessDataSegment(cpl: 0, rpl: 3, dpl: dataDesc.Dpl));
+
+        // CPL=3 (user) trying to read kernel-only data segment (DPL=0): DENIED
+        // For this we need a hypothetical kernel-data DPL=0 — codeDesc has DPL=0
+        // but it's a code segment, not data. Use codeDesc.Dpl as the privileged
+        // level to compare.
+        Assert.False(CanAccessDataSegment(cpl: 3, rpl: 3, dpl: codeDesc.Dpl));
+
+        // CPL=0 entering non-conforming code at DPL=0: ALLOWED (CPL == DPL)
+        Assert.True(CanEnterNonConformingCode(0, codeDesc.Dpl));
+        // CPL=3 entering DPL=0 non-conforming code: DENIED
+        Assert.False(CanEnterNonConformingCode(3, codeDesc.Dpl));
+    }
+
     [Fact]
     public void ReadDescriptor_Roundtrips_Through_Bus()
     {
