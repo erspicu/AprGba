@@ -2,10 +2,11 @@
 
 > **Status**：**IN PROGRESS**（2026-05-10）— 24.0–24.5 完工 (13 commits, 6
 > paper-quality screenshots, 1.31M Tom Harte SST cases 全綠)；
-> 24.6 JSON-driven port: **24.6.1–24.6.5d 完工** (9 commits, 30/30
-> JsonCpu tests + 703/703 T1，full MOV through framework — NOP/HLT/
-> reg-imm/reg-direct/memory ModR/M + 4 segment-override prefixes)；
-> 24.6.5e–g + 24.6.6–9 待做。
+> 24.6 JSON-driven port: **24.6.1–24.6.5g 完工** (12 commits, 56/56
+> JsonCpu tests + 729/729 T1，full data-transfer group through framework
+> — NOP / HLT / 全 MOV / PUSH / POP / XCHG / LEA / LDS / LES / 4
+> segment-override prefixes; 69 unique opcodes covered)；
+> 24.6.6–9 + 24.7 + 24.8 待做。
 >
 > **Trigger**：第 4 顆 CPU 候選 = Intel 8086（用以前寫的 Apr86 emulator
 > 當 reference oracle 的部分）。要解決的核心問題：8086 是 CISC、segmented
@@ -292,11 +293,12 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 
 ## 8. Phase plan
 
-> **目前累計**（2026-05-10）：22 個 commits（24.0 → 24.5：13 + 24.6.1 →
-> 24.6.5d：9）；T1 baseline 703/703 全綠；JSON-driven backend 已覆蓋 28
-> opcodes + 4 個 segment-override prefix（NOP + HLT + B0-BF MOV r,imm
-> 16 個 + 88-8B MOV r/m↔r 4 個全 ModR/M + 0x26/0x2E/0x36/0x3E 全 4 個
-> segment override prefixes）。剩 24.6.5e–g + 24.6.6–9 + 24.7 + 24.8。
+> **目前累計**（2026-05-10）：25 個 commits（24.0 → 24.5：13 + 24.6.1 →
+> 24.6.5g：12）；T1 baseline 729/729 全綠；JSON-driven backend 已覆蓋
+> **69 unique opcodes**：完整 MOV / PUSH / POP / XCHG / LEA / LDS / LES /
+> segment override prefixes / NOP / HLT。**24.6.5 整段 ✅ 完成**。
+> 剩 24.6.6 (ALU + 9-flag) + 24.6.7 (控流/移位/字串/INT/BCD/IO) + 24.6.8
+> (block-JIT) + 24.6.9 (demo 重跑) + 24.7 + 24.8。
 
 | Phase | 內容 | 成果 | 狀態 | Commit / 紀錄 |
 |---|---|---|---|---|
@@ -323,9 +325,9 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | 24.6.5b | MOV r/m, r 與 r, r/m (88-8B) — fetch_modrm + read_reg{8,16}_field with mod=11 register-direct only | 5 tests | ✅ | `06d9dab` |
 | 24.6.5c | Memory ModR/M — `x86_modrm_compute_ea` (full 8086 EA grammar：BX+SI/BP+disp/disp16/etc.) + `x86_modrm_load/store_w{8,16}` mod-aware emitters | 7 mem tests | ✅ | `384eca5` |
 | 24.6.5d | Segment override prefixes (0x26 ES / 0x2E CS / 0x36 SS / 0x3E DS) — C# Step() 在 dispatch 前消化 prefix 並寫入 SEG_OVERRIDE state slot；EA emitter 在計算完 default ea_seg 後若 override active 則替換為對應 segment 值；one-shot per instruction | 6 segment-override tests；last-prefix-wins；mod=11 reg-direct 不受影響 | ✅ | `d8e8f68` |
-| 24.6.5e | MOV r/m, imm (C6/C7) + MOV moffs (A0-A3) + MOV sreg/r,r (8C/8E) | 7 opcodes；reuses ModR/M + segment-reg slot routing | ⏳ | — |
-| 24.6.5f | PUSH/POP r16 (50-5F) + PUSH/POP sreg + PUSHF/POPF + PUSH r/m (FF /6) + POP r/m (8F) | 22 opcodes；SS:SP push/pop helper + 8088 PUSH SP quirk | ⏳ | — |
-| 24.6.5g | XCHG r/m,r (86/87) + XCHG AX,r16 (90-97) + LEA (8D) + LDS/LES (C4/C5) | 12 opcodes；LEA 用 EA 但不 load | ⏳ | — |
+| 24.6.5e | MOV r/m, imm (C6/C7) + MOV moffs (A0-A3) + MOV sreg/r,r (8C/8E) — 加 `LoadDefaultOrOverrideSegment` helper, 4 moffs emitters, 2 sreg field emitters；C6/C7 純 reuse 既有 fetch_imm + modrm_store | 11 tests；7 opcodes ✅ | ✅ | `ab2a023` |
+| 24.6.5f | PUSH/POP r16 (50-5F) + PUSH/POP sreg + PUSHF/POPF + POP r/m (8F /0)；FF /6 PUSH r/m 延到 24.6.7 跟 FF group 一起 | 7 tests；19 opcodes；SS:SP helper + 8088 PUSH-SP quirk + PUSHF reserved-bit mask | ✅ | `1ab9bb9` |
+| 24.6.5g | XCHG r/m,r (86/87) + XCHG AX,r16 (91-97; 90 仍是 NOP via mask shadow) + LEA (8D) + LDS/LES (C4/C5) — 加 xchg_ax_reg16_field, lea, load_far_pointer 3 個 emitter | 8 tests；11 opcodes；LEA 不碰 memory；LDS/LES 雙 16-bit read | ✅ | `7ad24a8` |
 | 24.6.6 | ALU group — ADD/OR/ADC/SBB/AND/SUB/XOR/CMP across 6 forms × 8-bit/16-bit + 9-flag IR computation (CF/PF/AF/ZF/SF/OF rules in LLVM IR mirroring `X86Alu.cs`) | ~80 opcodes；Tom Harte SST 8088 v2 ALU 子集全綠 | ⏳ | — |
 | 24.6.7 | Control flow (JMP/Jcc/CALL/RET/LOOP/JCXZ) + shift/rotate (D0-D3) + string ops + REP prefix + INT/IRET + BCD + IO | ~120 opcodes；Tom Harte 1.31M 全綠 through json backend | ⏳ | — |
 | 24.6.8 | Block-JIT mode — alloca + mem2reg + IR-level cycle budget (à la N1.B' for NES) | 三 backend (legacy / json-instr / json-block) 同步 | ⏳ | — |
@@ -344,12 +346,14 @@ Tom Harte SST cases 全綠）。**legacy backend 已是「8086 emulator 並排�
 在」狀態**，但要讓 8086 真正成為 framework 第 4 顆 CPU、走同一條 SpecCompiler
 + LLVM JIT pipeline，**24.6 JSON-driven port 是必做的下一步**。
 
-**24.6 進度 (2026-05-10)**：sub-phase **24.6.1 → 24.6.5d 完成** — JSON-driven
-8086 已能透過 framework SpecCompiler + LLVM JIT 跑 NOP / HLT / 全套 MOV
-(B0-BF reg/imm + 88-8B reg-to-reg + 88-8B 全 ModR/M memory grammar) +
-4 個 segment-override prefix（ES/CS/SS/DS，one-shot, last-wins）。
-703/703 T1 tests 全綠。剩 24.6.5e-g + 24.6.6-9 = 雜項 MOV / PUSH-POP /
-XCHG-LEA / ALU / 控流 / 移位 / 字串 / block-JIT / demo 重跑。
+**24.6 進度 (2026-05-10)**：sub-phase **24.6.1 → 24.6.5g 完成** —
+**24.6.5 整段 ✅**。JSON-driven 8086 已能透過 framework SpecCompiler +
+LLVM JIT 跑全部 data-transfer group（69 opcodes）：MOV r/imm, r/r/m
+(全 ModR/M), r/m,imm, moffs, sreg, segment override prefixes, PUSH/POP
+r16/sreg/FLAGS, POP r/m, XCHG (3 forms), LEA, LDS, LES, plus NOP/HLT。
+8088 PUSH-SP quirk + PUSHF reserved-bit mask 都正確處理。729/729 T1
+tests 全綠。剩 24.6.6 (ALU + 9-flag) + 24.6.7 (控流 / 移位 / 字串 /
+INT / BCD / IO) + 24.6.8 (block-JIT) + 24.6.9 (demo 重跑)。
 
 **最早可截圖 milestone**：**24.3 結束**（hello-cga.com → PNG）— 已達成。
 **最早 paper-quality milestone**：**24.5 結束**（6 個 demo 截圖 + Tom Harte
