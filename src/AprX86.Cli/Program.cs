@@ -28,6 +28,7 @@ ushort entrySeg = 0x0000;
 ushort entryOff = 0x0100;     // CP/M .com convention
 long maxCycles = 5_000_000L;
 string backend = "legacy";
+string variant = "i8086";
 bool verbose = false;
 
 foreach (var arg in args)
@@ -42,6 +43,7 @@ foreach (var arg in args)
     else if (arg.StartsWith("--entry-off="))         entryOff = ParseHex16(arg.Substring("--entry-off=".Length));
     else if (arg.StartsWith("--max-cycles="))        maxCycles = long.Parse(arg.Substring("--max-cycles=".Length));
     else if (arg.StartsWith("--backend="))           backend  = arg.Substring("--backend=".Length);
+    else if (arg.StartsWith("--variant="))           variant  = arg.Substring("--variant=".Length);
     else if (arg == "--verbose" || arg == "-v")      verbose = true;
     else { Console.Error.WriteLine($"unknown arg: {arg}"); PrintUsage(); return 2; }
 }
@@ -107,11 +109,22 @@ var mem = new X86Memory();
 var rom = File.ReadAllBytes(romPath);
 mem.LoadBinary(rom, entrySeg, entryOff);
 
+// 25.5 — variant gate. legacy is hand-coded 8086; reject 80186-only
+// variants explicitly so users see a clear error instead of silent
+// missing-opcode behavior.
+if (backend == "legacy" && variant != "i8086" && variant != "i8088")
+{
+    Console.Error.WriteLine(
+        $"error: --backend=legacy supports only --variant=i8086|i8088 (got '{variant}'). " +
+        $"Use --backend=json or --backend=json-block for i80186/i80188.");
+    return 6;
+}
+
 IX86CpuBackend cpu = backend switch
 {
     "legacy"     => new X86LegacyCpu(mem),
-    "json"       => new X86JsonCpu(mem, enableBlockJit: false),
-    "json-block" => new X86JsonCpu(mem, enableBlockJit: true),
+    "json"       => new X86JsonCpu(mem, enableBlockJit: false, variant: variant),
+    "json-block" => new X86JsonCpu(mem, enableBlockJit: true,  variant: variant),
     _            => throw new NotSupportedException($"backend '{backend}' not supported. Valid: legacy / json / json-block."),
 };
 cpu.Reset();
@@ -121,6 +134,7 @@ Console.WriteLine($"AprX86 — Intel x86-16 harness (phase 24.1 stub)");
 Console.WriteLine($"  rom:        {romPath} ({rom.Length} bytes)");
 Console.WriteLine($"  entry:      {entrySeg:X4}:{entryOff:X4}");
 Console.WriteLine($"  backend:    {cpu.BackendName}");
+Console.WriteLine($"  variant:    {variant}");
 Console.WriteLine($"  max-cycles: {maxCycles:N0}");
 Console.WriteLine();
 
@@ -174,7 +188,8 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("usage:");
     Console.Error.WriteLine("  apr-x86 --rom=<path> [--entry-seg=<hex>] [--entry-off=<hex>]");
-    Console.Error.WriteLine("          [--max-cycles=N] [--backend=legacy|json|json-block] [--verbose]");
+    Console.Error.WriteLine("          [--max-cycles=N] [--backend=legacy|json|json-block]");
+    Console.Error.WriteLine("          [--variant=i8086|i8088|i80186|i80188] [--verbose]");
     Console.Error.WriteLine("          [--screenshot=<path>]");
     Console.Error.WriteLine();
     Console.Error.WriteLine("  apr-x86 --tomharte=<.json[.gz]> [--tomharte-limit=N]");

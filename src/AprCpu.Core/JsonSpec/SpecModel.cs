@@ -262,13 +262,22 @@ public sealed record InstructionDef(
 
 public sealed record InstructionSelector(string Field, string Value)
 {
-    /// <summary>Decode the JSON value (binary string or integer) into a uint.</summary>
-    public uint NumericValue =>
-        Value.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? Convert.ToUInt32(Value.Substring(2), 16)
-        : Value.All(c => c is '0' or '1')
-            ? Convert.ToUInt32(Value, 2)
-        : uint.Parse(Value);
+    /// <summary>Decode the JSON value (binary string or integer) into a uint.
+    /// Accepts: "0xFF" hex, "0b1010" binary-with-prefix, "1010" plain binary,
+    /// or plain decimal.</summary>
+    public uint NumericValue
+    {
+        get
+        {
+            if (Value.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                return Convert.ToUInt32(Value.Substring(2), 16);
+            if (Value.StartsWith("0b", StringComparison.OrdinalIgnoreCase))
+                return Convert.ToUInt32(Value.Substring(2), 2);
+            if (Value.Length > 0 && Value.All(c => c is '0' or '1'))
+                return Convert.ToUInt32(Value, 2);
+            return uint.Parse(Value);
+        }
+    }
 }
 
 public sealed record Cycles(

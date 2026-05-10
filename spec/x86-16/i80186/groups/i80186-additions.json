@@ -308,7 +308,12 @@
         "manual_ref": "Intel iAPX 186 §rotate",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b000" },
-        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "rol" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w8", "out": "lhs" },
+          { "op": "x86_shift_rm8_imm8", "kind": "rol" }
+        ]
       },
       {
         "id": "ROR_rm8_imm8_sel001",
@@ -318,7 +323,12 @@
         "manual_ref": "Intel iAPX 186 §rotate",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b001" },
-        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "ror" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w8", "out": "lhs" },
+          { "op": "x86_shift_rm8_imm8", "kind": "ror" }
+        ]
       },
       {
         "id": "RCL_rm8_imm8_sel010",
@@ -328,7 +338,12 @@
         "manual_ref": "Intel iAPX 186 §rotate",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b010" },
-        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "rcl" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w8", "out": "lhs" },
+          { "op": "x86_shift_rm8_imm8", "kind": "rcl" }
+        ]
       },
       {
         "id": "RCR_rm8_imm8_sel011",
@@ -338,7 +353,12 @@
         "manual_ref": "Intel iAPX 186 §rotate",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b011" },
-        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "rcr" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w8", "out": "lhs" },
+          { "op": "x86_shift_rm8_imm8", "kind": "rcr" }
+        ]
       },
       {
         "id": "SHL_rm8_imm8_sel100",
@@ -348,7 +368,12 @@
         "manual_ref": "Intel iAPX 186 §shift",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b100" },
-        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "shl" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w8", "out": "lhs" },
+          { "op": "x86_shift_rm8_imm8", "kind": "shl" }
+        ]
       },
       {
         "id": "SHR_rm8_imm8_sel101",
@@ -358,7 +383,12 @@
         "manual_ref": "Intel iAPX 186 §shift",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b101" },
-        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "shr" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w8", "out": "lhs" },
+          { "op": "x86_shift_rm8_imm8", "kind": "shr" }
+        ]
       },
       {
         "id": "SAR_rm8_imm8_sel111",
@@ -368,7 +398,12 @@
         "manual_ref": "Intel iAPX 186 §shift",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b111" },
-        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "sar" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w8", "out": "lhs" },
+          { "op": "x86_shift_rm8_imm8", "kind": "sar" }
+        ]
       }
     ]
   },
@@ -388,7 +423,12 @@
         "manual_ref": "Intel iAPX 186 §rotate",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b000" },
-        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "rol" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w16", "out": "lhs" },
+          { "op": "x86_shift_rm16_imm8", "kind": "rol" }
+        ]
       },
       {
         "id": "ROR_rm16_imm8_sel001",
@@ -398,7 +438,12 @@
         "manual_ref": "Intel iAPX 186 §rotate",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b001" },
-        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "ror" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w16", "out": "lhs" },
+          { "op": "x86_shift_rm16_imm8", "kind": "ror" }
+        ]
       },
       {
         "id": "RCL_rm16_imm8_sel010",
@@ -408,7 +453,12 @@
         "manual_ref": "Intel iAPX 186 §rotate",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b010" },
-        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "rcl" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w16", "out": "lhs" },
+          { "op": "x86_shift_rm16_imm8", "kind": "rcl" }
+        ]
       },
       {
         "id": "RCR_rm16_imm8_sel011",
@@ -418,7 +468,12 @@
         "manual_ref": "Intel iAPX 186 §rotate",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b011" },
-        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "rcr" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w16", "out": "lhs" },
+          { "op": "x86_shift_rm16_imm8", "kind": "rcr" }
+        ]
       },
       {
         "id": "SHL_rm16_imm8_sel100",
@@ -428,7 +483,12 @@
         "manual_ref": "Intel iAPX 186 §shift",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b100" },
-        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "shl" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w16", "out": "lhs" },
+          { "op": "x86_shift_rm16_imm8", "kind": "shl" }
+        ]
       },
       {
         "id": "SHR_rm16_imm8_sel101",
@@ -438,7 +498,12 @@
         "manual_ref": "Intel iAPX 186 §shift",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b101" },
-        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "shr" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w16", "out": "lhs" },
+          { "op": "x86_shift_rm16_imm8", "kind": "shr" }
+        ]
       },
       {
         "id": "SAR_rm16_imm8_sel111",
@@ -448,7 +513,12 @@
         "manual_ref": "Intel iAPX 186 §shift",
         "cycles": { "form": "5" },
         "selector": { "field": "modrm_reg", "value": "0b111" },
-        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "sar" }]
+        "steps": [
+          { "op": "x86_fetch_modrm" },
+          { "op": "x86_modrm_compute_ea" },
+          { "op": "x86_modrm_load_w16", "out": "lhs" },
+          { "op": "x86_shift_rm16_imm8", "kind": "sar" }
+        ]
       }
     ]
   }

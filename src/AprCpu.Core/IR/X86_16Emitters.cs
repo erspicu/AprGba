@@ -5932,11 +5932,9 @@ internal abstract class X86ShiftRmImmBase : IMicroOpEmitter
         var i8 = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
 
-        // Spec lists this as the FIRST step on a group-byte format —
-        // ModR/M was already fetched at decode time by the format
-        // dispatcher path. Compute EA + load.
-        new X86ModRmComputeEaEmitter().Emit(ctx,
-            new MicroOpStep("x86_modrm_compute_ea", default));
+        // Spec preceded this step with x86_fetch_modrm + x86_modrm_compute_ea
+        // + x86_modrm_load_w{8,16} (out: "lhs"). So `lhs` is in ctx.Values.
+        var rm = ctx.Resolve("lhs");
         var imm8 = X86_16Emitters.FetchImm8(ctx, "shi_imm");
         // 80186 silicon: count masked to 5 bits.
         var count = ctx.Builder.BuildAnd(imm8,
@@ -5944,7 +5942,6 @@ internal abstract class X86ShiftRmImmBase : IMicroOpEmitter
 
         if (IsW16)
         {
-            var rm = X86ModRmMemHelpers.BuildLoadW16(ctx, "shi_rm");
             var count16 = ctx.Builder.BuildZExt(count, i16, "shi_c16");
             LLVMValueRef result = kind switch
             {
@@ -5958,7 +5955,6 @@ internal abstract class X86ShiftRmImmBase : IMicroOpEmitter
         }
         else
         {
-            var rm = X86ModRmMemHelpers.BuildLoadW8(ctx, "shi_rm");
             LLVMValueRef result = kind switch
             {
                 "shl" or "sal" => ctx.Builder.BuildShl(rm, count, "shi_shl"),

@@ -72,12 +72,21 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
 
     public X86Memory Memory => _mem;
 
-    public X86JsonCpu(X86Memory memory, bool enableBlockJit = false)
+    /// <summary>
+    /// 25.5 — variant string selects which spec directory to load.
+    /// "i8086" (default): spec/x86-16/i8086/cpu.json (base spec).
+    /// "i80186" / "i80188": spec/x86-16/i80186/cpu.json (extends i8086;
+    /// loaded via inheritance resolution).
+    /// </summary>
+    public string Variant { get; }
+
+    public X86JsonCpu(X86Memory memory, bool enableBlockJit = false, string variant = "i8086")
     {
         _mem = memory ?? throw new ArgumentNullException(nameof(memory));
         _blockJitEnabled = enableBlockJit;
+        Variant = variant;
 
-        var specPath = LocateSpec();
+        var specPath = LocateSpec(variant);
         var compileResult = SpecCompiler.Compile(specPath);
         if (compileResult.Diagnostics.Count != 0)
         {
@@ -157,18 +166,30 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         }
     }
 
-    private static string LocateSpec()
+    private static string LocateSpec(string variant = "i8086")
     {
+        // 25.5 — i8088 is ISA-identical to i8086 (cycle-only difference,
+        // not modeled at the spec level). i80188 is ISA-identical to
+        // i80186. Fold both into the single base / inheritance spec.
+        string subdir = variant switch
+        {
+            "i8086" or "i8088"           => "i8086",
+            "i80186" or "i80188"          => "i80186",
+            _ => throw new ArgumentException(
+                $"X86JsonCpu: unknown variant '{variant}'. Valid: i8086 | i8088 | i80186 | i80188.",
+                nameof(variant)),
+        };
+
         var dir = AppContext.BaseDirectory;
         for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
         {
-            var probe = Path.Combine(d.FullName, "spec", "x86-16", "i8086", "cpu.json");
+            var probe = Path.Combine(d.FullName, "spec", "x86-16", subdir, "cpu.json");
             if (File.Exists(probe)) return probe;
         }
-        var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "x86-16", "i8086", "cpu.json");
+        var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "x86-16", subdir, "cpu.json");
         if (File.Exists(cwdProbe)) return cwdProbe;
         throw new FileNotFoundException(
-            "X86JsonCpu: cannot locate spec/x86-16/i8086/cpu.json. Run from repo root.");
+            $"X86JsonCpu: cannot locate spec/x86-16/{subdir}/cpu.json. Run from repo root.");
     }
 
     // --- IX86CpuBackend surface -------------------------------------------
