@@ -1,0 +1,455 @@
+[
+  {
+    "name": "PushSpI80186",
+    "comment": "0x54 PUSH SP — 80186 silicon-quirk fix vs i8086. Pushes the PRE-decrement SP value (i.e. the SP that callers see before the push), not the post-decrement one. mask=0xFF wins over parent's PUSH_reg16 (mask=0xF8 match=0x50) for byte 0x54 only because additions are prepended in the EncodingGroups list. Other PUSH r16 (AX/CX/DX/BX/BP/SI/DI) still go through parent's emitter unchanged.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x54",
+    "instructions": [
+      {
+        "id": "PUSH_SP_i80186",
+        "mnemonic": "PUSH",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §PUSH",
+        "cycles": { "form": "10" },
+        "steps": [
+          { "op": "x86_push_sp_pre_decrement" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "PushImm8",
+    "comment": "0x6A PUSH imm8 — sign-extend imm8 to 16 bits and push. New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x6A",
+    "instructions": [
+      {
+        "id": "PUSH_imm8",
+        "mnemonic": "PUSH",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §PUSH",
+        "cycles": { "form": "10" },
+        "steps": [
+          { "op": "x86_push_imm8_sext_w16" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "PushImm16",
+    "comment": "0x68 PUSH imm16 — push 16-bit immediate. New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x68",
+    "instructions": [
+      {
+        "id": "PUSH_imm16",
+        "mnemonic": "PUSH",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §PUSH",
+        "cycles": { "form": "10" },
+        "steps": [
+          { "op": "x86_push_imm16" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "Pusha",
+    "comment": "0x60 PUSHA — push AX/CX/DX/BX/orig-SP/BP/SI/DI in order. orig-SP is the pre-PUSHA SP value. New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x60",
+    "instructions": [
+      {
+        "id": "PUSHA_noargs",
+        "mnemonic": "PUSHA",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §PUSHA",
+        "cycles": { "form": "36" },
+        "steps": [
+          { "op": "x86_pusha" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "Popa",
+    "comment": "0x61 POPA — pop DI/SI/BP/[skip]/BX/DX/CX/AX (reverse PUSHA order; SP slot discarded since SP itself is being recovered). New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x61",
+    "instructions": [
+      {
+        "id": "POPA_noargs",
+        "mnemonic": "POPA",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §POPA",
+        "cycles": { "form": "51" },
+        "steps": [
+          { "op": "x86_popa" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "BoundR16M16",
+    "comment": "0x62 BOUND r16, m16,m16 — check r16 in [m16_lo, m16_hi]; if out of range, raise INT 5 (BOUND range exceeded). New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x62",
+    "instructions": [
+      {
+        "id": "BOUND_r16_m16",
+        "mnemonic": "BOUND",
+        "since": "Intel80186",
+        "writes_pc": "conditional",
+        "manual_ref": "Intel iAPX 186 §BOUND",
+        "cycles": { "form": "33" },
+        "steps": [
+          { "op": "x86_bound_r16_m16" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "ImulR16Rm16Imm16",
+    "comment": "0x69 IMUL r16, r/m16, imm16 — three-operand signed multiply with 16-bit immediate. New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x69",
+    "instructions": [
+      {
+        "id": "IMUL_r16_rm16_imm16",
+        "mnemonic": "IMUL",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §IMUL",
+        "cycles": { "form": "22" },
+        "steps": [
+          { "op": "x86_imul_r16_rm16_imm16" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "ImulR16Rm16Imm8",
+    "comment": "0x6B IMUL r16, r/m16, imm8 — three-operand signed multiply with 8-bit imm sign-extended to 16. New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x6B",
+    "instructions": [
+      {
+        "id": "IMUL_r16_rm16_imm8",
+        "mnemonic": "IMUL",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §IMUL",
+        "cycles": { "form": "22" },
+        "steps": [
+          { "op": "x86_imul_r16_rm16_imm8" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "Insb",
+    "comment": "0x6C INSB — input byte from DX port to ES:[DI], then SI/DI advance per DF. New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x6C",
+    "instructions": [
+      {
+        "id": "INSB_noargs",
+        "mnemonic": "INSB",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §INS",
+        "cycles": { "form": "14" },
+        "steps": [
+          { "op": "x86_ins_b" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "Insw",
+    "comment": "0x6D INSW — input word from DX port to ES:[DI], DI advances by 2. New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x6D",
+    "instructions": [
+      {
+        "id": "INSW_noargs",
+        "mnemonic": "INSW",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §INS",
+        "cycles": { "form": "14" },
+        "steps": [
+          { "op": "x86_ins_w" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "Outsb",
+    "comment": "0x6E OUTSB — output byte from DS:[SI] to DX port, SI advances per DF. New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x6E",
+    "instructions": [
+      {
+        "id": "OUTSB_noargs",
+        "mnemonic": "OUTSB",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §OUTS",
+        "cycles": { "form": "14" },
+        "steps": [
+          { "op": "x86_outs_b" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "Outsw",
+    "comment": "0x6F OUTSW — output word from DS:[SI] to DX port, SI advances by 2. New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0x6F",
+    "instructions": [
+      {
+        "id": "OUTSW_noargs",
+        "mnemonic": "OUTSW",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §OUTS",
+        "cycles": { "form": "14" },
+        "steps": [
+          { "op": "x86_outs_w" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "Enter",
+    "comment": "0xC8 ENTER imm16, imm8 — set up nested-procedure stack frame. imm16 = local frame size; imm8 = nesting level (0..31, used for display-area copying from caller's frame). New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0xC8",
+    "instructions": [
+      {
+        "id": "ENTER_imm16_imm8",
+        "mnemonic": "ENTER",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §ENTER",
+        "cycles": { "form": "15" },
+        "steps": [
+          { "op": "x86_enter" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "Leave",
+    "comment": "0xC9 LEAVE — undo ENTER's frame: SP=BP; pop BP. New in 80186.",
+    "fields": {},
+    "mask": "0xFF",
+    "match": "0xC9",
+    "instructions": [
+      {
+        "id": "LEAVE_noargs",
+        "mnemonic": "LEAVE",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §LEAVE",
+        "cycles": { "form": "8" },
+        "steps": [
+          { "op": "x86_leave" }
+        ]
+      }
+    ]
+  },
+
+  {
+    "name": "ShiftImm8",
+    "comment": "0xC0 r/m8, imm8 — 80186 shift-by-immediate group. ModR/M reg field selects op (000=ROL, 001=ROR, 010=RCL, 011=RCR, 100=SHL/SAL, 101=SHR, 110=undef, 111=SAR). Count masked to bottom 5 bits per i80186 silicon. New in 80186.",
+    "fields": { "modrm_reg": "5:3" },
+    "mask": "0xFF",
+    "match": "0xC0",
+    "instructions": [
+      {
+        "id": "ROL_rm8_imm8_sel000",
+        "mnemonic": "ROL",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §rotate",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b000" },
+        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "rol" }]
+      },
+      {
+        "id": "ROR_rm8_imm8_sel001",
+        "mnemonic": "ROR",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §rotate",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b001" },
+        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "ror" }]
+      },
+      {
+        "id": "RCL_rm8_imm8_sel010",
+        "mnemonic": "RCL",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §rotate",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b010" },
+        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "rcl" }]
+      },
+      {
+        "id": "RCR_rm8_imm8_sel011",
+        "mnemonic": "RCR",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §rotate",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b011" },
+        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "rcr" }]
+      },
+      {
+        "id": "SHL_rm8_imm8_sel100",
+        "mnemonic": "SHL",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §shift",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b100" },
+        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "shl" }]
+      },
+      {
+        "id": "SHR_rm8_imm8_sel101",
+        "mnemonic": "SHR",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §shift",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b101" },
+        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "shr" }]
+      },
+      {
+        "id": "SAR_rm8_imm8_sel111",
+        "mnemonic": "SAR",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §shift",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b111" },
+        "steps": [{ "op": "x86_shift_rm8_imm8", "kind": "sar" }]
+      }
+    ]
+  },
+
+  {
+    "name": "ShiftImm16",
+    "comment": "0xC1 r/m16, imm8 — 16-bit counterpart of 0xC0. Same selector mapping. Count masked to bottom 5 bits. New in 80186.",
+    "fields": { "modrm_reg": "5:3" },
+    "mask": "0xFF",
+    "match": "0xC1",
+    "instructions": [
+      {
+        "id": "ROL_rm16_imm8_sel000",
+        "mnemonic": "ROL",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §rotate",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b000" },
+        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "rol" }]
+      },
+      {
+        "id": "ROR_rm16_imm8_sel001",
+        "mnemonic": "ROR",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §rotate",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b001" },
+        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "ror" }]
+      },
+      {
+        "id": "RCL_rm16_imm8_sel010",
+        "mnemonic": "RCL",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §rotate",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b010" },
+        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "rcl" }]
+      },
+      {
+        "id": "RCR_rm16_imm8_sel011",
+        "mnemonic": "RCR",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §rotate",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b011" },
+        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "rcr" }]
+      },
+      {
+        "id": "SHL_rm16_imm8_sel100",
+        "mnemonic": "SHL",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §shift",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b100" },
+        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "shl" }]
+      },
+      {
+        "id": "SHR_rm16_imm8_sel101",
+        "mnemonic": "SHR",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §shift",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b101" },
+        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "shr" }]
+      },
+      {
+        "id": "SAR_rm16_imm8_sel111",
+        "mnemonic": "SAR",
+        "since": "Intel80186",
+        "writes_pc": "never",
+        "manual_ref": "Intel iAPX 186 §shift",
+        "cycles": { "form": "5" },
+        "selector": { "field": "modrm_reg", "value": "0b111" },
+        "steps": [{ "op": "x86_shift_rm16_imm8", "kind": "sar" }]
+      }
+    ]
+  }
+]

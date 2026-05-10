@@ -114,7 +114,27 @@ public static class SpecLoader
                     fullPath, "$.architecture.extends");
 
             var mergedSets = ApplyInstructionSetDiff(parent, childCpu, fullPath);
-            return new LoadedSpec(fullPath, childCpu, mergedSets);
+
+            // 25.1 — inherit register_file / exception_vectors from parent
+            // when child uses the placeholder (empty placeholder = "I want
+            // to inherit"). Child's own values take precedence when set.
+            var mergedCpu = childCpu;
+            if (mergedCpu.RegisterFile.GeneralPurpose.Count == 0
+                && mergedCpu.RegisterFile.Status.Count == 0)
+            {
+                mergedCpu = mergedCpu with { RegisterFile = parent.Cpu.RegisterFile };
+            }
+            if (mergedCpu.ExceptionVectors.Count == 0)
+            {
+                mergedCpu = mergedCpu with { ExceptionVectors = parent.Cpu.ExceptionVectors };
+            }
+            // Inherit instruction_sets ref list too (so callers see the
+            // same set names parent declared, even if child didn't list them).
+            if (mergedCpu.InstructionSets.Count == 0)
+            {
+                mergedCpu = mergedCpu with { InstructionSets = parent.Cpu.InstructionSets };
+            }
+            return new LoadedSpec(fullPath, mergedCpu, mergedSets);
         }
         finally
         {
@@ -301,7 +321,14 @@ public static class SpecLoader
                             childFilePath, $"$.instruction_set_diff.{setName}.additions");
                 }
 
-            workingGroups.Add(new EncodingGroup(
+            // Insert additions at the FRONT of the encoding_groups list so
+            // that DecoderTable evaluates them BEFORE parent formats. This
+            // matters when an addition uses a more-specific mask (e.g. the
+            // i80186 PUSH_SP override = mask 0xFF / match 0x54) that needs
+            // to win over a parent's broader pattern (e.g. i8086
+            // PUSH_reg16 = mask 0xF8 / match 0x50). Without prepend the
+            // parent's broader pattern would shadow the addition.
+            workingGroups.Insert(0, new EncodingGroup(
                 Name: $"_additions_{childCpuId}",
                 AppliesWhen: null,
                 Formats: addFormats));
@@ -400,9 +427,51 @@ public static class SpecLoader
         var specVer  = ReqString(root, "spec_version", filePath, "$.spec_version");
         var arch     = ParseArchitecture(ReqObject(root, "architecture", filePath, "$.architecture"), filePath);
         var variants = ParseList(root, "variants", ParseVariant, filePath, "$.variants");
-        var regFile  = ParseRegisterFile(ReqObject(root, "register_file", filePath, "$.register_file"), filePath);
+        // 25.1 — register_file / exception_vectors become optional for child
+        // specs (architecture.extends != null). Inheritance resolution will
+        // copy them from parent. Base specs still require these fields.
+        bool isChild = arch.Extends is not null;
+        RegisterFile regFile;
+        if (TryGetObject(root, "register_file", out var rfEl))
+        {
+            regFile = ParseRegisterFile(rfEl, filePath);
+        }
+        else if (isChild)
+        {
+            // Empty placeholder — gets replaced by parent's register_file
+            // during inheritance resolution.
+            regFile = new RegisterFile(
+                new GeneralPurposeRegisters(0, 0, Array.Empty<string>(),
+                    new Dictionary<string, string>(StringComparer.Ordinal), null),
+                Array.Empty<StatusRegister>(),
+                Array.Empty<RegisterPair>(),
+                null);
+        }
+        else
+        {
+            throw new SpecValidationException(
+                "register_file is required (or set architecture.extends to inherit from a parent).",
+                filePath, "$.register_file");
+        }
+
         var modes    = TryGetObject(root, "processor_modes", out var pm) ? ParseProcessorModes(pm, filePath) : null;
-        var vectors  = ParseList(root, "exception_vectors", ParseExceptionVector, filePath, "$.exception_vectors");
+        // 25.1 — exception_vectors also optional for child specs.
+        IReadOnlyList<ExceptionVector> vectors;
+        if (root.TryGetProperty("exception_vectors", out var evEl) && evEl.ValueKind == JsonValueKind.Array)
+        {
+            vectors = ParseList(root, "exception_vectors", ParseExceptionVector, filePath, "$.exception_vectors");
+        }
+        else if (isChild)
+        {
+            vectors = Array.Empty<ExceptionVector>();
+        }
+        else
+        {
+            throw new SpecValidationException(
+                "exception_vectors is required (or set architecture.extends to inherit from a parent).",
+                filePath, "$.exception_vectors");
+        }
+
         var sets     = ParseList(root, "instruction_sets", ParseInstructionSetRef, filePath, "$.instruction_sets");
         // 25.1 — base specs must declare at least one instruction set; child
         // specs (architecture.extends != null) inherit sets from parent

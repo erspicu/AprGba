@@ -297,6 +297,71 @@ public class SpecInheritanceTests : IDisposable
     }
 
     [Fact]
+    public void Real_I80186_Spec_Loads_And_Inherits_From_I8086()
+    {
+        // Sprint 25.3 — load the actual i80186 spec from the repo and
+        // verify it inherits from i8086 + adds the new opcodes.
+        var repoRoot = LocateRepoRoot();
+        var i80186Cpu = Path.Combine(repoRoot, "spec", "x86-16", "i80186", "cpu.json");
+        Assert.True(File.Exists(i80186Cpu), $"i80186 cpu.json missing at {i80186Cpu}");
+
+        var loaded = SpecLoader.LoadCpuSpec(i80186Cpu);
+
+        Assert.Equal("Intel80186", loaded.Cpu.Architecture.Id);
+        Assert.Equal("Intel8086", loaded.Cpu.Architecture.Extends);
+
+        // Main set must contain parent's 149 instructions PLUS i80186 additions.
+        var main = loaded.InstructionSets["Main"];
+        var allInstr = main.EncodingGroups
+            .SelectMany(g => g.Formats)
+            .SelectMany(f => f.Instructions)
+            .ToList();
+        Assert.True(allInstr.Count >= 149 + 14,
+            $"expected at least 163 instructions (149 i8086 + 14 i80186-new), got {allInstr.Count}");
+
+        // Sample i8086 entries inherited (with provenance).
+        var addRm8R8 = allInstr.First(i => i.Id == "ADD_rm8_r8");
+        Assert.Equal("Intel8086", addRm8R8.OriginCpu);
+        Assert.Null(addRm8R8.OverriddenBy);
+
+        // Sample i80186 additions present (with provenance = Intel80186).
+        var pushaIds = allInstr.Where(i => i.Id == "PUSHA_noargs").ToList();
+        Assert.Single(pushaIds);
+        Assert.Equal("Intel80186", pushaIds[0].OriginCpu);
+
+        var enterIds = allInstr.Where(i => i.Id == "ENTER_imm16_imm8").ToList();
+        Assert.Single(enterIds);
+        Assert.Equal("Intel80186", enterIds[0].OriginCpu);
+
+        // PUSH_SP_i80186 added (parent's PUSH_reg16 still present too).
+        var pushSpI80186 = allInstr.FirstOrDefault(i => i.Id == "PUSH_SP_i80186");
+        Assert.NotNull(pushSpI80186);
+        Assert.Equal("Intel80186", pushSpI80186!.OriginCpu);
+
+        var pushReg16Parent = allInstr.FirstOrDefault(i => i.Id == "PUSH_reg16");
+        Assert.NotNull(pushReg16Parent);
+        Assert.Equal("Intel8086", pushReg16Parent!.OriginCpu);
+
+        // i80186 shift-imm group: 7 entries × 2 sizes (8/16) = 14 total
+        var shiftImmCount = allInstr.Count(i =>
+            i.Id is not null && (i.Id.Contains("rm8_imm8_sel") || i.Id.Contains("rm16_imm8_sel"))
+            && i.OriginCpu == "Intel80186");
+        Assert.Equal(14, shiftImmCount);
+    }
+
+    private static string LocateRepoRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        while (!string.IsNullOrEmpty(dir))
+        {
+            if (Directory.Exists(Path.Combine(dir, "spec")) && Directory.Exists(Path.Combine(dir, "src")))
+                return dir;
+            dir = Directory.GetParent(dir)?.FullName ?? "";
+        }
+        throw new DirectoryNotFoundException("Could not locate repo root from " + AppContext.BaseDirectory);
+    }
+
+    [Fact]
     public void Cyclic_Inheritance_Throws()
     {
         // A -> B -> A cycle (B claims to extend A, A claims to extend B).

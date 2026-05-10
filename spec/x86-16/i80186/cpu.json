@@ -1,0 +1,38 @@
+{
+  "$schema": "../../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+
+  "comment": "Intel 80186 (1982) — 8086 + 12 new opcodes + silicon-quirk fixes (PUSH SP / shift mask). Phase 25 — first AprCpu CPU built via spec inheritance (doc #23). Spec authoring cost: ~250 lines of diff vs ~3000 line i8086 base. Validates the load-time merge mechanism end-to-end.",
+
+  "architecture": {
+    "id":             "Intel80186",
+    "family":         "x86-16",
+    "extends":        "Intel8086",
+    "extends_path":   "../i8086/cpu.json",
+    "endianness":     "little",
+    "word_size_bits": 16
+  },
+
+  "variants": [
+    {
+      "id":       "i80186",
+      "core":     "Intel80186",
+      "features": [],
+      "notes":    "Intel 80186 — 8086 + 12 new opcodes (PUSHA/POPA/BOUND/IMUL imm/INS/OUTS/ENTER/LEAVE/shift-imm/PUSH imm) + silicon-quirk fixes (PUSH SP pre-decrement; shift count masked to 5 bits)."
+    },
+    {
+      "id":       "i80188",
+      "core":     "Intel80186",
+      "features": [],
+      "notes":    "Intel 80188 — 80186 with 8-bit external bus (analogous to 8088 vs 8086). ISA-identical."
+    }
+  ],
+
+  "instruction_set_diff": {
+    "Main": {
+      "additions": [
+        { "$include": "groups/i80186-additions.json" }
+      ]
+    }
+  }
+}
