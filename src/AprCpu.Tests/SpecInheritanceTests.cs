@@ -408,6 +408,33 @@ public class SpecInheritanceTests : IDisposable
     }
 
     [Fact]
+    public void Real_I80286_Spec_Declares_Exception_State_Slots()
+    {
+        // Sprint 27.11a — exception model foundation. Three new status
+        // registers must be present in the i80286 register file so that
+        // subsequent sprints (27.11b PE=1 NULL-selector check, 27.11c
+        // descriptor-load checks, etc.) can record fault state. Reset
+        // value 0 (cleared by Array.Clear in Reset()).
+        var repoRoot = LocateRepoRoot();
+        var i80286Cpu = Path.Combine(repoRoot, "spec", "x86-16", "i80286", "cpu.json");
+        var loaded = SpecLoader.LoadCpuSpec(i80286Cpu);
+
+        var status = loaded.Cpu.RegisterFile.Status;
+
+        var pending = status.FirstOrDefault(s => s.Name == "EXC_PENDING");
+        Assert.NotNull(pending);
+        Assert.Equal(8, pending!.WidthBits);
+
+        var vector = status.FirstOrDefault(s => s.Name == "EXC_VECTOR");
+        Assert.NotNull(vector);
+        Assert.Equal(8, vector!.WidthBits);
+
+        var error = status.FirstOrDefault(s => s.Name == "EXC_ERROR");
+        Assert.NotNull(error);
+        Assert.Equal(16, error!.WidthBits);
+    }
+
+    [Fact]
     public void Cyclic_Inheritance_Throws()
     {
         // A -> B -> A cycle (B claims to extend A, A claims to extend B).

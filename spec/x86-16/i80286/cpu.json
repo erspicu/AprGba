@@ -112,7 +112,11 @@
 
       { "name": "DS_BASE",   "width_bits": 32, "fields": {}, "comment": "Sprint 27.10b — hidden DS cache. Real-mode init: visible DS << 4 = 0 at reset." },
       { "name": "DS_LIMIT",  "width_bits": 16, "fields": {}, "comment": "Sprint 27.10b — hidden DS limit. Real-mode init: 0xFFFF." },
-      { "name": "DS_ACCESS", "width_bits": 8,  "fields": {}, "comment": "Sprint 27.10b — hidden DS access. Real-mode init: 0x93." }
+      { "name": "DS_ACCESS", "width_bits": 8,  "fields": {}, "comment": "Sprint 27.10b — hidden DS access. Real-mode init: 0x93." },
+
+      { "name": "EXC_PENDING", "width_bits": 8,  "fields": {}, "comment": "Sprint 27.11a — exception-pending flag. 0 = no fault, 1 = exception raised. Wired into PE=1 segment-load + memory-access paths in subsequent sprints (27.11b+). Reset = 0." },
+      { "name": "EXC_VECTOR",  "width_bits": 8,  "fields": {}, "comment": "Sprint 27.11a — exception vector. Standard 80286 fault numbers: #DE=0, #UD=6, #NM=7, #DF=8, #TS=10, #NP=11, #SS=12, #GP=13. Valid only when EXC_PENDING=1. Reset = 0." },
+      { "name": "EXC_ERROR",   "width_bits": 16, "fields": {}, "comment": "Sprint 27.11a — exception error code (16-bit on 80286). For #TS/#NP/#SS/#GP: selector index + EXT/IDT/TI bits. For #DE/#UD/#NM/#DF: 0 (no error code, but slot is always allocated for shape consistency). Valid only when EXC_PENDING=1. Reset = 0." }
     ]
   },
 
