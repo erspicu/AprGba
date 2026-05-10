@@ -187,4 +187,53 @@ public static class X86_16ProtectedMode
         public Msw WithPe(bool v) => new((ushort)((Raw & ~0x1) | (v ? 1 : 0)));
         public Msw WithTs(bool v) => new((ushort)((Raw & ~0x8) | (v ? 8 : 0)));
     }
+
+    /// <summary>
+    /// Sprint 27.9 — Current Privilege Level extracted from the CS
+    /// selector's low 2 bits. CPL is what determines which descriptors
+    /// the running code is allowed to use.
+    ///
+    /// On real-mode 80286, CS holds a paragraph value rather than a
+    /// selector; CPL is undefined / treated as 0 for compat. Caller
+    /// should only read CPL when IsProtectedMode() returns true.
+    /// </summary>
+    public static int CurrentPrivilegeLevel(ushort csSelector) => csSelector & 0x3;
+
+    /// <summary>
+    /// Sprint 27.9 — Standard data-segment access privilege check (Intel
+    /// 80286 PRM §6.2.1.1). To READ or WRITE through a data selector:
+    /// <c>max(CPL, RPL) &lt;= DPL</c>. Lower numeric value = higher
+    /// privilege, so the running code must be at LEAST as privileged
+    /// (or more privileged) than the segment's DPL — and the requester
+    /// must too (RPL acts as a self-imposed cap).
+    /// </summary>
+    public static bool CanAccessDataSegment(int cpl, int rpl, int dpl)
+        => Math.Max(cpl, rpl) <= dpl;
+
+    /// <summary>
+    /// Sprint 27.9 — non-conforming code segment access. Far call /
+    /// jump / iret to a non-conforming code segment requires
+    /// <c>CPL == DPL</c> exactly (no privilege change without going
+    /// through a call gate). Far calls + RPL is checked separately.
+    /// </summary>
+    public static bool CanEnterNonConformingCode(int cpl, int dpl)
+        => cpl == dpl;
+
+    /// <summary>
+    /// Sprint 27.9 — conforming code segment access. Conforming code
+    /// (descriptor type bit "C" set) is the "stay at caller's privilege"
+    /// case: requires <c>CPL &gt;= DPL</c> (caller is at least as
+    /// privileged as the segment claims to need).
+    /// </summary>
+    public static bool CanEnterConformingCode(int cpl, int dpl)
+        => cpl >= dpl;
+
+    /// <summary>
+    /// Sprint 27.9 — call gate eligibility. A far call through a call
+    /// gate is permitted iff <c>CPL &lt;= DPL</c> AND the gate's RPL
+    /// would not be downgraded. Simplified for Phase 27b first cut:
+    /// CPL &lt;= gate-DPL only.
+    /// </summary>
+    public static bool CanUseCallGate(int cpl, int gateDpl)
+        => cpl <= gateDpl;
 }

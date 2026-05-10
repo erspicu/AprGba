@@ -201,6 +201,62 @@ public class X86_16ProtectedModeTests
     }
 
     [Fact]
+    public void CurrentPrivilegeLevel_Reads_Low_Two_Bits_Of_CS()
+    {
+        Assert.Equal(0, CurrentPrivilegeLevel(0x0008));    // CS:00, RPL=0 (ring 0)
+        Assert.Equal(3, CurrentPrivilegeLevel(0x000B));    // RPL=3 (ring 3)
+        Assert.Equal(1, CurrentPrivilegeLevel(0xFFF1));    // top bits ignored
+    }
+
+    [Fact]
+    public void CanAccessDataSegment_Standard_Privilege_Check()
+    {
+        // Ring 0 code can access ring 0/1/2/3 data:
+        Assert.True(CanAccessDataSegment(cpl: 0, rpl: 0, dpl: 0));
+        Assert.True(CanAccessDataSegment(0, 0, 3));
+
+        // Ring 3 code can access ring 3 data only:
+        Assert.True (CanAccessDataSegment(3, 3, 3));
+        Assert.False(CanAccessDataSegment(3, 3, 0));   // dpl 0 means kernel-only
+        Assert.False(CanAccessDataSegment(3, 3, 2));
+
+        // RPL acts as cap: ring 0 code with RPL=3 cannot reach ring 0 data:
+        Assert.False(CanAccessDataSegment(0, 3, 0));
+        Assert.True (CanAccessDataSegment(0, 3, 3));
+    }
+
+    [Fact]
+    public void CanEnterNonConformingCode_Requires_Equality()
+    {
+        Assert.True (CanEnterNonConformingCode(0, 0));
+        Assert.True (CanEnterNonConformingCode(3, 3));
+        Assert.False(CanEnterNonConformingCode(0, 1));
+        Assert.False(CanEnterNonConformingCode(3, 0));   // ring 3 cannot direct-call ring 0
+    }
+
+    [Fact]
+    public void CanEnterConformingCode_Allows_CallerOrMorePrivileged()
+    {
+        // Ring 3 calling conforming-DPL=0 (kernel utility): allowed (CPL=3 >= DPL=0).
+        Assert.True (CanEnterConformingCode(3, 0));
+        // Ring 0 calling conforming-DPL=3: NOT allowed.
+        Assert.False(CanEnterConformingCode(0, 3));
+        Assert.True (CanEnterConformingCode(2, 2));
+    }
+
+    [Fact]
+    public void CanUseCallGate_LowerOrEqual_CPL_Allowed()
+    {
+        // Ring 3 calling call-gate DPL=3: allowed.
+        Assert.True (CanUseCallGate(3, 3));
+        // Ring 3 calling call-gate DPL=0: NOT allowed (gate restricts).
+        Assert.False(CanUseCallGate(3, 0));
+        // Ring 0 always allowed (most privileged).
+        Assert.True (CanUseCallGate(0, 0));
+        Assert.True (CanUseCallGate(0, 3));
+    }
+
+    [Fact]
     public void Msw_Constants_And_Bits()
     {
         Assert.False(Msw.RealMode.Pe);
