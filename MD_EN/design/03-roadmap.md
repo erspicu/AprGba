@@ -71,7 +71,7 @@ runs end-to-end. LLVM 20 + .NET 10 + LLVMSharp 20.x combination is stable.
 
 Completed; see [`MD_EN/design/04-json-schema-spec.md`](/MD_EN/design/04-json-schema-spec.md),
 [`MD_EN/design/05-microops-vocabulary.md`](/MD_EN/design/05-microops-vocabulary.md),
-`spec/schema/cpu-spec.schema.json`.
+`spec/cpu/_schema.json`.
 
 ---
 
@@ -249,7 +249,7 @@ vs Blargg subset) decided when we actually get there.
   screenshots; passes Blargg cpu_instrs **11/11 all sub-tests** (including
   02-interrupts, with EI delay + cycle-table-driven DIV/TIMA timer
   implemented)
-- 4.5C: `spec/lr35902/*.json` (23 group files, 501 opcodes) +
+- 4.5C: `spec/cpu/lr35902/*.json` (23 group files, 501 opcodes) +
   `Lr35902Emitters.cs` (~50 micro-ops) + `JsonCpu` backend; passes Blargg
   cpu_instrs **11/11 + master "Passed all tests"**, screenshots match
   LegacyCpu exactly. Design rationale in

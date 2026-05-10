@@ -49,7 +49,7 @@ Total ~3.5 days of focused work.
 
 After each R completes:
 - All existing tests (64) must still be green
-- The CLI `aprcpu --spec spec/arm7tdmi/cpu.json --output temp/arm7tdmi.ll`
+- The CLI `aprcpu --spec spec/cpu/arm7tdmi/cpu.json --output temp/arm7tdmi.ll`
   must still emit 62 functions, 0 diagnostics, and pass LLVM TryVerify
 - The IR structure of the produced `.ll` may differ slightly (e.g. GEP
   index changes), but semantics are identical

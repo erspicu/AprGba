@@ -6,9 +6,9 @@
 > 到 emitter 檔；framework 自動處理 per-instr / block-JIT 兩種模式」。
 >
 > 目前已實作的 3 個 CPU 例子可以參照：
-> - **ARM7TDMI**（GBA）— `spec/arm7tdmi/cpu.json` + `src/AprCpu.Core/IR/ArmEmitters.cs`
-> - **LR35902**（GB DMG）— `spec/lr35902/cpu.json` + `src/AprCpu.Core/IR/Lr35902Emitters.cs`
-> - **Ricoh 2A03**（NES NTSC）— `spec/2a03/cpu.json` + `src/AprCpu.Core/IR/Mos6502Emitters.cs`
+> - **ARM7TDMI**（GBA）— `spec/cpu/arm7tdmi/cpu.json` + `src/AprCpu.Core/IR/ArmEmitters.cs`
+> - **LR35902**（GB DMG）— `spec/cpu/lr35902/cpu.json` + `src/AprCpu.Core/IR/Lr35902Emitters.cs`
+> - **Ricoh 2A03**（NES NTSC）— `spec/cpu/2a03/cpu.json` + `src/AprCpu.Core/IR/Mos6502Emitters.cs`
 >
 > 加第 4 個跟著本 doc 的 step-by-step 走，一個 step 一個 commit、跑測試
 > 才往下一步。
@@ -30,7 +30,7 @@
 
 ### Step 1 — `spec/<arch>/cpu.json` (ISA semantics)
 
-把 ISA 抽象寫成 declarative JSON。schema 在 `spec/schema/cpu-spec.schema.json`。
+把 ISA 抽象寫成 declarative JSON。schema 在 `spec/cpu/_schema.json`。
 
 最小可運作：
 
@@ -97,7 +97,7 @@ update_sign/set_flag/...）— 都在 `StandardEmitters.RegisterAll`。
 ### Step 3 — `spec/machines/<machine>.json` (board-level memory map)
 
 CPU spec 不應該知道 memory map，板子 spec 才描述。schema 在
-`spec/schema/machine-spec.schema.json`。
+`spec/machines/_schema.json`。
 
 ```json
 {

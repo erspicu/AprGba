@@ -95,7 +95,7 @@ Resolving the cycles structural limitation requires a spec format
 refactor. Two options:
 
 (a) **One instruction-def per (mnemonic, addressing-mode)** —
-`spec/2a03/groups/alu-cc01.json` grows from 8 entries to 64 (4×). Other
+`spec/cpu/2a03/groups/alu-cc01.json` grows from 8 entries to 64 (4×). Other
 groups bloat similarly. Implementable but spec files become large and
 hand-maintenance cost goes up
 (b) **Per-format `cycle_table`** — add `cycle_table: { "000": 6, "001":

@@ -189,7 +189,7 @@ GB 09-loop100 從 6.5 → ≥10 MIPS（保守目標 ~50% 進步）。
 5. 加 spec schema 欄位 `instruction_length_table` (256-entry array of
    length values)；`SpecLoader` 讀進 `InstructionSetSpec`
 
-**Spec 改動**：`spec/lr35902/main.json` 加 256-entry length table
+**Spec 改動**：`spec/cpu/lr35902/main.json` 加 256-entry length table
 （或從 group files 自動推算 + 在 SpecCompiler 階段建表）
 
 **驗證**：
@@ -201,7 +201,7 @@ GB 09-loop100 從 6.5 → ≥10 MIPS（保守目標 ~50% 進步）。
 
 ### 4.2 Step 2 — 0xCB prefix as 2-byte atomic
 
-**檔案**：`spec/lr35902/groups/block3-cb-prefix.json` + `BlockDetector` +
+**檔案**：`spec/cpu/lr35902/groups/block3-cb-prefix.json` + `BlockDetector` +
 `SpecLoader`
 
 **改動**：

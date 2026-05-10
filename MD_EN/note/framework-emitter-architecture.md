@@ -393,7 +393,7 @@ true L3 ops.
 A typical "LD A, B" (opcode 0x78) goes from spec to native code via:
 
 ```
-1. spec/lr35902/groups/block1-ld-reg-reg.json:
+1. spec/cpu/lr35902/groups/block1-ld-reg-reg.json:
    { "name": "LdReg_Reg", "pattern": "01dddsss", ...
      "instructions": [{ "mnemonic": "LD", "steps": [
        { "op": "lr35902_read_r8",  "field": "sss", "out": "src" },

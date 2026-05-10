@@ -180,7 +180,7 @@ hot-path cost）。當 ON 時，spec ↔ runtime invariant 強制：
 ### 3.1 第三顆 CPU：Ricoh 2A03 / NES（N0–N1，10 commits）
 
 從零起新增 `AprNes.Cli` harness：
-- N0 — 2A03 JSON spec（`spec/2a03/cpu.json` + 7 個 group + unofficial）
+- N0 — 2A03 JSON spec（`spec/cpu/2a03/cpu.json` + 7 個 group + unofficial）
   256 opcode decoder coverage
 - N0b — LegacyCpu (Ricoh2A03Cpu) wired 到 NesMemoryBus + nestest PASS
   at PC=$C66E
@@ -488,8 +488,8 @@ extra fields。
 **為什麼**：同一顆 CPU 可能裝在不同機種（如 6502 在 NES / Apple II /
 C64；ARM7TDMI 在 GBA / NDS）；ISA 部分可重用，板級部分各機種不同。
 
-**實踐**：`spec/2a03/cpu.json`（ISA） + `spec/machines/nes-ntsc.json`
-（板級）；`spec/arm7tdmi/cpu.json` + `spec/machines/gba.json`。
+**實踐**：`spec/cpu/2a03/cpu.json`（ISA） + `spec/machines/nes-ntsc.json`
+（板級）；`spec/cpu/arm7tdmi/cpu.json` + `spec/machines/gba.json`。
 詳見 `MD/design/19-declarative-jit-policy.md`。
 
 ### 12.3 Page-table dispatch（替代 switch / linear scan）

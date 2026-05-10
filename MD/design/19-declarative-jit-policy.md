@@ -258,7 +258,7 @@ BlockDetector 在這個 instr 後結束 block。
 
 這些**不能** per-CPU incremental，因為改的是共用 layer：
 
-1.1 加 `MachineSpec` C# class + `spec/schema/machine-spec.schema.json`
+1.1 加 `MachineSpec` C# class + `spec/machines/_schema.json`
 1.2 `DecodedInstruction` struct 擴 `Immediate?` + `InstructionSize`
 1.3 `BlockCache` byte-coverage → page-bitset
 1.4 `BlockDetector` 加 `forces_end_of_block` 處理
@@ -271,7 +271,7 @@ BlockDetector 在這個 instr 後結束 block。
 
 2.1 寫 `spec/machines/gba.json`（BIOS / EWRAM / IWRAM / IO / Palette /
     VRAM / OAM / Cart ROM regions）
-2.2 寫 `spec/arm7tdmi/cpu.json` 加 `isa_metadata` section
+2.2 寫 `spec/cpu/arm7tdmi/cpu.json` 加 `isa_metadata` section
 2.3 GbaMemoryBus 改用 MachineSpec 驅動 dispatch
 2.4 ArmEmitters 改用新 DecodedInstruction.Immediate（如有 use point）
 
@@ -280,7 +280,7 @@ BlockDetector 在這個 instr 後結束 block。
 ### Step 3：LR35902 / GB migrate
 
 3.1 寫 `spec/machines/gb_dmg.json`
-3.2 `spec/lr35902/cpu.json` 加 `isa_metadata`
+3.2 `spec/cpu/lr35902/cpu.json` 加 `isa_metadata`
 3.3 GbMemoryBus 改用 MachineSpec
 3.4 Lr35902Emitters 簡化：`FetchImmediate` 不再分流（永遠用 DecodedInstruction.Immediate）；`EmitWriteByteWithSyncAndRamFastPath` 從 region table driven
 3.5 移除 GB 的 Lr35902WramBase / Lr35902HramBase 等 `BindExtern` hardcode（變 region driven）
@@ -291,7 +291,7 @@ BlockDetector 在這個 instr 後結束 block。
 ### Step 4：Ricoh 2A03 / NES migrate
 
 4.1 寫 `spec/machines/nes_ntsc.json`
-4.2 `spec/2a03/cpu.json` 加 `isa_metadata`（cycles_per_spec_unit=1 從這
+4.2 `spec/cpu/2a03/cpu.json` 加 `isa_metadata`（cycles_per_spec_unit=1 從這
     讀）
 4.3 NesMemoryBus 改 MachineSpec
 4.4 Mos6502Emitters 補 imm-bake（透過 DecodedInstruction.Immediate；現

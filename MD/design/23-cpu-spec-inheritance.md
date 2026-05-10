@@ -95,7 +95,7 @@ XOR/CMP），byte-only selector 解析不出單一 instruction。
 override / remove 用 ID 當 key。
 
 ```json
-// spec/x86-16/i8086/cpu.json — base
+// spec/cpu/x86-16/i8086/cpu.json — base
 {
     "$schema": "../../schema/cpu-spec.schema.json",
     "spec_version": "1.0",
@@ -117,7 +117,7 @@ override / remove 用 ID 當 key。
     }
 }
 
-// 例：spec/x86-16/i8086/groups/arithmetic.json 中的 instruction
+// 例：spec/cpu/x86-16/i8086/groups/arithmetic.json 中的 instruction
 [
     {
         "id": "MUL_rm16",                  // ← 必加，全 spec 唯一
@@ -129,7 +129,7 @@ override / remove 用 ID 當 key。
     ...
 ]
 
-// spec/x86-16/i80186/cpu.json — extends i8086
+// spec/cpu/x86-16/i80186/cpu.json — extends i8086
 {
     "architecture": {
         "id": "i80186",
@@ -161,7 +161,7 @@ override / remove 用 ID 當 key。
     }
 }
 
-// spec/x86-16/i80286/cpu.json — extends i80186
+// spec/cpu/x86-16/i80286/cpu.json — extends i80186
 {
     "architecture": {
         "id": "i80286",
@@ -319,7 +319,7 @@ spec 用不同 traits 組合產生不同 build target：
     ]
 }
 
-// spec/x86-16/i8086_with_8087.json — composition example
+// spec/cpu/x86-16/i8086_with_8087.json — composition example
 {
     "architecture": { "id": "i8086_with_8087", "extends": "i8086" },
     "traits": {
@@ -353,9 +353,9 @@ cycle。比合併成單 spec 更精細、cycle accounting 也對。
 
 ```
 sprint A: 寫 8086 base spec + X86_16Emitters.cs（不開 inheritance 機制）
-  └── spec/x86-16/_base_808x.json + groups/*.json (~3000 lines, abstract)
-  └── spec/x86-16/i8086.json (~50 lines, sibling 1 — 16-bit bus cycle)
-  └── spec/x86-16/i8088.json (~80 lines, sibling 2 — 8-bit bus cycle penalty)
+  └── spec/cpu/x86-16/_base_808x.json + groups/*.json (~3000 lines, abstract)
+  └── spec/cpu/x86-16/i8086.json (~50 lines, sibling 1 — 16-bit bus cycle)
+  └── spec/cpu/x86-16/i8088.json (~80 lines, sibling 2 — 8-bit bus cycle penalty)
   └── X86_16Emitters.cs (~1500 lines, ModR/M + segment 處理)
   → 通過 8086 test ROM (e.g. Apr86 既有測試 + 經典 8086 demo)
   → 同 spec 同 emitter 兩種 cycle 對照
@@ -366,14 +366,14 @@ sprint B: 加 inheritance 機制到 SpecLoader + schema validation
   → T1 通過；既有 ARM/LR35902/2A03 spec 沒 extends 仍 work（backwards-compat）
 
 sprint C: 寫 80186 spec — 純 diff (extends i8086)
-  └── spec/x86-16/i80186/cpu.json (~150 lines diff)
-  └── spec/x86-16/i80186/groups/i80186-additions.json (~200 lines, 12 new ops)
+  └── spec/cpu/x86-16/i80186/cpu.json (~150 lines diff)
+  └── spec/cpu/x86-16/i80186/groups/i80186-additions.json (~200 lines, 12 new ops)
   └── X86_16Emitters.cs += 12 個 new emitter (ENTER / LEAVE / IMUL r,imm / 等)
   → 通過 80186 specific test
 
 sprint D: 寫 80286 spec — extends i80186
-  └── spec/x86-16/i80286/cpu.json (~250 lines diff)
-  └── spec/x86-16/i80286/groups/i80286-protmode.json (~300 lines, 15 new ops + 0x0F escape group)
+  └── spec/cpu/x86-16/i80286/cpu.json (~250 lines diff)
+  └── spec/cpu/x86-16/i80286/groups/i80286-protmode.json (~300 lines, 15 new ops + 0x0F escape group)
   └── X86_16Emitters.cs += 15 個 new emitter (LGDT / LIDT / LLDT / LMSW / 等)
   → 通過 80286 real-mode + protected-mode test
 ```
@@ -412,7 +412,7 @@ Chain 深度：`i80286 → i80186 → i8086 → _base_808x` = 4 層，剛好觸�
 
 ```
 Chain 1 — x86-16 (16-bit real-mode + 286 protected-mode plumbing)
-spec/x86-16/
+spec/cpu/x86-16/
 ├── _base_808x.json                  ← abstract base (內部用)
 ├── i8086.json                       ← extends _base_808x
 ├── i8088.json                       ← extends _base_808x (sibling of 8086)
@@ -524,7 +524,7 @@ Q4 仍 open；新增 Q8 (FPU as trait)。
 | 5 | Decoder priority of overridden instruction | 同 priority physically replace | **由 ID-keyed dictionary 自然解決** — v2 改用 stable string ID 做 selector，override 等於 dict entry replace，沒 priority 問題 |
 | 6 | 雙向繼承（base 知道 child） | 不做 | **不做** — Resolution 單向 |
 | 7 | 8086 ↔ 8088 — 合併還是 sibling？ | 合併 | **改 sibling pattern** — Gemini critique #4.c：抽 `_base_808x.json`，兩者各自 extend 並 override cycle timing；比合併精細，cycle accounting 也對 |
-| 8 | **(NEW)** FPU 8087 / 80287 — extends or trait？ | — | **走 traits**（additive-only overlay）— 解 N×M combinatorial 爆炸；`spec/x86-16/i8086_with_8087.json` = base + trait composition |
+| 8 | **(NEW)** FPU 8087 / 80287 — extends or trait？ | — | **走 traits**（additive-only overlay）— 解 N×M combinatorial 爆炸；`spec/cpu/x86-16/i8086_with_8087.json` = base + trait composition |
 
 ---
 

@@ -275,7 +275,7 @@ output "cpu_instrs / 01" is normal).
 - `Cpu/LegacyCpu.cs` + `Cpu/JsonCpu.cs` — Reset distinguishes cold-start
   vs post-BIOS
 
-`spec/arm7tdmi/`:
+`spec/cpu/arm7tdmi/`:
 - `groups/data-processing.json` — 14 RegRegShift-format instructions'
   read_reg(rn) changed to read_reg_shift_by_reg
 - `groups/multiply-long.json` — 4 mnemonics get S-bit + update_nz_64

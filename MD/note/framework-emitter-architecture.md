@@ -1,4 +1,4 @@
-﻿# AprCpu Framework — 設計概念與 Emitter 架構
+# AprCpu Framework — 設計概念與 Emitter 架構
 
 > **原寫於 Phase 4.5 完工**（ARM7TDMI + LR35902 兩顆 CPU 都跑通的時點），
 > **2026-05-03 大改：反映 Phase 5.8 emitter library refactor + Phase 7
@@ -368,7 +368,7 @@ ARM 跟 LR35902 在「形狀」上的差異依然決定 emitter 量級，但 Pha
 一個典型的「LD A, B」(opcode 0x78) 從 spec 到 native code 經過：
 
 ```
-1. spec/lr35902/groups/block1-ld-reg-reg.json:
+1. spec/cpu/lr35902/groups/block1-ld-reg-reg.json:
    { "name": "LdReg_Reg", "pattern": "01dddsss", ...
      "instructions": [{ "mnemonic": "LD", "steps": [
        { "op": "lr35902_read_r8",  "field": "sss", "out": "src" },

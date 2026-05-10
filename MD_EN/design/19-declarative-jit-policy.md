@@ -275,7 +275,7 @@ Verification: this doc is committed + pushed. **No code changes**.
 These **cannot** be done per-CPU incrementally because they change the
 shared layer:
 
-1.1 Add a `MachineSpec` C# class + `spec/schema/machine-spec.schema.json`
+1.1 Add a `MachineSpec` C# class + `spec/machines/_schema.json`
 1.2 Extend the `DecodedInstruction` struct with `Immediate?` and
     `InstructionSize`
 1.3 Move `BlockCache` byte-coverage → page-bitset
@@ -291,7 +291,7 @@ migrate first to enable the build.
 
 2.1 Write `spec/machines/gba.json` (BIOS / EWRAM / IWRAM / IO / Palette /
     VRAM / OAM / Cart ROM regions)
-2.2 Add an `isa_metadata` section to `spec/arm7tdmi/cpu.json`
+2.2 Add an `isa_metadata` section to `spec/cpu/arm7tdmi/cpu.json`
 2.3 Switch GbaMemoryBus to MachineSpec-driven dispatch
 2.4 Switch ArmEmitters to the new DecodedInstruction.Immediate (where it
     has use sites)
@@ -302,7 +302,7 @@ compared to previous perf.
 ### Step 3: LR35902 / GB migration
 
 3.1 Write `spec/machines/gb_dmg.json`
-3.2 Add `isa_metadata` to `spec/lr35902/cpu.json`
+3.2 Add `isa_metadata` to `spec/cpu/lr35902/cpu.json`
 3.3 Switch GbMemoryBus to MachineSpec
 3.4 Simplify Lr35902Emitters: `FetchImmediate` no longer branches (always
     uses DecodedInstruction.Immediate); `EmitWriteByteWithSyncAndRamFastPath`
@@ -316,7 +316,7 @@ compared to previous perf.
 ### Step 4: Ricoh 2A03 / NES migration
 
 4.1 Write `spec/machines/nes_ntsc.json`
-4.2 Add `isa_metadata` to `spec/2a03/cpu.json` (cycles_per_spec_unit=1
+4.2 Add `isa_metadata` to `spec/cpu/2a03/cpu.json` (cycles_per_spec_unit=1
     is read from here)
 4.3 Switch NesMemoryBus to MachineSpec
 4.4 Add imm-bake to Mos6502Emitters (via DecodedInstruction.Immediate;

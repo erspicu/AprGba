@@ -76,7 +76,7 @@ declarativity**（從 50% → 70% → 78% → ~85%），perf 卻沒退步**。
 
 ### 2.1 Spec format 改動 summary
 
-`spec/2a03/groups/` 新增 `cycles.table` 的 InstructionDef：
+`spec/cpu/2a03/groups/` 新增 `cycles.table` 的 InstructionDef：
 
 | Group | Mnemonics | bbb modes | Total opcode-instances |
 |---|---:|---:|---:|

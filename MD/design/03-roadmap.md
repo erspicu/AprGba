@@ -68,7 +68,7 @@
 
 完成項目見 [`MD/design/04-json-schema-spec.md`](/MD/design/04-json-schema-spec.md)、
 [`MD/design/05-microops-vocabulary.md`](/MD/design/05-microops-vocabulary.md)、
-`spec/schema/cpu-spec.schema.json`。
+`spec/cpu/_schema.json`。
 
 ---
 
@@ -224,7 +224,7 @@ CPU 正確性已通過真實 ROM 端到端驗證，framework 對 ARMv4T 完整�
 - ✅ 4.5B：`LegacyCpu`（big-switch 直譯）+ DMG PPU stub + PNG 截圖；通過
   Blargg cpu_instrs **11/11 全部子測試**（含 02-interrupts，以 EI 延遲 +
   cycle-table 驅動的 DIV/TIMA timer 實作完成）
-- ✅ 4.5C：`spec/lr35902/*.json`（23 個 group 檔，501 opcodes）+
+- ✅ 4.5C：`spec/cpu/lr35902/*.json`（23 個 group 檔，501 opcodes）+
   `Lr35902Emitters.cs`（~50 個 micro-op）+ `JsonCpu` backend；通過
   Blargg cpu_instrs **11/11 + master "Passed all tests"**，跟 LegacyCpu
   截圖完全一致。設計依據見
@@ -1203,11 +1203,11 @@ claim 的最後 evidence。完整 phase plan 在
 | 24.6.5a-g | Data-transfer group complete — MOV all forms (B0-BF/88-8B 全 ModR/M/C6/C7/A0-A3/8C/8E/segment overrides) + PUSH/POP family (50-5F/sreg/FLAGS/r/m) + XCHG/LEA/LDS/LES — 69 opcodes | ✅ 7 commits | `1e992a3`..`7ad24a8` |
 | 24.6.6a-e | ALU + 9-flag IR — 8 ops × 6 forms (00-3D, 48 opcodes) + INC/DEC r16 (40-4F) + 80-83 ALU r/m,imm group + TEST/NOT/NEG + MUL/IMUL + CBW/CWD — 76 opcodes | ✅ 5 commits | `e997ade`..`e2c7e1b` |
 | 24.6.7a-g | Control flow + shift count=1 + string ops + REP + flag-manip/IO + INT/IRET + FE/FF group + BCD + DIV/IDIV — ~70 opcodes | ✅ 8 commits | `9aa7f6c`..`5958c0b` |
-| 24.6.7b2 | Shift by CL (D2/D3) — count != 1 path with 8088 silicon flag quirks | ⏳ | — |
-| 24.6.8 | Block-JIT mode (alloca + mem2reg, 對齊 NES N1.B') | ⏳ | — |
-| 24.6.9 | 24.5 demo 透過 json-block backend 重跑：result/x86-16/jit-*.png pixel-identical | ⏳ | — |
-| **24.7** | 80186 spec — 透過 inheritance (#23)：ENTER/LEAVE demo + 截圖 | ⏳ | — |
-| **24.8** | 80286 real-mode + protected-mode demo：4 顆 CPU 全綠 + protmode 截圖 | ⏳ | — |
+| 24.6.7b2 | Shift by CL (D2/D3) — count != 1 path with 8088 silicon flag quirks | ✅ | Phase 24.6.7 series |
+| 24.6.8 | Block-JIT mode (alloca + mem2reg, 對齊 NES N1.B') | ✅ | Phase 24.6.8 series |
+| 24.6.9 | 24.5 demo 透過 json-block backend 重跑：result/x86-16/jit-*.png pixel-identical | ✅ | `6f0045a` |
+| **24.7** | 80186 spec — 透過 inheritance (#23)：ENTER/LEAVE demo + 截圖 | ✅ | Phase 25 (`585c6b2`..`878dc92`) |
+| **24.8** | 80286 real-mode + protected-mode demo：4 顆 CPU 全綠 + 5-ROM fault matrix | ✅ | Phase 27a + 27b (`95e5138`..`4066b66`) |
 
 ### 本 session (2026-05-10) 累計 commits (~25 feature + ~6 docs)
 

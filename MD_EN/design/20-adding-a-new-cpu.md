@@ -8,9 +8,9 @@
 > block-JIT modes".
 >
 > The 3 CPUs already implemented can be referenced as examples:
-> - **ARM7TDMI** (GBA) — `spec/arm7tdmi/cpu.json` + `src/AprCpu.Core/IR/ArmEmitters.cs`
-> - **LR35902** (GB DMG) — `spec/lr35902/cpu.json` + `src/AprCpu.Core/IR/Lr35902Emitters.cs`
-> - **Ricoh 2A03** (NES NTSC) — `spec/2a03/cpu.json` + `src/AprCpu.Core/IR/Mos6502Emitters.cs`
+> - **ARM7TDMI** (GBA) — `spec/cpu/arm7tdmi/cpu.json` + `src/AprCpu.Core/IR/ArmEmitters.cs`
+> - **LR35902** (GB DMG) — `spec/cpu/lr35902/cpu.json` + `src/AprCpu.Core/IR/Lr35902Emitters.cs`
+> - **Ricoh 2A03** (NES NTSC) — `spec/cpu/2a03/cpu.json` + `src/AprCpu.Core/IR/Mos6502Emitters.cs`
 >
 > When adding a 4th, follow this doc step-by-step, one commit per step,
 > with tests passing before moving on.
@@ -37,7 +37,7 @@ one of 6502 / GB / ARM.
 ### Step 1 — `spec/<arch>/cpu.json` (ISA semantics)
 
 Express the ISA abstraction in declarative JSON. The schema is at
-`spec/schema/cpu-spec.schema.json`.
+`spec/cpu/_schema.json`.
 
 Minimum that works:
 
@@ -107,7 +107,7 @@ Only when generic isn't enough should you write an arch-specific emitter
 ### Step 3 — `spec/machines/<machine>.json` (board-level memory map)
 
 The CPU spec should not know the memory map; the board spec describes it.
-The schema is at `spec/schema/machine-spec.schema.json`.
+The schema is at `spec/machines/_schema.json`.
 
 ```json
 {

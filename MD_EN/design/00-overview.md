@@ -69,7 +69,7 @@ Completion snapshot (as of 2026-05-09): **455 unit tests all green**; arm/thumb/
   page-table dispatch (GbaMemoryBus also became spec-driven),
   allowed_widths debug-mode enforcement, fastmem block-JIT inline path
   (opt-in).
-- **JSON spec driven**: `spec/2a03/cpu.json` + 7 group files +
+- **JSON spec driven**: `spec/cpu/2a03/cpu.json` + 7 group files +
   `spec/machines/nes-ntsc.json`; all 256 opcodes are spec-derivable
   including cycle counts. N3.3 BLOCKED → RESOLVED.
 

@@ -2,7 +2,7 @@
 
 > Phase 4.5 has completed the reference implementation (`LegacyCpu`
 > interpreter, 256 opcodes) and passed Blargg `cpu_instrs` 11/11. The
-> work of Phase 4.5C is to write the same ISA into `spec/lr35902/`
+> work of Phase 4.5C is to write the same ISA into `spec/cpu/lr35902/`
 > using bit-pattern grouping, reusing the SpecCompiler proven on
 > ARM7TDMI, producing the `JsonCpu` backend, and obtaining the same
 > result on the same ROM.
@@ -65,7 +65,7 @@ a special case in the instructions selector.
 step list (`read_r8(sss)` -> `write_r8(ddd)`), differing only in reg
 lookup.
 
-Filename: `spec/lr35902/groups/block1-ld-reg-reg.json`
+Filename: `spec/cpu/lr35902/groups/block1-ld-reg-reg.json`
 
 ---
 
@@ -94,7 +94,7 @@ in block 3's `11_ooo_110`).
 Flag setting is also table-driven (each op's effect on Z/N/H/C is fixed
 by rule).
 
-Filename: `spec/lr35902/groups/block2-alu-reg.json`
+Filename: `spec/cpu/lr35902/groups/block2-alu-reg.json`
 
 ---
 
@@ -109,7 +109,7 @@ block 2, swapping only the source operand resolver — `operands.src.kind:
 
 **Instruction count**: 8.
 
-Filename: `spec/lr35902/groups/block3-alu-imm8.json`
+Filename: `spec/cpu/lr35902/groups/block3-alu-imm8.json`
 
 ---
 
@@ -119,7 +119,7 @@ Filename: `spec/lr35902/groups/block3-alu-imm8.json`
 
 `LD r, n` (including `LD (HL), n`). 8 entries.
 
-Filename: `spec/lr35902/groups/block0-ld-r8-imm8.json`
+Filename: `spec/cpu/lr35902/groups/block0-ld-r8-imm8.json`
 
 ---
 
@@ -133,7 +133,7 @@ Filename: `spec/lr35902/groups/block0-ld-r8-imm8.json`
 16 entries (including (HL)). INC does not affect C flag; DEC similar.
 H flag must be computed in both.
 
-Filename: `spec/lr35902/groups/block0-inc-dec-r8.json`
+Filename: `spec/cpu/lr35902/groups/block0-inc-dec-r8.json`
 
 ---
 
@@ -150,7 +150,7 @@ Filename: `spec/lr35902/groups/block0-inc-dec-r8.json`
 
 `LD rr, nn`, 4 entries. Validates paired register schema.
 
-Filename: `spec/lr35902/groups/block0-ld-rr-imm16.json`
+Filename: `spec/cpu/lr35902/groups/block0-ld-rr-imm16.json`
 
 ---
 
@@ -162,7 +162,7 @@ Three small groups, but the register field encoding is consistent:
 - `00_dd1_011` = DEC rr     (4 entries)
 - `00_dd1_001` = ADD HL, rr (4 entries; affects H/C, Z unchanged, N=0)
 
-Filename: `spec/lr35902/groups/block0-alu-rr.json`
+Filename: `spec/cpu/lr35902/groups/block0-alu-rr.json`
 
 ---
 
@@ -221,7 +221,7 @@ to be re-verified).
 POP AF has to mask out the low 4 bits of F (GB's F register forces low
 nibble = 0).
 
-8 entries. Filename: `spec/lr35902/groups/block3-push-pop.json`
+8 entries. Filename: `spec/cpu/lr35902/groups/block3-push-pop.json`
 
 ---
 
@@ -232,7 +232,7 @@ nibble = 0).
 `RST` jumps to `ttt x 8` = 0x00 / 0x08 / 0x10 / 0x18 / 0x20 / 0x28 /
 0x30 / 0x38. 8 entries.
 
-Filename: `spec/lr35902/groups/block3-rst.json`
+Filename: `spec/cpu/lr35902/groups/block3-rst.json`
 
 ---
 
@@ -330,7 +330,7 @@ listed independently:
 ## Final file structure proposal
 
 ```
-spec/lr35902/
+spec/cpu/lr35902/
   cpu.json                          — top-level: register_file (with paired),
                                        processor_modes (GB has no mode, omitted),
                                        instruction_set_dispatch (CB prefix)
@@ -415,7 +415,7 @@ spec volume is estimated at 40-60% depending on step list reuse.
 ## Actual file structure (consistent with original plan)
 
 ```
-spec/lr35902/
+spec/cpu/lr35902/
   cpu.json
   main.json
   cb.json

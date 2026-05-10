@@ -283,7 +283,7 @@ ARM 的 micro-op；新增的不多：
 
 ## Done criteria（全 Phase 2.5 結案標準）
 
-1. ✅ `aprcpu --spec spec/arm7tdmi/cpu.json --output temp/arm7tdmi.ll`
+1. ✅ `aprcpu --spec spec/cpu/arm7tdmi/cpu.json --output temp/arm7tdmi.ll`
    產出 ARMv4T 全部指令的 LLVM 函式（預估 80+ functions）
 2. ✅ Module 通過 LLVM `Verify`，0 diagnostics
 3. ✅ 所有 spec 中的 micro-op 都有對應 emitter

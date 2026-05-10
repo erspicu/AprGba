@@ -189,7 +189,7 @@ new tests — bus IRQ + DMA + scheduler + SystemRunner).
       v
 +----------------------------------------------------+
 | AprCpu.Core JIT pipeline                           |
-|  SpecCompiler.Compile(spec/arm7tdmi/cpu.json)      |
+|  SpecCompiler.Compile(spec/cpu/arm7tdmi/cpu.json)      |
 |   -> LLVM IR module -> MCJIT -> native fn pointers |
 | HostRuntime + extern shim binding                  |
 +----------------------------------------------------+
@@ -208,7 +208,7 @@ The two sides are shape-identical — the design "framework + JSON spec
 
 |  | GB (DMG) | GBA |
 |---|---|---|
-| CPU spec | `spec/lr35902/*.json` | `spec/arm7tdmi/*.json` |
+| CPU spec | `spec/cpu/lr35902/*.json` | `spec/cpu/arm7tdmi/*.json` |
 | Custom emitters | `Lr35902Emitters.cs` | `ArmEmitters.cs` |
 | Memory bus | `AprGb.Cli/Memory/GbMemoryBus.cs` | `AprCpu.Core/Runtime/Gba/GbaMemoryBus.cs` |
 | DMA controller | (none, GB doesn't need it) | `GbaDmaController.cs` |

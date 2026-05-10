@@ -78,7 +78,7 @@ multi-CPU shape).
 
 ### Suggested minimum deliverable (MVP-of-Phase-4.5)
 
-- [ ] `spec/lr35902/cpu.json` + `spec/lr35902/instructions/*.json`
+- [ ] `spec/cpu/lr35902/cpu.json` + `spec/cpu/lr35902/instructions/*.json`
   covering the LR35902 main instruction set (~245 main opcodes)
 - [ ] CB-prefix sub-instruction set (256 bit ops)
 - [ ] Host runtime hooked to GB memory map (ROM bank 0/1, VRAM, WRAM,
@@ -204,7 +204,7 @@ implementation.
 
 Recommended order, commit after each block:
 
-1. **Build spec skeleton**: `spec/lr35902/cpu.json` writes architecture,
+1. **Build spec skeleton**: `spec/cpu/lr35902/cpu.json` writes architecture,
    register_file (including paired register schema extension),
    processor_modes (GB has no mode concept, this field can be omitted)
 2. **8-bit Load group** (starting at AprGBemu CPU.cs line 22's
@@ -242,7 +242,7 @@ Recommended order, commit after each block:
 
 | AprGBemu file | Counterpart in this project |
 |---|---|
-| `Emu_GB/CPU.cs` (switch-case CPU) | `spec/lr35902/*.json` (data-driven) |
+| `Emu_GB/CPU.cs` (switch-case CPU) | `spec/cpu/lr35902/*.json` (data-driven) |
 | `Emu_GB/MEM.cs` (memory bus) | host runtime memory bus implementation (C#) |
 | `Emu_GB/Define.cs` (register declarations) | spec's `register_file` |
 | `Emu_GB/INT.cs` (interrupts) | host runtime interrupt loop |
@@ -259,7 +259,7 @@ the same CpuState sequence.
 
 When all of the following hold, declare Phase 4.5 complete:
 
-1. Done: `spec/lr35902/` covers main + CB-prefix full ISA
+1. Done: `spec/cpu/lr35902/` covers main + CB-prefix full ISA
 2. Done: framework-side schema/parser/emitter extensions are merged and
    pass all ARM tests
 3. Done: host runtime can load a GB ROM and run fetch-decode-execute
@@ -289,7 +289,7 @@ After completion:
 
 After `LegacyCpu` interpreter (256-case big switch) finishes and passes
 Blargg `cpu_instrs` 11/11, the same ISA is to be written into
-`spec/lr35902/` using bit-pattern grouping, producing a `JsonCpu`
+`spec/cpu/lr35902/` using bit-pattern grouping, producing a `JsonCpu`
 backend that runs the same ROM in comparison with legacy. The specific
 grouping table is in
 [`10-lr35902-bit-pattern-groups.md`](./10-lr35902-bit-pattern-groups.md).

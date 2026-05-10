@@ -173,7 +173,7 @@ apr-gba --rom=test-roms/gba-tests/thumb/thumb.gba --cycles=300000 --screenshot=r
       ▼
 ┌────────────────────────────────────────────────────┐
 │ AprCpu.Core JIT pipeline                           │
-│  SpecCompiler.Compile(spec/arm7tdmi/cpu.json)      │
+│  SpecCompiler.Compile(spec/cpu/arm7tdmi/cpu.json)      │
 │   → LLVM IR module → MCJIT → native fn pointers    │
 │ HostRuntime + extern shim binding                  │
 └────────────────────────────────────────────────────┘
@@ -191,7 +191,7 @@ ROM（`RunFrames_AdvancesSchedulerAndStillReachesArmGbaHalt`）守底。
 
 |  | GB (DMG) | GBA |
 |---|---|---|
-| CPU spec | `spec/lr35902/*.json` | `spec/arm7tdmi/*.json` |
+| CPU spec | `spec/cpu/lr35902/*.json` | `spec/cpu/arm7tdmi/*.json` |
 | Custom emitters | `Lr35902Emitters.cs` | `ArmEmitters.cs` |
 | Memory bus | `AprGb.Cli/Memory/GbMemoryBus.cs` | `AprCpu.Core/Runtime/Gba/GbaMemoryBus.cs` |
 | DMA controller | (none, GB 不需要) | `GbaDmaController.cs` |

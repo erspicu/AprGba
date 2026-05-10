@@ -69,7 +69,7 @@ logo 截圖；NES 端 nestest（三 backend）+ blargg cpu_test5（三 backend�
   (`TryGetHostPointer`)、ARM page-table dispatch (GbaMemoryBus 也 spec-driven)、
   allowed_widths debug-mode enforcement、fastmem block-JIT inline path
   (opt-in)。
-- **JSON spec 驅動**：`spec/2a03/cpu.json` + 7 個 group + `spec/machines/nes-ntsc.json`，
+- **JSON spec 驅動**：`spec/cpu/2a03/cpu.json` + 7 個 group + `spec/machines/nes-ntsc.json`，
   256 opcode 全部 spec-derivable 含 cycle 數。N3.3 BLOCKED → RESOLVED。
 
 ### 明確排除（第一版不做，2026-05 scope decisions）

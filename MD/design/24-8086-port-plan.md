@@ -317,8 +317,8 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | **24.4.5** | String ops MOVSB/CMPSB/SCASB/LODSB/STOSB（10 ops）+ REP/REPNE prefix | 1.17M SST | ✅ | `44220a7` |
 | **24.4.6** | INT/IRET/INTO + CBW/CWD + IN/OUT + BCD（functional） | 1.31M SST cases (BCD silicon-quirk SST deferred) | ✅ | `0927832` |
 | **24.5** | 5-10 個 hand-crafted demo + 截圖 | 6 paper-quality screenshots: hello-cga / primes / fibonacci / mandelbrot / string-copy / factorial | ✅ | `a897276`, `acf685a` |
-| **24.6** | **JSON-driven port** — `spec/x86-16/i8086/cpu.json` + groups + `X86_16Emitters.cs` (LLVM IR) + `X86JsonCpu` per-instr / block-JIT；三 backend (legacy / json / json-block) 全綠 Tom Harte | 8086 真正成為 framework 第 4 顆 CPU；同 pipeline 跑 | ⏳ partial | (子項見下) |
-| 24.6.1 | Spec scaffolding：`spec/x86-16/i8086/{cpu.json,main.json}`，8 GPRs in ModR/M order，9-flag FLAGS，4 segment regs + IP + HALTED | SpecLoader test green | ✅ | `4730945` |
+| **24.6** | **JSON-driven port** — `spec/cpu/x86-16/i8086/cpu.json` + groups + `X86_16Emitters.cs` (LLVM IR) + `X86JsonCpu` per-instr / block-JIT；三 backend (legacy / json / json-block) 全綠 Tom Harte | 8086 真正成為 framework 第 4 顆 CPU；同 pipeline 跑 | ⏳ partial | (子項見下) |
+| 24.6.1 | Spec scaffolding：`spec/cpu/x86-16/i8086/{cpu.json,main.json}`，8 GPRs in ModR/M order，9-flag FLAGS，4 segment regs + IP + HALTED | SpecLoader test green | ✅ | `4730945` |
 | 24.6.2 | Smoke group：NOP (0x90) + HLT (0xF4) decode through DecoderTable | 4 decode tests | ✅ | `9a43c73` |
 | 24.6.3 | `X86_16Emitters.cs` scaffolding：family dispatch + halt emitter + helpers (FetchImm8/16, SegmentedRead/Write8/16, ReadGpr8/16, WriteGpr8/16, byte-half preservation rule) | 5 spec compile tests | ✅ | `24e5e70` |
 | 24.6.4 | `X86JsonCpu` per-instr backend：SpecCompiler → ORC LLJIT → live fn pointers, NOP/HLT roundtrip, State getter/LoadState | 7 e2e tests | ✅ | `01cdeb3` |
@@ -350,7 +350,7 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | 24.6.9 | Re-run 24.5 demos through json-block — 6 demos (hello-cga/primes/fibonacci/mandelbrot/string-copy/factorial) | result/x86-16/jit-block/*.png 6 張 SHA256 pixel-identical 對 legacy 版 | ✅ | `6f0045a` |
 | **24.6b** | (optional) Lockstep diff legacy vs Apr86（限 .com 程式範圍） | Apr86 reference cross-check | ⏳ | — |
 | **24.7** | 80186 spec — 透過 inheritance (#23) | ENTER/LEAVE demo + result/x86-16/enter-leave-i80186.png | ✅ | Phase 25 (`585c6b2`..`878dc92`); see [25-i80186-implementation-plan.md](25-i80186-implementation-plan.md) |
-| **24.8** | 80286 real-mode + protected-mode demos | 4 顆 CPU 全綠 + result/x86-16/protmode-msr-i80286.png | ✅ real-mode complete (Phase 26 v1 stub `6b1e2d6`..`e5d023f` + Phase 27a full `95e5138`..`78cf9fd`, 14/14 286 system insts). Protected-mode visual demo (`protmode-msr-i80286.png`) deferred to Phase 27b multi-week. See [`26-i80286-realmode-plan.md`](26-i80286-realmode-plan.md), [`27-i80286-completion-plan.md`](27-i80286-completion-plan.md), [`MD/performance/202605110100-i80286-realmode-complete.md`](../performance/202605110100-i80286-realmode-complete.md) | — |
+| **24.8** | 80286 real-mode + protected-mode demos | 4 顆 CPU 全綠 + result/x86-16/protmode-msr-i80286.png | ✅ Phase 27a real-mode complete (`95e5138`..`78cf9fd`, 14/14 286 system insts) + Phase 27b protected-mode complete (`11fdc98`..`4066b66`, descriptor-fetch + 4-check fault model). Visual demo replaced by 5-ROM CLI fault matrix (entry/np/null-ss/dpl-gp/ss-bad-type) — see [`27-i80286-completion-plan.md`](27-i80286-completion-plan.md) and [`MD/performance/202605110200-i80286-pmode-fault-model-complete.md`](../performance/202605110200-i80286-pmode-fault-model-complete.md). | `4066b66` |
 
 **重要 update (2026-05-10)**：phase 24.6 在 doc 原版 v1 裡漏掉 **「JSON-driven
 port」** 這個關鍵 sub-phase — 直接從 24.5 demo 跳到 24.7 inheritance 是錯

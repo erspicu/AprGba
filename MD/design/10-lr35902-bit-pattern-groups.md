@@ -2,7 +2,7 @@
 
 > Phase 4.5 已經完成 reference implementation（`LegacyCpu` 直譯 256 個
 > opcode）並通過 Blargg `cpu_instrs` 11/11。Phase 4.5C 的工作是把同樣
-> 的 ISA 用 bit-pattern 分群寫進 `spec/lr35902/`，沿用 ARM7TDMI 那一套
+> 的 ISA 用 bit-pattern 分群寫進 `spec/cpu/lr35902/`，沿用 ARM7TDMI 那一套
 > SpecCompiler，產出 `JsonCpu` backend，再對同一份 ROM 取得相同結果。
 >
 > 本文件是該 spec 結構的設計依據。
@@ -58,7 +58,7 @@ case 處理。
 **指令數**：`8 × 8 - 1 (HALT) = 63`，全部共用同一個 step list（`read_r8(sss)`
 → `write_r8(ddd)`），差別只在 reg lookup。
 
-檔名：`spec/lr35902/groups/block1-ld-reg-reg.json`
+檔名：`spec/cpu/lr35902/groups/block1-ld-reg-reg.json`
 
 ---
 
@@ -86,7 +86,7 @@ case 處理。
 差別只在 ALU op 與 source reg。Flag 設定也是表驅動（每個 op 對 Z/N/H/C
 的影響規則固定）。
 
-檔名：`spec/lr35902/groups/block2-alu-reg.json`
+檔名：`spec/cpu/lr35902/groups/block2-alu-reg.json`
 
 ---
 
@@ -100,7 +100,7 @@ resolver — `operands.src.kind: "imm8"` vs `"reg8_by_field"`。
 
 **指令數**：8。
 
-檔名：`spec/lr35902/groups/block3-alu-imm8.json`
+檔名：`spec/cpu/lr35902/groups/block3-alu-imm8.json`
 
 ---
 
@@ -110,7 +110,7 @@ resolver — `operands.src.kind: "imm8"` vs `"reg8_by_field"`。
 
 `LD r, n`（含 `LD (HL), n`）。共 8 個。
 
-檔名：`spec/lr35902/groups/block0-ld-r8-imm8.json`
+檔名：`spec/cpu/lr35902/groups/block0-ld-r8-imm8.json`
 
 ---
 
@@ -123,7 +123,7 @@ resolver — `operands.src.kind: "imm8"` vs `"reg8_by_field"`。
 
 共 16 個（含 (HL)）。INC 不影響 C flag、DEC 同。H flag 都要算。
 
-檔名：`spec/lr35902/groups/block0-inc-dec-r8.json`
+檔名：`spec/cpu/lr35902/groups/block0-inc-dec-r8.json`
 
 ---
 
@@ -140,7 +140,7 @@ resolver — `operands.src.kind: "imm8"` vs `"reg8_by_field"`。
 
 `LD rr, nn`，4 個。Validates paired register schema。
 
-檔名：`spec/lr35902/groups/block0-ld-rr-imm16.json`
+檔名：`spec/cpu/lr35902/groups/block0-ld-rr-imm16.json`
 
 ---
 
@@ -152,7 +152,7 @@ resolver — `operands.src.kind: "imm8"` vs `"reg8_by_field"`。
 - `00_dd1_011` = DEC rr     （4 個）
 - `00_dd1_001` = ADD HL, rr （4 個，影響 H/C，Z 不變、N=0）
 
-檔名：`spec/lr35902/groups/block0-alu-rr.json`
+檔名：`spec/cpu/lr35902/groups/block0-alu-rr.json`
 
 ---
 
@@ -208,7 +208,7 @@ selector 區分。
 
 POP AF 要 mask 掉 F 的低 4 bit（GB 的 F register 強制低 nibble = 0）。
 
-共 8 個。檔名：`spec/lr35902/groups/block3-push-pop.json`
+共 8 個。檔名：`spec/cpu/lr35902/groups/block3-push-pop.json`
 
 ---
 
@@ -219,7 +219,7 @@ POP AF 要 mask 掉 F 的低 4 bit（GB 的 F register 強制低 nibble = 0）�
 `RST` 跳轉到 `ttt × 8` = 0x00 / 0x08 / 0x10 / 0x18 / 0x20 / 0x28 /
 0x30 / 0x38。共 8 個。
 
-檔名：`spec/lr35902/groups/block3-rst.json`
+檔名：`spec/cpu/lr35902/groups/block3-rst.json`
 
 ---
 
@@ -313,7 +313,7 @@ shift/rotate 細分（`oo=00`，bbb 編碼 op）：
 ## 最終檔案結構提案
 
 ```
-spec/lr35902/
+spec/cpu/lr35902/
   cpu.json                          — top-level：register_file (含 paired)、
                                        processor_modes（GB 沒 mode → 省）、
                                        instruction_set_dispatch（CB prefix）
@@ -397,7 +397,7 @@ spec/lr35902/
 ## 實際檔案結構（與原計畫一致）
 
 ```
-spec/lr35902/
+spec/cpu/lr35902/
   cpu.json
   main.json
   cb.json

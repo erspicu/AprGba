@@ -207,7 +207,7 @@ improvement).
 5. Add spec schema field `instruction_length_table` (256-entry array of
    length values); `SpecLoader` reads into `InstructionSetSpec`
 
-**Spec changes**: `spec/lr35902/main.json` adds 256-entry length table (or
+**Spec changes**: `spec/cpu/lr35902/main.json` adds 256-entry length table (or
 auto-derive from group files + build the table at SpecCompiler stage)
 
 **Verification**:
@@ -219,7 +219,7 @@ auto-derive from group files + build the table at SpecCompiler stage)
 
 ### 4.2 Step 2 — 0xCB prefix as 2-byte atomic
 
-**Files**: `spec/lr35902/groups/block3-cb-prefix.json` + `BlockDetector` +
+**Files**: `spec/cpu/lr35902/groups/block3-cb-prefix.json` + `BlockDetector` +
 `SpecLoader`
 
 **Changes**:

@@ -66,7 +66,7 @@ diff 行為，比對人寫文件方便很多。
 
 ### 建議的最小可交付（MVP-of-Phase-4.5）
 
-- [ ] `spec/lr35902/cpu.json` + `spec/lr35902/instructions/*.json`
+- [ ] `spec/cpu/lr35902/cpu.json` + `spec/cpu/lr35902/instructions/*.json`
   涵蓋 LR35902 主指令集（~245 個 main opcode）
 - [ ] CB-prefix 子指令集（256 個 bit op）
 - [ ] Host runtime 接 GB memory map（ROM bank 0/1、VRAM、WRAM、OAM、IO、
@@ -183,7 +183,7 @@ Thumb 的「另一個 set 切換」用法，沒跑過「同一個 set 內依 opc
 
 建議照這個順序，每完成一塊就 commit：
 
-1. **建 spec 骨架**：`spec/lr35902/cpu.json` 寫 architecture、
+1. **建 spec 骨架**：`spec/cpu/lr35902/cpu.json` 寫 architecture、
    register_file（含 paired register schema 擴充）、processor_modes
    （GB 沒有 mode 概念，這欄可省）
 2. **8-bit Load 群** （AprGBemu CPU.cs 第 22 行起的 `#region 8bit Load`）
@@ -216,7 +216,7 @@ Thumb 的「另一個 set 切換」用法，沒跑過「同一個 set 內依 opc
 
 | AprGBemu 檔案 | 本專案對應產出 |
 |---|---|
-| `Emu_GB/CPU.cs`（switch-case CPU） | `spec/lr35902/*.json`（資料化）|
+| `Emu_GB/CPU.cs`（switch-case CPU） | `spec/cpu/lr35902/*.json`（資料化）|
 | `Emu_GB/MEM.cs`（memory bus） | host runtime memory bus 實作（C#） |
 | `Emu_GB/Define.cs`（暫存器宣告） | spec 的 `register_file` |
 | `Emu_GB/INT.cs`（中斷） | host runtime interrupt loop |
@@ -232,7 +232,7 @@ AprGBemu 是 **WinForms + 純直譯**；本專案目標是把它的 CPU 部分�
 
 當以下都成立，宣告 Phase 4.5 完成：
 
-1. ✅ `spec/lr35902/` 涵蓋 LR35902 主 + CB-prefix 全 ISA
+1. ✅ `spec/cpu/lr35902/` 涵蓋 LR35902 主 + CB-prefix 全 ISA
 2. ✅ Framework 端的 schema/parser/emitter 擴充已合入並通過全部 ARM 測試
 3. ✅ Host runtime 能載入 GB ROM、跑 fetch-decode-execute 不 crash
 4. ✅ 至少一個 Blargg cpu_instrs 子測試通過（範圍真到那邊再決定要幾個）
@@ -255,6 +255,6 @@ AprGBemu 是 **WinForms + 純直譯**；本專案目標是把它的 CPU 部分�
 ## 4.5C：spec 結構設計
 
 `LegacyCpu` 直譯（256-case big switch）走完並通過 Blargg `cpu_instrs`
-11/11 後，要把同一份 ISA 用 bit-pattern 分群寫進 `spec/lr35902/`，產出
+11/11 後，要把同一份 ISA 用 bit-pattern 分群寫進 `spec/cpu/lr35902/`，產出
 `JsonCpu` backend，跟 legacy 跑同一份 ROM 對照。具體分群表參見
 [`10-lr35902-bit-pattern-groups.md`](./10-lr35902-bit-pattern-groups.md)。

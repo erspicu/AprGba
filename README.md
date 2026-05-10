@@ -4,9 +4,15 @@
 > *generated* from a machine-readable specification — and whether the
 > generated code can run fast enough to be practical.
 
-**Last updated:** 2026-05-09 (Asia/Taipei)
+**Last updated:** 2026-05-11 (Asia/Taipei)
 **License:** [WTFPL v2](LICENSE) — do what the fuck you want to.
-**Status:** Active research. **Three CPUs** (ARM7TDMI / LR35902 / Ricoh 2A03) running through the same framework. Block-JIT path live for all three. Memory bus + cycle table + interrupt vectors + access widths all spec-driven (~85% declarative ratio). Generic lockstep diff toolkit. Page-table dispatch for both NES (1-level, 32-byte) and GBA (1-level, 16 MB).
+**Status:** Active research. **Six CPU variants** running through the
+same framework — ARM7TDMI, LR35902, Ricoh 2A03, and the **Intel x86-16
+family** (i8086 / i80186 / i80286, with 80286 protected-mode segmentation
+and a 4-baseline-check fault model live). Block-JIT path live for all of
+them. Memory bus + cycle table + interrupt vectors + access widths +
+spec inheritance all spec-driven (i80186 / i80286 land via JSON Merge
+Patch on i8086 with **zero** runtime overhead). 894 unit tests passing.
 
 ---
 
@@ -20,10 +26,11 @@ Think of it this way:
 
 | Component | Role |
 |---|---|
-| **`AprCpu`** | The framework. CPU spec loader + decoder generator + IR emitters + LLVM JIT runtime + block detector + cache + page-table dispatch + lockstep diff toolkit. **This is the core.** |
+| **`AprCpu`** | The framework. CPU spec loader + decoder generator + IR emitters + LLVM JIT runtime + block detector + cache + page-table dispatch + lockstep diff toolkit + spec inheritance. **This is the core.** |
 | **`AprGba`** | One concrete consumer of the framework — full GBA system (ARM7TDMI + Thumb + memory bus + PPU + scheduler). Used to push `AprCpu` to its limits. |
 | **`AprGb`** | A second consumer — Game Boy DMG (LR35902 / SM83). Used as a *control case* and to prove the framework genuinely supports a second, different ISA. |
-| **`AprNes`** | A third consumer — NES (Ricoh 2A03 / MOS 6502). Adds variable-width 1-3 byte 8-bit ISA with the framework's most extreme declarativity exercise: ~85% of the runtime (memory bus, cycle table, interrupt vectors, region routing) drives off `spec/2a03/*.json` + `spec/machines/nes-ntsc.json`. |
+| **`AprNes`** | A third consumer — NES (Ricoh 2A03 / MOS 6502). Adds variable-width 1-3 byte 8-bit ISA with the framework's most extreme declarativity exercise: ~85% of the runtime (memory bus, cycle table, interrupt vectors, region routing) drives off `spec/cpu/2a03/*.json` + `spec/machines/nes-ntsc.json`. |
+| **`AprX86`** | A fourth consumer — Intel x86-16 family (i8086 / 8088 / i80186 / 80188 / i80286). Validates spec **inheritance** (`spec/cpu/x86-16/i80286/cpu.json` extends i80186 extends i8086, depth 3). i80286 protected-mode segmentation + 4-check fault model end-to-end demoable. |
 
 ### 2. Why does this project exist?
 
@@ -41,16 +48,17 @@ What if the entire ISA — encoding patterns, register file layout, condition co
 
 #### The goals, in priority order
 
-1. **Build a framework that's actually generic.** Not "generic in theory" — generic in the sense that three genuinely different CPUs (ARM7TDMI + LR35902 + Ricoh 2A03) compile through the same pipeline with no per-CPU C# code in the emit pipeline.
+1. **Build a framework that's actually generic.** Not "generic in theory" — generic in the sense that genuinely different CPUs (ARM7TDMI + LR35902 + Ricoh 2A03 + Intel x86-16) compile through the same pipeline with no per-CPU C# code in the emit pipeline.
 2. **Take the framework all the way to block-JIT.** Per-instruction interpreters are easy to make generic. The hard part is whether the framework can survive the architectural pressure of LLVM JIT, cycle accounting, IRQ delivery, SMC detection, and pipeline-PC quirks — *while staying spec-driven*.
-3. **Validate against real workloads.** Pass Blargg's `cpu_instrs.gb` (all 11 sub-tests). Pass jsmolka's `arm.gba`/`thumb.gba`. Boot the GBA BIOS via LLE. Render canonical screenshots with cycle-accurate matrix tests.
-4. **Document the design philosophy.** Every trade-off recorded. Every architectural pattern named. Future maintainers — including future-me — should be able to tell *why* a design choice was made, not just *what* the code does.
+3. **Validate against real workloads.** Pass Blargg's `cpu_instrs.gb`, jsmolka's ARM/Thumb tests, blargg NES `cpu_test5`, Tom Harte's 8088 SST (1.31M cases). Boot the GBA BIOS via LLE. Render canonical screenshots with cycle-accurate matrix tests.
+4. **Stress the framework with spec inheritance.** Adding new CPUs in the same ISA family should cost a JSON diff, not a re-implementation. The Intel x86-16 chain (8086 → 80186 → 80286, with full 80286 protected-mode segmentation + fault model) shipped in this mode and serves as the proof.
+5. **Document the design philosophy.** Every trade-off recorded. Every architectural pattern named. Future maintainers — including future-me — should be able to tell *why* a design choice was made, not just *what* the code does.
 
 #### What this project is **not**
 
 - **Not** a competitor to mGBA. mGBA is a polished end-user emulator; we are a research framework.
 - **Not** chasing maximum cycle accuracy. We are deliberately at "instruction-grained timing accuracy with sync exits at HW-relevant moments" — enough for commercial ROMs, not enough for cycle-perfect demoscene work.
-- **Not** trying to be the fastest emulator. The current LLVM block-JIT path runs Blargg cpu_instrs at ~21 MIPS (10k frames) / ~27 MIPS (60k frames amortised). The hand-coded `AprGb` legacy interpreter (imported from a previous project — see §3) still beats this. We know. **Performance optimisation is a downstream concern after the framework design is sound.**
+- **Not** trying to be the fastest emulator. The framework's value is *generality*, not raw speed. (That said: the Intel 8086 block-JIT path runs at 218 MIPS on a tight inner loop — 5.65× faster than a hand-coded interpreter — once Gemini-suggested LLVM CFG superblocks were in place.)
 
 #### Proof of execution — test ROM screenshots
 
@@ -60,66 +68,54 @@ Visual evidence the framework actually runs correctness-grade workloads end-to-e
 
 ![Blargg cpu_instrs all 11 sub-tests pass](result/gb/json-llvm/cpu_instrs.png)
 
-Run command: `apr-gb --rom=test-roms/gb-test-roms-master/cpu_instrs/cpu_instrs.gb --cpu=json-llvm --block-jit --frames=10000`. The serial output ends with **"Passed all tests"**. All 11 sub-tests pass through the JSON-driven LR35902 spec compiled to LLVM IR and run via ORC LLJIT block-JIT:
+Run command: `apr-gb --rom=test-roms/gb-test-roms-master/cpu_instrs/cpu_instrs.gb --cpu=json-llvm --block-jit --frames=10000`. The serial output ends with **"Passed all tests"**. All 11 sub-tests pass through the JSON-driven LR35902 spec compiled to LLVM IR and run via ORC LLJIT block-JIT.
 
-| # | Sub-test | What it covers |
-|---|---|---|
-| 01 | special | CPU edge-case behaviours (DAA quirks, halted-state transitions) |
-| 02 | interrupts | IME / IE / IF interaction, EI delayed-effect, HALT-with-interrupts |
-| 03 | op sp,hl | Stack pointer / HL register-pair arithmetic (`ADD SP,e`, `LD HL,SP+e`) |
-| 04 | op r,imm | Register × immediate ALU (`ADD A,n`, `SUB A,n`, `CP n`, …) |
-| 05 | op rp | 16-bit register-pair operations (`INC BC`, `ADD HL,DE`, `LD BC,nn`, …) |
-| 06 | ld r,r | All 64 register-to-register loads (`LD A,B`, `LD H,(HL)`, …) |
-| 07 | jr,jp,call,ret,rst | Full control-flow set: relative jump, absolute jump, call, return, restart |
-| 08 | misc instrs | CCF / SCF / CPL / DAA edge cases + flag interactions |
-| 09 | op r,r | Register-to-register ALU (`ADD A,B`, `XOR C`, `CP H`, …) |
-| 10 | bit ops | 0xCB-prefix BIT / SET / RES across all 256 sub-opcodes |
-| 11 | op a,(hl) | A × memory[HL] ALU operations |
-
-##### Game Boy Advance — jsmolka `arm.gba` (BIOS LLE path)
+##### Game Boy Advance — jsmolka `arm.gba` and `thumb.gba` (BIOS LLE path)
 
 ![jsmolka arm tests pass under real GBA BIOS](result/gba/bios_lle_arm.png)
 
-Run command: `apr-gba --rom=test-roms/gba-tests/arm/arm.gba --bios=BIOS/gba_bios.bin --block-jit`. **LLE** = *Low-Level Emulation* — instead of HLE-stubbing the BIOS calls, we execute the actual Nintendo GBA BIOS (`gba_bios.bin`) through our ARM7TDMI emulation; the BIOS bootloader runs the Nintendo logo intro, scrambles VRAM, then jumps to the cart entry-point where the test framework takes over. This exercises the framework on **real production-grade ARM7TDMI code paths** that homebrew tests would otherwise skip.
-
-The screenshot shows **all ARM-mode test groups passing** — covering ~5000+ individual test vectors across every ARM7TDMI ARM-mode (32-bit) instruction class:
-- Data-processing (ADD/SUB/AND/OR/EOR/MOV/MVN/CMP/CMN/TST/TEQ × all addressing modes × S/non-S flag variants)
-- Multiply / multiply-long (MUL / MLA / UMULL / SMULL / UMLAL / SMLAL)
-- Single-data-transfer (LDR/STR with byte/halfword/sign-extension and pre/post-indexed offsets)
-- Block-data-transfer (LDM/STM with all four addressing modes IA/IB/DA/DB and writeback)
-- Branch (B / BL / BX with cond-code matrix)
-- PSR transfer (MRS / MSR with field masks)
-- Software interrupt (SWI to BIOS)
-- Mode switches (USER / FIQ / IRQ / SVC / ABT / UND banking)
-
-##### Game Boy Advance — jsmolka `thumb.gba` (BIOS LLE path)
-
 ![jsmolka thumb tests pass under real GBA BIOS](result/gba/bios_lle_thumb.png)
 
-Run command: `apr-gba --rom=test-roms/gba-tests/thumb/thumb.gba --bios=BIOS/gba_bios.bin --block-jit`. Same BIOS LLE setup as the ARM test, but now running Thumb-mode (16-bit) test vectors. ARM7TDMI's Thumb mode is a re-encoding of a subset of ARM with tighter instruction format — porting the spec correctly requires both ARM and Thumb to compile through the same emitter pipeline using the per-mode encoding table.
+Run command: `apr-gba --rom=test-roms/gba-tests/arm/arm.gba --bios=BIOS/gba_bios.bin --block-jit`. **LLE** = *Low-Level Emulation* — instead of HLE-stubbing the BIOS calls, we execute the actual Nintendo GBA BIOS through our ARM7TDMI emulation. Both ARM-mode and Thumb-mode test groups pass — covering ~5000+ test vectors per mode across every ARM7TDMI instruction class (data-processing, multiply, single/block data transfer, branch, PSR transfer, SWI, mode switches).
 
-The screenshot shows **all Thumb test groups passing**, covering:
-- Format 1 / 2: shift / immediate-value
-- Format 3: move/compare/add/subtract immediate
-- Format 4: ALU operations (AND/EOR/LSL/LSR/ASR/ADC/SBC/ROR/TST/NEG/CMP/CMN/ORR/MUL/BIC/MVN)
-- Format 5: Hi-register operations & branch-exchange
-- Format 6: PC-relative load
-- Formats 7-11: load/store with register/immediate offsets, halfword, sign-extended, SP-relative
-- Format 12: load address (PC / SP relative)
-- Format 13: SP arithmetic
-- Format 14: PUSH/POP with optional LR/PC
-- Format 15: multiple load/store
-- Format 16: conditional branch
-- Format 17: software interrupt
-- Format 18: unconditional branch
-- Format 19: long-branch-with-link (BL pair encoding)
+##### NES — blargg `cpu_test5/cpu.nes` (JSON-block JIT path, Ricoh 2A03)
 
-These three screenshots together demonstrate that the **same `AprCpu` framework**, with **the same `BlockFunctionBuilder` / `EmitContext` / micro-op registry**, compiles and correctly executes:
+![blargg NES cpu_test5 all subtests pass](result/nes/blargg_nes_cpu_test5_cpu_jsonblock.png)
+
+Run command: `apr-nes --rom=test-roms/blargg_nes_cpu_test5/cpu.nes --run --max-cycles=110000000 --backend=json-block --screenshot=...`. The PPU nametable is rendered as a CGA-style PNG. blargg's `cpu_test5/cpu.nes` covers MOS 6502 official + unofficial opcodes through the JSON-driven Ricoh 2A03 spec compiled via SpecCompiler → LLVM IR → ORC LLJIT block-JIT. The "All tests complete" string is the test ROM's own success signal.
+
+##### Intel 8086 — CGA text-mode demos (legacy + json-block backends)
+
+![Intel 8086 mandelbrot ASCII rendered through JSON-driven block-JIT](result/x86-16/mandelbrot-ascii-i8086.png)
+
+![Intel 8086 primes through JSON-driven block-JIT](result/x86-16/primes-i8086.png)
+
+![Intel 8086 fibonacci through JSON-driven block-JIT](result/x86-16/fibonacci-i8086.png)
+
+These are hand-crafted .com binaries running through the Intel 8086 backend (`apr-x86 --rom=... --backend=json-block --variant=i8086`). The CGA text-mode framebuffer (80×25 chars × 16 colors, 8×14 glyphs) is rendered to PNG by a small renderer in the harness; the CPU itself is **fully JSON-driven** — no per-instruction C# code in the emit pipeline.
+
+The mandelbrot demo computes the Mandelbrot set in fixed-point integer math and renders it with ASCII shading — exercises ALU / control flow / nested loops / signed comparison through the framework. All six 8086 demos (hello-cga / primes / fibonacci / mandelbrot / string-copy / factorial) produce **byte-identical PNGs across all three backends** (legacy / json-llvm / json-block), validating end-to-end framework correctness.
+
+##### Intel 80286 — protected-mode fault matrix (5-ROM CLI demo)
+
+The 80286 backend has no integrated CGA renderer (yet); protected-mode segmentation is demoed via a 5-ROM **fault matrix**. Each ROM is a 96-byte hand-crafted `.com` (assembled from NASM source under `test-roms/x86/src/27-pmode-*.asm`), entering protected mode via `LMSW` and then loading a segment register with a deliberately-malformed selector. The 80286 backend's descriptor-fetch + 4-check fault pipeline (P-bit / NULL-SS / DPL / type) catches each violation:
+
+| ROM | Selector → reg | Descriptor | Architectural outcome | Observed |
+|---|---|---|---|---|
+| `27-pmode-entry.com` | `0x0008 → DS` | P=1, S=1, DPL=0, writable data | OK; `mov bx,[0]` reads DS_BASE=0x100 | `BX=0xF1B8`, no EXC |
+| `27-pmode-np.com` | `0x0008 → DS` | **P=0** | `#NP(sel)` per Intel | `EXC vector=0x0B error=0x0008` |
+| `27-pmode-null-ss.com` | `0x0000 → SS` | (NULL) | `#GP(0)` per Intel | `EXC vector=0x0D error=0x0000` |
+| `27-pmode-dpl-gp.com` | `0x000B → DS` (RPL=3) | DPL=0 | `#GP(sel)`: max(CPL=0,RPL=3) > DPL=0 | `EXC vector=0x0D error=0x0008` |
+| `27-pmode-ss-bad-type.com` | `0x0008 → SS` | type=executable code | `#GP(sel)`: SS demands writable data | `EXC vector=0x0D error=0x0008` |
+
+These 6 screenshots + 5 fault-matrix ROMs together demonstrate that the **same `AprCpu` framework**, with **the same `BlockFunctionBuilder` / `EmitContext` / micro-op registry**, compiles and correctly executes:
 1. A variable-width 8-bit CPU (LR35902) with prefix-byte sub-decoding
 2. ARM-mode 32-bit fixed-width with 16-condition-code dispatch
 3. Thumb-mode 16-bit fixed-width with 19 distinct encoding formats
+4. A variable-width 8-bit CPU with unofficial opcodes (Ricoh 2A03 / MOS 6502)
+5. A 16-bit CISC family (Intel 8086 / 80186 / 80286) with segmented memory, ModR/M, prefix bytes, and **descriptor-based protected-mode segmentation + 4-check fault model**
 
-— without any per-CPU C# code in the emit pipeline. **This is the core claim of the project, and these images are the proof.**
+— without any per-CPU C# code in the emit pipeline. **This is the core claim of the project, and these images + ROMs are the proof.**
 
 ### 3. Honest acknowledgement: the `AprGb` legacy interpreter
 
@@ -128,25 +124,26 @@ The Game Boy interpreter under `src/AprGb.Cli/Cpu/LegacyCpu*` is **not** origina
 Why import it?
 
 1. **Provide a reference oracle.** Lockstep diff against a known-good interpreter is invaluable when developing a JSON-driven path. Every Blargg PASS we celebrate gets cross-checked against the legacy interpreter producing identical state.
-2. **Establish a perf baseline.** The legacy interpreter runs cpu_instrs at ~31 MIPS — faster than our current JIT. This is honest: **as of 2026-05-04, our LLVM block-JIT is still 13-32% slower than a well-tuned hand-coded interpreter**. We track this gap in [`MD_EN/performance/`](MD_EN/performance/).
-3. **Demonstrate the framework's real value isn't raw speed.** It's *generality*. The same `AprCpu` pipeline that compiles ARM7TDMI also compiles LR35902 — no architectural hardcoding. The legacy interpreter cannot do this.
+2. **Establish a perf baseline.** The legacy interpreter runs cpu_instrs at ~31 MIPS — early on this was faster than our JIT. (For 8086, after Gemini-suggested LLVM CFG superblocks, json-block hits **218 MIPS**, 5.65× over legacy on the bench loop.)
+3. **Demonstrate the framework's real value isn't raw speed.** It's *generality*. The same `AprCpu` pipeline that compiles ARM7TDMI also compiles LR35902, Ricoh 2A03, and Intel x86-16 — no architectural hardcoding.
 
 ### 4. What's interesting about the framework?
 
 Beyond "JSON in, working emulator out", these are the framework-level designs that took deliberate effort and are documented in [`MD_EN/design/`](MD_EN/design/):
 
-- **Variable-width detection without spec coupling.** A `lengthOracle` callback turns a 256-entry static table into a per-CPU plug-in. ARM (4-byte fixed), Thumb (2-byte fixed), and LR35902 (1-3 byte variable, with 0xCB-prefix sub-decoder) all share the same `BlockDetector`.
+- **Spec inheritance via JSON Merge Patch (RFC 7386).** Within one ISA family, a child spec is a diff over the parent's resolved spec — `spec/cpu/x86-16/i80186/cpu.json` adds 26 instructions on top of i8086 (~330 lines vs ~3000 from scratch); `spec/cpu/x86-16/i80286/cpu.json` adds the system instructions + protected-mode plumbing on top of that. Inheritance is **build/load-time data overlay**: SpecLoader merges the chain once at load time, downstream (SpecCompiler / DecoderTable / runtime) sees no hierarchy at all. Zero runtime overhead — i80186 perf == i8086 perf on shared workloads. See [`MD_EN/design/23-cpu-spec-inheritance.md`](MD_EN/design/23-cpu-spec-inheritance.md).
+- **Variable-width detection without spec coupling.** A `lengthOracle` callback turns a 256-entry static table into a per-CPU plug-in. ARM (4-byte fixed), Thumb (2-byte fixed), LR35902 (1-3 byte variable, with 0xCB-prefix sub-decoder), Intel x86 (1-7 byte variable, with prefix bytes / ModR/M / SIB / disp / imm) all share the same `BlockDetector`.
+- **Intel 80286 protected-mode segmentation, fully spec-driven.** When `MSW.PE = 1`, the i80286 backend fetches an 8-byte descriptor from the GDT, validates it through 4 baseline checks (P-bit / NULL-SS / DPL/RPL/CPL privilege / segment type), and populates the hidden segment-register cache; subsequent ModR/M memory accesses use `<seg>_BASE` from the cache, not `(visible-selector << 4)`. Validation faults set `EXC_PENDING` / `EXC_VECTOR` / `EXC_ERROR` slots without contaminating the cache. **All of this is in shared `X86_16Emitters` C# helpers gated by `register_file` slot existence** — i8086 / i80186 specs don't declare the cache slots, so the helpers no-op via try/catch and -1 sentinels. See [`MD_EN/design/27-i80286-completion-plan.md`](MD_EN/design/27-i80286-completion-plan.md) and [`MD_EN/performance/202605110200-i80286-pmode-fault-model-complete.md`](MD_EN/performance/202605110200-i80286-pmode-fault-model-complete.md).
 - **Generic `defer` micro-op for delayed-effect instructions.** Whether it's LR35902 `EI` (IME=1 after one more instruction), Z80 `STI`, or x86 `STI`, the spec writes `defer { delay: 1, body: [...] }` and an AST pre-pass injects the delayed body as a phantom step. Zero runtime cost — it's compile-time lowered.
 - **Generic `sync` micro-op for control-yield to host.** A spec step can declare "after this point, the host might want to deliver an IRQ". The block-JIT emitter turns this into a conditional mid-block `ret void`. Same mechanism services LR35902 MMIO writes, IRQ-relevant memory writes, and (eventually) any new CPU's HW-state-change boundary.
-- **Three architectural patterns for timing-accurate block-JIT.** Predictive cycle downcounting (compute-once-deduct-as-you-go), MMIO catch-up callbacks (HW gets ticked at the moment it's observed), and sync exits (block ret-voids when HW state changes). Every timing problem is classified into one of these three. See [`MD_EN/design/15-timing-and-framework-design.md`](MD_EN/design/15-timing-and-framework-design.md).
+- **Three architectural patterns for timing-accurate block-JIT.** Predictive cycle downcounting (compute-once-deduct-as-you-go), MMIO catch-up callbacks (HW gets ticked at the moment it's observed), and sync exits (block ret-voids when HW state changes). See [`MD_EN/design/15-timing-and-framework-design.md`](MD_EN/design/15-timing-and-framework-design.md).
 - **`EmitContext` as a routing layer.** Spec emitters call `ctx.GepGpr(idx)` instead of `Layout.GepGpr(builder, statePtr, idx)`. The context decides whether the access goes to a state-struct GEP or a block-local alloca shadow. Per-instruction mode and block-JIT mode share emitter code.
-- **Self-modifying-code detection at framework level.** A per-byte coverage counter is incremented when a block compiles, decremented when it's invalidated. Memory writes do a 1-byte counter check inline; if non-zero, a slow-path notify scans cached blocks and invalidates the matching ones. The infrastructure is generic — any cached + writable-code platform reuses it.
-- **Cross-jump follow.** The detector follows unconditional `JR`/`JP` (and equivalents) into their target, lengthening blocks from "average 1.0-1.1 instructions" to "5-20 instructions" — a structural fix for the BIOS-LLE perf cliff.
-- **Strategy 2 PC handling.** Pipeline-PC reads (ARM `pc+8`, Thumb `pc+4`, LR35902 `pc+length`) become baked compile-time constants in the block IR. No more per-instruction "pre-set R15" writes that confuse "did this instruction branch?" detection.
-- **Lockstep diff as framework infrastructure.** `apr-gb --diff-bjit=N` runs both backends side-by-side and reports the first divergence. The same approach is now generalised — `AprCpu.Core/Validation/LockstepDiff.cs` (N5) defines an `ISteppableCpu` interface so any CPU implementation can be lockstep-tested against another instance without a per-arch harness.
-- **Hardware-style 8-combo screenshot matrix.** GBA test ROMs render through 8 combinations (`arm/thumb` × `HLE/BIOS-boot` × `per-instr/block-JIT`); a single canonical MD5 hash means all eight produced bit-identical output. Regression-proof for any framework change.
-- **Spec-driven runtime.** Memory bus dispatch (NES + GBA), interrupt vector addresses, per-(mnemonic, addressing-mode) cycle counts, allowed access widths, and dynamic cycle penalties all read from `spec/`. The 2A03 NES integration drives ~85% of the runtime declaratively; the remaining ~15% are by-design escape hatches (mapper state machines, PPU/APU heavy side effects, NMI procedural sequences).
-- **Page-table dispatch.** Both NES (32-byte / 2048 entries / 16 KB) and GBA (16 MB / 256 entries) memory buses use O(1) page-table dispatch built from `spec/machines/*.json` at construction. The same pattern scales to the 2-level table needed for finer sub-region maps.
+- **Self-modifying-code detection at framework level.** A per-byte coverage counter is incremented when a block compiles, decremented when it's invalidated. Memory writes do a 1-byte counter check inline; if non-zero, a slow-path notify scans cached blocks and invalidates the matching ones. Generic — any cached + writable-code platform reuses it.
+- **Cross-jump follow + LLVM-CFG superblocks.** The detector follows unconditional `JR`/`JP` (and equivalents) into their target. For x86, intra-block back-edges (LOOP / Jcc / JMP rel) are emitted as **LLVM CFG within a single function**: alloca + mem2reg promotes register state across iterations through phi nodes, letting LLVM's loop optimizer collapse / vectorize where possible. This is what took 8086 from 27 → 218 MIPS on the bench loop.
+- **Lockstep diff as framework infrastructure.** `apr-gb --diff-bjit=N` runs both backends side-by-side and reports the first divergence. Generalized — `AprCpu.Core/Validation/LockstepDiff.cs` defines an `ISteppableCpu` interface so any CPU implementation can be lockstep-tested against another.
+- **Hardware-style screenshot matrix.** GBA test ROMs render through 8 combinations (`arm/thumb` × `HLE/BIOS-boot` × `per-instr/block-JIT`); 8086 demos render through 3 backends × 2 variants (i8086/i80186) × 6 demos. Single canonical SHA256 hash means all combos produced bit-identical output. Regression-proof for any framework change.
+- **Spec-driven runtime.** Memory bus dispatch (NES + GBA), interrupt vector addresses, per-(mnemonic, addressing-mode) cycle counts, allowed access widths, and dynamic cycle penalties all read from `spec/`. The 2A03 NES integration drives ~85% of the runtime declaratively.
+- **Page-table dispatch.** Both NES (32-byte / 2048 entries / 16 KB) and GBA (16 MB / 256 entries) memory buses use O(1) page-table dispatch built from `spec/machines/*.json` at construction.
 
 ### 5. Project layout
 
@@ -155,33 +152,38 @@ AprGba/
 ├── src/
 │   ├── AprCpu.Core/        ← THE FRAMEWORK. Spec loader + IR emitters + LLVM JIT
 │   │   ├── JsonSpec/       ← spec deserialisation (RegisterFile, EncodingFormat, …)
+│   │   │   └── (incl. JsonMergePatch for spec inheritance)
 │   │   ├── IR/             ← LLVM IR generation (BlockFunctionBuilder, EmitContext, micro-op emitters)
 │   │   └── Runtime/        ← block detector + cache + ORC LLJIT host runtime
 │   ├── AprCpu.Compiler/    ← CLI: spec → LLVM IR (used for inspection / smoke tests)
-│   ├── AprCpu.Tests/       ← 455 unit tests covering decoder, emitters, block detector, cache, …
+│   ├── AprCpu.Tests/       ← 894 unit tests covering decoder, emitters, block detector, cache, spec inheritance, …
 │   ├── AprGba.Cli/         ← GBA harness (ARM7TDMI + Thumb + bus + PPU + scheduler + screenshot)
 │   ├── AprGb.Cli/          ← Game Boy harness (LR35902 + bus + PPU; legacy interpreter from AprGBemu)
-│   └── AprNes.Cli/         ← NES harness (Ricoh 2A03 + bus + PPU + Mapper000/001 + screenshot)
+│   ├── AprNes.Cli/         ← NES harness (Ricoh 2A03 + bus + PPU + Mapper000/001 + screenshot)
+│   └── AprX86.Cli/         ← Intel x86-16 harness (i8086/8088/i80186/80188/i80286 + CGA framebuffer)
 ├── spec/
-│   ├── arm7tdmi/           ← ARM7TDMI ISA spec (cpu.json + ARM groups + Thumb groups)
-│   ├── lr35902/            ← LR35902 ISA spec (cpu.json + Main + CB-prefix groups)
-│   ├── 2a03/               ← Ricoh 2A03 / NES 6502 spec (cpu.json + 7 cc-pattern groups + unofficial)
-│   ├── machines/           ← MachineSpec — memory bus regions / interrupt vectors / allowed_widths per system (nes-ntsc / gba / gb-dmg)
-│   └── schema/             ← JSON schemas for spec validation
-├── test-roms/              ← Blargg cpu_instrs, jsmolka arm/thumb, armwrestler, loop100 stress ROMs
+│   ├── cpu/                ← All CPU specs (with co-located _schema.json)
+│   │   ├── _schema.json    ← JSON schema for cpu specs
+│   │   ├── arm7tdmi/       ← ARM7TDMI ISA spec (cpu.json + ARM groups + Thumb groups)
+│   │   ├── lr35902/        ← LR35902 ISA spec (cpu.json + Main + CB-prefix groups)
+│   │   ├── 2a03/           ← Ricoh 2A03 / NES 6502 spec (cpu.json + 7 cc-pattern groups + unofficial)
+│   │   └── x86-16/         ← Intel x86-16 family (i8086 → i80186 → i80286 inheritance chain)
+│   │       ├── i8086/
+│   │       ├── i80186/     ← extends i8086 (depth 2)
+│   │       └── i80286/     ← extends i80186 (depth 3); + protected-mode descriptor + fault model
+│   └── machines/           ← MachineSpec — memory bus regions / interrupt vectors / allowed_widths per system
+│       ├── _schema.json    ← JSON schema for machine specs
+│       ├── nes-ntsc.json
+│       ├── gba.json
+│       └── gb-dmg.json
+├── test-roms/              ← Blargg cpu_instrs, jsmolka arm/thumb, blargg NES, Tom Harte 8088 SST, x86 demos
+│   └── x86/src/            ← NASM source for protected-mode fault demos (Phase 27b)
+├── result/                 ← Canonical screenshots (gb / gba / nes / x86-16)
 ├── MD/                     ← Traditional Chinese authoring source
-│   ├── design/             ← Long-form design docs (overview, architecture, roadmap, …)
-│   │   ├── 12-gb-block-jit-roadmap.md       ← GB block-JIT progress & next steps
-│   │   ├── 13-defer-microop.md              ← `defer` micro-op design
-│   │   ├── 14-irq-sync-fastslow.md          ← `sync` micro-op + bus-extern split
-│   │   └── 15-timing-and-framework-design.md ← Timing-accuracy & framework-genericity synthesis
-│   ├── performance/        ← Benchmark logs + completion reports (one file per perf event)
-│   ├── note/               ← Working notes
-│   └── process/            ← Workflows (commit-QA tier, …)
-├── MD_EN/                  ← English mirror of MD/ (same files, English prose)
-├── tools/                  ← Build helpers (jsmolka/blargg ROM builders), Gemini knowledgebase
+├── MD_EN/                  ← English mirror of MD/
+├── tools/                  ← Build helpers (jsmolka/blargg/nasm ROM builders), Gemini knowledgebase
 ├── BIOS/                   ← (not in repo) place gba_bios.bin / gb_bios.bin here for LLE tests
-├── ref/                    ← Vendor manuals + datasheets (ARM ARM, GB CPU manual, …)
+├── ref/                    ← Vendor manuals + datasheets (ARM ARM, GB CPU manual, Intel iAPX 86/88, …)
 ├── temp/                   ← (gitignored) scratch dir for IR dumps, screenshots, log files
 ├── etc/                    ← (gitignored) local working notes
 ├── CLAUDE.md               ← Project rules for AI agents (Claude Code et al.)
@@ -193,79 +195,68 @@ AprGba/
 #### Prerequisites
 
 - **.NET 10 SDK** (target framework `net10.0`).
-- **Windows x64.** Linux / macOS untested for now — `libLLVM.runtime.win-x64` is the only RID currently referenced. Adding other RIDs is a small change in `AprCpu.Compiler.csproj`.
+- **Windows x64.** Linux / macOS untested for now — `libLLVM.runtime.win-x64` is the only RID currently referenced.
 - **LLVM 20** is provided via the `libLLVM.runtime.win-x64` NuGet package — no separate install required.
+- **NASM 3.x** (only if you want to rebuild the Phase 27b protected-mode `.com` demos from `test-roms/x86/src/*.asm`). On Windows: `winget install NASM.NASM`.
 
 #### Build & test
 
 ```sh
-# Restore + build the whole solution
 dotnet build AprGba.slnx
-
-# Run the unit-test suite (455 tests as of 2026-05-09)
-dotnet test  AprGba.slnx
+dotnet test  AprGba.slnx       # 894 tests
 ```
 
 #### Run the GBA harness
 
 ```sh
-# Boot a test ROM with HLE BIOS, render to PNG
-dotnet run --project src/AprGba.Cli -- \
-    --rom=test-roms/gba-tests/arm/arm.gba \
-    --frames=300 \
-    --screenshot=temp/arm-out.png
-
-# Same, but with block-JIT enabled
-dotnet run --project src/AprGba.Cli -- \
-    --rom=test-roms/gba-tests/arm/arm.gba \
-    --frames=300 \
-    --block-jit \
-    --screenshot=temp/arm-bjit.png
-
-# Boot a real BIOS via LLE (drop gba_bios.bin in BIOS/)
 dotnet run --project src/AprGba.Cli -- \
     --rom=test-roms/gba-tests/arm/arm.gba \
     --bios=BIOS/gba_bios.bin \
-    --frames=300 \
-    --block-jit
+    --frames=300 --block-jit \
+    --screenshot=temp/arm-out.png
 ```
 
 #### Run the Game Boy harness
 
 ```sh
-# Run Blargg cpu_instrs with block-JIT
 dotnet run --project src/AprGb.Cli -- \
     --rom="test-roms/gb-test-roms-master/cpu_instrs/cpu_instrs.gb" \
-    --cpu=json-llvm \
-    --block-jit \
-    --frames=10000
-
-# Lockstep diff per-instruction vs block-JIT (for correctness debugging)
-dotnet run --project src/AprGb.Cli -- \
-    --rom="test-roms/gb-test-roms-master/cpu_instrs/cpu_instrs.gb" \
-    --cpu=json-llvm --block-jit \
-    --diff-bjit=2000000 \
-    --frames=2000
+    --cpu=json-llvm --block-jit --frames=10000
 ```
 
 #### Run the NES harness
 
 ```sh
-# Run nestest correctness ROM (auto-mode at PC=$C000, halts at $C66E on PASS)
 dotnet run --project src/AprNes.Cli -- \
     --rom=test-roms/nes-test/nestest.nes \
     --nestest --backend=json-block
 
-# Run blargg cpu_test5 (writes "All tests complete" to PPU nametable on PASS)
 dotnet run --project src/AprNes.Cli -- \
     --rom=test-roms/blargg_nes_cpu_test5/cpu.nes \
     --run --max-cycles=110000000 --backend=json-block \
     --screenshot=temp/blargg-nes.png
+```
 
-# Lockstep diff legacy interpreter vs json-block JIT
-dotnet run --project src/AprNes.Cli -- \
-    --rom=test-roms/nes-test/nestest.nes \
-    --diff-block
+#### Run the Intel x86-16 harness
+
+```sh
+# 8086 mandelbrot demo
+dotnet run --project src/AprX86.Cli -- \
+    --rom=test-roms/x86/24.5-mandelbrot.com \
+    --backend=json-block --variant=i8086 \
+    --screenshot=temp/mandelbrot.png
+
+# 80186-only ENTER/LEAVE demo (validates spec inheritance)
+dotnet run --project src/AprX86.Cli -- \
+    --rom=test-roms/x86/25-enter-leave.com \
+    --backend=json-block --variant=i80186
+
+# 80286 protected-mode fault matrix
+for r in entry np null-ss dpl-gp ss-bad-type; do
+  dotnet run --project src/AprX86.Cli -- \
+      --rom=test-roms/x86/27-pmode-$r.com \
+      --backend=json-block --variant=i80286
+done
 ```
 
 ### 7. How to contribute / take over development
@@ -274,10 +265,11 @@ dotnet run --project src/AprNes.Cli -- \
 
 1. **[`MD_EN/design/00-overview.md`](MD_EN/design/00-overview.md)** — what this project is at the highest level.
 2. **[`MD_EN/design/02-architecture.md`](MD_EN/design/02-architecture.md)** — how the pieces fit.
-3. **[`MD_EN/design/12-gb-block-jit-roadmap.md`](MD_EN/design/12-gb-block-jit-roadmap.md)** — the active roadmap with every shipped commit + remaining items.
-4. **[`MD_EN/design/15-timing-and-framework-design.md`](MD_EN/design/15-timing-and-framework-design.md)** — the timing & framework-genericity synthesis. **Read this before touching any timing code.**
-5. **[`CLAUDE.md`](CLAUDE.md)** — project rules (commit QA workflow, scratch-file conventions, naming).
-6. **[`MD_EN/process/01-commit-qa-workflow.md`](MD_EN/process/01-commit-qa-workflow.md)** — what level of QA each kind of commit requires.
+3. **[`MD_EN/design/12-gb-block-jit-roadmap.md`](MD_EN/design/12-gb-block-jit-roadmap.md)** — the active GB roadmap.
+4. **[`MD_EN/design/15-timing-and-framework-design.md`](MD_EN/design/15-timing-and-framework-design.md)** — Timing & framework-genericity synthesis. **Read this before touching any timing code.**
+5. **[`MD_EN/design/23-cpu-spec-inheritance.md`](MD_EN/design/23-cpu-spec-inheritance.md)** — the inheritance mechanism (drives everything from i80186 onward).
+6. **[`MD_EN/design/27-i80286-completion-plan.md`](MD_EN/design/27-i80286-completion-plan.md)** — protected-mode segmentation + fault model (current frontier).
+7. **[`CLAUDE.md`](CLAUDE.md)** — project rules (commit QA workflow, scratch-file conventions, naming).
 
 #### Adding a new CPU
 
@@ -288,380 +280,33 @@ The current architecture supports any ISA expressible as:
 - A set of micro-op steps per instruction (declarative semantics: `read_reg`, `add`, `set_flag`, `store`, `defer`, `sync`, …)
 - Optionally: a `lengthOracle` callback for variable-width ISAs
 - Optionally: a `prefix_to_set` field for prefix-byte sub-decoders
+- Optionally: an `extends` / `extends_path` parent for inheritance within an ISA family
 
-Look at `spec/lr35902/cpu.json` + `spec/lr35902/groups/*.json` for a complete variable-width example. ARM7TDMI is at `spec/arm7tdmi/`.
-
-To add a new CPU:
-
-1. Define `cpu.json` (register file, status registers, exception vectors, processor modes if any).
-2. Define encoding-format groups under `groups/` covering the full opcode space.
-3. If variable-width, write a `Cpu_X_InstructionLengths.cs` next to `Lr35902InstructionLengths.cs` and wire it as the `lengthOracle`.
-4. Write a CLI harness consuming `AprCpu.Core` (look at `AprGb.Cli/Cpu/JsonCpu.cs` as a template).
-5. Add unit tests under `AprCpu.Tests/`.
-6. Document in [`MD_EN/design/`](MD_EN/design/) if you hit any framework-level surprises.
+Look at `spec/cpu/lr35902/cpu.json` + `spec/cpu/lr35902/groups/*.json` for a complete variable-width example. ARM7TDMI is at `spec/cpu/arm7tdmi/`. Spec inheritance lives at `spec/cpu/x86-16/i80186/cpu.json` (extends i8086).
 
 #### Tools
 
-- **`tools/knowledgebase/gemini_query.py`** — wraps Gemini API for "ask the oracle" queries when stuck on LLVM / vendor / arch corner cases. One question at a time. Logs to `tools/knowledgebase/message/`.
-- **`tools/build_blargg.sh`**, **`tools/build_jsmolka.sh`**, **`tools/build_loop100.sh`** — re-build the test ROMs from source if you change them.
-- **`tools/gba_handasm.py`** — small disassembler helper for ad-hoc inspection.
-- **`tools/fasmarm/`**, **`tools/wla-dx/`** — vendored assemblers for ARM and LR35902 ROM building.
-- **`temp/`** — drop all scratch files here (IR dumps, intermediate JSON, debug screenshots). Gitignored.
+- **`tools/knowledgebase/gemini_query.py`** — Gemini API consult. One question at a time. Logs to `tools/knowledgebase/message/`.
+- **`tools/build_blargg.sh`**, **`tools/build_jsmolka.sh`**, **`tools/build_loop100.sh`** — re-build test ROMs from source.
+- **`tools/build_27_pmode_demos.py`** — assemble the 5 protected-mode fault demos via NASM.
+- **`tools/verify_x86_matrix.ps1`** / **`tools/verify_x86_variant_matrix.ps1`** — visual regression matrix (T2-tier QA).
+- **`tools/bench_x86.ps1`** — 8086 best-of-3 MIPS benchmark.
 
 ### 8. Where this could go
 
-The framework is designed so that the following are *additive* extensions, not architectural rewrites:
-
-- **More CPUs.** Ricoh 2A03 / NES 6502 is now done (third CPU, completed 2026-05-09). Next candidates: Intel 8086 (segmented memory, 16-bit CISC), Z80 (Master System / GG), 8080 (CP/M), 68000 (Genesis / Neo Geo / early Mac), MIPS R3000 (PS1), MIPS R4300i (N64) — all expressible in the same JSON model. Variable-width + prefix-decoded + unofficial-opcode ISAs already work (LR35902 0xCB; 2A03 unofficial cc=11).
-- **Additional execution backends.** The `EmitContext` routing layer means a future AOT compiler, WebAssembly target, or even a different IR backend can slot in alongside the LLVM JIT without touching emitters.
+- **More CPUs.** Z80 (Master System / GG), 8080 (CP/M), 68000 (Genesis / Neo Geo / early Mac), MIPS R3000 (PS1), MIPS R4300i (N64), 80386 (next x86 family chain) — all expressible in the same JSON model. Variable-width + prefix-decoded + unofficial-opcode ISAs already work (LR35902 0xCB; 2A03 unofficial cc=11; x86 0x0F escape + ModR/M + SIB).
+- **Additional execution backends.** The `EmitContext` routing layer means a future AOT compiler, WebAssembly target, or different IR backend can slot in alongside the LLVM JIT.
 - **Spec-time IR pre-passes.** Dead-flag elimination, micro-op fusion, hot-opcode inlining — all naturally extend the existing AST pre-pass mechanism.
-- **Timing model upgrades.** Per-cycle bus contention, deferred SMC invalidation, full pipeline modelling — each one fits one of the three architectural patterns in [`MD_EN/design/15-timing-and-framework-design.md`](MD_EN/design/15-timing-and-framework-design.md).
-- **Beyond emulation.** A JSON-driven CPU model is also a *specification artefact* — usable for: educational visualisations, what-if architectural studies, cross-architecture binary translators, dynamic taint analysis, formal verification scaffolding. The framework doesn't *do* these, but it's a substrate that makes them practical for hobbyist effort.
+- **More protected-mode features.** TSS task switching, full LDT (TI=1) descriptor lookup, far-jump CS handling under PE=1, visible-sreg rewind on fault — all additive on top of the `EmitSegCacheUpdate` + `EmitRaiseException` helpers landed in Phase 27b.
+- **Beyond emulation.** A JSON-driven CPU model is also a *specification artefact* — usable for: educational visualisations, what-if architectural studies, cross-architecture binary translators, dynamic taint analysis, formal verification scaffolding.
 
-> **Want to push the framework further?** A long synthesis doc —
-> [`MD_EN/note/framework-future-extensions-and-vision.md`](MD_EN/note/framework-future-extensions-and-vision.md) —
-> lays out a concrete advanced-challenge roadmap: spec-level extensions
-> needed to support modern machines (FPU / SIMD / multi-core / delay
-> slots), the co-processor plug-in architecture (PS1 GTE pattern), the
-> machine-level definition (`MachineDef`) schema, where the JSON-vs-C#
-> boundary should sit, industry comparison (MAME, QEMU TCG, Ghidra
-> SLEIGH, ArchC), and 8 application directions beyond emulation
-> (educational visualisation, what-if architecture studies, cross-arch
-> binary translation, taint analysis, formal verification scaffolding,
-> RTL co-simulation, hardware preservation). **If you want to take over
-> or contribute substantially, start there.**
+> **Want to push the framework further?** The long synthesis doc
+> [`MD_EN/note/framework-future-extensions-and-vision.md`](MD_EN/note/framework-future-extensions-and-vision.md)
+> lays out a concrete advanced-challenge roadmap.
 
 ### 9. References & acknowledgements
 
-- **Vendor manuals** (in `ref/`) — ARM Architecture Reference Manual, Game Boy CPU manual, Pan Docs.
-- **Test suites** — Blargg's cpu_instrs, jsmolka's arm/thumb tests, armwrestler.
+- **Vendor manuals** (in `ref/`) — ARM Architecture Reference Manual, Game Boy CPU manual, Pan Docs, Intel iAPX 86/88, Intel 80286 PRM.
+- **Test suites** — Blargg's cpu_instrs, jsmolka's arm/thumb, armwrestler, Tom Harte SingleStepTests 8088_v2.
 - **Industry references** — design hints cross-checked against QEMU TCG, FEX-Emu, Dynarmic, mGBA, Dolphin via Gemini consultation logs (`tools/knowledgebase/message/`).
-- **Predecessor project** — [erspicu/AprGBemu](https://github.com/erspicu/AprGBemu): hand-coded LR35902 interpreter, source of `AprGb.Cli/Cpu/LegacyCpu.cs`. Used here as oracle + perf baseline.
-
----
-
-## 中文版
-
-### 1. 這專案到底是什麼？
-
-repo 名字叫 **AprGba**，內容裡也有完整的 Game Boy Advance 模擬器外殼。**但 GBA 不是這個專案的目的。** 真正的核心是 **`AprCpu`** — 一個 JSON-driven 的 CPU 模擬框架。GBA 模擬器只是「壓力測試載體」，用來證明框架可以推到 non-trivial 的真實工作負載（commercial 級 ARM7TDMI 模擬 + LLVM block-JIT）。
-
-換個角度看：
-
-| 元件 | 角色 |
-|---|---|
-| **`AprCpu`** | 框架本體。spec loader + decoder generator + IR emitters + LLVM JIT runtime + block detector + cache + page-table dispatch + lockstep diff toolkit。**這才是核心。** |
-| **`AprGba`** | 框架的一個具體消費者 — 完整 GBA 系統 (ARM7TDMI + Thumb + memory bus + PPU + scheduler)。用來把 `AprCpu` 推到極限。 |
-| **`AprGb`** | 第二個消費者 — Game Boy DMG (LR35902 / SM83)。用作 *對照組*，並證明框架真的支援第二個、不一樣的 ISA。 |
-| **`AprNes`** | 第三個消費者 — NES (Ricoh 2A03 / MOS 6502)。新增變寬 1-3 byte 8-bit ISA；同時是框架最極端的 declarativity 練習：~85% 的 runtime（memory bus、cycle table、interrupt vectors、region routing）由 `spec/2a03/*.json` + `spec/machines/nes-ntsc.json` 驅動。 |
-
-### 2. 為什麼有這個專案？
-
-#### 想解決的問題
-
-寫 CPU 模擬器是個被反覆重新發明的苦差事。每個新平台 — 每個新的 homebrew 主機、每個 retro-computing 專案、每次「我來試試模擬個 X」 — 都會重複同一條 hand-coded dispatcher loop、同一個 opcode `switch`、同一堆 flag-update boilerplate、同一批 partial-register stalls 跟 pipeline-PC quirks 重新踩坑。
-
-業界有很棒的 emulator (mGBA / Dolphin / QEMU / FCEUX)。但每個都跟「自己那顆 CPU」緊密耦合。要把 mGBA 等級的 JIT port 到新 ISA，通常等於重寫一個 emulator。
-
-#### 假設
-
-> **如果把 CPU 變成一個 JSON 檔案會怎樣？**
-
-如果整個 ISA — 編碼模式、register file 配置、condition codes、micro-op 語意、cycle 成本、pipeline 行為 — 都是宣告式資料，而 emulator 框架可以把這些資料編譯成可執行的 interpreter *和* LLVM JIT，那會是什麼樣子？
-
-#### 目標（按優先順序）
-
-1. **建一個真的通用的框架。** 不是「理論通用」 — 是「三個本質不同的 CPU (ARM7TDMI + LR35902 + Ricoh 2A03) 走同一條 pipeline，emit pipeline 沒有任何 per-CPU 的 C# code」這種通用。
-2. **把框架推到 block-JIT。** Per-instruction interpreter 要做通用很容易。難的是框架能不能扛住 LLVM JIT、cycle accounting、IRQ delivery、SMC detection、pipeline-PC quirks 的架構壓力 — *同時保持 spec-driven*。
-3. **拿真實 workload 驗證。** Blargg `cpu_instrs.gb` 全 11 個 sub-test PASS、jsmolka `arm.gba`/`thumb.gba` PASS、GBA BIOS 走 LLE 成功啟動、cycle-accurate matrix screenshot test 通過。
-4. **記錄設計觀念。** 每個取捨都有紀錄。每個架構 pattern 都有名字。後人 — 包括未來的我自己 — 看得出每個設計選擇是 *為什麼* 這樣，不只是 *做了什麼*。
-
-#### 這個專案 **不是** 什麼
-
-- **不是** 要跟 mGBA 競爭。mGBA 是成熟的終端使用者 emulator，我們是研究框架。
-- **不是** 在追求極致 cycle accuracy。我們刻意停在「instruction-grained timing accuracy + HW-relevant 時刻 sync exit」 — 對 commercial ROM 夠用，對 cycle-perfect demoscene 不夠。
-- **不是** 要當最快的 emulator。現在 LLVM block-JIT 在 Blargg cpu_instrs 跑 ~21 MIPS (10k frames) / ~27 MIPS (60k frames amortised)。我們從舊專案 import 的 `AprGb` 手寫 interpreter (見 §3) 還是比這快。我們知道。**Performance 優化是框架設計穩定後的下游問題。**
-
-#### 執行驗證 — test ROM 通過截圖
-
-下面三張截圖證明框架不只是「理論上跑得起來」，而是真的把 correctness-grade 的 test ROM 端到端跑完：
-
-##### Game Boy — Blargg `cpu_instrs.gb` (JSON-LLVM block-JIT 路徑)
-
-![Blargg cpu_instrs 全 11 個 sub-test PASS](result/gb/json-llvm/cpu_instrs.png)
-
-執行指令：`apr-gb --rom=test-roms/gb-test-roms-master/cpu_instrs/cpu_instrs.gb --cpu=json-llvm --block-jit --frames=10000`。Serial output 收尾是 **"Passed all tests"**。整套走 JSON-driven LR35902 spec 編譯到 LLVM IR、由 ORC LLJIT block-JIT 執行：
-
-| # | Sub-test | 涵蓋內容 |
-|---|---|---|
-| 01 | special | CPU 邊緣行為（DAA 怪招、halt 狀態切換） |
-| 02 | interrupts | IME / IE / IF 互動、EI 延遲生效、HALT-with-interrupts |
-| 03 | op sp,hl | Stack pointer / HL pair 算術（`ADD SP,e`、`LD HL,SP+e`） |
-| 04 | op r,imm | Register × immediate ALU（`ADD A,n`、`SUB A,n`、`CP n` …） |
-| 05 | op rp | 16-bit pair operations（`INC BC`、`ADD HL,DE`、`LD BC,nn` …） |
-| 06 | ld r,r | 全部 64 種 register-to-register load（`LD A,B`、`LD H,(HL)` …） |
-| 07 | jr,jp,call,ret,rst | 完整 control-flow：相對 jump、絕對 jump、call、return、restart |
-| 08 | misc instrs | CCF / SCF / CPL / DAA 邊緣 case + flag 互動 |
-| 09 | op r,r | Register-to-register ALU（`ADD A,B`、`XOR C`、`CP H` …） |
-| 10 | bit ops | 0xCB-prefix BIT / SET / RES 全 256 個 sub-opcode |
-| 11 | op a,(hl) | A × memory[HL] ALU 操作 |
-
-##### Game Boy Advance — jsmolka `arm.gba` (BIOS LLE 路徑)
-
-![jsmolka arm test 在 real GBA BIOS 下 PASS](result/gba/bios_lle_arm.png)
-
-執行指令：`apr-gba --rom=test-roms/gba-tests/arm/arm.gba --bios=BIOS/gba_bios.bin --block-jit`。**LLE** = *Low-Level Emulation* — 不是 HLE-stub 掉 BIOS call，而是把真的 Nintendo GBA BIOS (`gba_bios.bin`) 透過我們的 ARM7TDMI 模擬跑起來；BIOS bootloader 跑 Nintendo logo intro、洗 VRAM、然後跳 cart entry-point 給 test framework 接手。這個路徑會把框架推到**真正商業級 ARM7TDMI code path**——homebrew test 通常會跳過這層。
-
-截圖顯示**所有 ARM-mode test group 全 PASS** — 涵蓋 ~5000+ 個 test vector，每一個 ARM7TDMI ARM-mode (32-bit) 指令類別都有：
-- Data-processing（ADD/SUB/AND/OR/EOR/MOV/MVN/CMP/CMN/TST/TEQ × 所有 addressing mode × S/non-S flag 變體）
-- Multiply / multiply-long（MUL / MLA / UMULL / SMULL / UMLAL / SMLAL）
-- Single-data-transfer（LDR/STR with byte/halfword/sign-extension 跟 pre/post-indexed offset）
-- Block-data-transfer（LDM/STM 四種 addressing mode IA/IB/DA/DB + writeback）
-- Branch（B / BL / BX 配 cond-code matrix）
-- PSR transfer（MRS / MSR 含 field mask）
-- Software interrupt（SWI 進 BIOS）
-- Mode switches（USER / FIQ / IRQ / SVC / ABT / UND banking）
-
-##### Game Boy Advance — jsmolka `thumb.gba` (BIOS LLE 路徑)
-
-![jsmolka thumb test 在 real GBA BIOS 下 PASS](result/gba/bios_lle_thumb.png)
-
-執行指令：`apr-gba --rom=test-roms/gba-tests/thumb/thumb.gba --bios=BIOS/gba_bios.bin --block-jit`。同樣的 BIOS LLE setup，但跑 Thumb-mode (16-bit) test vector。ARM7TDMI 的 Thumb mode 是 ARM 的 re-encoded subset、用更緊湊的 instruction format；spec port 正確的話 ARM 跟 Thumb 應該透過同一個 emitter pipeline 編譯（差別在 per-mode encoding table）。
-
-截圖顯示**所有 Thumb test group 全 PASS**，涵蓋：
-- Format 1 / 2: shift / 立即值
-- Format 3: move/compare/add/subtract immediate
-- Format 4: ALU operations（AND/EOR/LSL/LSR/ASR/ADC/SBC/ROR/TST/NEG/CMP/CMN/ORR/MUL/BIC/MVN）
-- Format 5: Hi-register operations & branch-exchange
-- Format 6: PC-relative load
-- Formats 7-11: load/store with register/immediate offset、halfword、sign-extended、SP-relative
-- Format 12: load address（PC / SP relative）
-- Format 13: SP arithmetic
-- Format 14: PUSH/POP 含選用 LR/PC
-- Format 15: multiple load/store
-- Format 16: conditional branch
-- Format 17: software interrupt
-- Format 18: unconditional branch
-- Format 19: long-branch-with-link（BL pair 編碼）
-
-這三張截圖一起證明：**同一個 `AprCpu` 框架**、**同一個 `BlockFunctionBuilder` / `EmitContext` / micro-op registry**，能編譯且正確執行：
-1. 變寬 8-bit CPU (LR35902) 含 prefix-byte sub-decoding
-2. ARM-mode 32-bit 定寬 + 16 種 condition-code dispatch
-3. Thumb-mode 16-bit 定寬 + 19 種 distinct encoding format
-
-— emit pipeline 沒有任何 per-CPU C# code。**這是這個專案的 core claim，這三張圖就是證據。**
-
-### 3. 老實交代：`AprGb` legacy interpreter
-
-`src/AprGb.Cli/Cpu/LegacyCpu*` 下的 Game Boy interpreter **不是** 這專案原創的。它從我之前寫的手刻 emulator import 過來 — 見 [erspicu/AprGBemu](https://github.com/erspicu/AprGBemu)。
-
-為什麼要 import？
-
-1. **提供 reference oracle。** 開發 JSON-driven 路徑時，跟一個已知正確的 interpreter 做 lockstep diff 是無價的。每一個 Blargg PASS 我們都跟 legacy interpreter 對拍 state 完全一致才算數。
-2. **建立 perf baseline。** Legacy interpreter 跑 cpu_instrs ~31 MIPS — 比我們現在的 JIT 快。誠實講：**截至 2026-05-04，我們的 LLVM block-JIT 仍比一個調過的手刻 interpreter 慢 13-32%。** 這個 gap 紀錄在 [`MD/performance/`](MD/performance/)。
-3. **證明框架真正的價值不在 raw speed。** 是 *通用性*。同一個 `AprCpu` pipeline 同時編譯 ARM7TDMI 跟 LR35902 — 沒有任何 architectural hardcoding。Legacy interpreter 做不到這件事。
-
-### 4. 框架有哪些值得一提的設計？
-
-除了「JSON 餵進去、可以動的 emulator 跑出來」之外，下面這些是框架級的設計、每個都用力想過、都記錄在 [`MD/design/`](MD/design/)：
-
-- **Variable-width detection 不跟 spec 耦合。** 用 `lengthOracle` callback 把 256-entry static table 變成 per-CPU plug-in。ARM (定寬 4-byte)、Thumb (定寬 2-byte)、LR35902 (變寬 1-3 byte，加 0xCB-prefix sub-decoder) 走同一個 `BlockDetector`。
-- **通用 `defer` micro-op 處理延遲生效指令。** LR35902 `EI`、Z80 `STI`、x86 `STI` 全都用 `defer { delay: 1, body: [...] }` 表達；AST pre-pass 把 delayed body 注入成 phantom step。Zero runtime cost — compile-time 攤平。
-- **通用 `sync` micro-op 處理 control-yield 給 host。** Spec step 可以宣告「執行到這個點之後，host 可能想 deliver IRQ」。Block-JIT emitter 把它變成 conditional mid-block `ret void`。同一機制服務 LR35902 MMIO 寫、IRQ-relevant memory 寫、未來任何 CPU 的 HW-state-change 邊界。
-- **三個架構 pattern 處理 timing-accurate block-JIT。** Predictive cycle downcounting (先算總額邊跑邊扣)、MMIO catch-up callbacks (HW 在被觀測那刻才被 tick)、sync exits (HW state 改變時 block ret-void)。每個 timing 問題都歸到這三條軸的其中一條。詳見 [`MD/design/15-timing-and-framework-design.md`](MD/design/15-timing-and-framework-design.md)。
-- **`EmitContext` 作為 routing layer。** Spec emitters 呼叫 `ctx.GepGpr(idx)` 而不是 `Layout.GepGpr(builder, statePtr, idx)`。Context 自己決定要走 state-struct GEP 還是 block-local alloca shadow。Per-instruction 模式跟 block-JIT 模式共用 emitter code。
-- **框架級 SMC detection。** 每個 byte 一個 coverage counter，block 編譯時 increment、invalidate 時 decrement。記憶體寫做 1-byte counter 的 inline check；非零才走 slow-path notify scan。infrastructure 是 generic — 任何 cached + writable-code 平台都能重用。
-- **Cross-jump follow。** Detector 跨 unconditional `JR`/`JP` (跟同類) 連續到 target，把 block 平均長度從「1.0-1.1 instr」拉到「5-20 instr」 — 結構性修掉 BIOS-LLE perf cliff。
-- **Strategy 2 PC handling。** Pipeline-PC reads (ARM `pc+8`、Thumb `pc+4`、LR35902 `pc+length`) 在 block IR 裡變成編譯時常數。不再有 per-instruction 的「pre-set R15」寫操作搞混「這條 instr 有沒有分支？」的判斷。
-- **Lockstep diff 是 framework infrastructure。** `apr-gb --diff-bjit=N` 把兩 backend 並排跑、回報第一個分歧點。N5 把這個 pattern 抽成 `AprCpu.Core/Validation/LockstepDiff.cs` — 任何 CPU 實作只要 implement `ISteppableCpu` (Step + Snapshot + 可選 bus peek) 就能用同一個 toolkit 互測，未來新 CPU backend 直接受惠。
-- **8-combo screenshot matrix 防 regression。** GBA test ROM 走 8 種組合 (`arm/thumb` × `HLE/BIOS-boot` × `per-instr/block-JIT`) 渲染；單一 canonical MD5 hash 表示 8 個輸出 bit-identical。任何框架改動撞到 hash 改變就立刻 catch。
-- **Spec 驅動 runtime。** Memory bus dispatch（NES + GBA）、interrupt vector 位址、per-(mnemonic, addressing-mode) cycle 數、access widths、dynamic cycle penalties 全都從 `spec/` 讀。NES 整合下 ~85% runtime 是宣告式驅動；剩下 ~15% 是設計刻意保留的 escape hatch（mapper state machine、PPU/APU heavy side effects、NMI procedural sequence）。
-- **Page-table dispatch。** NES (32-byte / 2048 entries / 16 KB) 跟 GBA (16 MB / 256 entries) 兩條 memory bus 都用 O(1) page-table 在 construction 時從 `spec/machines/*.json` 建出來。同一個 pattern scale 到未來 sub-region 細粒度需要的 2-level table。
-
-### 5. 專案目錄
-
-```
-AprGba/
-├── src/
-│   ├── AprCpu.Core/        ← 框架本體。Spec loader + IR emitters + LLVM JIT
-│   │   ├── JsonSpec/       ← spec 反序列化 (RegisterFile / EncodingFormat / …)
-│   │   ├── IR/             ← LLVM IR 生成 (BlockFunctionBuilder / EmitContext / micro-op emitters)
-│   │   └── Runtime/        ← block detector + cache + ORC LLJIT host runtime
-│   ├── AprCpu.Compiler/    ← CLI: spec → LLVM IR (用來 inspect / smoke test)
-│   ├── AprCpu.Tests/       ← 455 個 unit test 涵蓋 decoder / emitters / detector / cache / …
-│   ├── AprGba.Cli/         ← GBA harness (ARM7TDMI + Thumb + bus + PPU + scheduler + screenshot)
-│   ├── AprGb.Cli/          ← Game Boy harness (LR35902 + bus + PPU；legacy interpreter 從 AprGBemu 來)
-│   └── AprNes.Cli/         ← NES harness (Ricoh 2A03 + bus + PPU + Mapper000/001 + screenshot)
-├── spec/
-│   ├── arm7tdmi/           ← ARM7TDMI ISA spec (cpu.json + ARM groups + Thumb groups)
-│   ├── lr35902/            ← LR35902 ISA spec (cpu.json + Main + CB-prefix groups)
-│   ├── 2a03/               ← Ricoh 2A03 / NES 6502 spec (cpu.json + 7 個 cc-pattern group + unofficial)
-│   ├── machines/           ← MachineSpec — 各機種 memory bus 區段 / interrupt vector / allowed_widths（nes-ntsc / gba / gb-dmg）
-│   └── schema/             ← spec 的 JSON schema 驗證
-├── test-roms/              ← Blargg cpu_instrs / jsmolka arm-thumb / armwrestler / loop100 stress ROM
-├── MD/                     ← 中文 authoring source（原始撰寫版）
-│   ├── design/             ← 長篇設計 doc (overview / architecture / roadmap / …)
-│   │   ├── 12-gb-block-jit-roadmap.md       ← GB block-JIT 進度跟下一步
-│   │   ├── 13-defer-microop.md              ← `defer` micro-op 設計
-│   │   ├── 14-irq-sync-fastslow.md          ← `sync` micro-op + bus-extern split
-│   │   └── 15-timing-and-framework-design.md ← Timing 準確 + 框架通用化的 synthesis
-│   ├── performance/        ← Benchmark log + 完工報告 (one file per perf event)
-│   ├── note/               ← 工作筆記
-│   └── process/            ← 流程 (commit-QA tier / …)
-├── MD_EN/                  ← MD/ 的英文鏡像版（同檔名、英文 prose）
-├── tools/                  ← Build helper (jsmolka/blargg ROM builder) / Gemini knowledgebase
-├── BIOS/                   ← (不在 repo) 想跑 LLE test 的話放 gba_bios.bin / gb_bios.bin 進來
-├── ref/                    ← Vendor manual + datasheet (ARM ARM / GB CPU manual / …)
-├── temp/                   ← (gitignored) scratch dir 給 IR dump / screenshot / log 用
-├── etc/                    ← (gitignored) 本機工作筆記
-├── CLAUDE.md               ← 給 AI agent (Claude Code 等) 的專案規則
-└── AprGba.slnx             ← .NET solution 檔 (target framework: net10.0)
-```
-
-### 6. Quick start
-
-#### 前置
-
-- **.NET 10 SDK** (target framework `net10.0`)
-- **Windows x64**。Linux / macOS 目前沒測 — `libLLVM.runtime.win-x64` 是目前唯一引用的 RID。要加其他 RID 是 `AprCpu.Compiler.csproj` 的小改動。
-- **LLVM 20** 走 `libLLVM.runtime.win-x64` NuGet 套件 — 不用另裝。
-
-#### Build & test
-
-```sh
-# Restore + build 整個 solution
-dotnet build AprGba.slnx
-
-# 跑單元測試 (2026-05-09 為 455 個)
-dotnet test  AprGba.slnx
-```
-
-#### 跑 GBA harness
-
-```sh
-# 用 HLE BIOS 開 test ROM、輸出 PNG
-dotnet run --project src/AprGba.Cli -- \
-    --rom=test-roms/gba-tests/arm/arm.gba \
-    --frames=300 \
-    --screenshot=temp/arm-out.png
-
-# 一樣但開 block-JIT
-dotnet run --project src/AprGba.Cli -- \
-    --rom=test-roms/gba-tests/arm/arm.gba \
-    --frames=300 \
-    --block-jit \
-    --screenshot=temp/arm-bjit.png
-
-# 跑 real BIOS LLE (gba_bios.bin 放在 BIOS/)
-dotnet run --project src/AprGba.Cli -- \
-    --rom=test-roms/gba-tests/arm/arm.gba \
-    --bios=BIOS/gba_bios.bin \
-    --frames=300 \
-    --block-jit
-```
-
-#### 跑 Game Boy harness
-
-```sh
-# 跑 Blargg cpu_instrs 開 block-JIT
-dotnet run --project src/AprGb.Cli -- \
-    --rom="test-roms/gb-test-roms-master/cpu_instrs/cpu_instrs.gb" \
-    --cpu=json-llvm \
-    --block-jit \
-    --frames=10000
-
-# Lockstep diff per-instr vs block-JIT (correctness debug 用)
-dotnet run --project src/AprGb.Cli -- \
-    --rom="test-roms/gb-test-roms-master/cpu_instrs/cpu_instrs.gb" \
-    --cpu=json-llvm --block-jit \
-    --diff-bjit=2000000 \
-    --frames=2000
-```
-
-#### 跑 NES harness
-
-```sh
-# 跑 nestest correctness ROM (auto-mode 從 PC=$C000 開始；PASS 時 halt 在 $C66E)
-dotnet run --project src/AprNes.Cli -- \
-    --rom=test-roms/nes-test/nestest.nes \
-    --nestest --backend=json-block
-
-# 跑 blargg cpu_test5 (PASS 時 PPU nametable 寫 "All tests complete")
-dotnet run --project src/AprNes.Cli -- \
-    --rom=test-roms/blargg_nes_cpu_test5/cpu.nes \
-    --run --max-cycles=110000000 --backend=json-block \
-    --screenshot=temp/blargg-nes.png
-
-# Legacy interpreter vs json-block JIT lockstep diff
-dotnet run --project src/AprNes.Cli -- \
-    --rom=test-roms/nes-test/nestest.nes \
-    --diff-block
-```
-
-### 7. 想接手開發 / 貢獻？
-
-#### 依序讀這幾份
-
-1. **[`MD/design/00-overview.md`](MD/design/00-overview.md)** — 最高層次的「這個專案是什麼」。
-2. **[`MD/design/02-architecture.md`](MD/design/02-architecture.md)** — 各部分怎麼組合。
-3. **[`MD/design/12-gb-block-jit-roadmap.md`](MD/design/12-gb-block-jit-roadmap.md)** — 目前 active roadmap、每個 ship 的 commit、剩下要做的。
-4. **[`MD/design/15-timing-and-framework-design.md`](MD/design/15-timing-and-framework-design.md)** — Timing 準確 + 框架通用化的 synthesis。**動任何 timing 相關 code 之前先讀這份。**
-5. **[`CLAUDE.md`](CLAUDE.md)** — 專案規則 (commit QA workflow / scratch-file 慣例 / 命名)。
-6. **[`MD/process/01-commit-qa-workflow.md`](MD/process/01-commit-qa-workflow.md)** — 哪種 commit 要過哪一級 QA。
-
-#### 加新 CPU
-
-目前架構支援任何能用下面表達的 ISA：
-
-- 一個 register file (general-purpose + status registers，可 banked per mode)
-- 一組 encoding format 用 bit-pattern matching (`mask` / `match`)
-- 每個 instruction 一組 micro-op step (宣告式語意：`read_reg` / `add` / `set_flag` / `store` / `defer` / `sync` / …)
-- (選用) 變寬 ISA 用 `lengthOracle` callback
-- (選用) prefix-byte sub-decoder 用 `prefix_to_set` 欄位
-
-完整變寬範例看 `spec/lr35902/cpu.json` + `spec/lr35902/groups/*.json`。ARM7TDMI 在 `spec/arm7tdmi/`。
-
-加新 CPU 的步驟：
-
-1. 寫 `cpu.json` (register file / status registers / exception vectors / processor modes 如果有)。
-2. 在 `groups/` 下定義 encoding-format group 涵蓋所有 opcode 空間。
-3. 變寬的話，仿 `Lr35902InstructionLengths.cs` 寫一個 `Cpu_X_InstructionLengths.cs` + 接成 `lengthOracle`。
-4. 寫一個 CLI harness 消費 `AprCpu.Core` (看 `AprGb.Cli/Cpu/JsonCpu.cs` 當 template)。
-5. 在 `AprCpu.Tests/` 加 unit test。
-6. 撞到任何框架級 surprise 的話寫進 [`MD/design/`](MD/design/)。
-
-#### 工具
-
-- **`tools/knowledgebase/gemini_query.py`** — 包 Gemini API 用來「請教神諭」，卡 LLVM / vendor / arch corner case 時用。一次問一個。Log 寫到 `tools/knowledgebase/message/`。
-- **`tools/build_blargg.sh`** / **`tools/build_jsmolka.sh`** / **`tools/build_loop100.sh`** — 從 source 重 build test ROM (改了 source 的話)。
-- **`tools/gba_handasm.py`** — 小型 disassembler helper 給 ad-hoc inspect 用。
-- **`tools/fasmarm/`** / **`tools/wla-dx/`** — vendored assembler 給 ARM 跟 LR35902 ROM 編譯用。
-- **`temp/`** — 所有 scratch file 丟這裡 (IR dump / 中間 JSON / debug screenshot)。Gitignored。
-
-### 8. 這個框架可以走多遠
-
-框架設計成下面這些是「加法擴充」、不是「架構重寫」：
-
-- **更多 CPU。** Ricoh 2A03 / NES 6502 已完工（第三顆 CPU，2026-05-09 完成）。下一波候選：Intel 8086 (segmented memory, 16-bit CISC)、Z80 (Master System / GG)、8080 (CP/M)、68000 (Genesis / Neo Geo / 早期 Mac)、MIPS R3000 (PS1)、MIPS R4300i (N64) — 全都能用同一個 JSON 模型表達。變寬 + prefix-decoded + unofficial-opcode ISA 都已經 work (LR35902 0xCB；2A03 unofficial cc=11)。
-- **其他 execution backend。** `EmitContext` routing layer 表示未來 AOT compiler、WebAssembly target、甚至不同的 IR backend 都能跟 LLVM JIT 並列，不用動 emitter。
-- **Spec-time IR pre-pass。** Dead-flag elimination、micro-op fusion、hot-opcode inlining — 全都自然延伸現有的 AST pre-pass 機制。
-- **Timing 模型升級。** Per-cycle bus contention、deferred SMC invalidation、完整 pipeline 模擬 — 每個都套到 [`MD/design/15-timing-and-framework-design.md`](MD/design/15-timing-and-framework-design.md) 三大 pattern 的其中一個。
-- **超出 emulation 的應用。** JSON-driven CPU model 同時是個 *規格檔* — 可以拿來做：教育性視覺化、what-if 架構研究、跨架構 binary translator、dynamic taint analysis、formal verification scaffolding。框架本身不做這些事，但是它是個讓 hobbyist effort 也能做這些事的基礎。
-
-> **想把框架推得更遠？** 有一份長篇 synthesis doc —
-> [`MD/note/framework-future-extensions-and-vision.md`](MD/note/framework-future-extensions-and-vision.md) —
-> 整理出具體的進階挑戰路線圖：要支援現代機種需要的 spec-level 擴充
-> (FPU / SIMD / 多核 / delay slots)、co-processor plug-in 架構 (PS1
-> GTE 範式)、machine-level definition (`MachineDef`) schema、JSON vs
-> C# 的邊界該劃在哪、業界對比 (MAME / QEMU TCG / Ghidra SLEIGH /
-> ArchC)、以及 8 個 emulation 之外的應用方向（教育視覺化、what-if
-> 架構研究、跨架構 binary translation、taint analysis、formal
-> verification scaffolding、RTL co-simulation、硬體保存等）。**想接
-> 手或實質貢獻的話，從這份開始讀。**
-
-### 9. References & 致謝
-
-- **Vendor manual** (在 `ref/`) — ARM Architecture Reference Manual、Game Boy CPU manual、Pan Docs。
-- **Test suite** — Blargg cpu_instrs、jsmolka arm/thumb test、armwrestler。
-- **業界 reference** — 設計 hint 透過 Gemini 諮詢跟 QEMU TCG / FEX-Emu / Dynarmic / mGBA / Dolphin 對拍 (`tools/knowledgebase/message/`)。
-- **前置專案** — [erspicu/AprGBemu](https://github.com/erspicu/AprGBemu)：手刻 LR35902 interpreter，是 `AprGb.Cli/Cpu/LegacyCpu.cs` 的來源。在這裡作為 oracle + perf baseline。
+- **Predecessor projects** — [erspicu/AprGBemu](https://github.com/erspicu/AprGBemu) (LR35902 interpreter, source of `AprGb.Cli/Cpu/LegacyCpu.cs`), and the older `Apr86` 8086 emulator (referenced for CGA framebuffer + PA_mem layout).

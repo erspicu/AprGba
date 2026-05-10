@@ -85,7 +85,7 @@ per design doc #21 §5 + N3 實踐結論：
 
 要解 cycles 結構性限制需要 spec format 重構。兩個選項：
 
-(a) **每 (mnemonic, addressing-mode) 各 instruction-def** — `spec/2a03/groups/alu-cc01.json` 從 8 entries 變 64 entries (4×)。其他 group 同樣膨脹。實作可行但 spec 文件變大、人手維護成本高
+(a) **每 (mnemonic, addressing-mode) 各 instruction-def** — `spec/cpu/2a03/groups/alu-cc01.json` 從 8 entries 變 64 entries (4×)。其他 group 同樣膨脹。實作可行但 spec 文件變大、人手維護成本高
 (b) **Per-format `cycle_table`** — 在 `InstructionFormat` 加 `cycle_table: { "000": 6, "001": 3, "010": 2, ... }` mapping bbb → cycle count。Spec 大小幾乎不變、resolver 邏輯稍微複雜
 
 方向 (b) 比較合理，但**留作 future N4+ 範圍**。

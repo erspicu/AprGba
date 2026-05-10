@@ -2,7 +2,7 @@
 
 寫新 instruction format / instruction 時遵循這些慣例，可避免後續維護
 時的拼字漂移、欄位命名衝突、與 emitter 行為不一致。本文件不是 schema
-強制規則（schema 在 `spec/schema/cpu-spec.schema.json`），而是「人類
+強制規則（schema 在 `spec/cpu/_schema.json`），而是「人類
 慣例」。Lint 會檢查強制項目；其他屬於 code review 範疇。
 
 ---
@@ -15,7 +15,7 @@
 | `spec/<arch_id>/<set_name>.json`       | 一個 instruction set（如 `arm.json`、`thumb.json`） |
 | `spec/<arch_id>/groups/*.json`         | （可選）encoding-group 分割檔，用 `$include` 引入 |
 | `spec/<arch_id>/formats/*.json`        | （可選）更細顆粒的 format / instruction 分割 |
-| `spec/schema/cpu-spec.schema.json`     | JSON Schema validator |
+| `spec/cpu/_schema.json`     | JSON Schema validator |
 | [`MD/design/0X-...md`](/MD/design/0X-...md)                   | 設計文件 |
 
 `<arch_id>` 用小寫去掉版本號（`arm7tdmi`、`mos6502`）。`<set_name>` 與
@@ -296,7 +296,7 @@ format 之間（同一 group 內）：依 priority — 高 specificity（mask �
 ```
 dotnet test                     # 35+ tests, includes coverage matrix
 dotnet run --project src/AprCpu.Compiler -- \
-    --spec spec/arm7tdmi/cpu.json --output temp/arm7tdmi.ll
+    --spec spec/cpu/arm7tdmi/cpu.json --output temp/arm7tdmi.ll
 ```
 
 CLI 必須輸出 0 diagnostics；測試必須全綠。

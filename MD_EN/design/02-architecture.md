@@ -34,7 +34,7 @@
 
 ## Component Responsibilities
 
-### 1. JSON Spec (`spec/arm7tdmi/*.json`)
+### 1. JSON Spec (`spec/cpu/arm7tdmi/*.json`)
 - Defines instruction encoding formats: bit patterns, mask/match
 - Defines semantics (sequence of micro-op steps)
 - Defines cycle count hints
@@ -235,7 +235,7 @@ void ExecuteBlock_<Set>_pc<XXXXXXXX>(CpuState* state);
 ## JSON Schema
 
 Full schema spec: see `04-json-schema-spec.md`; micro-op vocabulary: see
-`05-microops-vocabulary.md`; concrete spec examples: see `spec/arm7tdmi/`.
+`05-microops-vocabulary.md`; concrete spec examples: see `spec/cpu/arm7tdmi/`.
 
 ---
 

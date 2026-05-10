@@ -82,7 +82,7 @@ blocker).
 
 ### 2.1 Spec format change summary
 
-InstructionDef entries with `cycles.table` added under `spec/2a03/groups/`:
+InstructionDef entries with `cycles.table` added under `spec/cpu/2a03/groups/`:
 
 | Group | Mnemonics | bbb modes | Total opcode-instances |
 |---|---:|---:|---:|

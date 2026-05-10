@@ -4,7 +4,7 @@ When writing a new instruction format / instruction, follow these
 conventions to avoid spelling drift, field name conflicts, and
 inconsistencies with emitter behaviour during later maintenance. This
 document is not schema-enforced (the schema lives at
-`spec/schema/cpu-spec.schema.json`) — it is "human convention". Lint
+`spec/cpu/_schema.json`) — it is "human convention". Lint
 checks the enforced items; everything else falls under code review.
 
 ---
@@ -17,7 +17,7 @@ checks the enforced items; everything else falls under code review.
 | `spec/<arch_id>/<set_name>.json`       | One instruction set (e.g. `arm.json`, `thumb.json`) |
 | `spec/<arch_id>/groups/*.json`         | (Optional) encoding-group split files, included via `$include` |
 | `spec/<arch_id>/formats/*.json`        | (Optional) finer-grained format / instruction split |
-| `spec/schema/cpu-spec.schema.json`     | JSON Schema validator |
+| `spec/cpu/_schema.json`     | JSON Schema validator |
 | [`MD_EN/design/0X-...md`](/MD_EN/design/0X-...md)                   | Design documents |
 
 `<arch_id>` uses lowercase with version numbers stripped (`arm7tdmi`,
@@ -328,7 +328,7 @@ After adding/modifying spec, the following must be run:
 ```
 dotnet test                     # 35+ tests, includes coverage matrix
 dotnet run --project src/AprCpu.Compiler -- \
-    --spec spec/arm7tdmi/cpu.json --output temp/arm7tdmi.ll
+    --spec spec/cpu/arm7tdmi/cpu.json --output temp/arm7tdmi.ll
 ```
 
 The CLI must produce 0 diagnostics; tests must all be green.

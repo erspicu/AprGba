@@ -34,7 +34,7 @@
 
 ## 組件職責
 
-### 1. JSON 規格（`spec/arm7tdmi/*.json`）
+### 1. JSON 規格（`spec/cpu/arm7tdmi/*.json`）
 - 定義指令編碼格式（encoding format）：bit pattern、mask/match
 - 定義語義（micro-op steps 序列）
 - 定義 cycle count 提示
@@ -250,7 +250,7 @@ void ExecuteBlock_<Set>_pc<XXXXXXXX>(CpuState* state);
 ## JSON Schema
 
 完整 schema 規範見 `04-json-schema-spec.md`；micro-op 詞彙表見
-`05-microops-vocabulary.md`；實際 spec 範例見 `spec/arm7tdmi/`。
+`05-microops-vocabulary.md`；實際 spec 範例見 `spec/cpu/arm7tdmi/`。
 
 ---
 

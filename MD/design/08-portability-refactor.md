@@ -43,7 +43,7 @@ emitter 與 operand resolver — **耦合面會繼續擴大**。趁現在 footpr
 
 每個 R 完成後：
 - 所有現有測試（64 個）必須仍綠
-- CLI `aprcpu --spec spec/arm7tdmi/cpu.json --output temp/arm7tdmi.ll`
+- CLI `aprcpu --spec spec/cpu/arm7tdmi/cpu.json --output temp/arm7tdmi.ll`
   必須仍 emit 62 functions、0 diagnostics、LLVM TryVerify 通過
 - 產出 `.ll` 的 IR 結構容許微差（如 GEP 索引變動），但語義相同
 

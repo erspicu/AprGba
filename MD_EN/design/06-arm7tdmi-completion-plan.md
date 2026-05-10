@@ -311,7 +311,7 @@ Thumb semantics can directly reuse ARM micro-ops; not many new ones:
 
 ## Done criteria (closing standard for all of Phase 2.5)
 
-1. Done: `aprcpu --spec spec/arm7tdmi/cpu.json --output temp/arm7tdmi.ll`
+1. Done: `aprcpu --spec spec/cpu/arm7tdmi/cpu.json --output temp/arm7tdmi.ll`
    produces LLVM functions for all ARMv4T instructions (estimated 80+
    functions)
 2. Done: Module passes LLVM `Verify` with 0 diagnostics

@@ -248,7 +248,7 @@ output 「cpu_instrs / 01」normal）。
 - `Memory/GbMemoryBus.cs` — `LoadBios` / BiosEnabled / 0xFF50 unmap
 - `Cpu/LegacyCpu.cs` + `Cpu/JsonCpu.cs` — Reset 分 cold-start vs post-BIOS
 
-`spec/arm7tdmi/`：
+`spec/cpu/arm7tdmi/`：
 - `groups/data-processing.json` — RegRegShift format 14 個指令的 read_reg(rn) 
   改成 read_reg_shift_by_reg
 - `groups/multiply-long.json` — 4 個 mnemonic 末尾加 S-bit + update_nz_64

@@ -209,7 +209,7 @@ the bus to preserve the SMC notify hook.
 ### 3.1 Third CPU: Ricoh 2A03 / NES (N0–N1, 10 commits)
 
 Built `AprNes.Cli` harness from scratch:
-- N0 — 2A03 JSON spec (`spec/2a03/cpu.json` + 7 groups + unofficial),
+- N0 — 2A03 JSON spec (`spec/cpu/2a03/cpu.json` + 7 groups + unofficial),
   256-opcode decoder coverage
 - N0b — LegacyCpu (Ricoh2A03Cpu) wired to NesMemoryBus + nestest PASS
   at PC=$C66E
@@ -547,8 +547,8 @@ config for one specific machine).
 Apple II / C64; ARM7TDMI in GBA / NDS); the ISA part is reusable,
 while the machine part differs.
 
-**Practice**: `spec/2a03/cpu.json` (ISA) + `spec/machines/nes-ntsc.json`
-(machine); `spec/arm7tdmi/cpu.json` + `spec/machines/gba.json`. See
+**Practice**: `spec/cpu/2a03/cpu.json` (ISA) + `spec/machines/nes-ntsc.json`
+(machine); `spec/cpu/arm7tdmi/cpu.json` + `spec/machines/gba.json`. See
 `MD/design/19-declarative-jit-policy.md`.
 
 ### 12.3 Page-table dispatch (replacing switch / linear scan)

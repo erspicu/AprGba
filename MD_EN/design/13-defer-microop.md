@@ -196,7 +196,7 @@ counters per instr.
 
 ### 4.5 Step 5 — Migrate LR35902 EI spec (~0.5 day)
 
-- `spec/lr35902/groups/block3-di-ei.json`: change EI's step from
+- `spec/cpu/lr35902/groups/block3-di-ei.json`: change EI's step from
   `[{ "op": "lr35902_ime_delayed" }]` to
   `[{ "op": "defer", "delay_type": "instruction_count", "delay_value": 1, "body": [...] }]`
 - For V1, keep `lr35902_ime_delayed` as alternative — per-instr uses old,
