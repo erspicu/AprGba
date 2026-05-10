@@ -5635,21 +5635,16 @@ internal sealed class X86Clts286StubEmitter : IMicroOpEmitter
     }
 }
 
-// x86_286_zero_one_dispatch — Phase 26 Sprint 26.3 dispatcher for the
-// 0F 01 group on i80286. ModR/M.reg selects:
-//   /0 SGDT m48     (deferred to Sprint 26.3+)
+// x86_286_zero_one_dispatch — Phase 26 Sprint 26.3 / 27.1 dispatcher for
+// the 0F 01 group on i80286. ModR/M.reg selects:
+//   /0 SGDT m48     (deferred to Sprint 27.2)
 //   /1 SIDT m48     (deferred)
 //   /2 LGDT m48     (deferred)
 //   /3 LIDT m48     (deferred)
-//   /4 SMSW r/m16   ✅ Phase 26 v1 — stores constant 0xFFF0
+//   /4 SMSW r/m16   ✅ Sprint 27.1 — reads REAL MSW status register
 //   /5 reserved     (UD)
-//   /6 LMSW r/m16   (deferred to Sprint 26.4 with real MSW state)
+//   /6 LMSW r/m16   ✅ Sprint 27.1 — writes low 16 bits to MSW
 //   /7 INVLPG       (386+, never reachable on 286)
-//
-// Dispatch via runtime switch on modrm_reg (already in ctx.Values from
-// x86_fetch_modrm). Default + non-implemented arms fall through silently
-// (no-op) for now — the demo only exercises /4. Sprint 26.4+ will fill
-// in the rest.
 internal sealed class X86286ZeroOneDispatchEmitter : IMicroOpEmitter
 {
     public string OpName => "x86_286_zero_one_dispatch";
@@ -5667,16 +5662,29 @@ internal sealed class X86286ZeroOneDispatchEmitter : IMicroOpEmitter
         for (int i = 0; i < 8; i++)
             sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
 
-        // /4 SMSW: store 0xFFF0 (real-mode reset MSW) to r/m16.
+        // /4 SMSW r/m16: read MSW status register, store to r/m16 destination.
         ctx.Builder.PositionAtEnd(arms[4]);
-        var mswConst = LLVMValueRef.CreateConstInt(i16, 0xFFF0, false);
-        X86ModRmMemHelpers.BuildStoreW16(ctx, mswConst);
+        var mswPtr = ctx.GepStatusRegister("MSW");
+        var mswVal = ctx.Builder.BuildLoad2(i16, mswPtr, "z01_4_msw");
+        X86ModRmMemHelpers.BuildStoreW16(ctx, mswVal);
         ctx.Builder.BuildBr(endBB);
 
-        // /0 /1 /2 /3 /6 /7 — no-op stubs (deferred). /5 reserved.
+        // /6 LMSW r/m16: load r/m16 source value, write to MSW.
+        // Per Intel 80286 PRM real-mode behavior: writes all 16 bits to
+        // MSW. Bit 0 (PE) once set cannot be cleared in real mode (only
+        // a triple-fault or LOADALL can return to real mode). Phase 27a
+        // doesn't enforce that lock-once-set rule (Phase 27b protected-
+        // mode does).
+        ctx.Builder.PositionAtEnd(arms[6]);
+        var lmswSrc = X86ModRmMemHelpers.BuildLoadW16(ctx, "z01_6_src");
+        ctx.Builder.BuildStore(lmswSrc, ctx.GepStatusRegister("MSW"));
+        ctx.Builder.BuildBr(endBB);
+
+        // /0 /1 /2 /3 /5 /7 — no-op stubs (Sprint 27.2 fills 0/1/2/3 with
+        // SGDT/SIDT/LGDT/LIDT real implementations).
         for (int i = 0; i < 8; i++)
         {
-            if (i == 4) continue;
+            if (i == 4 || i == 6) continue;
             ctx.Builder.PositionAtEnd(arms[i]);
             ctx.Builder.BuildBr(endBB);
         }

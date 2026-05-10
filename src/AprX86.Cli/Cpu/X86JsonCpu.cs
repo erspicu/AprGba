@@ -212,6 +212,18 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         WriteU16(_csOff, 0xFFFF);
         // FLAGS, IP, others already cleared.
         _state[_segOverrideOff] = 0xFF;     // no segment override at reset
+
+        // Sprint 27.1 — i80286 only: MSW resets to 0xFFF0 (top 4 bits
+        // stuck set per Intel 80286 PRM). i8086 / i80186 don't have the
+        // MSW status register so the offset query returns -1 sentinel
+        // (or the spec layout simply lacks the slot).
+        try
+        {
+            var mswOff = (int)_rt.StatusOffset("MSW");
+            WriteU16(mswOff, 0xFFF0);
+        }
+        catch (KeyNotFoundException) { /* spec doesn't declare MSW (i8086/i80186) — no-op */ }
+        catch (ArgumentException)    { /* same */ }
         _activeMem = _mem;
     }
 
