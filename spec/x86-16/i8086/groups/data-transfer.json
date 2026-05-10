@@ -2,408 +2,747 @@
   "name": "DataTransfer",
   "comment": "8086 MOV / data-transfer family. 24.6.5 lands incrementally; this initial cut covers MOV r,imm (B0-BF). Later sub-steps fill in MOV r/m forms, segment-register moves, PUSH/POP, XCHG, LEA, LDS/LES.",
   "formats": [
-
     {
-      "name":  "MovR8Imm8",
+      "name": "MovR8Imm8",
       "comment": "0xB0-0xB7 MOV r8, imm8 — destination byte register is encoded in the opcode's low 3 bits. 000=AL 001=CL 010=DL 011=BL 100=AH 101=CH 110=DH 111=BH.",
-      "fields": { "reg": "2:0" },
-      "mask":  "0xF8",
+      "fields": {
+        "reg": "2:0"
+      },
+      "mask": "0xF8",
       "match": "0xB0",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "4" },
+          "cycles": {
+            "form": "4"
+          },
           "steps": [
-            { "op": "x86_fetch_imm8",       "out": "imm" },
-            { "op": "x86_write_reg8_field", "field": "reg", "in": ["imm"] }
-          ]
+            {
+              "op": "x86_fetch_imm8",
+              "out": "imm"
+            },
+            {
+              "op": "x86_write_reg8_field",
+              "field": "reg",
+              "in": [
+                "imm"
+              ]
+            }
+          ],
+          "id": "MOV_r8_imm8"
         }
       ]
     },
-
     {
-      "name":  "MovR16Imm16",
+      "name": "MovR16Imm16",
       "comment": "0xB8-0xBF MOV r16, imm16 — destination word register is encoded in the opcode's low 3 bits. 000=AX 001=CX 010=DX 011=BX 100=SP 101=BP 110=SI 111=DI.",
-      "fields": { "reg": "2:0" },
-      "mask":  "0xF8",
+      "fields": {
+        "reg": "2:0"
+      },
+      "mask": "0xF8",
       "match": "0xB8",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "4" },
+          "cycles": {
+            "form": "4"
+          },
           "steps": [
-            { "op": "x86_fetch_imm16",       "out": "imm" },
-            { "op": "x86_write_reg16_field", "field": "reg", "in": ["imm"] }
-          ]
+            {
+              "op": "x86_fetch_imm16",
+              "out": "imm"
+            },
+            {
+              "op": "x86_write_reg16_field",
+              "field": "reg",
+              "in": [
+                "imm"
+              ]
+            }
+          ],
+          "id": "MOV_r16_imm16"
         }
       ]
     },
-
     {
-      "name":  "MovRm8R8",
+      "name": "MovRm8R8",
       "comment": "0x88 MOV r/m8, r8 — copy r8 (modrm.reg) → r/m8 (modrm.rm). Now full ModR/M (24.6.5c): mod=11 reg-direct OR mod=00/01/10 memory effective address (BX+SI / BP+disp / disp16 / etc.) with default segment.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x88",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "2" },
+          "cycles": {
+            "form": "2"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_read_reg8_field",  "field": "modrm_reg", "out": "src" },
-            { "op": "x86_modrm_store_w8",   "in": ["src"] }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_read_reg8_field",
+              "field": "modrm_reg",
+              "out": "src"
+            },
+            {
+              "op": "x86_modrm_store_w8",
+              "in": [
+                "src"
+              ]
+            }
+          ],
+          "id": "MOV_rm8_r8"
         }
       ]
     },
-
     {
-      "name":  "MovRm16R16",
+      "name": "MovRm16R16",
       "comment": "0x89 MOV r/m16, r16 — copy r16 (modrm.reg) → r/m16 (modrm.rm). Full ModR/M.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x89",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "2" },
+          "cycles": {
+            "form": "2"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_read_reg16_field", "field": "modrm_reg", "out": "src" },
-            { "op": "x86_modrm_store_w16",  "in": ["src"] }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_read_reg16_field",
+              "field": "modrm_reg",
+              "out": "src"
+            },
+            {
+              "op": "x86_modrm_store_w16",
+              "in": [
+                "src"
+              ]
+            }
+          ],
+          "id": "MOV_rm16_r16"
         }
       ]
     },
-
     {
-      "name":  "MovR8Rm8",
+      "name": "MovR8Rm8",
       "comment": "0x8A MOV r8, r/m8 — copy r/m8 (modrm.rm) → r8 (modrm.reg). Full ModR/M.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x8A",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "2" },
+          "cycles": {
+            "form": "2"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_modrm_load_w8",     "out": "src" },
-            { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["src"] }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w8",
+              "out": "src"
+            },
+            {
+              "op": "x86_write_reg8_field",
+              "field": "modrm_reg",
+              "in": [
+                "src"
+              ]
+            }
+          ],
+          "id": "MOV_r8_rm8"
         }
       ]
     },
-
     {
-      "name":  "MovR16Rm16",
+      "name": "MovR16Rm16",
       "comment": "0x8B MOV r16, r/m16 — copy r/m16 (modrm.rm) → r16 (modrm.reg). Full ModR/M.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x8B",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "2" },
+          "cycles": {
+            "form": "2"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_modrm_load_w16",     "out": "src" },
-            { "op": "x86_write_reg16_field",  "field": "modrm_reg", "in": ["src"] }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w16",
+              "out": "src"
+            },
+            {
+              "op": "x86_write_reg16_field",
+              "field": "modrm_reg",
+              "in": [
+                "src"
+              ]
+            }
+          ],
+          "id": "MOV_r16_rm16"
         }
       ]
     },
-
     {
-      "name":  "MovRm8Imm8",
+      "name": "MovRm8Imm8",
       "comment": "0xC6 /0 MOV r/m8, imm8 — Intel reserves the reg field as /0 but 8086 silicon ignores it (validated by Tom Harte). Steps reuse modrm_compute_ea + modrm_store_w8 with a fetched imm8 value.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0xC6",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "4" },
+          "cycles": {
+            "form": "4"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_fetch_imm8",       "out": "imm" },
-            { "op": "x86_modrm_store_w8",   "in": ["imm"] }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_fetch_imm8",
+              "out": "imm"
+            },
+            {
+              "op": "x86_modrm_store_w8",
+              "in": [
+                "imm"
+              ]
+            }
+          ],
+          "id": "MOV_rm8_imm8"
         }
       ]
     },
-
     {
-      "name":  "MovRm16Imm16",
+      "name": "MovRm16Imm16",
       "comment": "0xC7 /0 MOV r/m16, imm16 — same as 0xC6 but 16-bit. Reg field ignored.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0xC7",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "4" },
+          "cycles": {
+            "form": "4"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_fetch_imm16",      "out": "imm" },
-            { "op": "x86_modrm_store_w16",  "in": ["imm"] }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_fetch_imm16",
+              "out": "imm"
+            },
+            {
+              "op": "x86_modrm_store_w16",
+              "in": [
+                "imm"
+              ]
+            }
+          ],
+          "id": "MOV_rm16_imm16"
         }
       ]
     },
-
     {
-      "name":  "MovAlMoffs8",
+      "name": "MovAlMoffs8",
       "comment": "0xA0 MOV AL, moffs8 — fast path for absolute-address byte read into AL. Default segment DS, segment-override prefix applies.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0xA0",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "10" },
+          "cycles": {
+            "form": "10"
+          },
           "steps": [
-            { "op": "x86_mov_acc_moffs_load_w8" }
-          ]
+            {
+              "op": "x86_mov_acc_moffs_load_w8"
+            }
+          ],
+          "id": "MOV_al_moffs8"
         }
       ]
     },
-
     {
-      "name":  "MovAxMoffs16",
+      "name": "MovAxMoffs16",
       "comment": "0xA1 MOV AX, moffs16 — word-width counterpart of A0. The disp is still 16-bit; the suffix refers to data width.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0xA1",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "10" },
+          "cycles": {
+            "form": "10"
+          },
           "steps": [
-            { "op": "x86_mov_acc_moffs_load_w16" }
-          ]
+            {
+              "op": "x86_mov_acc_moffs_load_w16"
+            }
+          ],
+          "id": "MOV_ax_moffs16"
         }
       ]
     },
-
     {
-      "name":  "MovMoffs8Al",
+      "name": "MovMoffs8Al",
       "comment": "0xA2 MOV moffs8, AL — store AL byte into [seg:disp16].",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0xA2",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "10" },
+          "cycles": {
+            "form": "10"
+          },
           "steps": [
-            { "op": "x86_mov_acc_moffs_store_w8" }
-          ]
+            {
+              "op": "x86_mov_acc_moffs_store_w8"
+            }
+          ],
+          "id": "MOV_moffs8_al"
         }
       ]
     },
-
     {
-      "name":  "MovMoffs16Ax",
+      "name": "MovMoffs16Ax",
       "comment": "0xA3 MOV moffs16, AX — store AX word into [seg:disp16].",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0xA3",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "10" },
+          "cycles": {
+            "form": "10"
+          },
           "steps": [
-            { "op": "x86_mov_acc_moffs_store_w16" }
-          ]
+            {
+              "op": "x86_mov_acc_moffs_store_w16"
+            }
+          ],
+          "id": "MOV_moffs16_ax"
         }
       ]
     },
-
     {
-      "name":  "MovRm16Sreg",
+      "name": "MovRm16Sreg",
       "comment": "0x8C MOV r/m16, sreg — modrm.reg encodes the SOURCE segment register (000=ES, 001=CS, 010=SS, 011=DS); modrm.rm is the destination r/m16 word.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x8C",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "2" },
+          "cycles": {
+            "form": "2"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_read_sreg_field",  "field": "modrm_reg", "out": "src" },
-            { "op": "x86_modrm_store_w16",  "in": ["src"] }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_read_sreg_field",
+              "field": "modrm_reg",
+              "out": "src"
+            },
+            {
+              "op": "x86_modrm_store_w16",
+              "in": [
+                "src"
+              ]
+            }
+          ],
+          "id": "MOV_rm16_sreg"
         }
       ]
     },
-
     {
-      "name":  "MovSregRm16",
+      "name": "MovSregRm16",
       "comment": "0x8E MOV sreg, r/m16 — modrm.reg encodes the DESTINATION segment register; modrm.rm is the source r/m16. Writing CS via reg=001 has undefined behaviour per Intel docs; we treat as a normal segment-reg store for determinism.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x8E",
       "instructions": [
         {
-          "mnemonic":   "MOV",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "MOV",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §MOV",
-          "cycles":     { "form": "2" },
+          "cycles": {
+            "form": "2"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_modrm_load_w16",     "out": "src" },
-            { "op": "x86_write_sreg_field",   "field": "modrm_reg", "in": ["src"] }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w16",
+              "out": "src"
+            },
+            {
+              "op": "x86_write_sreg_field",
+              "field": "modrm_reg",
+              "in": [
+                "src"
+              ]
+            }
+          ],
+          "id": "MOV_sreg_rm16"
         }
       ]
     },
-
     {
-      "name":  "PushReg16",
+      "name": "PushReg16",
       "comment": "0x50-0x57 PUSH r16 — opcode encodes destination GPR in low 3 bits. 8088 PUSH-SP quirk handled inside emitter (decrement-then-read).",
-      "fields": { "reg": "2:0" },
-      "mask":  "0xF8",
+      "fields": {
+        "reg": "2:0"
+      },
+      "mask": "0xF8",
       "match": "0x50",
       "instructions": [
         {
-          "mnemonic":   "PUSH",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "PUSH",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §PUSH",
-          "cycles":     { "form": "11" },
+          "cycles": {
+            "form": "11"
+          },
           "steps": [
-            { "op": "x86_push_reg16_field", "field": "reg" }
-          ]
+            {
+              "op": "x86_push_reg16_field",
+              "field": "reg"
+            }
+          ],
+          "id": "PUSH_reg16"
         }
       ]
     },
-
     {
-      "name":  "PopReg16",
+      "name": "PopReg16",
       "comment": "0x58-0x5F POP r16 — opcode encodes destination GPR in low 3 bits.",
-      "fields": { "reg": "2:0" },
-      "mask":  "0xF8",
+      "fields": {
+        "reg": "2:0"
+      },
+      "mask": "0xF8",
       "match": "0x58",
       "instructions": [
         {
-          "mnemonic":   "POP",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "mnemonic": "POP",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §POP",
-          "cycles":     { "form": "8" },
+          "cycles": {
+            "form": "8"
+          },
           "steps": [
-            { "op": "x86_pop_reg16_field", "field": "reg" }
-          ]
+            {
+              "op": "x86_pop_reg16_field",
+              "field": "reg"
+            }
+          ],
+          "id": "POP_reg16"
         }
       ]
     },
-
     {
-      "name":  "PushEs",
-      "fields": {}, "mask": "0xFF", "match": "0x06",
-      "instructions": [{ "mnemonic": "PUSH", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §PUSH", "cycles": { "form": "10" }, "steps": [{ "op": "x86_push_seg", "seg": "ES" }] }]
+      "name": "PushEs",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x06",
+      "instructions": [
+        {
+          "mnemonic": "PUSH",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §PUSH",
+          "cycles": {
+            "form": "10"
+          },
+          "steps": [
+            {
+              "op": "x86_push_seg",
+              "seg": "ES"
+            }
+          ],
+          "id": "PUSH_es"
+        }
+      ]
     },
     {
-      "name":  "PushCs",
-      "fields": {}, "mask": "0xFF", "match": "0x0E",
-      "instructions": [{ "mnemonic": "PUSH", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §PUSH", "cycles": { "form": "10" }, "steps": [{ "op": "x86_push_seg", "seg": "CS" }] }]
+      "name": "PushCs",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x0E",
+      "instructions": [
+        {
+          "mnemonic": "PUSH",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §PUSH",
+          "cycles": {
+            "form": "10"
+          },
+          "steps": [
+            {
+              "op": "x86_push_seg",
+              "seg": "CS"
+            }
+          ],
+          "id": "PUSH_cs"
+        }
+      ]
     },
     {
-      "name":  "PushSs",
-      "fields": {}, "mask": "0xFF", "match": "0x16",
-      "instructions": [{ "mnemonic": "PUSH", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §PUSH", "cycles": { "form": "10" }, "steps": [{ "op": "x86_push_seg", "seg": "SS" }] }]
+      "name": "PushSs",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x16",
+      "instructions": [
+        {
+          "mnemonic": "PUSH",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §PUSH",
+          "cycles": {
+            "form": "10"
+          },
+          "steps": [
+            {
+              "op": "x86_push_seg",
+              "seg": "SS"
+            }
+          ],
+          "id": "PUSH_ss"
+        }
+      ]
     },
     {
-      "name":  "PushDs",
-      "fields": {}, "mask": "0xFF", "match": "0x1E",
-      "instructions": [{ "mnemonic": "PUSH", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §PUSH", "cycles": { "form": "10" }, "steps": [{ "op": "x86_push_seg", "seg": "DS" }] }]
+      "name": "PushDs",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x1E",
+      "instructions": [
+        {
+          "mnemonic": "PUSH",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §PUSH",
+          "cycles": {
+            "form": "10"
+          },
+          "steps": [
+            {
+              "op": "x86_push_seg",
+              "seg": "DS"
+            }
+          ],
+          "id": "PUSH_ds"
+        }
+      ]
     },
-
     {
-      "name":  "PopEs",
+      "name": "PopEs",
       "comment": "0x07 POP ES. (No POP CS at 0x0F — 8086 silicon does pop CS but all assemblers reject it; later x86 reuses 0x0F as 2-byte opcode prefix. We omit it.)",
-      "fields": {}, "mask": "0xFF", "match": "0x07",
-      "instructions": [{ "mnemonic": "POP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §POP", "cycles": { "form": "8" }, "steps": [{ "op": "x86_pop_seg", "seg": "ES" }] }]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x07",
+      "instructions": [
+        {
+          "mnemonic": "POP",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §POP",
+          "cycles": {
+            "form": "8"
+          },
+          "steps": [
+            {
+              "op": "x86_pop_seg",
+              "seg": "ES"
+            }
+          ],
+          "id": "POP_es"
+        }
+      ]
     },
     {
-      "name":  "PopSs",
-      "fields": {}, "mask": "0xFF", "match": "0x17",
-      "instructions": [{ "mnemonic": "POP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §POP", "cycles": { "form": "8" }, "steps": [{ "op": "x86_pop_seg", "seg": "SS" }] }]
+      "name": "PopSs",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x17",
+      "instructions": [
+        {
+          "mnemonic": "POP",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §POP",
+          "cycles": {
+            "form": "8"
+          },
+          "steps": [
+            {
+              "op": "x86_pop_seg",
+              "seg": "SS"
+            }
+          ],
+          "id": "POP_ss"
+        }
+      ]
     },
     {
-      "name":  "PopDs",
-      "fields": {}, "mask": "0xFF", "match": "0x1F",
-      "instructions": [{ "mnemonic": "POP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §POP", "cycles": { "form": "8" }, "steps": [{ "op": "x86_pop_seg", "seg": "DS" }] }]
+      "name": "PopDs",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x1F",
+      "instructions": [
+        {
+          "mnemonic": "POP",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §POP",
+          "cycles": {
+            "form": "8"
+          },
+          "steps": [
+            {
+              "op": "x86_pop_seg",
+              "seg": "DS"
+            }
+          ],
+          "id": "POP_ds"
+        }
+      ]
     },
-
     {
-      "name":  "Pushf",
+      "name": "Pushf",
       "comment": "0x9C PUSHF. Reserved bits forced per 8086 layout: bits 1+12-15 = 1, bits 3+5 = 0; the 9 architectural flags preserved.",
-      "fields": {}, "mask": "0xFF", "match": "0x9C",
-      "instructions": [{ "mnemonic": "PUSHF", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §PUSHF", "cycles": { "form": "10" }, "steps": [{ "op": "x86_push_flags" }] }]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x9C",
+      "instructions": [
+        {
+          "mnemonic": "PUSHF",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §PUSHF",
+          "cycles": {
+            "form": "10"
+          },
+          "steps": [
+            {
+              "op": "x86_push_flags"
+            }
+          ],
+          "id": "PUSHF_noargs"
+        }
+      ]
     },
     {
-      "name":  "Popf",
-      "fields": {}, "mask": "0xFF", "match": "0x9D",
-      "instructions": [{ "mnemonic": "POPF", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §POPF", "cycles": { "form": "8" }, "steps": [{ "op": "x86_pop_flags" }] }]
+      "name": "Popf",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x9D",
+      "instructions": [
+        {
+          "mnemonic": "POPF",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §POPF",
+          "cycles": {
+            "form": "8"
+          },
+          "steps": [
+            {
+              "op": "x86_pop_flags"
+            }
+          ],
+          "id": "POPF_noargs"
+        }
+      ]
     },
-
     {
-      "name":  "PopRm16",
+      "name": "PopRm16",
       "comment": "0x8F /0 POP r/m16. Other 8F /N (1..7) are invalid on 8086 — modrm.reg is dispatched at decode time but we only register /0 here; invalid /N would silently take this path (acceptable since they're undefined on 8086 anyway).\n\nNote 0xFF /6 PUSH r/m16 deliberately omitted from 24.6.5f because the FF group contains 8 different opcode-extension variants (/0=INC, /1=DEC, /2=CALL near, /3=CALL far, /4=JMP near, /5=JMP far, /6=PUSH, /7=invalid). They will be added together in 24.6.7 when CALL/JMP indirect land.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x8F",
       "instructions": [
         {
@@ -411,21 +750,29 @@
           "since": "Intel8086",
           "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §POP",
-          "cycles": { "form": "8" },
+          "cycles": {
+            "form": "8"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_pop_modrm_w16" }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_pop_modrm_w16"
+            }
+          ],
+          "id": "POP_rm16"
         }
       ]
     },
-
     {
-      "name":  "XchgRm8R8",
+      "name": "XchgRm8R8",
       "comment": "0x86 XCHG r/m8, r8 — atomic swap (treated as LOCK-able on later x86; on 8086 it's just a swap). Snapshot reg before writing, then store reg→r/m and snapshot→reg.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x86",
       "instructions": [
         {
@@ -433,24 +780,48 @@
           "since": "Intel8086",
           "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §XCHG",
-          "cycles": { "form": "4" },
+          "cycles": {
+            "form": "4"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_modrm_load_w8",     "out": "memval" },
-            { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "regval" },
-            { "op": "x86_modrm_store_w8",    "in": ["regval"] },
-            { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["memval"] }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w8",
+              "out": "memval"
+            },
+            {
+              "op": "x86_read_reg8_field",
+              "field": "modrm_reg",
+              "out": "regval"
+            },
+            {
+              "op": "x86_modrm_store_w8",
+              "in": [
+                "regval"
+              ]
+            },
+            {
+              "op": "x86_write_reg8_field",
+              "field": "modrm_reg",
+              "in": [
+                "memval"
+              ]
+            }
+          ],
+          "id": "XCHG_rm8_r8"
         }
       ]
     },
-
     {
-      "name":  "XchgRm16R16",
+      "name": "XchgRm16R16",
       "comment": "0x87 XCHG r/m16, r16 — word-width counterpart of 86.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x87",
       "instructions": [
         {
@@ -458,24 +829,50 @@
           "since": "Intel8086",
           "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §XCHG",
-          "cycles": { "form": "4" },
+          "cycles": {
+            "form": "4"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_modrm_load_w16",     "out": "memval" },
-            { "op": "x86_read_reg16_field",   "field": "modrm_reg", "out": "regval" },
-            { "op": "x86_modrm_store_w16",    "in": ["regval"] },
-            { "op": "x86_write_reg16_field",  "field": "modrm_reg", "in": ["memval"] }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w16",
+              "out": "memval"
+            },
+            {
+              "op": "x86_read_reg16_field",
+              "field": "modrm_reg",
+              "out": "regval"
+            },
+            {
+              "op": "x86_modrm_store_w16",
+              "in": [
+                "regval"
+              ]
+            },
+            {
+              "op": "x86_write_reg16_field",
+              "field": "modrm_reg",
+              "in": [
+                "memval"
+              ]
+            }
+          ],
+          "id": "XCHG_rm16_r16"
         }
       ]
     },
-
     {
-      "name":  "XchgAxR16",
+      "name": "XchgAxR16",
       "comment": "0x91-0x97 XCHG AX, r16 — opcode encodes the OTHER reg in low 3 bits. 0x90 (XCHG AX,AX = NOP) is shadowed by the smoke group's mask=0xFF entry, so this broader mask=0xF8 entry only fires for 0x91-0x97.",
-      "fields": { "reg": "2:0" },
-      "mask":  "0xF8",
+      "fields": {
+        "reg": "2:0"
+      },
+      "mask": "0xF8",
       "match": "0x90",
       "instructions": [
         {
@@ -483,19 +880,24 @@
           "since": "Intel8086",
           "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §XCHG",
-          "cycles": { "form": "3" },
+          "cycles": {
+            "form": "3"
+          },
           "steps": [
-            { "op": "x86_xchg_ax_reg16_field", "field": "reg" }
-          ]
+            {
+              "op": "x86_xchg_ax_reg16_field",
+              "field": "reg"
+            }
+          ],
+          "id": "XCHG_ax_r16"
         }
       ]
     },
-
     {
-      "name":  "Lea",
+      "name": "Lea",
       "comment": "0x8D LEA r16, m — compute the effective address from ModR/M and write the OFFSET to GPR[modrm.reg]; no memory load happens. mod=11 LEA r16,r16 is undefined per Intel; we silently let the EA emitter's mod=11 zero placeholder flow through.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x8D",
       "instructions": [
         {
@@ -503,21 +905,29 @@
           "since": "Intel8086",
           "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §LEA",
-          "cycles": { "form": "2" },
+          "cycles": {
+            "form": "2"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_lea" }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_lea"
+            }
+          ],
+          "id": "LEA_noargs"
         }
       ]
     },
-
     {
-      "name":  "Les",
+      "name": "Les",
       "comment": "0xC4 LES r16, m32 — load 32-bit far pointer: low 16 bits of memory operand → GPR[modrm.reg], high 16 bits → ES.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0xC4",
       "instructions": [
         {
@@ -525,21 +935,30 @@
           "since": "Intel8086",
           "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §LDS/LES",
-          "cycles": { "form": "16" },
+          "cycles": {
+            "form": "16"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_load_far_pointer", "dest_seg": "ES" }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_load_far_pointer",
+              "dest_seg": "ES"
+            }
+          ],
+          "id": "LES_noargs"
         }
       ]
     },
-
     {
-      "name":  "Lds",
+      "name": "Lds",
       "comment": "0xC5 LDS r16, m32 — same as LES but loads DS from the high half.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0xC5",
       "instructions": [
         {
@@ -547,15 +966,24 @@
           "since": "Intel8086",
           "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §LDS/LES",
-          "cycles": { "form": "16" },
+          "cycles": {
+            "form": "16"
+          },
           "steps": [
-            { "op": "x86_fetch_modrm" },
-            { "op": "x86_modrm_compute_ea" },
-            { "op": "x86_load_far_pointer", "dest_seg": "DS" }
-          ]
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_load_far_pointer",
+              "dest_seg": "DS"
+            }
+          ],
+          "id": "LDS_noargs"
         }
       ]
     }
-
   ]
 }

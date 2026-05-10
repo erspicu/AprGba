@@ -3,39 +3,46 @@
   "comment": "24.6.2 — minimal smoke group. NOP (0x90) + HLT (0xF4) only. Both single-byte, no operands, no flags touched. Proves the SpecLoader → DecoderTable wiring accepts x86 encodings before the real groups land in 24.6.5+.",
   "formats": [
     {
-      "name":  "Nop",
+      "name": "Nop",
       "comment": "0x90 NOP — actually XCHG AX,AX in silicon, but the framework treats the no-op identity case as its own decoded entry.",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0x90",
       "instructions": [
         {
           "mnemonic": "NOP",
-          "since":      "Intel8086",
-          "writes_pc":  "never",
+          "since": "Intel8086",
+          "writes_pc": "never",
           "manual_ref": "Intel SDM Vol.2 §NOP",
-          "cycles":     { "form": "3" },
-          "steps": []
+          "cycles": {
+            "form": "3"
+          },
+          "steps": [],
+          "id": "NOP_noargs"
         }
       ]
     },
-
     {
-      "name":  "Hlt",
+      "name": "Hlt",
       "comment": "0xF4 HLT — halt until next external interrupt. Emitter raises a halt signal; the runtime breaks out of the per-block loop. writes_pc=always so block-JIT BlockDetector ends the block at HLT (otherwise the block would walk past into garbage memory and clobber FLAGS during pre-halt execution).",
       "fields": {},
-      "mask":  "0xFF",
+      "mask": "0xFF",
       "match": "0xF4",
       "instructions": [
         {
-          "mnemonic":   "HLT",
-          "since":      "Intel8086",
-          "writes_pc":  "always",
+          "mnemonic": "HLT",
+          "since": "Intel8086",
+          "writes_pc": "always",
           "manual_ref": "Intel SDM Vol.2 §HLT",
-          "cycles":     { "form": "2" },
+          "cycles": {
+            "form": "2"
+          },
           "steps": [
-            { "op": "x86_halt" }
-          ]
+            {
+              "op": "x86_halt"
+            }
+          ],
+          "id": "HLT_noargs"
         }
       ]
     }

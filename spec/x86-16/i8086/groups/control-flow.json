@@ -1,135 +1,386 @@
 {
   "name": "ControlFlow",
   "comment": "8086 control flow — JMP / Jcc / JCXZ / LOOP* / CALL / RET (24.6.7a). Far CALL/JMP, FF group CALL/JMP indirect, INT/IRET, IRETF deferred to 24.6.7b/c. All branch targets are relative to post-fetch IP (after the displacement bytes have been consumed).",
-
   "formats": [
-
     {
       "name": "JmpRel8",
       "comment": "0xEB JMP rel8 — short jump, signed 8-bit displacement.",
-      "fields": {}, "mask": "0xFF", "match": "0xEB",
-      "instructions": [{ "mnemonic": "JMP", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §JMP", "cycles": { "form": "15" }, "steps": [
-        { "op": "x86_jmp_rel8" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xEB",
+      "instructions": [
+        {
+          "mnemonic": "JMP",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §JMP",
+          "cycles": {
+            "form": "15"
+          },
+          "steps": [
+            {
+              "op": "x86_jmp_rel8"
+            }
+          ],
+          "id": "JMP_rel8"
+        }
+      ]
     },
     {
       "name": "JmpRel16",
       "comment": "0xE9 JMP rel16 — near jump, signed 16-bit displacement.",
-      "fields": {}, "mask": "0xFF", "match": "0xE9",
-      "instructions": [{ "mnemonic": "JMP", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §JMP", "cycles": { "form": "15" }, "steps": [
-        { "op": "x86_jmp_rel16" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE9",
+      "instructions": [
+        {
+          "mnemonic": "JMP",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §JMP",
+          "cycles": {
+            "form": "15"
+          },
+          "steps": [
+            {
+              "op": "x86_jmp_rel16"
+            }
+          ],
+          "id": "JMP_rel16"
+        }
+      ]
     },
-
     {
       "name": "JccRel8",
       "comment": "0x70-0x7F Jcc rel8 — 16 conditional jumps with 4-bit cccc field encoding the predicate. Single emitter dispatches at runtime via switch on cccc; both taken and not-taken branches always advance IP past disp8.",
-      "fields": { "cccc": "3:0" },
-      "mask":  "0xF0",
+      "fields": {
+        "cccc": "3:0"
+      },
+      "mask": "0xF0",
       "match": "0x70",
-      "instructions": [{ "mnemonic": "Jcc", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §Jcc", "cycles": { "form": "16" }, "steps": [
-        { "op": "x86_jcc_rel8", "cond_field": "cccc" }
-      ]}]
+      "instructions": [
+        {
+          "mnemonic": "Jcc",
+          "since": "Intel8086",
+          "writes_pc": "conditional",
+          "manual_ref": "Intel SDM Vol.2 §Jcc",
+          "cycles": {
+            "form": "16"
+          },
+          "steps": [
+            {
+              "op": "x86_jcc_rel8",
+              "cond_field": "cccc"
+            }
+          ],
+          "id": "JCC_rel8"
+        }
+      ]
     },
-
     {
       "name": "JcxzRel8",
       "comment": "0xE3 JCXZ rel8 — jump if CX == 0. Does NOT decrement CX (unlike LOOP).",
-      "fields": {}, "mask": "0xFF", "match": "0xE3",
-      "instructions": [{ "mnemonic": "JCXZ", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §JCXZ", "cycles": { "form": "18" }, "steps": [
-        { "op": "x86_jcxz_rel8" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE3",
+      "instructions": [
+        {
+          "mnemonic": "JCXZ",
+          "since": "Intel8086",
+          "writes_pc": "conditional",
+          "manual_ref": "Intel SDM Vol.2 §JCXZ",
+          "cycles": {
+            "form": "18"
+          },
+          "steps": [
+            {
+              "op": "x86_jcxz_rel8"
+            }
+          ],
+          "id": "JCXZ_rel8"
+        }
+      ]
     },
-
     {
       "name": "LoopneRel8",
       "comment": "0xE0 LOOPNE/LOOPNZ rel8 — CX-=1; if CX != 0 AND ZF=0, jump.",
-      "fields": {}, "mask": "0xFF", "match": "0xE0",
-      "instructions": [{ "mnemonic": "LOOPNE", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §LOOPcc", "cycles": { "form": "19" }, "steps": [
-        { "op": "x86_loop", "kind": "loopne" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE0",
+      "instructions": [
+        {
+          "mnemonic": "LOOPNE",
+          "since": "Intel8086",
+          "writes_pc": "conditional",
+          "manual_ref": "Intel SDM Vol.2 §LOOPcc",
+          "cycles": {
+            "form": "19"
+          },
+          "steps": [
+            {
+              "op": "x86_loop",
+              "kind": "loopne"
+            }
+          ],
+          "id": "LOOPNE_rel8"
+        }
+      ]
     },
     {
       "name": "LoopeRel8",
-      "fields": {}, "mask": "0xFF", "match": "0xE1",
-      "instructions": [{ "mnemonic": "LOOPE", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §LOOPcc", "cycles": { "form": "18" }, "steps": [
-        { "op": "x86_loop", "kind": "loope" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE1",
+      "instructions": [
+        {
+          "mnemonic": "LOOPE",
+          "since": "Intel8086",
+          "writes_pc": "conditional",
+          "manual_ref": "Intel SDM Vol.2 §LOOPcc",
+          "cycles": {
+            "form": "18"
+          },
+          "steps": [
+            {
+              "op": "x86_loop",
+              "kind": "loope"
+            }
+          ],
+          "id": "LOOPE_rel8"
+        }
+      ]
     },
     {
       "name": "LoopRel8",
-      "fields": {}, "mask": "0xFF", "match": "0xE2",
-      "instructions": [{ "mnemonic": "LOOP", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §LOOP", "cycles": { "form": "17" }, "steps": [
-        { "op": "x86_loop", "kind": "loop" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE2",
+      "instructions": [
+        {
+          "mnemonic": "LOOP",
+          "since": "Intel8086",
+          "writes_pc": "conditional",
+          "manual_ref": "Intel SDM Vol.2 §LOOP",
+          "cycles": {
+            "form": "17"
+          },
+          "steps": [
+            {
+              "op": "x86_loop",
+              "kind": "loop"
+            }
+          ],
+          "id": "LOOP_rel8"
+        }
+      ]
     },
-
     {
       "name": "CallRel16",
       "comment": "0xE8 CALL rel16 — push post-fetch IP, then IP += disp16.",
-      "fields": {}, "mask": "0xFF", "match": "0xE8",
-      "instructions": [{ "mnemonic": "CALL", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §CALL", "cycles": { "form": "19" }, "steps": [
-        { "op": "x86_call_rel16" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE8",
+      "instructions": [
+        {
+          "mnemonic": "CALL",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §CALL",
+          "cycles": {
+            "form": "19"
+          },
+          "steps": [
+            {
+              "op": "x86_call_rel16"
+            }
+          ],
+          "id": "CALL_rel16"
+        }
+      ]
     },
-
     {
       "name": "RetNear",
       "comment": "0xC3 RET (near) — pop IP from stack.",
-      "fields": {}, "mask": "0xFF", "match": "0xC3",
-      "instructions": [{ "mnemonic": "RET", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §RET", "cycles": { "form": "16" }, "steps": [
-        { "op": "x86_ret_near" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xC3",
+      "instructions": [
+        {
+          "mnemonic": "RET",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §RET",
+          "cycles": {
+            "form": "16"
+          },
+          "steps": [
+            {
+              "op": "x86_ret_near"
+            }
+          ],
+          "id": "RET_near"
+        }
+      ]
     },
     {
       "name": "RetNearImm16",
       "comment": "0xC2 RET imm16 — pop IP, then discard imm16 bytes from stack (caller-cleanup convention).",
-      "fields": {}, "mask": "0xFF", "match": "0xC2",
-      "instructions": [{ "mnemonic": "RET", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §RET", "cycles": { "form": "20" }, "steps": [
-        { "op": "x86_ret_near_imm16" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xC2",
+      "instructions": [
+        {
+          "mnemonic": "RET",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §RET",
+          "cycles": {
+            "form": "20"
+          },
+          "steps": [
+            {
+              "op": "x86_ret_near_imm16"
+            }
+          ],
+          "id": "RET_near_imm16"
+        }
+      ]
     },
-
     {
       "name": "ShiftRotateD0",
       "comment": "0xD0 r/m8, 1 — shift/rotate group with implicit count 1. modrm.reg sub-selects ROL(0) ROR(1) RCL(2) RCR(3) SHL(4) SHR(5) SAL(6 alias) SAR(7).",
-      "fields": {}, "mask": "0xFF", "match": "0xD0",
-      "instructions": [{ "mnemonic": "ShiftRot8_1", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §shifts/rotates", "cycles": { "form": "2" }, "steps": [
-        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
-        { "op": "x86_modrm_load_w8", "out": "lhs" },
-        { "op": "x86_shift_rotate_w8_count1" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xD0",
+      "instructions": [
+        {
+          "mnemonic": "ShiftRot8_1",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §shifts/rotates",
+          "cycles": {
+            "form": "2"
+          },
+          "steps": [
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w8",
+              "out": "lhs"
+            },
+            {
+              "op": "x86_shift_rotate_w8_count1"
+            }
+          ],
+          "id": "SHIFTROT8_1_shift_rotate_d0"
+        }
+      ]
     },
     {
       "name": "ShiftRotateD1",
       "comment": "0xD1 r/m16, 1 — 16-bit counterpart of D0.",
-      "fields": {}, "mask": "0xFF", "match": "0xD1",
-      "instructions": [{ "mnemonic": "ShiftRot16_1", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §shifts/rotates", "cycles": { "form": "2" }, "steps": [
-        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
-        { "op": "x86_modrm_load_w16", "out": "lhs" },
-        { "op": "x86_shift_rotate_w16_count1" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xD1",
+      "instructions": [
+        {
+          "mnemonic": "ShiftRot16_1",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §shifts/rotates",
+          "cycles": {
+            "form": "2"
+          },
+          "steps": [
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w16",
+              "out": "lhs"
+            },
+            {
+              "op": "x86_shift_rotate_w16_count1"
+            }
+          ],
+          "id": "SHIFTROT16_1_shift_rotate_d1"
+        }
+      ]
     },
     {
       "name": "ShiftRotateD2",
       "comment": "0xD2 r/m8, CL — same dispatcher as D0 but count from CL. SHL/SHR/SAR via LLVM precomputed shifts; ROL/ROR/RCL/RCR currently emit count=1 IR (silicon-accurate count>1 deferred).",
-      "fields": {}, "mask": "0xFF", "match": "0xD2",
-      "instructions": [{ "mnemonic": "ShiftRot8_CL", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §shifts/rotates", "cycles": { "form": "8" }, "steps": [
-        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
-        { "op": "x86_modrm_load_w8", "out": "lhs" },
-        { "op": "x86_shift_rotate_w8_count_cl" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xD2",
+      "instructions": [
+        {
+          "mnemonic": "ShiftRot8_CL",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §shifts/rotates",
+          "cycles": {
+            "form": "8"
+          },
+          "steps": [
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w8",
+              "out": "lhs"
+            },
+            {
+              "op": "x86_shift_rotate_w8_count_cl"
+            }
+          ],
+          "id": "SHIFTROT8_CL_shift_rotate_d2"
+        }
+      ]
     },
     {
       "name": "ShiftRotateD3",
       "comment": "0xD3 r/m16, CL — 16-bit counterpart of D2.",
-      "fields": {}, "mask": "0xFF", "match": "0xD3",
-      "instructions": [{ "mnemonic": "ShiftRot16_CL", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §shifts/rotates", "cycles": { "form": "8" }, "steps": [
-        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
-        { "op": "x86_modrm_load_w16", "out": "lhs" },
-        { "op": "x86_shift_rotate_w16_count_cl" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xD3",
+      "instructions": [
+        {
+          "mnemonic": "ShiftRot16_CL",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §shifts/rotates",
+          "cycles": {
+            "form": "8"
+          },
+          "steps": [
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w16",
+              "out": "lhs"
+            },
+            {
+              "op": "x86_shift_rotate_w16_count_cl"
+            }
+          ],
+          "id": "SHIFTROT16_CL_shift_rotate_d3"
+        }
+      ]
     }
-
   ]
 }

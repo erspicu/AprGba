@@ -1,101 +1,713 @@
 {
   "name": "Misc",
   "comment": "8086 single-byte flag-manipulation + IO ops (24.6.7d). INT/IRET/INTO + DIV/IDIV (with INT 0) + BCD ops live in a future sub-step.\n\nFLAGS bit positions: CF=0, PF=2, AF=4, ZF=6, SF=7, TF=8, IF=9, DF=10, OF=11.",
-
   "formats": [
-    { "name": "Clc", "fields": {}, "mask": "0xFF", "match": "0xF8",
-      "instructions": [{ "mnemonic": "CLC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CLC", "cycles": { "form": "2" }, "steps": [{ "op": "x86_clear_flag_bit", "bit_pos": 0 }] }] },
-    { "name": "Stc", "fields": {}, "mask": "0xFF", "match": "0xF9",
-      "instructions": [{ "mnemonic": "STC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §STC", "cycles": { "form": "2" }, "steps": [{ "op": "x86_set_flag_bit", "bit_pos": 0 }] }] },
-    { "name": "Cli", "fields": {}, "mask": "0xFF", "match": "0xFA",
-      "instructions": [{ "mnemonic": "CLI", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CLI", "cycles": { "form": "2" }, "steps": [{ "op": "x86_clear_flag_bit", "bit_pos": 9 }] }] },
-    { "name": "Sti", "fields": {}, "mask": "0xFF", "match": "0xFB",
-      "instructions": [{ "mnemonic": "STI", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §STI", "cycles": { "form": "2" }, "steps": [{ "op": "x86_set_flag_bit", "bit_pos": 9 }] }] },
-    { "name": "Cld", "fields": {}, "mask": "0xFF", "match": "0xFC",
-      "instructions": [{ "mnemonic": "CLD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CLD", "cycles": { "form": "2" }, "steps": [{ "op": "x86_clear_flag_bit", "bit_pos": 10 }] }] },
-    { "name": "Std", "fields": {}, "mask": "0xFF", "match": "0xFD",
-      "instructions": [{ "mnemonic": "STD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §STD", "cycles": { "form": "2" }, "steps": [{ "op": "x86_set_flag_bit", "bit_pos": 10 }] }] },
-    { "name": "Cmc", "fields": {}, "mask": "0xFF", "match": "0xF5",
-      "instructions": [{ "mnemonic": "CMC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CMC", "cycles": { "form": "2" }, "steps": [{ "op": "x86_cmc" }] }] },
-    { "name": "Sahf", "fields": {}, "mask": "0xFF", "match": "0x9E",
-      "instructions": [{ "mnemonic": "SAHF", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SAHF", "cycles": { "form": "4" }, "steps": [{ "op": "x86_sahf" }] }] },
-    { "name": "Lahf", "fields": {}, "mask": "0xFF", "match": "0x9F",
-      "instructions": [{ "mnemonic": "LAHF", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §LAHF", "cycles": { "form": "4" }, "steps": [{ "op": "x86_lahf" }] }] },
-
-    { "name": "InAlImm8", "fields": {}, "mask": "0xFF", "match": "0xE4",
-      "instructions": [{ "mnemonic": "IN", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §IN", "cycles": { "form": "10" }, "steps": [{ "op": "x86_in_imm8", "width": 8 }] }] },
-    { "name": "InAxImm8", "fields": {}, "mask": "0xFF", "match": "0xE5",
-      "instructions": [{ "mnemonic": "IN", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §IN", "cycles": { "form": "10" }, "steps": [{ "op": "x86_in_imm8", "width": 16 }] }] },
-    { "name": "OutImm8Al", "fields": {}, "mask": "0xFF", "match": "0xE6",
-      "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "10" }, "steps": [{ "op": "x86_out_imm8", "width": 8 }] }] },
-    { "name": "OutImm8Ax", "fields": {}, "mask": "0xFF", "match": "0xE7",
-      "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "10" }, "steps": [{ "op": "x86_out_imm8", "width": 16 }] }] },
-    { "name": "InAlDx", "fields": {}, "mask": "0xFF", "match": "0xEC",
-      "instructions": [{ "mnemonic": "IN", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §IN", "cycles": { "form": "8" }, "steps": [{ "op": "x86_in_dx", "width": 8 }] }] },
-    { "name": "InAxDx", "fields": {}, "mask": "0xFF", "match": "0xED",
-      "instructions": [{ "mnemonic": "IN", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §IN", "cycles": { "form": "8" }, "steps": [{ "op": "x86_in_dx", "width": 16 }] }] },
-    { "name": "OutDxAl", "fields": {}, "mask": "0xFF", "match": "0xEE",
-      "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "8" }, "steps": [{ "op": "x86_out_dx", "width": 8 }] }] },
-    { "name": "OutDxAx", "fields": {}, "mask": "0xFF", "match": "0xEF",
-      "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "8" }, "steps": [{ "op": "x86_out_dx", "width": 16 }] }] },
-
+    {
+      "name": "Clc",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xF8",
+      "instructions": [
+        {
+          "mnemonic": "CLC",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §CLC",
+          "cycles": {
+            "form": "2"
+          },
+          "steps": [
+            {
+              "op": "x86_clear_flag_bit",
+              "bit_pos": 0
+            }
+          ],
+          "id": "CLC_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Stc",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xF9",
+      "instructions": [
+        {
+          "mnemonic": "STC",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §STC",
+          "cycles": {
+            "form": "2"
+          },
+          "steps": [
+            {
+              "op": "x86_set_flag_bit",
+              "bit_pos": 0
+            }
+          ],
+          "id": "STC_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Cli",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xFA",
+      "instructions": [
+        {
+          "mnemonic": "CLI",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §CLI",
+          "cycles": {
+            "form": "2"
+          },
+          "steps": [
+            {
+              "op": "x86_clear_flag_bit",
+              "bit_pos": 9
+            }
+          ],
+          "id": "CLI_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Sti",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xFB",
+      "instructions": [
+        {
+          "mnemonic": "STI",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §STI",
+          "cycles": {
+            "form": "2"
+          },
+          "steps": [
+            {
+              "op": "x86_set_flag_bit",
+              "bit_pos": 9
+            }
+          ],
+          "id": "STI_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Cld",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xFC",
+      "instructions": [
+        {
+          "mnemonic": "CLD",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §CLD",
+          "cycles": {
+            "form": "2"
+          },
+          "steps": [
+            {
+              "op": "x86_clear_flag_bit",
+              "bit_pos": 10
+            }
+          ],
+          "id": "CLD_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Std",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xFD",
+      "instructions": [
+        {
+          "mnemonic": "STD",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §STD",
+          "cycles": {
+            "form": "2"
+          },
+          "steps": [
+            {
+              "op": "x86_set_flag_bit",
+              "bit_pos": 10
+            }
+          ],
+          "id": "STD_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Cmc",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xF5",
+      "instructions": [
+        {
+          "mnemonic": "CMC",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §CMC",
+          "cycles": {
+            "form": "2"
+          },
+          "steps": [
+            {
+              "op": "x86_cmc"
+            }
+          ],
+          "id": "CMC_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Sahf",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x9E",
+      "instructions": [
+        {
+          "mnemonic": "SAHF",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §SAHF",
+          "cycles": {
+            "form": "4"
+          },
+          "steps": [
+            {
+              "op": "x86_sahf"
+            }
+          ],
+          "id": "SAHF_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Lahf",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x9F",
+      "instructions": [
+        {
+          "mnemonic": "LAHF",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §LAHF",
+          "cycles": {
+            "form": "4"
+          },
+          "steps": [
+            {
+              "op": "x86_lahf"
+            }
+          ],
+          "id": "LAHF_noargs"
+        }
+      ]
+    },
+    {
+      "name": "InAlImm8",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE4",
+      "instructions": [
+        {
+          "mnemonic": "IN",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §IN",
+          "cycles": {
+            "form": "10"
+          },
+          "steps": [
+            {
+              "op": "x86_in_imm8",
+              "width": 8
+            }
+          ],
+          "id": "IN_al_imm8"
+        }
+      ]
+    },
+    {
+      "name": "InAxImm8",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE5",
+      "instructions": [
+        {
+          "mnemonic": "IN",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §IN",
+          "cycles": {
+            "form": "10"
+          },
+          "steps": [
+            {
+              "op": "x86_in_imm8",
+              "width": 16
+            }
+          ],
+          "id": "IN_ax_imm8"
+        }
+      ]
+    },
+    {
+      "name": "OutImm8Al",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE6",
+      "instructions": [
+        {
+          "mnemonic": "OUT",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §OUT",
+          "cycles": {
+            "form": "10"
+          },
+          "steps": [
+            {
+              "op": "x86_out_imm8",
+              "width": 8
+            }
+          ],
+          "id": "OUT_imm8_al"
+        }
+      ]
+    },
+    {
+      "name": "OutImm8Ax",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xE7",
+      "instructions": [
+        {
+          "mnemonic": "OUT",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §OUT",
+          "cycles": {
+            "form": "10"
+          },
+          "steps": [
+            {
+              "op": "x86_out_imm8",
+              "width": 16
+            }
+          ],
+          "id": "OUT_imm8_ax"
+        }
+      ]
+    },
+    {
+      "name": "InAlDx",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xEC",
+      "instructions": [
+        {
+          "mnemonic": "IN",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §IN",
+          "cycles": {
+            "form": "8"
+          },
+          "steps": [
+            {
+              "op": "x86_in_dx",
+              "width": 8
+            }
+          ],
+          "id": "IN_al_dx"
+        }
+      ]
+    },
+    {
+      "name": "InAxDx",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xED",
+      "instructions": [
+        {
+          "mnemonic": "IN",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §IN",
+          "cycles": {
+            "form": "8"
+          },
+          "steps": [
+            {
+              "op": "x86_in_dx",
+              "width": 16
+            }
+          ],
+          "id": "IN_ax_dx"
+        }
+      ]
+    },
+    {
+      "name": "OutDxAl",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xEE",
+      "instructions": [
+        {
+          "mnemonic": "OUT",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §OUT",
+          "cycles": {
+            "form": "8"
+          },
+          "steps": [
+            {
+              "op": "x86_out_dx",
+              "width": 8
+            }
+          ],
+          "id": "OUT_dx_al"
+        }
+      ]
+    },
+    {
+      "name": "OutDxAx",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xEF",
+      "instructions": [
+        {
+          "mnemonic": "OUT",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §OUT",
+          "cycles": {
+            "form": "8"
+          },
+          "steps": [
+            {
+              "op": "x86_out_dx",
+              "width": 16
+            }
+          ],
+          "id": "OUT_dx_ax"
+        }
+      ]
+    },
     {
       "name": "IntImm8",
       "comment": "0xCD imm8 INT n — push FLAGS+CS+IP, clear IF/TF, jump to IVT[n*4].",
-      "fields": {}, "mask": "0xFF", "match": "0xCD",
-      "instructions": [{ "mnemonic": "INT", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §INT", "cycles": { "form": "51" }, "steps": [{ "op": "x86_int_imm8" }] }]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xCD",
+      "instructions": [
+        {
+          "mnemonic": "INT",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §INT",
+          "cycles": {
+            "form": "51"
+          },
+          "steps": [
+            {
+              "op": "x86_int_imm8"
+            }
+          ],
+          "id": "INT_imm8"
+        }
+      ]
     },
     {
       "name": "Int3",
       "comment": "0xCC INT 3 — single-byte breakpoint, vector at IVT[12].",
-      "fields": {}, "mask": "0xFF", "match": "0xCC",
-      "instructions": [{ "mnemonic": "INT3", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §INT 3", "cycles": { "form": "52" }, "steps": [{ "op": "x86_int3" }] }]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xCC",
+      "instructions": [
+        {
+          "mnemonic": "INT3",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §INT 3",
+          "cycles": {
+            "form": "52"
+          },
+          "steps": [
+            {
+              "op": "x86_int3"
+            }
+          ],
+          "id": "INT3_noargs"
+        }
+      ]
     },
     {
       "name": "Into",
       "comment": "0xCE INTO — if OF=1, do INT 4 (overflow trap). Else no-op.",
-      "fields": {}, "mask": "0xFF", "match": "0xCE",
-      "instructions": [{ "mnemonic": "INTO", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §INTO", "cycles": { "form": "53" }, "steps": [{ "op": "x86_into" }] }]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xCE",
+      "instructions": [
+        {
+          "mnemonic": "INTO",
+          "since": "Intel8086",
+          "writes_pc": "conditional",
+          "manual_ref": "Intel SDM Vol.2 §INTO",
+          "cycles": {
+            "form": "53"
+          },
+          "steps": [
+            {
+              "op": "x86_into"
+            }
+          ],
+          "id": "INTO_noargs"
+        }
+      ]
     },
     {
       "name": "Iret",
       "comment": "0xCF IRET — pop IP, pop CS, pop FLAGS (reverse of INT entry).",
-      "fields": {}, "mask": "0xFF", "match": "0xCF",
-      "instructions": [{ "mnemonic": "IRET", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §IRET", "cycles": { "form": "32" }, "steps": [{ "op": "x86_iret" }] }]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xCF",
+      "instructions": [
+        {
+          "mnemonic": "IRET",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §IRET",
+          "cycles": {
+            "form": "32"
+          },
+          "steps": [
+            {
+              "op": "x86_iret"
+            }
+          ],
+          "id": "IRET_noargs"
+        }
+      ]
     },
-
     {
       "name": "FeGroup",
       "comment": "0xFE group: only /0=INC r/m8 and /1=DEC r/m8 valid (others 8086-undefined). Dispatcher at runtime via modrm.reg.",
-      "fields": {}, "mask": "0xFF", "match": "0xFE",
-      "instructions": [{ "mnemonic": "FE_GROUP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §INC/DEC", "cycles": { "form": "3" }, "steps": [
-        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
-        { "op": "x86_modrm_load_w8", "out": "lhs" },
-        { "op": "x86_fe_group_dispatch" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xFE",
+      "instructions": [
+        {
+          "mnemonic": "FE_GROUP",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §INC/DEC",
+          "cycles": {
+            "form": "3"
+          },
+          "steps": [
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w8",
+              "out": "lhs"
+            },
+            {
+              "op": "x86_fe_group_dispatch"
+            }
+          ],
+          "id": "FE_GROUP_fe_group"
+        }
+      ]
     },
     {
       "name": "FfGroup",
       "comment": "0xFF group — 16-bit operand. /0=INC, /1=DEC, /2=CALL near r/m, /3=CALL far m16:16, /4=JMP near r/m, /5=JMP far m16:16, /6=PUSH r/m, /7=invalid. /3 and /5 use the EA's far-pointer interpretation (low word→IP, high word→CS); near forms use lhs as the new IP value. writes_pc=conditional because INC/DEC/PUSH paths do NOT touch IP.",
-      "fields": {}, "mask": "0xFF", "match": "0xFF",
-      "instructions": [{ "mnemonic": "FF_GROUP", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §FF group", "cycles": { "form": "3" }, "steps": [
-        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
-        { "op": "x86_modrm_load_w16", "out": "lhs" },
-        { "op": "x86_ff_group_dispatch" }
-      ]}]
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xFF",
+      "instructions": [
+        {
+          "mnemonic": "FF_GROUP",
+          "since": "Intel8086",
+          "writes_pc": "conditional",
+          "manual_ref": "Intel SDM Vol.2 §FF group",
+          "cycles": {
+            "form": "3"
+          },
+          "steps": [
+            {
+              "op": "x86_fetch_modrm"
+            },
+            {
+              "op": "x86_modrm_compute_ea"
+            },
+            {
+              "op": "x86_modrm_load_w16",
+              "out": "lhs"
+            },
+            {
+              "op": "x86_ff_group_dispatch"
+            }
+          ],
+          "id": "FF_GROUP_ff_group"
+        }
+      ]
     },
-
-    { "name": "Daa", "fields": {}, "mask": "0xFF", "match": "0x27",
-      "instructions": [{ "mnemonic": "DAA", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §DAA", "cycles": { "form": "4" }, "steps": [{ "op": "x86_daa" }] }] },
-    { "name": "Das", "fields": {}, "mask": "0xFF", "match": "0x2F",
-      "instructions": [{ "mnemonic": "DAS", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §DAS", "cycles": { "form": "4" }, "steps": [{ "op": "x86_das" }] }] },
-    { "name": "Aaa", "fields": {}, "mask": "0xFF", "match": "0x37",
-      "instructions": [{ "mnemonic": "AAA", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AAA", "cycles": { "form": "4" }, "steps": [{ "op": "x86_aaa" }] }] },
-    { "name": "Aas", "fields": {}, "mask": "0xFF", "match": "0x3F",
-      "instructions": [{ "mnemonic": "AAS", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AAS", "cycles": { "form": "4" }, "steps": [{ "op": "x86_aas" }] }] },
-    { "name": "Aam", "fields": {}, "mask": "0xFF", "match": "0xD4",
-      "instructions": [{ "mnemonic": "AAM", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AAM", "cycles": { "form": "83" }, "steps": [{ "op": "x86_aam" }] }] },
-    { "name": "Aad", "fields": {}, "mask": "0xFF", "match": "0xD5",
-      "instructions": [{ "mnemonic": "AAD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AAD", "cycles": { "form": "60" }, "steps": [{ "op": "x86_aad" }] }] }
+    {
+      "name": "Daa",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x27",
+      "instructions": [
+        {
+          "mnemonic": "DAA",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §DAA",
+          "cycles": {
+            "form": "4"
+          },
+          "steps": [
+            {
+              "op": "x86_daa"
+            }
+          ],
+          "id": "DAA_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Das",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x2F",
+      "instructions": [
+        {
+          "mnemonic": "DAS",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §DAS",
+          "cycles": {
+            "form": "4"
+          },
+          "steps": [
+            {
+              "op": "x86_das"
+            }
+          ],
+          "id": "DAS_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Aaa",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x37",
+      "instructions": [
+        {
+          "mnemonic": "AAA",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §AAA",
+          "cycles": {
+            "form": "4"
+          },
+          "steps": [
+            {
+              "op": "x86_aaa"
+            }
+          ],
+          "id": "AAA_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Aas",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x3F",
+      "instructions": [
+        {
+          "mnemonic": "AAS",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §AAS",
+          "cycles": {
+            "form": "4"
+          },
+          "steps": [
+            {
+              "op": "x86_aas"
+            }
+          ],
+          "id": "AAS_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Aam",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xD4",
+      "instructions": [
+        {
+          "mnemonic": "AAM",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §AAM",
+          "cycles": {
+            "form": "83"
+          },
+          "steps": [
+            {
+              "op": "x86_aam"
+            }
+          ],
+          "id": "AAM_noargs"
+        }
+      ]
+    },
+    {
+      "name": "Aad",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xD5",
+      "instructions": [
+        {
+          "mnemonic": "AAD",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §AAD",
+          "cycles": {
+            "form": "60"
+          },
+          "steps": [
+            {
+              "op": "x86_aad"
+            }
+          ],
+          "id": "AAD_noargs"
+        }
+      ]
+    }
   ]
 }
