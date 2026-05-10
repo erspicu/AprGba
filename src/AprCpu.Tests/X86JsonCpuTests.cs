@@ -1594,6 +1594,140 @@ public class X86JsonCpuTests
         Assert.Equal(0x0F, mem.ReadByte(0x80));
     }
 
+    // ---------------- 24.6.6d — TEST + NOT + NEG ----------------
+
+    /// <summary>0xA8 0xFF → TEST AL, 0xFF. AL=0x80 → 0x80 & 0xFF = 0x80, SF=1, ZF=0.</summary>
+    [Fact]
+    public void Step_TestAlImm8_SetsSign()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xA8, 0xFF, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x80;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x80, cpu.State.A.L);   // AL unchanged (TEST doesn't write back)
+        Assert.True(cpu.State.FlagS);
+        Assert.False(cpu.State.FlagZ);
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>TEST AL, AL — common "is AL zero?" idiom. AL=0 → ZF=1.</summary>
+    [Fact]
+    public void Step_TestAlAl_ZeroIsZero()
+    {
+        // 0x84 C0 mod=11 reg=000(=AL) rm=000(=AL)
+        var (cpu, _) = Setup(new byte[] { 0x84, 0xC0, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x00;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.True(cpu.State.FlagZ);
+    }
+
+    /// <summary>
+    /// 0xF6 /2 NOT r/m8 reg-direct: F6 D0 → NOT AL.
+    /// modrm=D0: mod=11 reg=010(=NOT) rm=000(=AL).
+    /// AL=0xAA → 0x55. NOT does NOT touch flags.
+    /// </summary>
+    [Fact]
+    public void Step_NotAl_ViaF6Group()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF6, 0xD0, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0xAA; s.FlagC = true; s.FlagZ = true;   // pre-set flags
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x55, cpu.State.A.L);
+        Assert.True(cpu.State.FlagC);    // CF preserved
+        Assert.True(cpu.State.FlagZ);    // ZF preserved
+    }
+
+    /// <summary>
+    /// 0xF6 /3 NEG r/m8 reg-direct: F6 D8 → NEG AL.
+    /// AL=0x05 → -5 = 0xFB. CF=1 (operand was non-zero), SF=1.
+    /// </summary>
+    [Fact]
+    public void Step_NegAl_NonZero()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF6, 0xD8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x05;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xFB, cpu.State.A.L);
+        Assert.True(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagS);
+    }
+
+    /// <summary>
+    /// NEG AL with AL=0 → 0. CF=0 (operand was zero), ZF=1.
+    /// </summary>
+    [Fact]
+    public void Step_NegAl_Zero()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF6, 0xD8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x00;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x00, cpu.State.A.L);
+        Assert.False(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagZ);
+    }
+
+    /// <summary>
+    /// 0xF7 /2 NOT r/m16 reg-direct: F7 D3 → NOT BX.
+    /// modrm=D3: mod=11 reg=010(=NOT) rm=011(=BX). BX=0xAAAA → 0x5555.
+    /// </summary>
+    [Fact]
+    public void Step_NotBx_ViaF7Group()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF7, 0xD3, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0xAAAA;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x5555, cpu.State.B.X);
+    }
+
+    /// <summary>
+    /// 0xF7 /0 TEST r/m16, imm16 reg-direct: F7 C0 FF FF → TEST AX, 0xFFFF.
+    /// modrm=C0: mod=11 reg=000(=TEST) rm=000(=AX). AX=0x1234, TEST sets SF=0, ZF=0.
+    /// </summary>
+    [Fact]
+    public void Step_TestAxImm16_ViaF7Group()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF7, 0xC0, 0xFF, 0xFF, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x1234;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x1234, cpu.State.A.X);   // AX unchanged
+        Assert.False(cpu.State.FlagZ);
+        Assert.False(cpu.State.FlagS);          // 0x1234 high bit = 0
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

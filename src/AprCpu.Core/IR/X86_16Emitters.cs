@@ -108,6 +108,18 @@ public static class X86_16Emitters
         // i16 ALU lane while preserving signed value.
         reg.Register(new X86FetchImm8SextW16Emitter());
 
+        // 24.6.6d — TEST (84/85/A8/A9), NOT/NEG (F6 /2 /3, F7 /2 /3),
+        // and the F6/F7 group dispatcher (only /0=TEST + /2=NOT + /3=NEG
+        // for now; MUL/IMUL/DIV/IDIV in 24.6.6e).
+        reg.Register(new X86TestW8Emitter());
+        reg.Register(new X86TestW16Emitter());
+        reg.Register(new X86NotW8Emitter());
+        reg.Register(new X86NotW16Emitter());
+        reg.Register(new X86NegW8Emitter());
+        reg.Register(new X86NegW16Emitter());
+        reg.Register(new X86F6GroupDispatchEmitter());
+        reg.Register(new X86F7GroupDispatchEmitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -2651,5 +2663,240 @@ internal sealed class X86FetchImm8SextW16Emitter : IMicroOpEmitter
         var i16 = LLVMTypeRef.Int16;
         var b = X86_16Emitters.FetchImm8(ctx, outName);
         ctx.Values[outName] = ctx.Builder.BuildSExt(b, i16, $"{outName}_sext");
+    }
+}
+
+// ============================================================================
+// 24.6.6d — TEST / NOT / NEG (8/16-bit).
+//
+// TEST is "AND for flags only" — set flags per AND rules (CF=0, OF=0,
+// AF=0, PF/ZF/SF from result), no writeback. Direct opcodes 0x84/0x85
+// (r/m,r) and 0xA8/0xA9 (AL/AX,imm) plus the F6 /0 / F7 /0 group entries.
+//
+// NOT is bitwise inversion. Per Intel: does NOT touch any flag. Spec
+// composes fetch_modrm + compute_ea + load + not + store.
+//
+// NEG is arithmetic negation (0 - operand). Flag rules:
+//   CF = 1 if operand was non-zero, else 0
+//   OF = 1 if operand was 0x80 (or 0x8000) — signed overflow at MIN
+//   AF/PF/ZF/SF — per result via standard rules
+// Same writeback path as ADD/SUB.
+//
+// JSON shape:
+//   { "op": "x86_test_w8", "lhs": "<n>", "rhs": "<n>" }   — no out, no writeback
+//   { "op": "x86_not_w8",  "in": ["<n>"], "out": "<n>" }
+//   { "op": "x86_neg_w8",  "in": ["<n>"], "out": "<n>" }
+//   (and w16 counterparts)
+// ============================================================================
+
+internal sealed class X86TestW8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_test_w8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var lhs = ctx.Resolve(step.Raw.GetProperty("lhs").GetString()!);
+        var rhs = ctx.Resolve(step.Raw.GetProperty("rhs").GetString()!);
+        // AND rules apply for flags; result discarded.
+        X86AluHelpers.BuildAluW8(ctx, "and", lhs, rhs, "test8");
+    }
+}
+
+internal sealed class X86TestW16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_test_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var lhs = ctx.Resolve(step.Raw.GetProperty("lhs").GetString()!);
+        var rhs = ctx.Resolve(step.Raw.GetProperty("rhs").GetString()!);
+        X86AluHelpers.BuildAluW16(ctx, "and", lhs, rhs, "test16");
+    }
+}
+
+internal sealed class X86NotW8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_not_w8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var v = ctx.Resolve(step.Raw.GetProperty("in")[0].GetString()!);
+        var i8 = LLVMTypeRef.Int8;
+        var nv = ctx.Builder.BuildXor(v,
+            LLVMValueRef.CreateConstInt(i8, 0xFF, false), "not8_v");
+        if (step.Raw.TryGetProperty("out", out var op))
+            ctx.Values[op.GetString()!] = nv;
+    }
+}
+
+internal sealed class X86NotW16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_not_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var v = ctx.Resolve(step.Raw.GetProperty("in")[0].GetString()!);
+        var i16 = LLVMTypeRef.Int16;
+        var nv = ctx.Builder.BuildXor(v,
+            LLVMValueRef.CreateConstInt(i16, 0xFFFF, false), "not16_v");
+        if (step.Raw.TryGetProperty("out", out var op))
+            ctx.Values[op.GetString()!] = nv;
+    }
+}
+
+internal sealed class X86NegW8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_neg_w8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var v = ctx.Resolve(step.Raw.GetProperty("in")[0].GetString()!);
+        var i8 = LLVMTypeRef.Int8;
+        // NEG = SUB 0, v — uses the standard sub flag rules naturally:
+        //   CF = (raw & 0x100) != 0 = (0 - v < 0) = (v != 0) ✓
+        //   OF = (((0^v) & (0^r)) & 0x80) != 0 = ((v & r) & 0x80) != 0
+        //        which equals 1 iff v=0x80 (only case where 0-v wraps to itself)
+        var zero = LLVMValueRef.CreateConstInt(i8, 0, false);
+        var nv = X86AluHelpers.BuildAluW8(ctx, "sub", zero, v, "neg8");
+        if (step.Raw.TryGetProperty("out", out var op))
+            ctx.Values[op.GetString()!] = nv;
+    }
+}
+
+internal sealed class X86NegW16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_neg_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var v = ctx.Resolve(step.Raw.GetProperty("in")[0].GetString()!);
+        var i16 = LLVMTypeRef.Int16;
+        var zero = LLVMValueRef.CreateConstInt(i16, 0, false);
+        var nv = X86AluHelpers.BuildAluW16(ctx, "sub", zero, v, "neg16");
+        if (step.Raw.TryGetProperty("out", out var op))
+            ctx.Values[op.GetString()!] = nv;
+    }
+}
+
+// ============================================================================
+// 24.6.6d — F6 / F7 group dispatchers. modrm.reg sub-selects the op:
+//   /0 = TEST r/m, imm
+//   /1 = (alias for TEST on 8086, same as /0 — silicon decodes both)
+//   /2 = NOT r/m
+//   /3 = NEG r/m
+//   /4 = MUL r/m  (AX = AL * r/m8 ; DX:AX = AX * r/m16)   — 24.6.6e
+//   /5 = IMUL r/m (signed multiply)                        — 24.6.6e
+//   /6 = DIV r/m  (unsigned divide)                        — 24.6.6e
+//   /7 = IDIV r/m (signed divide)                          — 24.6.6e
+//
+// /4-/7 land in 24.6.6e; this dispatcher silently no-ops them for now.
+//
+// Spec convention: the lhs (operand) is preloaded by modrm_load_w{8,16}
+// → "lhs". For /0 TEST the imm is also preloaded by fetch_imm{8,16}
+// → "rhs". /2 NOT and /3 NEG don't need rhs.
+// ============================================================================
+
+internal sealed class X86F6GroupDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_f6_group_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+        var lhs = ctx.Resolve("lhs");
+        var sel = ctx.Resolve("modrm_reg");
+
+        var endBB     = ctx.Function.AppendBasicBlock("f6g_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("f6g_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"f6g_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        // /0 TEST r/m8, imm8 — fetch imm INSIDE this arm so non-TEST sub-ops
+        // don't accidentally advance IP. (Pre-fetching in spec was wrong:
+        // NOT/NEG/MUL/etc. don't have an imm operand.)
+        ctx.Builder.PositionAtEnd(arms[0]);
+        var rhs0 = X86_16Emitters.FetchImm8(ctx, "f6g_imm0");
+        X86AluHelpers.BuildAluW8(ctx, "and", lhs, rhs0, "f6g_test");
+        ctx.Builder.BuildBr(endBB);
+
+        // /1 alias of /0 on 8086 — also has imm operand.
+        ctx.Builder.PositionAtEnd(arms[1]);
+        var rhs1 = X86_16Emitters.FetchImm8(ctx, "f6g_imm1");
+        X86AluHelpers.BuildAluW8(ctx, "and", lhs, rhs1, "f6g_test1");
+        ctx.Builder.BuildBr(endBB);
+
+        // /2 NOT r/m8 — bitwise inversion + writeback. No flag update.
+        ctx.Builder.PositionAtEnd(arms[2]);
+        var notV = ctx.Builder.BuildXor(lhs,
+            LLVMValueRef.CreateConstInt(i8, 0xFF, false), "f6g_not");
+        X86ModRmMemHelpers.BuildStoreW8(ctx, notV);
+        ctx.Builder.BuildBr(endBB);
+
+        // /3 NEG r/m8 — 0 - lhs via SUB rules + writeback.
+        ctx.Builder.PositionAtEnd(arms[3]);
+        var zero = LLVMValueRef.CreateConstInt(i8, 0, false);
+        var negV = X86AluHelpers.BuildAluW8(ctx, "sub", zero, lhs, "f6g_neg");
+        X86ModRmMemHelpers.BuildStoreW8(ctx, negV);
+        ctx.Builder.BuildBr(endBB);
+
+        // /4-/7 deferred to 24.6.6e — silent no-op for now.
+        for (int i = 4; i <= 7; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+internal sealed class X86F7GroupDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_f7_group_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var lhs = ctx.Resolve("lhs");
+        var sel = ctx.Resolve("modrm_reg");
+
+        var endBB     = ctx.Function.AppendBasicBlock("f7g_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("f7g_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"f7g_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        ctx.Builder.PositionAtEnd(arms[0]);
+        var rhs0 = X86_16Emitters.FetchImm16(ctx, "f7g_imm0");
+        X86AluHelpers.BuildAluW16(ctx, "and", lhs, rhs0, "f7g_test");
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(arms[1]);
+        var rhs1 = X86_16Emitters.FetchImm16(ctx, "f7g_imm1");
+        X86AluHelpers.BuildAluW16(ctx, "and", lhs, rhs1, "f7g_test1");
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(arms[2]);
+        var notV = ctx.Builder.BuildXor(lhs,
+            LLVMValueRef.CreateConstInt(i16, 0xFFFF, false), "f7g_not");
+        X86ModRmMemHelpers.BuildStoreW16(ctx, notV);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(arms[3]);
+        var zero = LLVMValueRef.CreateConstInt(i16, 0, false);
+        var negV = X86AluHelpers.BuildAluW16(ctx, "sub", zero, lhs, "f7g_neg");
+        X86ModRmMemHelpers.BuildStoreW16(ctx, negV);
+        ctx.Builder.BuildBr(endBB);
+
+        for (int i = 4; i <= 7; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
     }
 }

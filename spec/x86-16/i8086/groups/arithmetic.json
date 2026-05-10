@@ -387,6 +387,67 @@
         { "op": "x86_fetch_imm8_sext_w16", "out": "rhs" },
         { "op": "x86_alu_group_modrm_imm_w16" }
       ]}]
+    },
+
+    {
+      "name": "TestRm8R8",
+      "comment": "0x84 TEST r/m8, r8 — AND for flags only, no writeback.",
+      "fields": {}, "mask": "0xFF", "match": "0x84",
+      "instructions": [{ "mnemonic": "TEST", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §TEST", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8",   "out": "lhs" },
+        { "op": "x86_read_reg8_field", "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_test_w8", "lhs": "lhs", "rhs": "rhs" }
+      ]}]
+    },
+    {
+      "name": "TestRm16R16",
+      "fields": {}, "mask": "0xFF", "match": "0x85",
+      "instructions": [{ "mnemonic": "TEST", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §TEST", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",   "out": "lhs" },
+        { "op": "x86_read_reg16_field", "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_test_w16", "lhs": "lhs", "rhs": "rhs" }
+      ]}]
+    },
+    {
+      "name": "TestAlImm8",
+      "fields": {}, "mask": "0xFF", "match": "0xA8",
+      "instructions": [{ "mnemonic": "TEST", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §TEST", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr", "name": "AL", "out": "lhs" },
+        { "op": "x86_fetch_imm8",     "out": "rhs" },
+        { "op": "x86_test_w8", "lhs": "lhs", "rhs": "rhs" }
+      ]}]
+    },
+    {
+      "name": "TestAxImm16",
+      "fields": {}, "mask": "0xFF", "match": "0xA9",
+      "instructions": [{ "mnemonic": "TEST", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §TEST", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr", "name": "AX", "out": "lhs" },
+        { "op": "x86_fetch_imm16",    "out": "rhs" },
+        { "op": "x86_test_w16", "lhs": "lhs", "rhs": "rhs" }
+      ]}]
+    },
+
+    {
+      "name": "F6Group",
+      "comment": "0xF6 group: /0=TEST r/m8,imm8 (also /1 alias), /2=NOT r/m8, /3=NEG r/m8, /4..7=MUL/IMUL/DIV/IDIV (deferred 24.6.6e). Imm fetch happens INSIDE the dispatcher's /0,/1 arms only — pre-fetching in spec would over-advance IP for NOT/NEG/MUL etc.",
+      "fields": {}, "mask": "0xFF", "match": "0xF6",
+      "instructions": [{ "mnemonic": "F6_GROUP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §F6/F7", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8",   "out": "lhs" },
+        { "op": "x86_f6_group_dispatch" }
+      ]}]
+    },
+    {
+      "name": "F7Group",
+      "comment": "0xF7 group — 16-bit counterpart of F6. Same imm-fetch-inside-dispatcher rule.",
+      "fields": {}, "mask": "0xFF", "match": "0xF7",
+      "instructions": [{ "mnemonic": "F7_GROUP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §F6/F7", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",   "out": "lhs" },
+        { "op": "x86_f7_group_dispatch" }
+      ]}]
     }
   ]
 }
