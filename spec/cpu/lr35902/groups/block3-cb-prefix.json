@@ -1,6 +1,6 @@
 {
   "name": "Block3_CbPrefix",
-  "comment": "0xCB — opcode prefix that switches the next byte's decoding to the CB instruction set. The host runtime intercepts this and dispatches to spec/lr35902/cb.json for the actual instruction; PC advances past both the 0xCB and the CB-byte's payload.",
+  "comment": "0xCB — opcode prefix that switches the next byte's decoding to the CB instruction set. The host runtime intercepts this and dispatches to spec/cpu/lr35902/cb.json for the actual instruction; PC advances past both the 0xCB and the CB-byte's payload.",
   "formats": [
     {
       "name": "CbPrefix",

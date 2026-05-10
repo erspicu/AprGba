@@ -8,8 +8,8 @@ public class SpecValidatorTests
     [Fact]
     public void ExistingArmAndThumbSpecs_PassValidationWithNoWarnings()
     {
-        var arm   = SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "arm.json"));
-        var thumb = SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "thumb.json"));
+        var arm   = SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "arm.json"));
+        var thumb = SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "thumb.json"));
 
         Assert.Empty(SpecValidator.ValidateInstructionSet(arm));
         Assert.Empty(SpecValidator.ValidateInstructionSet(thumb));

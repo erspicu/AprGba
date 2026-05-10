@@ -8,7 +8,7 @@ namespace AprGb.Cli.Cpu;
 /// <list type="bullet">
 /// <item><b>Legacy</b> — direct port of <c>AprGBemu/Emu_GB/CPU.cs</c>,
 /// the proven big-switch implementation. Used as the reference baseline.</item>
-/// <item><b>JsonLlvm</b> — driven by <c>spec/lr35902/*.json</c> through
+/// <item><b>JsonLlvm</b> — driven by <c>spec/cpu/lr35902/*.json</c> through
 /// <see cref="AprCpu.Core"/>'s LLVM JIT pipeline. The thing we actually
 /// want to validate.</item>
 /// </list>

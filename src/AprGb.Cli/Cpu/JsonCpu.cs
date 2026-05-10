@@ -12,7 +12,7 @@ using LLVMSharp.Interop;
 namespace AprGb.Cli.Cpu;
 
 /// <summary>
-/// JSON-driven LR35902 backend. Loads <c>spec/lr35902/cpu.json</c>,
+/// JSON-driven LR35902 backend. Loads <c>spec/cpu/lr35902/cpu.json</c>,
 /// compiles it through <see cref="SpecCompiler"/> to LLVM IR, JITs the
 /// module via <see cref="HostRuntime"/>, and dispatches each instruction
 /// by reading the opcode byte from <see cref="GbMemoryBus"/> and calling
@@ -220,19 +220,19 @@ public sealed unsafe class JsonCpu : ICpuBackend
 
     private static string LocateSpec()
     {
-        // Walk up from CWD looking for spec/lr35902/cpu.json. The Cli is
+        // Walk up from CWD looking for spec/cpu/lr35902/cpu.json. The Cli is
         // typically run from repo root or its bin/ directory.
         var dir = AppContext.BaseDirectory;
         for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
         {
-            var probe = Path.Combine(d.FullName, "spec", "lr35902", "cpu.json");
+            var probe = Path.Combine(d.FullName, "spec", "cpu", "lr35902", "cpu.json");
             if (File.Exists(probe)) return probe;
         }
         // Fallback: relative to CWD.
-        var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "lr35902", "cpu.json");
+        var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "cpu", "lr35902", "cpu.json");
         if (File.Exists(cwdProbe)) return cwdProbe;
         throw new FileNotFoundException(
-            "JsonCpu: cannot locate spec/lr35902/cpu.json. Run from repo root.");
+            "JsonCpu: cannot locate spec/cpu/lr35902/cpu.json. Run from repo root.");
     }
 
     public bool IsHalted => _halted;

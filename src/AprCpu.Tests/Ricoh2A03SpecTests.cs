@@ -21,7 +21,7 @@ namespace AprCpu.Tests;
 public class Ricoh2A03SpecTests
 {
     private static string CpuJsonPath =>
-        Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json");
+        Path.Combine(TestPaths.CpuSpecRoot, "2a03", "cpu.json");
 
     [Fact]
     public void LoadsCpuSpec_Architecture_IsRicoh2A03()

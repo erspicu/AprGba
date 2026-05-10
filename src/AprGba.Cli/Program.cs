@@ -326,12 +326,12 @@ static string LocateArm7tdmiSpec()
     var dir = AppContext.BaseDirectory;
     for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
     {
-        var probe = Path.Combine(d.FullName, "spec", "arm7tdmi", "cpu.json");
+        var probe = Path.Combine(d.FullName, "spec", "cpu", "arm7tdmi", "cpu.json");
         if (File.Exists(probe)) return probe;
     }
-    var cwd = Path.Combine(Environment.CurrentDirectory, "spec", "arm7tdmi", "cpu.json");
+    var cwd = Path.Combine(Environment.CurrentDirectory, "spec", "cpu", "arm7tdmi", "cpu.json");
     if (File.Exists(cwd)) return cwd;
-    throw new FileNotFoundException("spec/arm7tdmi/cpu.json not found — run apr-gba from repo root.");
+    throw new FileNotFoundException("spec/cpu/arm7tdmi/cpu.json not found — run apr-gba from repo root.");
 }
 
 static void DumpRomHeader(byte[] rom)

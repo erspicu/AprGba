@@ -91,7 +91,7 @@ public class CpuStateLayoutTests
     public void Layout_ConstructsForArm7Tdmi_WithExpectedFlagPositions()
     {
         var loaded = SpecLoader.LoadCpuSpec(
-            Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "cpu.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "cpu.json"));
         var ctx = LLVMContextRef.Create();
         var layout = new CpuStateLayout(ctx, loaded.Cpu.RegisterFile, loaded.Cpu.ProcessorModes);
 
@@ -125,7 +125,7 @@ public class CpuStateLayoutTests
     public unsafe void Layout_ConstructsForLr35902_With8BitGprsAndPairs()
     {
         var loaded = SpecLoader.LoadCpuSpec(
-            Path.Combine(TestPaths.SpecRoot, "lr35902", "cpu.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "lr35902", "cpu.json"));
         var ctx = LLVMContextRef.Create();
         var layout = new CpuStateLayout(ctx, loaded.Cpu.RegisterFile, loaded.Cpu.ProcessorModes);
 

@@ -16,7 +16,7 @@ namespace AprCpu.Tests;
 /// </summary>
 public class BlockFunctionBuilderTests
 {
-    private static string CpuJson => Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "cpu.json");
+    private static string CpuJson => Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "cpu.json");
 
     /// <summary>
     /// Three plain MOVs (no branch) — block runs all three, state ends

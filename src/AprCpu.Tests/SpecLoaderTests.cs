@@ -5,7 +5,7 @@ namespace AprCpu.Tests;
 
 public class SpecLoaderTests
 {
-    private static string SpecRoot => TestPaths.SpecRoot;
+    private static string SpecRoot => TestPaths.CpuSpecRoot;
 
     [Fact]
     public void Loads_Arm7tdmi_CpuJson_AndAllReferencedSets()

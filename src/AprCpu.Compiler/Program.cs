@@ -157,7 +157,7 @@ static int RunBench(string romPath, long steps)
     var cpuJson = LocateArm7tdmiSpec();
     if (cpuJson is null)
     {
-        Console.Error.WriteLine("[aprcpu] cannot find spec/arm7tdmi/cpu.json. Run from repo root.");
+        Console.Error.WriteLine("[aprcpu] cannot find spec/cpu/arm7tdmi/cpu.json. Run from repo root.");
         return 1;
     }
     var rom = File.ReadAllBytes(romPath);
@@ -233,9 +233,9 @@ static string? LocateArm7tdmiSpec()
     var dir = AppContext.BaseDirectory;
     for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
     {
-        var probe = Path.Combine(d.FullName, "spec", "arm7tdmi", "cpu.json");
+        var probe = Path.Combine(d.FullName, "spec", "cpu", "arm7tdmi", "cpu.json");
         if (File.Exists(probe)) return probe;
     }
-    var cwd = Path.Combine(Environment.CurrentDirectory, "spec", "arm7tdmi", "cpu.json");
+    var cwd = Path.Combine(Environment.CurrentDirectory, "spec", "cpu", "arm7tdmi", "cpu.json");
     return File.Exists(cwd) ? cwd : null;
 }

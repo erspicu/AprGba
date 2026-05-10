@@ -18,7 +18,7 @@ namespace AprCpu.Tests;
 public class Intel8086SpecTests
 {
     private static string CpuJsonPath =>
-        Path.Combine(TestPaths.SpecRoot, "x86-16", "i8086", "cpu.json");
+        Path.Combine(TestPaths.CpuSpecRoot, "x86-16", "i8086", "cpu.json");
 
     [Fact]
     public void LoadsCpuSpec_Architecture_IsIntel8086()

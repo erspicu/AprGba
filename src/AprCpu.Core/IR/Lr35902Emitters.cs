@@ -5,7 +5,7 @@ namespace AprCpu.Core.IR;
 
 /// <summary>
 /// LR35902 (Sharp SM83 / Game Boy CPU) — micro-op emitters for the
-/// custom <c>lr35902_*</c> ops referenced by <c>spec/lr35902/groups/*.json</c>,
+/// custom <c>lr35902_*</c> ops referenced by <c>spec/cpu/lr35902/groups/*.json</c>,
 /// plus the named-register helpers (<c>read_reg_named</c> /
 /// <c>write_reg_named</c>) that any 8-bit CPU with mixed GPR + status
 /// register layout will want.
@@ -382,7 +382,7 @@ internal sealed class WriteRegNamedEmitter : IMicroOpEmitter
 /// <summary>
 // SimpleNoOpEmitter deleted in Phase 5.8 Step 5.6 — its sole user
 // (lr35902_cb_dispatch) was removed in favour of an empty step list
-// in spec/lr35902/groups/block3-cb-prefix.json.
+// in spec/cpu/lr35902/groups/block3-cb-prefix.json.
 
 /// <summary>
 /// Stub for read_imm8 / read_imm16 until the host-bus extern is wired.
@@ -875,7 +875,7 @@ internal sealed class Lr35902WriteRrDdEmitter : IMicroOpEmitter
 }
 
 // Lr35902IncDecRrDdEmitter deleted in Phase 5.8 Step 5.7.B/C cleanup —
-// migrated to per-dd selector variants in spec/lr35902/groups/block0-alu-rr.json
+// migrated to per-dd selector variants in spec/cpu/lr35902/groups/block0-alu-rr.json
 // using the named-pair read+add/sub+write chain.
 
 /// <summary>

@@ -20,7 +20,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-SPEC_DIR = Path("spec/x86-16/i8086/groups")
+SPEC_DIR = Path("spec/cpu/x86-16/i8086/groups")
 
 def camel_to_snake(name: str) -> str:
     # "AddRm8R8" -> "add_rm8_r8"; "AddRmW16Imm16" -> "add_rm_w16_imm16"

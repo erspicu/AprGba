@@ -1,7 +1,7 @@
 // JSON-spec-driven Intel 8086 backend.
 //
 // 24.6.4 — per-instruction skeleton. Mirrors NesJsonCpu: loads
-// spec/x86-16/i8086/cpu.json, runs SpecCompiler over it, wires the LLVM
+// spec/cpu/x86-16/i8086/cpu.json, runs SpecCompiler over it, wires the LLVM
 // module through HostRuntime, JIT-compiles, and dispatches one opcode
 // per Step() call.
 //
@@ -79,8 +79,8 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
 
     /// <summary>
     /// 25.5 — variant string selects which spec directory to load.
-    /// "i8086" (default): spec/x86-16/i8086/cpu.json (base spec).
-    /// "i80186" / "i80188": spec/x86-16/i80186/cpu.json (extends i8086;
+    /// "i8086" (default): spec/cpu/x86-16/i8086/cpu.json (base spec).
+    /// "i80186" / "i80188": spec/cpu/x86-16/i80186/cpu.json (extends i8086;
     /// loaded via inheritance resolution).
     /// </summary>
     public string Variant { get; }
@@ -205,13 +205,13 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         var dir = AppContext.BaseDirectory;
         for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
         {
-            var probe = Path.Combine(d.FullName, "spec", "x86-16", subdir, "cpu.json");
+            var probe = Path.Combine(d.FullName, "spec", "cpu", "x86-16", subdir, "cpu.json");
             if (File.Exists(probe)) return probe;
         }
-        var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "x86-16", subdir, "cpu.json");
+        var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "cpu", "x86-16", subdir, "cpu.json");
         if (File.Exists(cwdProbe)) return cwdProbe;
         throw new FileNotFoundException(
-            $"X86JsonCpu: cannot locate spec/x86-16/{subdir}/cpu.json. Run from repo root.");
+            $"X86JsonCpu: cannot locate spec/cpu/x86-16/{subdir}/cpu.json. Run from repo root.");
     }
 
     // --- IX86CpuBackend surface -------------------------------------------

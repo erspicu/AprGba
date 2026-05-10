@@ -18,7 +18,7 @@ namespace AprCpu.Tests;
 /// </summary>
 public class HostRuntimeTests
 {
-    private static string CpuJson => Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "cpu.json");
+    private static string CpuJson => Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "cpu.json");
 
     [Fact]
     public unsafe void ArmAddImmediate_WritesExpectedSum()

@@ -1,5 +1,5 @@
 {
-  "$schema": "../../schema/cpu-spec.schema.json",
+  "$schema": "../../_schema.json",
   "spec_version": "1.0",
   "name": "Main",
   "width_bits": 8,

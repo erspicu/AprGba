@@ -1,5 +1,5 @@
 {
-  "$schema": "../../schema/cpu-spec.schema.json",
+  "$schema": "../../_schema.json",
   "spec_version": "1.0",
 
   "comment": "Intel 80186 (1982) — 8086 + 12 new opcodes + silicon-quirk fixes (PUSH SP / shift mask). Phase 25 — first AprCpu CPU built via spec inheritance (doc #23). Spec authoring cost: ~250 lines of diff vs ~3000 line i8086 base. Validates the load-time merge mechanism end-to-end.",

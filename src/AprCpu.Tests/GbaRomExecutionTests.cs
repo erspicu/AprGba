@@ -25,7 +25,7 @@ public class GbaRomExecutionTests
     private readonly ITestOutputHelper _output;
     public GbaRomExecutionTests(ITestOutputHelper output) => _output = output;
 
-    private static string CpuJson => Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "cpu.json");
+    private static string CpuJson => Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "cpu.json");
 
     private sealed class Setup : IDisposable
     {

@@ -27,7 +27,7 @@ public class ArmGoldenTests
 {
     private const uint UserModeEnc = 0x10;
 
-    private static string CpuJson => Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "cpu.json");
+    private static string CpuJson => Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "cpu.json");
 
     private sealed class Setup : IDisposable
     {

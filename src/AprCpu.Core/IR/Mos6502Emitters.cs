@@ -5,7 +5,7 @@ namespace AprCpu.Core.IR;
 
 /// <summary>
 /// MOS 6502 / Ricoh 2A03 — micro-op emitters for the
-/// <c>mos_*</c> ops referenced by <c>spec/2a03/groups/*.json</c>, plus
+/// <c>mos_*</c> ops referenced by <c>spec/cpu/2a03/groups/*.json</c>, plus
 /// the <c>read_imm8</c> / <c>read_imm16</c> per-instr fetchers
 /// (analogous to the LR35902 ones but reading from the 6502's PC, which
 /// is a 16-bit status register).

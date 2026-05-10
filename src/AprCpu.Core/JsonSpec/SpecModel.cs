@@ -2,7 +2,7 @@ using System.Text.Json;
 
 namespace AprCpu.Core.JsonSpec;
 
-// POCO model mirroring the JSON schema in spec/schema/cpu-spec.schema.json.
+// POCO model mirroring the JSON schema in spec/cpu/_schema.json.
 // Records are immutable post-load; SpecLoader is the only writer.
 
 #region Top-level files

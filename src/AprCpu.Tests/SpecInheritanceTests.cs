@@ -302,7 +302,7 @@ public class SpecInheritanceTests : IDisposable
         // Sprint 25.3 — load the actual i80186 spec from the repo and
         // verify it inherits from i8086 + adds the new opcodes.
         var repoRoot = LocateRepoRoot();
-        var i80186Cpu = Path.Combine(repoRoot, "spec", "x86-16", "i80186", "cpu.json");
+        var i80186Cpu = Path.Combine(repoRoot, "spec", "cpu", "x86-16", "i80186", "cpu.json");
         Assert.True(File.Exists(i80186Cpu), $"i80186 cpu.json missing at {i80186Cpu}");
 
         var loaded = SpecLoader.LoadCpuSpec(i80186Cpu);
@@ -370,7 +370,7 @@ public class SpecInheritanceTests : IDisposable
         // i80286 introduces a TwoByteEsc set (parent didn't have it) for
         // 0x0F-prefixed system instructions.
         var repoRoot = LocateRepoRoot();
-        var i80286Cpu = Path.Combine(repoRoot, "spec", "x86-16", "i80286", "cpu.json");
+        var i80286Cpu = Path.Combine(repoRoot, "spec", "cpu", "x86-16", "i80286", "cpu.json");
         Assert.True(File.Exists(i80286Cpu), $"i80286 cpu.json missing at {i80286Cpu}");
 
         var loaded = SpecLoader.LoadCpuSpec(i80286Cpu);
@@ -416,7 +416,7 @@ public class SpecInheritanceTests : IDisposable
         // descriptor-load checks, etc.) can record fault state. Reset
         // value 0 (cleared by Array.Clear in Reset()).
         var repoRoot = LocateRepoRoot();
-        var i80286Cpu = Path.Combine(repoRoot, "spec", "x86-16", "i80286", "cpu.json");
+        var i80286Cpu = Path.Combine(repoRoot, "spec", "cpu", "x86-16", "i80286", "cpu.json");
         var loaded = SpecLoader.LoadCpuSpec(i80286Cpu);
 
         var status = loaded.Cpu.RegisterFile.Status;

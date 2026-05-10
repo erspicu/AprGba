@@ -126,7 +126,7 @@ public static class X86_16InstructionLengths
     /// (hasModrm, immBytes) for each 8086 opcode in our JSON-driven coverage.
     /// Opcodes not listed default to (false, 0) — length 1.
     ///
-    /// Sourced from Intel iAPX 86,88 manual + spec/x86-16/i8086/groups/*.
+    /// Sourced from Intel iAPX 86,88 manual + spec/cpu/x86-16/i8086/groups/*.
     /// Ordering: data-transfer, ALU, control flow, shift/rotate, string,
     /// flag-manip, IO, INT/IRET, FE/FF group, BCD.
     /// </summary>

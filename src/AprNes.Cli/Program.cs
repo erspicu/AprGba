@@ -59,7 +59,7 @@ foreach (var arg in args)
     else { Console.Error.WriteLine($"unknown arg: {arg}"); PrintUsage(); return 2; }
 }
 
-// Load 2A03 spec — locate spec/2a03/cpu.json relative to repo root.
+// Load 2A03 spec — locate spec/cpu/2a03/cpu.json relative to repo root.
 var specPath = LocateSpec();
 Console.WriteLine($"AprNes — Ricoh 2A03 spec validation");
 Console.WriteLine($"  spec:    {specPath}");
@@ -316,10 +316,10 @@ static string LocateSpec()
     var dir = AppContext.BaseDirectory;
     for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
     {
-        var probe = Path.Combine(d.FullName, "spec", "2a03", "cpu.json");
+        var probe = Path.Combine(d.FullName, "spec", "cpu", "2a03", "cpu.json");
         if (File.Exists(probe)) return probe;
     }
-    var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "2a03", "cpu.json");
+    var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "cpu", "2a03", "cpu.json");
     if (File.Exists(cwdProbe)) return cwdProbe;
-    throw new FileNotFoundException("Cannot locate spec/2a03/cpu.json. Run from repo root.");
+    throw new FileNotFoundException("Cannot locate spec/cpu/2a03/cpu.json. Run from repo root.");
 }

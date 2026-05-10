@@ -2,7 +2,7 @@
 //
 // Phase 24.1: bare data type. CPU execution (X86LegacyCpu, X86JsonCpu)
 // will operate on this; the framework spec-driven path will route via
-// CpuStateLayout once spec/x86-16/i8086/cpu.json lands (phase 24.4).
+// CpuStateLayout once spec/cpu/x86-16/i8086/cpu.json lands (phase 24.4).
 //
 // Layout intent:
 //   AX/BX/CX/DX  — split into AL/AH/BL/BH/CL/CH/DL/DH halves via

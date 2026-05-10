@@ -5,7 +5,7 @@ namespace AprCpu.Tests;
 
 public class SpecCompilerTests
 {
-    private static string CpuJson => Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "cpu.json");
+    private static string CpuJson => Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "cpu.json");
 
     [Fact]
     public void Compile_ProducesFunctionsForArmAndThumbInstructions()
@@ -121,7 +121,7 @@ public class SpecCompilerTests
 
     // ---------------- LR35902 (Phase 4.5C) ----------------
 
-    private static string Lr35902CpuJson => Path.Combine(TestPaths.SpecRoot, "lr35902", "cpu.json");
+    private static string Lr35902CpuJson => Path.Combine(TestPaths.CpuSpecRoot, "lr35902", "cpu.json");
 
     /// <summary>
     /// Baseline: the spec loads, the module builds, and the trivial "no-step"
@@ -543,7 +543,7 @@ public class SpecCompilerTests
 
     // ---------------- Ricoh 2A03 (N1) ----------------
 
-    private static string Ricoh2A03CpuJson => Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json");
+    private static string Ricoh2A03CpuJson => Path.Combine(TestPaths.CpuSpecRoot, "2a03", "cpu.json");
 
     /// <summary>
     /// N1 baseline: spec loads, module builds, "Main" decoder is populated

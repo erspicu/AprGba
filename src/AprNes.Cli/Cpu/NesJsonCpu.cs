@@ -1,6 +1,6 @@
 // JSON-spec-driven Ricoh 2A03 backend.
 //
-// Loads spec/2a03/cpu.json, runs SpecCompiler over it (emits 117 LLVM
+// Loads spec/cpu/2a03/cpu.json, runs SpecCompiler over it (emits 117 LLVM
 // functions covering all 256 opcodes), wires the LLVM module through
 // HostRuntime, JIT-compiles, and dispatches one instruction per Step()
 // call by reading the opcode byte from NesMemoryBus and invoking the
@@ -261,13 +261,13 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
         var dir = AppContext.BaseDirectory;
         for (var d = new DirectoryInfo(dir); d is not null; d = d.Parent)
         {
-            var probe = Path.Combine(d.FullName, "spec", "2a03", "cpu.json");
+            var probe = Path.Combine(d.FullName, "spec", "cpu", "2a03", "cpu.json");
             if (File.Exists(probe)) return probe;
         }
-        var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "2a03", "cpu.json");
+        var cwdProbe = Path.Combine(Environment.CurrentDirectory, "spec", "cpu", "2a03", "cpu.json");
         if (File.Exists(cwdProbe)) return cwdProbe;
         throw new FileNotFoundException(
-            "NesJsonCpu: cannot locate spec/2a03/cpu.json. Run from repo root.");
+            "NesJsonCpu: cannot locate spec/cpu/2a03/cpu.json. Run from repo root.");
     }
 
     // --- INesCpuBackend surface -----------------------------------------
@@ -455,7 +455,7 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
             module, _compileResult.Layout,
             _compileResult.EmitterRegistry, _compileResult.ResolverRegistry)
         {
-            // N2.5 — read cycles_per_spec_unit from spec/2a03/cpu.json's
+            // N2.5 — read cycles_per_spec_unit from spec/cpu/2a03/cpu.json's
             // isa_metadata section instead of hardcoding 1. 6502 spec
             // uses raw CPU cycles in cycles.form ("3m" = 3 cycles), so
             // isa_metadata declares cycles_per_spec_unit=1; default 4

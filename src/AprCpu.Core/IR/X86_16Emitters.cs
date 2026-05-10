@@ -5,7 +5,7 @@ namespace AprCpu.Core.IR;
 
 /// <summary>
 /// Intel 8086 / x86-16 family — micro-op emitters for the <c>x86_*</c>
-/// ops referenced by <c>spec/x86-16/i8086/groups/*.json</c>.
+/// ops referenced by <c>spec/cpu/x86-16/i8086/groups/*.json</c>.
 ///
 /// Registered into <see cref="EmitterRegistry"/> by <see cref="SpecCompiler"/>
 /// when <c>architecture.family</c> = <c>"x86-16"</c>.
@@ -6143,7 +6143,7 @@ internal sealed class X86ShiftRotateW16Count1Emitter : IMicroOpEmitter
 // ============================================================================
 // Phase 25 — Intel 80186 additions
 //
-// All emitters below are referenced only by spec/x86-16/i80186/groups/
+// All emitters below are referenced only by spec/cpu/x86-16/i80186/groups/
 // i80186-additions.json. Running an i8086 backend will never invoke them
 // (DecoderTable doesn't see the 80186 spec). They form the back half of
 // the inheritance demo: i80186 spec inherits 149 instructions + adds 26

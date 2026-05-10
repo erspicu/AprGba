@@ -13,7 +13,7 @@ public class BlockDetectorTests
     private static (BlockDetector det, FakeBus bus) BuildArm()
     {
         var setSpec = SpecLoader.LoadInstructionSet(
-            Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "arm.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "arm.json"));
         var decoder = new DecoderTable(setSpec);
         return (new BlockDetector(setSpec, decoder), new FakeBus());
     }
@@ -114,7 +114,7 @@ public class BlockDetectorTests
     private static (BlockDetector det, FakeBus bus) BuildLr35902Main()
     {
         var setSpec = SpecLoader.LoadInstructionSet(
-            Path.Combine(TestPaths.SpecRoot, "lr35902", "main.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "lr35902", "main.json"));
         var decoder = new DecoderTable(setSpec);
         return (
             new BlockDetector(setSpec, decoder, Lr35902InstructionLengths.GetLength),
@@ -176,7 +176,7 @@ public class BlockDetectorTests
     public void Lr35902_CtorWithoutLengthOracle_TreatedAsOneByteFixed()
     {
         var setSpec = SpecLoader.LoadInstructionSet(
-            Path.Combine(TestPaths.SpecRoot, "lr35902", "main.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "lr35902", "main.json"));
         var decoder = new DecoderTable(setSpec);
         var det = new BlockDetector(setSpec, decoder);   // no oracle
         Assert.False(det.IsVariableWidth);
@@ -190,9 +190,9 @@ public class BlockDetectorTests
     private static (BlockDetector det, FakeBus bus) BuildLr35902WithCbDispatch()
     {
         var mainSpec = SpecLoader.LoadInstructionSet(
-            Path.Combine(TestPaths.SpecRoot, "lr35902", "main.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "lr35902", "main.json"));
         var cbSpec = SpecLoader.LoadInstructionSet(
-            Path.Combine(TestPaths.SpecRoot, "lr35902", "cb.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "lr35902", "cb.json"));
         var mainDec = new DecoderTable(mainSpec);
         var cbDec   = new DecoderTable(cbSpec);
         var prefixDispatch = new Dictionary<byte, DecoderTable> { [0xCB] = cbDec };

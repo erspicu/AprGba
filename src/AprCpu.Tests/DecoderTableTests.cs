@@ -7,10 +7,10 @@ namespace AprCpu.Tests;
 public class DecoderTableTests
 {
     private static InstructionSetSpec LoadArm() =>
-        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "arm.json"));
+        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "arm.json"));
 
     private static InstructionSetSpec LoadThumb() =>
-        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "thumb.json"));
+        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "thumb.json"));
 
     [Fact]
     public void Construct_ValidatesAllPatterns()
@@ -907,7 +907,7 @@ public class DecoderTableTests
     // ---------------- LR35902 main set, block 1 (LD r,r' + HALT) ----------------
 
     private static InstructionSetSpec LoadLr35902Main() =>
-        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "lr35902", "main.json"));
+        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.CpuSpecRoot, "lr35902", "main.json"));
 
     [Theory]
     [InlineData(0x76, "Halt",         "HALT")]      // 01_110_110 — must beat LdHlInd_Reg
@@ -1067,7 +1067,7 @@ public class DecoderTableTests
     // ---------------- LR35902 CB instruction set ----------------
 
     private static InstructionSetSpec LoadLr35902Cb() =>
-        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "lr35902", "cb.json"));
+        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.CpuSpecRoot, "lr35902", "cb.json"));
 
     [Theory]
     [InlineData(0x00, "Cb_Shift", "RLC")]   // RLC B
@@ -1113,7 +1113,7 @@ public class DecoderTableTests
     // ---------------- 24.6.2 — Intel 8086 smoke decode ----------------
 
     private static InstructionSetSpec Load8086Main() =>
-        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "x86-16", "i8086", "main.json"));
+        SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.CpuSpecRoot, "x86-16", "i8086", "main.json"));
 
     /// <summary>0x90 NOP — single-byte, identity.</summary>
     [Fact]
@@ -1142,7 +1142,7 @@ public class DecoderTableTests
     /// <summary>
     /// An undefined byte returns null. 0x0F is a stable choice — POP CS
     /// in 8086 silicon, reserved as 2-byte opcode prefix on 80286+,
-    /// never wired in spec/x86-16/i8086.
+    /// never wired in spec/cpu/x86-16/i8086.
     /// </summary>
     [Fact]
     public void Decode_Intel8086_UndefinedByteIsNull()

@@ -15,7 +15,7 @@ namespace AprCpu.Tests;
 /// </summary>
 public class CpuExecutorTests
 {
-    private static string CpuJson => Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "cpu.json");
+    private static string CpuJson => Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "cpu.json");
 
     private sealed class Setup : IDisposable
     {

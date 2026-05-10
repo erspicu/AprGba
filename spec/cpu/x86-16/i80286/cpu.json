@@ -1,5 +1,5 @@
 {
-  "$schema": "../../schema/cpu-spec.schema.json",
+  "$schema": "../../_schema.json",
   "spec_version": "1.0",
 
   "comment": "Intel 80286 (1982) — 80186 + 13 system instructions reachable via 0x0F escape prefix. Phase 26 ships REAL-MODE only; the system instructions exist in the spec but their semantic implementations are no-op-ish (LMSW/SMSW touch a real MSW register; the descriptor-related ones (LGDT/LIDT/LLDT/LTR/...) store/load to dedicated state slots without enforcing any of the protected-mode invariants those slots would gate. Phase 27 will implement protected mode end-to-end on top of this scaffold.",

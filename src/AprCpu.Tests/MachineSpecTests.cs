@@ -122,17 +122,17 @@ public class MachineSpecTests
     [Fact]
     public void IsaMetadata_LoadsForAllThreeCpus_WithExpectedValues()
     {
-        var arm = SpecLoader.LoadCpuSpec(Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "cpu.json"));
+        var arm = SpecLoader.LoadCpuSpec(Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "cpu.json"));
         Assert.NotNull(arm.Cpu.IsaMetadata);
         Assert.Equal("little", arm.Cpu.IsaMetadata!.Endianness);
         Assert.Equal(4, arm.Cpu.IsaMetadata.CyclesPerSpecUnit);
         Assert.Equal("lazy", arm.Cpu.IsaMetadata.PcUpdatePolicy);
 
-        var gb = SpecLoader.LoadCpuSpec(Path.Combine(TestPaths.SpecRoot, "lr35902", "cpu.json"));
+        var gb = SpecLoader.LoadCpuSpec(Path.Combine(TestPaths.CpuSpecRoot, "lr35902", "cpu.json"));
         Assert.NotNull(gb.Cpu.IsaMetadata);
         Assert.Equal(4, gb.Cpu.IsaMetadata!.CyclesPerSpecUnit);
 
-        var nes = SpecLoader.LoadCpuSpec(Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json"));
+        var nes = SpecLoader.LoadCpuSpec(Path.Combine(TestPaths.CpuSpecRoot, "2a03", "cpu.json"));
         Assert.NotNull(nes.Cpu.IsaMetadata);
         Assert.Equal(1, nes.Cpu.IsaMetadata!.CyclesPerSpecUnit);
         Assert.Equal("lazy", nes.Cpu.IsaMetadata.PcUpdatePolicy);
@@ -220,7 +220,7 @@ public class MachineSpecTests
     public void Mos6502CycleTable_FullSpec_MatchesOracleWhereCovered()
     {
         var compiled = AprCpu.Core.Compilation.SpecCompiler.Compile(
-            Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "2a03", "cpu.json"));
         Assert.True(compiled.DecoderTables.TryGetValue("Main", out var dec));
 
         int covered = 0;
@@ -253,7 +253,7 @@ public class MachineSpecTests
     public void Mos6502Branches_DeclareDynamicCyclePenalties()
     {
         var compiled = AprCpu.Core.Compilation.SpecCompiler.Compile(
-            Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "2a03", "cpu.json"));
         Assert.True(compiled.DecoderTables.TryGetValue("Main", out var dec));
 
         // 8 conditional branches at 0x10/0x30/0x50/0x70/0x90/0xB0/0xD0/0xF0.
@@ -301,7 +301,7 @@ public class MachineSpecTests
         };
 
         var compiled = AprCpu.Core.Compilation.SpecCompiler.Compile(
-            Path.Combine(TestPaths.SpecRoot, "2a03", "cpu.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "2a03", "cpu.json"));
         Assert.True(compiled.DecoderTables.TryGetValue("Main", out var dec));
 
         int verified = 0;

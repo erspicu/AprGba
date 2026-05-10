@@ -1,5 +1,5 @@
 {
-    "$schema": "../schema/machine-spec.schema.json",
+    "$schema": "_schema.json",
     "spec_version": "2.0",
     "name": "gb-dmg",
     "cpu": "LR35902",

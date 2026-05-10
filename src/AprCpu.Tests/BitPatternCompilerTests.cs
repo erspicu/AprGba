@@ -32,7 +32,7 @@ public class BitPatternCompilerTests
     public void Validate_PassesForArmDataProcessingFormat()
     {
         var arm = SpecLoader.LoadInstructionSet(
-            Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "arm.json"));
+            Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "arm.json"));
         var fmt = arm.EncodingGroups
             .SelectMany(g => g.Formats)
             .Single(f => f.Name == "DataProcessing_Immediate");
@@ -45,8 +45,8 @@ public class BitPatternCompilerTests
     [Fact]
     public void Validate_PassesForAllArmAndThumbFormats()
     {
-        var arm   = SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "arm.json"));
-        var thumb = SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.SpecRoot, "arm7tdmi", "thumb.json"));
+        var arm   = SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "arm.json"));
+        var thumb = SpecLoader.LoadInstructionSet(Path.Combine(TestPaths.CpuSpecRoot, "arm7tdmi", "thumb.json"));
 
         foreach (var (set, width) in new[] { (arm, 32), (thumb, 16) })
         foreach (var fmt in set.EncodingGroups.SelectMany(g => g.Formats))

@@ -9,6 +9,8 @@ internal static class TestPaths
 {
     public static string RepoRoot { get; } = ResolveRepoRoot();
     public static string SpecRoot     => Path.Combine(RepoRoot, "spec");
+    public static string CpuSpecRoot  => Path.Combine(RepoRoot, "spec", "cpu");
+    public static string MachineSpecRoot => Path.Combine(RepoRoot, "spec", "machines");
     public static string TempRoot     => Path.Combine(RepoRoot, "temp");
     public static string TestRomsRoot => Path.Combine(RepoRoot, "test-roms");
 
