@@ -171,6 +171,12 @@ public static class X86_16Emitters
         reg.Register(new X86OutImm8Emitter());
         reg.Register(new X86OutDxEmitter());
 
+        // 24.6.7d2 — interrupt machinery (INT/INT3/INTO/IRET).
+        reg.Register(new X86IntImm8Emitter());
+        reg.Register(new X86Int3Emitter());
+        reg.Register(new X86IntoEmitter());
+        reg.Register(new X86IretEmitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -4112,6 +4118,157 @@ internal sealed class X86OutDxEmitter : IMicroOpEmitter
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
         // No-op — port DX, value AL/AX both ignored.
+    }
+}
+
+// ============================================================================
+// 24.6.7d2 — interrupt machinery (INT/INT3/INTO/IRET).
+//
+// INT n (CD imm8):
+//   1. Push FLAGS (with current bits — IF/TF still set if they were)
+//   2. Clear IF (FLAGS bit 9), TF (FLAGS bit 8)
+//   3. Push CS
+//   4. Push IP (post-fetch — points past the INT instruction)
+//   5. Read 32-bit far pointer at linear (n * 4): low word → IP, high word → CS
+//
+// INT 3 (CC, single-byte): same as INT 3 but no imm fetch.
+// INTO (CE): conditional INT 4 if OF=1.
+// IRET (CF): pop IP, pop CS, pop FLAGS — reverses INT entry.
+//
+// The vector-table read uses absolute (segment=0) addressing — 8086 has
+// the IVT hardcoded at physical 0x00000-0x003FF (256 vectors × 4 bytes).
+// ============================================================================
+
+internal static class X86InterruptHelpers
+{
+    /// <summary>
+    /// Common INT entry sequence given a vector number (i32 0..255).
+    /// Pushes FLAGS, clears IF+TF, pushes CS, pushes IP, then jumps via
+    /// the IVT entry at linear address (vec * 4).
+    /// </summary>
+    public static void EmitIntCommon(EmitContext ctx, LLVMValueRef vec32, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        // Push FLAGS as-is (NOT the masked-reserved-bit version PUSHF
+        // applies — silicon pushes raw on INT entry).
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        var flags = ctx.Builder.BuildLoad2(i16, fPtr, $"{label}_flags");
+        X86StackHelpers.PushW16(ctx, flags, $"{label}_psh_f");
+
+        // Clear IF (bit 9) and TF (bit 8) AFTER pushing the original FLAGS.
+        var clearMask = LLVMValueRef.CreateConstInt(i16, (ulong)(unchecked((ushort)~0x0300)), false);
+        var newFlags = ctx.Builder.BuildAnd(flags, clearMask, $"{label}_flags_clr");
+        ctx.Builder.BuildStore(newFlags, fPtr);
+
+        // Push CS.
+        var csPtr = ctx.GepStatusRegister("CS");
+        var cs = ctx.Builder.BuildLoad2(i16, csPtr, $"{label}_cs");
+        X86StackHelpers.PushW16(ctx, cs, $"{label}_psh_cs");
+
+        // Push IP (post-fetch).
+        var ipPtr = ctx.GepStatusRegister("IP");
+        var ip = ctx.Builder.BuildLoad2(i16, ipPtr, $"{label}_ip");
+        X86StackHelpers.PushW16(ctx, ip, $"{label}_psh_ip");
+
+        // Read vector at physical (vec * 4): low word = new IP, high word = new CS.
+        var vec32_4 = ctx.Builder.BuildShl(vec32,
+            LLVMValueRef.CreateConstInt(i32, 2, false), $"{label}_vec4");
+        // Read 4 bytes via memory_read_8 calls.
+        var addrIp = vec32_4;
+        var addrCs = ctx.Builder.BuildAdd(vec32_4,
+            LLVMValueRef.CreateConstInt(i32, 2, false), $"{label}_addrCs");
+        var newIpLo = MemoryEmitters.CallRead8(ctx, addrIp, $"{label}_iplo");
+        var addrIp1 = ctx.Builder.BuildAdd(vec32_4,
+            LLVMValueRef.CreateConstInt(i32, 1, false), $"{label}_addrIp1");
+        var newIpHi = MemoryEmitters.CallRead8(ctx, addrIp1, $"{label}_iphi");
+        var newCsLo = MemoryEmitters.CallRead8(ctx, addrCs, $"{label}_cslo");
+        var addrCs1 = ctx.Builder.BuildAdd(vec32_4,
+            LLVMValueRef.CreateConstInt(i32, 3, false), $"{label}_addrCs1");
+        var newCsHi = MemoryEmitters.CallRead8(ctx, addrCs1, $"{label}_cshi");
+
+        var i8  = LLVMTypeRef.Int8;
+        LLVMValueRef Combine(LLVMValueRef lo, LLVMValueRef hi, string n)
+        {
+            var loZ = ctx.Builder.BuildZExt(lo, i16, $"{n}_lz");
+            var hiZ = ctx.Builder.BuildZExt(hi, i16, $"{n}_hz");
+            var hiSh = ctx.Builder.BuildShl(hiZ,
+                LLVMValueRef.CreateConstInt(i16, 8, false), $"{n}_hs");
+            return ctx.Builder.BuildOr(hiSh, loZ, n);
+        }
+        var newIp16 = Combine(newIpLo, newIpHi, $"{label}_newIp");
+        var newCs16 = Combine(newCsLo, newCsHi, $"{label}_newCs");
+
+        ctx.Builder.BuildStore(newIp16, ipPtr);
+        ctx.Builder.BuildStore(newCs16, csPtr);
+    }
+}
+
+internal sealed class X86IntImm8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_int_imm8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        // Fetch the vector byte (advances IP).
+        var vec8 = X86_16Emitters.FetchImm8(ctx, "int_vec");
+        var vec32 = ctx.Builder.BuildZExt(vec8, i32, "int_vec32");
+        X86InterruptHelpers.EmitIntCommon(ctx, vec32, "int");
+    }
+}
+
+internal sealed class X86Int3Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_int3";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        X86InterruptHelpers.EmitIntCommon(ctx,
+            LLVMValueRef.CreateConstInt(i32, 3, false), "int3");
+    }
+}
+
+internal sealed class X86IntoEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_into";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // INTO: if OF=1, do INT 4. Else no-op (IP advance already happened
+        // via the opcode-byte fetch in the dispatcher).
+        var i32 = LLVMTypeRef.Int32;
+        var flags = X86CtrlHelpers.LoadFlags(ctx, "into");
+        var of = X86CtrlHelpers.ExtractFlagBit(ctx, flags, 11, "into_of");
+
+        var doIntBB = ctx.Function.AppendBasicBlock("into_do");
+        var skipBB  = ctx.Function.AppendBasicBlock("into_skip");
+        var endBB   = ctx.Function.AppendBasicBlock("into_end");
+        ctx.Builder.BuildCondBr(of, doIntBB, skipBB);
+
+        ctx.Builder.PositionAtEnd(doIntBB);
+        X86InterruptHelpers.EmitIntCommon(ctx,
+            LLVMValueRef.CreateConstInt(i32, 4, false), "into");
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(skipBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+internal sealed class X86IretEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_iret";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // Reverse of INT entry: pop IP, pop CS, pop FLAGS.
+        var newIp = X86StackHelpers.PopW16(ctx, "iret_ip");
+        var newCs = X86StackHelpers.PopW16(ctx, "iret_cs");
+        var newFl = X86StackHelpers.PopW16(ctx, "iret_fl");
+
+        ctx.Builder.BuildStore(newIp, ctx.GepStatusRegister("IP"));
+        ctx.Builder.BuildStore(newCs, ctx.GepStatusRegister("CS"));
+        ctx.Builder.BuildStore(newFl, ctx.GepStatusRegister("FLAGS"));
     }
 }
 

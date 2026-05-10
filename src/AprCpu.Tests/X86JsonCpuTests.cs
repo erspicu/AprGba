@@ -2657,6 +2657,135 @@ public class X86JsonCpuTests
         Assert.Equal(0x42, cpu.State.A.L);   // AL unchanged after OUT
     }
 
+    // ---------------- 24.6.7d2 — INT / INT3 / INTO / IRET ----------------
+
+    /// <summary>
+    /// 0xCD 21 → INT 0x21. Reads IVT[0x21*4=0x84..0x87] for far pointer.
+    /// Pre-fill IVT[0x21] = 0:0x500 → handler at 0x500.
+    /// </summary>
+    [Fact]
+    public void Step_IntImm8_JumpsToVector()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xCD, 0x21, 0xF4 });
+        var s = cpu.State;
+        s.SP = 0x0200; s.SS = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x300);
+        mem.LoadBinary(new byte[] { 0xCD, 0x21, 0xF4 }, 0, 0x300);
+        // IVT[0x21*4 = 0x84] holds: IP=0x500, CS=0
+        mem.WriteByte(0x84, 0x00);
+        mem.WriteByte(0x85, 0x05);
+        mem.WriteByte(0x86, 0x00);
+        mem.WriteByte(0x87, 0x00);
+        // Handler at CS=0, IP=0x500: just HLT
+        mem.WriteByte(0x500, 0xF4);
+
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        // Stack should hold pushed FLAGS, CS=0, IP=0x302 (post-INT 2-byte instruction)
+        Assert.Equal(0x01FA, cpu.State.SP);    // 6 bytes pushed
+        ushort pushedIp = (ushort)(mem.ReadByte(0x01FA) | (mem.ReadByte(0x01FB) << 8));
+        ushort pushedCs = (ushort)(mem.ReadByte(0x01FC) | (mem.ReadByte(0x01FD) << 8));
+        Assert.Equal(0x302, pushedIp);
+        Assert.Equal(0x000, pushedCs);
+    }
+
+    /// <summary>
+    /// INT clears IF and TF after pushing FLAGS.
+    /// </summary>
+    [Fact]
+    public void Step_Int_ClearsIfTf()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xCD, 0x10, 0xF4 });
+        var s = cpu.State;
+        s.SP = 0x0200; s.SS = 0;
+        s.FlagI = true; s.FlagT = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x300);
+        mem.LoadBinary(new byte[] { 0xCD, 0x10, 0xF4 }, 0, 0x300);
+        // IVT[0x10*4 = 0x40] → handler that just halts
+        mem.WriteByte(0x40, 0x00); mem.WriteByte(0x41, 0x06);
+        mem.WriteByte(0x42, 0x00); mem.WriteByte(0x43, 0x00);
+        mem.WriteByte(0x600, 0xF4);
+
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.False(cpu.State.FlagI);
+        Assert.False(cpu.State.FlagT);
+    }
+
+    /// <summary>
+    /// Round-trip via INT + IRET: handler does IRET, control returns past INT.
+    /// </summary>
+    [Fact]
+    public void Step_IntIret_RoundTrip()
+    {
+        // CS=0; main: int 0x10; mov al, 0xAA; hlt
+        // Handler at 0x600: iret
+        // After: AL=0xAA (mov ran post-IRET), SP back to original.
+        var code = new byte[]
+        {
+            0xCD, 0x10,        // int 0x10
+            0xB0, 0xAA,        // mov al, 0xAA
+            0xF4               // hlt
+        };
+        var (cpu, mem) = Setup(code);
+        var s = cpu.State;
+        s.SP = 0x0200; s.SS = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x300);
+        mem.LoadBinary(code, 0, 0x300);
+        mem.WriteByte(0x40, 0x00); mem.WriteByte(0x41, 0x06);
+        mem.WriteByte(0x42, 0x00); mem.WriteByte(0x43, 0x00);
+        mem.WriteByte(0x600, 0xCF);   // iret
+
+        for (int i = 0; i < 16 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xAA, cpu.State.A.L);
+        Assert.Equal(0x0200, cpu.State.SP);
+    }
+
+    /// <summary>
+    /// INTO with OF=1 → does INT 4. With OF=0 → no-op.
+    /// </summary>
+    [Fact]
+    public void Step_Into_ConditionalOnOverflow()
+    {
+        // First test: OF=0, INTO is no-op, then HLT
+        var (cpu, _) = Setup(new byte[] { 0xCE, 0xF4 });
+        var s = cpu.State;
+        s.SP = 0x0200; s.SS = 0;
+        s.FlagO = false;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0200, cpu.State.SP);   // No push happened
+    }
+
+    /// <summary>
+    /// 0xCC INT 3 — vector at IVT[12]. Pre-fill IVT[3]=0:0x700; handler halts.
+    /// </summary>
+    [Fact]
+    public void Step_Int3_BreakpointVector()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xCC, 0xF4 });
+        var s = cpu.State;
+        s.SP = 0x0200; s.SS = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x300);
+        mem.LoadBinary(new byte[] { 0xCC, 0xF4 }, 0, 0x300);
+        // IVT[3*4 = 0x0C] → handler at 0x700
+        mem.WriteByte(0x0C, 0x00); mem.WriteByte(0x0D, 0x07);
+        mem.WriteByte(0x0E, 0x00); mem.WriteByte(0x0F, 0x00);
+        mem.WriteByte(0x700, 0xF4);
+
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x01FA, cpu.State.SP);   // 6 bytes pushed
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

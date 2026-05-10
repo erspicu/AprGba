@@ -37,6 +37,31 @@
     { "name": "OutDxAl", "fields": {}, "mask": "0xFF", "match": "0xEE",
       "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "8" }, "steps": [{ "op": "x86_out_dx", "width": 8 }] }] },
     { "name": "OutDxAx", "fields": {}, "mask": "0xFF", "match": "0xEF",
-      "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "8" }, "steps": [{ "op": "x86_out_dx", "width": 16 }] }] }
+      "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "8" }, "steps": [{ "op": "x86_out_dx", "width": 16 }] }] },
+
+    {
+      "name": "IntImm8",
+      "comment": "0xCD imm8 INT n — push FLAGS+CS+IP, clear IF/TF, jump to IVT[n*4].",
+      "fields": {}, "mask": "0xFF", "match": "0xCD",
+      "instructions": [{ "mnemonic": "INT", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §INT", "cycles": { "form": "51" }, "steps": [{ "op": "x86_int_imm8" }] }]
+    },
+    {
+      "name": "Int3",
+      "comment": "0xCC INT 3 — single-byte breakpoint, vector at IVT[12].",
+      "fields": {}, "mask": "0xFF", "match": "0xCC",
+      "instructions": [{ "mnemonic": "INT3", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §INT 3", "cycles": { "form": "52" }, "steps": [{ "op": "x86_int3" }] }]
+    },
+    {
+      "name": "Into",
+      "comment": "0xCE INTO — if OF=1, do INT 4 (overflow trap). Else no-op.",
+      "fields": {}, "mask": "0xFF", "match": "0xCE",
+      "instructions": [{ "mnemonic": "INTO", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §INTO", "cycles": { "form": "53" }, "steps": [{ "op": "x86_into" }] }]
+    },
+    {
+      "name": "Iret",
+      "comment": "0xCF IRET — pop IP, pop CS, pop FLAGS (reverse of INT entry).",
+      "fields": {}, "mask": "0xFF", "match": "0xCF",
+      "instructions": [{ "mnemonic": "IRET", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §IRET", "cycles": { "form": "32" }, "steps": [{ "op": "x86_iret" }] }]
+    }
   ]
 }
