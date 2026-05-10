@@ -2,11 +2,11 @@
 
 > **Status**：**IN PROGRESS**（2026-05-10）— 24.0–24.5 完工 (13 commits, 6
 > paper-quality screenshots, 1.31M Tom Harte SST cases 全綠)；
-> 24.6 JSON-driven port: **24.6.1–24.6.6 + 24.6.7 (a-g) 完工** (25 commits,
-> 154/154 JsonCpu tests + 827/827 T1，~213 unique opcodes — 完整
-> data-transfer + ALU + 控流 + shift count=1 + string+REP + flag-manip/IO +
-> INT/IRET + FE/FF group + BCD + DIV/IDIV)；
-> 24.6.7b2 (shift by CL) + 24.6.8 + 24.6.9 + 24.7 + 24.8 待做。
+> 24.6 JSON-driven port: **24.6.1–24.6.6 + 24.6.7 整段 完工** (26 commits,
+> 159/159 JsonCpu tests + 832/832 T1，~217 unique opcodes — 完整
+> data-transfer + ALU + 控流 + shift count=1+CL + string+REP +
+> flag-manip/IO + INT/IRET + FE/FF group + BCD + DIV/IDIV)；
+> 24.6.8 (block-JIT) + 24.6.9 (demo 重跑) + 24.7 + 24.8 待做。
 >
 > **Trigger**：第 4 顆 CPU 候選 = Intel 8086（用以前寫的 Apr86 emulator
 > 當 reference oracle 的部分）。要解決的核心問題：8086 是 CISC、segmented
@@ -293,13 +293,13 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 
 ## 8. Phase plan
 
-> **目前累計**（2026-05-10）：38 個 commits（24.0 → 24.5：13 + 24.6.1 →
-> 24.6.7g：25）；T1 baseline 827/827 全綠；JSON-driven backend 已覆蓋
-> **~213 unique opcodes** — 完整 data-transfer + ALU + 控流 +
-> shift count=1 + string ops + REP/REPE/REPNE + INT/IRET + flag-manip +
-> IO + FE/FF group + BCD + DIV/IDIV。**24.6.5 + 24.6.6 整段 + 24.6.7
-> 絕大部分 ✅**。剩 24.6.7b2 (shift by CL D2/D3) + 24.6.8 (block-JIT) +
-> 24.6.9 (demo 重跑) + 24.7 (80186) + 24.8 (80286)。
+> **目前累計**（2026-05-10）：39 個 commits（24.0 → 24.5：13 + 24.6.1 →
+> 24.6.7b2：26）；T1 baseline 832/832 全綠；JSON-driven backend 已覆蓋
+> **~217 unique opcodes** — **24.6.5 + 24.6.6 + 24.6.7 整段 ✅**。
+> 完整 data-transfer + ALU + 控流 + shift count=1+CL + string ops +
+> REP/REPE/REPNE + INT/IRET + flag-manip + IO + FE/FF group + BCD +
+> DIV/IDIV。剩 24.6.8 (block-JIT) + 24.6.9 (demo 重跑) + 24.7 (80186) +
+> 24.8 (80286)。
 
 | Phase | 內容 | 成果 | 狀態 | Commit / 紀錄 |
 |---|---|---|---|---|
@@ -345,7 +345,7 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | 24.6.7e | FE/FF group dispatchers — FE /0/1 INC/DEC mem; FF /0/1 INC/DEC, /2/3 CALL near/far, /4/5 JMP near/far, /6 PUSH r/m | 5 tests；2 group opcodes (10 sub-ops via dispatcher) | ✅ | `5689223` |
 | 24.6.7f | BCD ops — DAA/DAS/AAA/AAS/AAM/AAD (silicon flag quirks partial; full Tom Harte SST validation deferred) | 5 tests；6 opcodes | ✅ | `f65cd13` |
 | 24.6.7g | DIV/IDIV r/m8 + r/m16 (F6/F7 /6 /7) — quotient/remainder; divide-by-zero silently no-op (INT 0 trap deferred); flags undefined per Intel | 4 tests；4 sub-ops | ✅ | `5958c0b` |
-| 24.6.7b2 | Shift by CL (D2/D3) — count != 1 path with 8088 silicon flag quirks. Full count=N flag rules need careful Tom Harte alignment. | — | ⏳ | — |
+| 24.6.7b2 | Shift by CL (D2/D3) — SHL/SHR/SAR via LLVM precomputed shifts; ROL/ROR/RCL/RCR fall back to count=1 IR (silicon-accurate count>1 deferred). count=0 → no-op. | 5 tests；2 group opcodes | ✅ | `f70f260` |
 | 24.6.8 | Block-JIT mode — alloca + mem2reg + IR-level cycle budget (à la N1.B' for NES) | 三 backend (legacy / json-instr / json-block) 同步 | ⏳ | — |
 | 24.6.9 | Re-run 24.5 demos through json-block backend | result/x86-16/jit-*.png 與 legacy pixel-identical 6 張新截圖 | ⏳ | — |
 | **24.6b** | (optional) Lockstep diff legacy vs Apr86（限 .com 程式範圍） | Apr86 reference cross-check | ⏳ | — |
