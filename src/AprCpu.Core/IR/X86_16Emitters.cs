@@ -5831,68 +5831,42 @@ internal sealed class X86InsWEmitter  : X86InsOutsBase { public override string 
 internal sealed class X86OutsBEmitter : X86InsOutsBase { public override string OpName => "x86_outs_b"; protected override int Width => 1; protected override bool IsIns => false; }
 internal sealed class X86OutsWEmitter : X86InsOutsBase { public override string OpName => "x86_outs_w"; protected override int Width => 2; protected override bool IsIns => false; }
 
-// x86_enter — 0xC8 ENTER imm16, imm8.
+// x86_enter — 0xC8 ENTER imm16, imm8. Sprint 25.4 v1: only the
+// nest_level=0 path is implemented (which is what every C compiler
+// emits — display-copying for nested Pascal-style scoping is rarely
+// used). nest_level > 0 is silently ignored. Steps:
 //   1. push BP
 //   2. frame_temp = SP
-//   3. (if nest_level > 0) copy display words from caller's frame:
-//        for i = 1 to nest_level - 1: BP -= 2; push [SS:BP]
-//        push frame_temp
-//   4. BP = frame_temp
-//   5. SP -= alloc_size
-// Most C compilers emit ENTER with nest_level=0, so the display-copy
-// loop is rare in real code — we implement it but a 0-level frame is
-// the common path.
+//   3. BP = frame_temp
+//   4. SP -= alloc_size
+// Earlier draft had a CondBr to gate the nest-level path but it
+// interacted badly with block-JIT alloca shadow propagation across the
+// merge BB; per-instr backend was correct but block-JIT showed register
+// state losses. Linear emit is robust under both modes.
 internal sealed class X86EnterEmitter : IMicroOpEmitter
 {
     public string OpName => "x86_enter";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
 
         var allocSize = X86_16Emitters.FetchImm16(ctx, "enter_alloc");
-        var nestLevel = X86_16Emitters.FetchImm8(ctx, "enter_nest");
-        // Mask nest level to 5 bits per silicon (top 3 bits ignored).
-        var nestMasked = ctx.Builder.BuildAnd(nestLevel,
-            LLVMValueRef.CreateConstInt(i8, 0x1F, false), "enter_nest_m");
+        // FetchImm8 still has to advance IP past the nest-level byte even
+        // though we ignore the value. (Block-JIT's PackedTailBytes path
+        // advances IP regardless.)
+        _ = X86_16Emitters.FetchImm8(ctx, "enter_nest_ignored");
 
-        // Step 1: push BP.
+        // Step 1: push BP (current).
         var bp = X86_16Emitters.ReadGpr16(ctx, 5, "enter_bp_old");
         X86StackHelpers.PushW16(ctx, bp, "enter_psh_bp");
 
-        // Step 2: frame_temp = SP (after the BP push).
+        // Step 2 + 3: BP = (SP after push).
         var spPtr = ctx.GepGpr(4);
         var frameTemp = ctx.Builder.BuildLoad2(i16, spPtr, "enter_frame");
-
-        // Step 3: nest_level > 0 path — copy display.
-        // For simplicity we emit an LLVM loop. Use existing back-edge
-        // pattern (24.6.8e) where appropriate; otherwise sequential BBs.
-        var hasNest = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE,
-            nestMasked, LLVMValueRef.CreateConstInt(i8, 0, false), "enter_has_nest");
-        var nestBB    = ctx.Function.AppendBasicBlock("enter_nest_path");
-        var noNestBB  = ctx.Function.AppendBasicBlock("enter_no_nest");
-        var afterBB   = ctx.Function.AppendBasicBlock("enter_after");
-        ctx.Builder.BuildCondBr(hasNest, nestBB, noNestBB);
-
-        // Nest path: simplest correct impl — loop emitting (BP-=2; push [SS:BP])
-        // (nestLevel-1) times, then push frame_temp.
-        ctx.Builder.PositionAtEnd(nestBB);
-        // For sane v1: only support nestLevel == 1 fully (most common
-        // non-zero case). Higher levels: just push frame_temp once
-        // (degenerated; no real demo ROM uses nestLevel > 1).
-        X86StackHelpers.PushW16(ctx, frameTemp, "enter_psh_frame");
-        ctx.Builder.BuildBr(afterBB);
-
-        ctx.Builder.PositionAtEnd(noNestBB);
-        ctx.Builder.BuildBr(afterBB);
-
-        ctx.Builder.PositionAtEnd(afterBB);
-        // Step 4: BP = frame_temp.
         X86_16Emitters.WriteGpr16(ctx, 5, frameTemp);
 
-        // Step 5: SP -= alloc_size.
-        var spNow = ctx.Builder.BuildLoad2(i16, spPtr, "enter_sp_now");
-        var spFinal = ctx.Builder.BuildSub(spNow, allocSize, "enter_sp_final");
+        // Step 4: SP -= alloc_size.
+        var spFinal = ctx.Builder.BuildSub(frameTemp, allocSize, "enter_sp_final");
         ctx.Builder.BuildStore(spFinal, spPtr);
     }
 }
