@@ -242,28 +242,43 @@ public static class X86_16Emitters
     /// <summary>
     /// Read a byte from CS:IP and advance IP by 1. Returns i8.
     ///
-    /// Block-JIT fast path mirrors <see cref="Mos6502Emitters.FetchImm8"/> —
-    /// when <c>ctx.CurrentInstructionBaseAddress</c> is set we extract the
-    /// imm byte from the precomputed instruction word constant; otherwise
-    /// we issue a memory_read_8 extern at linear (CS&lt;&lt;4)+IP.
-    ///
-    /// 24.6.3: only the per-instr extern path is implemented. Block-JIT
-    /// extraction goes in 24.6.8 once the instruction-word constant
-    /// layout for variable-length 8086 ops is decided.
+    /// <para>Block-JIT fast path (24.6.8d): when BlockDetector pre-fetched
+    /// trailing bytes into <see cref="EmitContext.CurrentInstructionPackedTailBytes"/>
+    /// (an i64 LLVM constant carrying up to 8 LE bytes after the opcode)
+    /// AND the requested byte offset still inside the packed region
+    /// (ImmConsumed + 1 ≤ LengthBytes - 1), extract the byte via
+    /// shift+trunc on the constant. Otherwise issue a memory_read_8
+    /// extern at linear (CS&lt;&lt;4)+IP. IP advance happens identically in
+    /// both modes so downstream PC reads stay consistent.</para>
     /// </summary>
     internal static LLVMValueRef FetchImm8(EmitContext ctx, string label)
     {
         var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
+        var i64 = LLVMTypeRef.Int64;
 
         var ipPtr = ctx.GepStatusRegister("IP");
         var ip16 = ctx.Builder.BuildLoad2(i16, ipPtr, $"{label}_ip");
 
-        var cs16  = LoadSeg16(ctx, "CS", $"{label}_cs");
-        var lin32 = SegmentedLinear(ctx, cs16, ip16, $"{label}_lin");
-
-        var b = MemoryEmitters.CallRead8(ctx, lin32, label);
+        LLVMValueRef b;
+        int trailingTotal = ctx.CurrentInstructionLengthBytes is byte len ? len - 1 : 0;
+        if (ctx.CurrentInstructionPackedTailBytes is ulong tail
+            && ctx.CurrentInstructionImmConsumed + 1 <= trailingTotal)
+        {
+            int offset = ctx.ReserveImmediateBytes(1);
+            uint shiftBits = (uint)(offset * 8);
+            var tailConst = LLVMValueRef.CreateConstInt(i64, tail, false);
+            var shifted = ctx.Builder.BuildLShr(tailConst,
+                LLVMValueRef.CreateConstInt(i64, shiftBits, false), $"{label}_tail_shr");
+            b = ctx.Builder.BuildTrunc(shifted, i8, $"{label}_imm");
+        }
+        else
+        {
+            var cs16  = LoadSeg16(ctx, "CS", $"{label}_cs");
+            var lin32 = SegmentedLinear(ctx, cs16, ip16, $"{label}_lin");
+            b = MemoryEmitters.CallRead8(ctx, lin32, label);
+        }
 
         // IP wraps within 16 bits — silicon does not propagate carry into CS.
         var newIp = ctx.Builder.BuildAdd(ip16,
@@ -274,34 +289,55 @@ public static class X86_16Emitters
 
     /// <summary>
     /// Read a 16-bit little-endian word from CS:IP and advance IP by 2.
-    /// Returns i16. Each byte read goes through a 20-bit linear address
+    /// Returns i16.
+    ///
+    /// <para>Block-JIT fast path (24.6.8d): when the next 2 bytes fit
+    /// inside <see cref="EmitContext.CurrentInstructionPackedTailBytes"/>,
+    /// extract via shift+trunc on the i64 constant (zero-cost — LLVM
+    /// folds at compile time). Otherwise fall back to two memory_read_8
+    /// externs. Each byte read goes through a 20-bit linear address
     /// computed independently — the 16-bit IP wrap means a fetch starting
-    /// at 0xFFFF reads byte at CS:0xFFFF then byte at CS:0x0000.
+    /// at 0xFFFF reads byte at CS:0xFFFF then byte at CS:0x0000.</para>
     /// </summary>
     internal static LLVMValueRef FetchImm16(EmitContext ctx, string label)
     {
         var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
+        var i64 = LLVMTypeRef.Int64;
 
         var ipPtr = ctx.GepStatusRegister("IP");
         var ip16 = ctx.Builder.BuildLoad2(i16, ipPtr, $"{label}_ip");
 
-        var cs16 = LoadSeg16(ctx, "CS", $"{label}_cs");
+        LLVMValueRef word;
+        int trailingTotal = ctx.CurrentInstructionLengthBytes is byte len ? len - 1 : 0;
+        if (ctx.CurrentInstructionPackedTailBytes is ulong tail
+            && ctx.CurrentInstructionImmConsumed + 2 <= trailingTotal)
+        {
+            int offset = ctx.ReserveImmediateBytes(2);
+            uint shiftBits = (uint)(offset * 8);
+            var tailConst = LLVMValueRef.CreateConstInt(i64, tail, false);
+            var shifted = ctx.Builder.BuildLShr(tailConst,
+                LLVMValueRef.CreateConstInt(i64, shiftBits, false), $"{label}_tail_shr");
+            word = ctx.Builder.BuildTrunc(shifted, i16, $"{label}_imm");
+        }
+        else
+        {
+            var cs16 = LoadSeg16(ctx, "CS", $"{label}_cs");
+            var lin0 = SegmentedLinear(ctx, cs16, ip16, $"{label}_lin0");
+            var lo8  = MemoryEmitters.CallRead8(ctx, lin0, $"{label}_lo");
 
-        var lin0 = SegmentedLinear(ctx, cs16, ip16, $"{label}_lin0");
-        var lo8  = MemoryEmitters.CallRead8(ctx, lin0, $"{label}_lo");
+            var ipPlus1 = ctx.Builder.BuildAdd(ip16,
+                LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_ip1");
+            var lin1 = SegmentedLinear(ctx, cs16, ipPlus1, $"{label}_lin1");
+            var hi8  = MemoryEmitters.CallRead8(ctx, lin1, $"{label}_hi");
 
-        var ipPlus1 = ctx.Builder.BuildAdd(ip16,
-            LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_ip1");
-        var lin1 = SegmentedLinear(ctx, cs16, ipPlus1, $"{label}_lin1");
-        var hi8  = MemoryEmitters.CallRead8(ctx, lin1, $"{label}_hi");
-
-        var loZ  = ctx.Builder.BuildZExt(lo8, i16, $"{label}_loz");
-        var hiZ  = ctx.Builder.BuildZExt(hi8, i16, $"{label}_hiz");
-        var hiSh = ctx.Builder.BuildShl(hiZ,
-            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi_shl");
-        var word = ctx.Builder.BuildOr(hiSh, loZ, label);
+            var loZ  = ctx.Builder.BuildZExt(lo8, i16, $"{label}_loz");
+            var hiZ  = ctx.Builder.BuildZExt(hi8, i16, $"{label}_hiz");
+            var hiSh = ctx.Builder.BuildShl(hiZ,
+                LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi_shl");
+            word = ctx.Builder.BuildOr(hiSh, loZ, label);
+        }
 
         var newIp = ctx.Builder.BuildAdd(ip16,
             LLVMValueRef.CreateConstInt(i16, 2, false), $"{label}_ip_next");

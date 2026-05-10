@@ -250,7 +250,7 @@ public sealed unsafe class BlockFunctionBuilder
             // (conditional branches: per-instr backend's taken path
             // costs Mm = base + (M-N) m-cycles extra).
             var (cycleCost, extraTaken) = ParseCyclesFormBoth(bi.Decoded.Instruction.Cycles?.Form);
-            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord), bi.Pc, len, cycleCost, extraTaken);
+            ctx.BeginInstruction(bi.Decoded.Format, bi.Decoded.Instruction, ConstU32(bi.InstructionWord), bi.Pc, len, cycleCost, extraTaken, bi.PackedTailBytes);
 
             // 1. Pre block: clear PcWritten, then cond gate.
             //

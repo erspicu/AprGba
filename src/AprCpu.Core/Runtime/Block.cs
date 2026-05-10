@@ -111,7 +111,18 @@ public sealed record DecodedBlockInstruction(
     // instruction word — leave null and let arch-specific emitters
     // extract via the existing pattern. Length-1 instructions (no
     // operand) also leave this null.
-    uint? Immediate = null);
+    uint? Immediate = null,
+    // 24.6.8d — pre-fetched trailing bytes (after the opcode), little-
+    // endian packed into a ulong. CISC ISAs (Intel 8086+) populate this
+    // in BlockDetector when total instruction length ≤ 9 bytes; emitters
+    // for FetchImm8 / FetchImm16 / ModR/M-byte / disp consume it as an
+    // i64 LLVM constant via shift+trunc. Each in-instruction fetch
+    // advances ctx.CurrentInstructionImmConsumed by its byte count, so
+    // shift offset = ImmConsumed * 8. Null means either fixed-width
+    // ISA, length 1 (no trailing bytes), or length > 9 (rare; emitters
+    // fall back to the bus path). RISC variable-width ISAs (LR35902,
+    // 6502) leave this null and use Immediate / InstructionWord directly.
+    ulong? PackedTailBytes = null);
 
 /// <summary>Why <see cref="BlockDetector"/> stopped collecting instructions.</summary>
 public enum BlockEndReason

@@ -1,0 +1,100 @@
+Timestamp: 2026-05-10T17:16:21
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I'm implementing a CPU emulator framework that compiles JSON-described instruction sets to LLVM IR via ORC LLJIT. I have three CPUs running today through the same pipeline: ARM7TDMI (32-bit fixed-width), LR35902 / 6502 (variable-width 1-3 bytes), and Intel 8086 (variable-width 1-15 bytes, CISC). Block-JIT batches several decoded instructions into one LLVM function per block via alloca + mem2reg state-promotion.
+
+Current 8086 perf is about 27 MIPS in block-JIT vs 38 MIPS for a hand-coded C# interpreter (so 0.71x baseline). The per-instruction LLVM JIT is even slower at 7 MIPS (0.19x). I have three planned framework optimizations to close the gap and want your take on (a) whether the ordering is right, (b) whether the smallest-first one (immediate-baking) is well-scoped, and (c) realistic ROI per item.
+
+The three planned items:
+
+**#1 Bake immediates as IR constants.** Currently x86 FetchImm8/FetchImm16 inside block-JIT-emitted IR call a managed-native trampoline (memory_read_8 extern) for each operand byte — even though BlockDetector already read those bytes at decode time. My fix: have BlockDetector pack opcode + up to 3 trailing operand bytes LE into the 32-bit InstructionWord that gets passed as ctx.Instruction (an LLVMConstantInt). Then FetchImm8/16 extract via shift+trunc on that constant when ctx.CurrentInstructionLengthBytes ≤ 4 (i.e. fits in u32). For longer instructions (length 5-15, e.g. MOV r/m16, imm16 with disp16) the trailing bytes after position 3 fall back to the bus path. This is what 6502 and LR35902 already do — I'm just porting the pattern with a per-instruction 'consumed bytes' counter because x86 emitters call FetchImm8 multiple times within one body (ModRM byte → disp → imm). Estimated impact: maybe 1.5-2x in block-JIT MIPS for the bench workload (which uses only ≤3-byte instructions, so 100% baked).
+
+**#2 Cross-jump follow into back-edges.** BlockDetector currently ends a block at any IP-writing instruction (LOOP, Jcc, JMP rel). The NES backend already extends this for JR/JP with constant targets — when followTarget != current and not yet visited, include the branch as 'IsFollowedBranch' (its emitter skips PC write) and continue decoding at the target. For my bench (tight inner add/add/loop), this would unroll the inner block from 3 instructions to ~196k instructions per block invocation. Expected impact: 5-10x for tight loops.
+
+**#3 Cross-block register SSA.** Currently each block has its own alloca-based shadow registers (mem2reg promotes them to SSA inside the block); on entry it loads from the live state buffer, on exit it flushes back. Across block boundaries, all SSA values are dropped. To keep registers in SSA across blocks would need either (a) a 'block group' abstraction where a hot trace compiles as one big function with internal CFG joining adjacent blocks, or (b) link-time function-level inlining via LLVM Module-level optimization passes. This is the heaviest change — multi-day to architect, IDK if worth it before #1+#2.
+
+My specific questions:
+1. For #1 — is constraining baking to length ≤ 4 (3 trailing bytes packed in u32) a reasonable starting point, or should I bite the bullet now and use i64 ctx.Instruction for x86? The longer instructions (5-15 bytes) would still need byte-array fallback for the rest, so i64 doesn't fully solve it — it just covers more cases.
+2. For #2 — any pitfalls I should watch for when porting this to x86? The NES version uses 'IsFollowedBranch' to skip the branch's PC-write IR, but x86 LOOP also decrements CX and Jcc reads FLAGS. Does the followed-branch IR need to be different for those, or is just 'skip the IP write' sufficient since BlockFunctionBuilder will fall through to the next instruction's IR naturally?
+3. For #3 — is there a smaller intermediate optimization that's worth doing first? E.g., 'inline next block' for the common case where block N's exit branches to block N+1 with no other entries, without going full cross-block SSA?
+4. Is this ordering (1 then 2 then 3) right, or would you reorder?
+
+========================================================================
+RESPONSE
+========================================================================
+This is a fantastic project. Compiling an architecture as complex and quirky as the Intel 8086 via ORC LLJIT using a generic JSON-driven framework is a massive undertaking. 
+
+Your current performance numbers make perfect sense. In emulation, an LLVM JIT usually *loses* to a hand-coded interpreter until two things happen: **1) Trampoline calls are eliminated**, and **2) CPU state is kept in host registers (SSA) across multiple instructions.** Right now, your JIT is paying the heavy cost of function calls (`memory_read_8`) and context load/stores per tiny block, which makes it slower than C#'s highly optimized `switch`-dispatch loops.
+
+Here is an analysis of your plan, answering your questions in context.
+
+### 4. Is the ordering (1 -> 2 -> 3) right?
+**Yes, absolutely.**
+*   **#1 (Immediates)** is low-hanging fruit with a massive ROI. It eliminates native-to-managed transitions, which are currently devastating your JIT performance.
+*   **#2 (Larger Blocks/Edges)** amortizes the entry/exit cost of the JIT blocks.
+*   **#3 (Cross-block SSA)** is the architectural endgame that eliminates the entry/exit memory access overhead entirely, but it is extremely complex to implement well. 
+
+Do them exactly in this order. #1 will likely push you past the interpreter baseline.
+
+---
+
+### 1. For #1: Constraining baking to length ≤ 4 (u32) vs i64
+**Bite the bullet and use `i64`.** 
+
+Since you are passing this as an `LLVMConstantInt`, there is **zero runtime penalty** for using an `i64` instead of an `i32`. LLVM evaluates constants at compile-time. When it lowers to host machine code (x86_64 or AArch64), it will emit exact immediate loads or embed the constants directly into the host instructions. 
+
+By using `i64`, you get 1 byte for the opcode and 7 bytes for the operands. This covers the vast majority of x86 instructions (e.g., ModRM + SIB + 16-bit Disp + 16-bit Imm is exactly 7 bytes). If you stick to `u32`, instructions like `MOV word ptr [bx+di+0x1234], 0x5678` (6 bytes) will fall back to the slow memory bus path. 
+
+*Alternative thought:* If your framework allows, why pack it into a `InstructionWord` constant at all? Your `BlockFunctionBuilder` could simply read the bytes directly from emulator memory *during JIT compilation time* and emit them directly as `Builder.CreateConstInt(Val)` into the IR sequence. 
+
+---
+
+### 2. For #2: Pitfalls with Cross-jump follow (LOOP, Jcc)
+There are two major pitfalls here, one related to x86 semantics and one related to LLVM.
+
+**Pitfall A: You cannot just "skip the IP write" for Conditional Branches.**
+You mentioned: *"unroll the inner block from 3 instructions to ~196k instructions per block invocation"* for a loop. 
+If `LOOP` or `Jcc` are conditional, you cannot statically unroll them at JIT time without evaluating the condition. 
+*   `LOOP`: Decrements CX, checks if CX != 0.
+*   `Jcc`: Evaluates FLAGS.
+
+If you just append the target instruction's IR linearly (unrolling), you are assuming the branch is taken. When the loop finally finishes (e.g., CX hits 0), your linearly executing LLVM code won't know how to stop. 
+**The Fix:** You must translate x86 loops into **LLVM control flow** within the same LLVM function. Your block builder needs to create LLVM `BasicBlock`s. 
+When you encounter `LOOP`:
+1. Emit IR to decrement CX.
+2. Emit IR to check if CX == 0.
+3. Emit LLVM `br` (branch). If true, branch to the LLVM `BasicBlock` representing the start of the loop. If false, branch to the next instruction's `BasicBlock`.
+
+**Pitfall B: Unbounded LLVM Compile Times (The 196k Instruction Problem)**
+Even if you are unrolling a loop with known bounds (e.g., `REP MOVSB` with a constant CX), **do not emit 196k instructions into a single LLVM block.** 
+LLVM's register allocation and instruction selection passes have algorithmic complexities that scale non-linearly (roughly $O(N^2)$ in worst cases). If you feed ORC JIT a function with hundreds of thousands of instructions, the JIT compiler will hang for seconds or even minutes.
+**The Fix:** Cap your block sizes. A common heuristic in emulators (like RPCS3 or Dolphin) is a maximum of 100 to 500 instructions per LLVM function. Instead of unrolling, generate a tight LLVM loop (as described above) so the IR remains small, but the host executes it natively.
+
+---
+
+### 3. For #3: Smaller intermediate optimization before Cross-block SSA
+True cross-block SSA across multiple LLVM functions is notoriously difficult. If you pass state via memory (current), it's slow. If you use LTO (Link Time Optimization) to inline functions, compile times skyrocket.
+
+Here are two intermediate steps before going full trace-JIT:
+
+**Intermediate A: Block Chaining / Direct Dispatch**
+Currently, when a block finishes, it likely returns to a C# run-loop:
+```csharp
+while(running) {
+    var block = JITCache.Get(CPU.IP);
+    block(CPU_Context); // loads from memory, executes, stores to memory
+}
+```
+You can eliminate the lookup overhead by doing **Block Patching**. When Block A ends with a jump to Block B, rewrite the end of Block A's native code to jump directly to the host memory address of Block B. This doesn't fix the SSA load/store issue, but it eliminates dispatcher overhead.
+
+**Intermediate B: "Superblocks" (Intra-function CFG)**
+Instead of cross-block SSA, just make your blocks bigger. Stop terminating blocks at *every* branch. 
+If Block A ends in a conditional `JZ`, decode *both* the taken and not-taken paths up to a certain depth or instruction limit. Compile them all into a single LLVM function using LLVM `BasicBlock`s. 
+Because they are in the same LLVM function, your existing `alloca` + `mem2reg` setup will automatically promote the CPU registers to SSA host registers across the branches. This gives you the benefits of cross-block SSA without the architectural nightmare of linking separate LLVM functions.
+
+### Summary of Expected ROI
+*   **#1 (Immediates as i64 Constants):** Will yield an immediate, massive boost. Likely 1.5x - 2x. Trampolines to managed code from inside a tight JIT block are the #1 enemy of emulator performance.
+*   **#2 (Loops as LLVM CFG):** Will yield 3x - 5x on tight loops. By translating x86 loops to LLVM loops (rather than unbounded unrolling), LLVM will optimize the host registers, hoist loop invariants, and execute at native speeds.
+*   **#3 (Superblocks / Larger CFGs):** Will yield another 1.5x - 2x by minimizing memory spills (`mem2reg` covers more ground).

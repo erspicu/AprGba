@@ -1,0 +1,132 @@
+Timestamp: 2026-05-10T15:41:30
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I'm refactoring a CPU emulation framework's BlockDetector to support Intel 8086 (CISC) alongside existing CPUs (ARM7TDMI, LR35902/Z80, Ricoh 2A03/6502).
+
+Current design:
+- BlockDetector takes a length oracle of signature 'Func<byte, int>' that returns 1-4 bytes given just the first opcode byte. Designed for fixed-position-length CPUs where opcode byte alone determines instruction length.
+- BlockFunctionBuilder emits one LLVM function per detected block of consecutive instructions, with state buffer access going through alloca + mem2reg promotion (so multi-instruction blocks share SSA values for registers/flags).
+- Per-instruction emitters fetch their own immediates via 'x86_fetch_imm8/16' which does memory_read at CS:IP and advances IP. Prefixes (segment override, REP) are handled in the C# Step() before dispatch.
+
+8086 doesn't fit this model:
+- Instruction length depends on the ModR/M byte (which is the SECOND byte) — the mod and rm fields determine displacement byte count (0/1/2)
+- Optional prefixes can prepend (segment override 4 + REP 2 + LOCK 1)
+- Total instruction can be 1-15 bytes
+- For block-JIT we need to walk N consecutive instructions WITHOUT actually executing them
+
+Question: What's the cleanest minimal refactor? Specifically:
+1. Should the length oracle become Func<IMemoryBus, uint pc, int> so it can read multiple bytes?
+2. Or should we have a separate 'instruction decoder' interface that does both decode + length in one pass?
+3. How do you typically handle prefix dispatch in dynarec block detection — fold prefix bytes into the 'instruction' record, or treat each prefix as its own pseudo-instruction in the block?
+4. For block-JIT compile-time vs runtime dispatch on prefix-affected behavior (e.g. segment override changes which segment to read for ModR/M operand) — bake into IR per-block, or read state slot at runtime?
+
+Aiming for: minimal disruption to the 4 existing CPU backends, future-proof for 80286/80386 with even longer encodings + more prefixes (operand-size 0x66, address-size 0x67). Architectural opinion welcome.
+
+========================================================================
+RESPONSE
+========================================================================
+Refactoring a JIT compiler from RISC/simple-CISC architectures to Intel x86 is a classic rite of passage in emulation. The core issue you are hitting is that your current JIT is doing **compile-time dispatch but runtime decoding**. 
+
+For x86, decoding is complex enough that you must separate **JIT-time decoding** from **runtime execution**. Here is the cleanest architectural approach to answer your questions and future-proof for the 386.
+
+### 1 & 2: The Length Oracle vs. The Instruction Decoder
+**Recommendation:** Abandon the `Func<byte, int>` length oracle entirely. Move to a separate **Instruction Decoder interface**.
+
+In x86, you cannot know the length of an instruction without fully decoding it. If you build a length oracle that just reads bytes to find the length, your IR emitter will have to parse those exact same bytes *again* to figure out what LLVM instructions to emit. 
+
+Instead, introduce a generic `Instruction` struct and a decoder interface:
+
+```csharp
+public struct DecodedInstruction {
+    public uint PC;
+    public int Length;
+    
+    // Architecture-specific payload. 
+    // For ARM: the 32-bit opcode.
+    // For x86: Opcode, ModR/M, SIB, Immediates, and Prefix Flags.
+    public ulong ArchPayload; 
+    public uint ArchFlags;    
+}
+
+public interface IInstructionDecoder {
+    // Takes the memory bus and current PC, fully decodes ONE instruction
+    DecodedInstruction Decode(IMemoryBus bus, uint pc);
+}
+```
+
+**Impact on existing CPUs:** Minimal. For 6502, `Decode` just reads 1 byte from `bus`, does a quick table lookup for `Length`, stores the 1 byte in `ArchPayload`, and returns. Your block builder loops this until a branch is hit.
+
+### 3. Handling Prefixes: Fold or Split?
+**Recommendation:** **Fold prefix bytes into the instruction record.** Do *not* treat them as pseudo-instructions.
+
+Treating prefixes as separate block instructions is a nightmare for JITs. Why? 
+* **Interrupts/Exceptions:** If a page fault happens on the memory access of `REP MOVSB`, the CPU must resume with the `REP` prefix intact. If you split them, your PC tracking gets detached from architectural reality.
+* **LLVM IR Generation:** A segment override changes the IR you need to generate. It is much easier to emit `Load(DS_Base + offset)` vs `Load(FS_Base + offset)` if the emitter has all that context at once.
+
+When your x86 Decoder encounters `F3` (REP) or `64` (FS override), it should simply set a bitfield in `ArchFlags`, advance its internal length counter, and continue parsing the *actual* opcode. 
+
+```csharp
+// Example x86 Decode logic pseudo-code
+[Flags]
+public enum X86Prefixes { None = 0, Rep = 1, RepNz = 2, SegFS = 4, SegGS = 8, ... }
+
+public DecodedInstruction DecodeX86(IMemoryBus bus, uint pc) {
+    int length = 0;
+    X86Prefixes prefixes = X86Prefixes.None;
+    byte b = bus.Read(pc);
+    
+    while (IsPrefix(b)) {
+        prefixes |= GetPrefixFlag(b);
+        length++;
+        b = bus.Read(pc + length);
+    }
+    
+    // Now decode Opcode + ModR/M using 'b'
+    // Calculate total length including displacement/immediates
+    return new DecodedInstruction { Length = length, ArchFlags = (uint)prefixes, ... };
+}
+```
+
+### 4. Compile-time vs Runtime Dispatch for Prefix Behavior
+**Recommendation:** **Bake prefix behavior into the IR at compile time.**
+
+This is the most important shift when moving to x86 block-JIT. You mentioned that currently, your emitters call `x86_fetch_imm8/16` at runtime inside the LLVM IR. **You should stop doing this.**
+
+If an instruction has an immediate, the JIT knows exactly what that immediate is *at compile time* (because the decoder just read it). Instead of emitting LLVM IR that reads memory at `CS:IP`, you should extract the immediate during the `Decode` phase, and bake it into the LLVM IR as a `ConstantInt`.
+
+Similarly, for segment overrides: The segment register used for an instruction is mathematically static for that specific instruction at that specific PC. 
+
+```csharp
+// Inside your BlockFunctionBuilder / IR Emitter:
+
+// BAD (Current):
+// IR.EmitCall(FetchImm16); 
+// IR.EmitCall(ReadMemory);
+
+// GOOD (Baked IR):
+// If the instruction had a segment override, bake the choice of base register into the IR
+Value* segmentBase = instruction.HasPrefix(SegFS) 
+    ? IR.Load(cpuState.FS_Base) 
+    : IR.Load(cpuState.DS_Base); // (or SS depending on BP/SP in ModR/M)
+
+Value* address = IR.Add(segmentBase, IR.ConstantInt(instruction.Displacement));
+Value* data = IR.EmitMemoryRead(address);
+```
+
+### Future-Proofing for 80286 / 80386
+By taking the "Full Decode -> Folded Context -> Baked IR" approach, adding 32-bit support becomes trivial. 
+
+In the 386, `0x66` (Operand Size Override) and `0x67` (Address Size Override) are just prefixes. 
+1. Your decoder sets the `Has0x66` flag.
+2. Your IR emitter looks at `Has0x66`.
+3. If true, it uses LLVM's `IRBuilder.CreateAdd(val1, val2)` as 32-bit `i32`. If false, it truncates/masks to 16-bit `i16`.
+
+### Summary of the Refactoring Path
+1. **Change the BlockDetector** so it relies on an `IInstructionDecoder.Decode(...)` instead of a length oracle.
+2. **Buffer the Block:** The BlockDetector should return a `List<DecodedInstruction>`.
+3. **Pass the List to the Builder:** `BlockFunctionBuilder` iterates over `DecodedInstruction`s.
+4. **Bake Constants:** Update your emitters to use the immediates and prefixes stored in the `DecodedInstruction` to emit tightly optimized LLVM IR (`i32` constants instead of runtime memory reads). 
+
+This minimizes disruption because your Z80, 6502, and ARM backends can be ported to this new interface in about 15 minutes (their decoders just look at 1-4 bytes and return), while giving x86 the breathing room it needs to handle CISC complexity.

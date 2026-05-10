@@ -219,9 +219,16 @@ public sealed class BlockDetector
                 // 24.6.8a — CISC bus-aware path (Intel 8086+). The oracle
                 // walks the bus from the current PC to determine the
                 // instruction's total byte count (1-15 for 8086). We
-                // dispatch decode on just the first byte; multi-byte
-                // operand consumption is the per-instruction emitter's
-                // responsibility (memory_read_8 in JIT).
+                // dispatch decode on just the first byte (x86 Format.Mask
+                // is 0xFF for 8086); multi-byte operand consumption is
+                // the per-instruction emitter's responsibility.
+                //
+                // 24.6.8d — trailing bytes (after the opcode) are also
+                // pre-fetched into <see cref="DecodedBlockInstruction.PackedTailBytes"/>
+                // (LE-packed ulong, up to 8 bytes) so x86 FetchImm8/16
+                // emitters can extract via shift+trunc on a constant
+                // instead of issuing memory_read_8 externs. See packing
+                // block below — this happens once decoded is non-null.
                 int lenInt = _busLengthOracle(bus, pc);
                 if (lenInt is < 1 or > 15)
                     throw new InvalidOperationException(
@@ -368,10 +375,9 @@ public sealed class BlockDetector
             // null. Fixed-width (no length oracle, _instrSizeBytes != 0)
             // → null (encoding has imm in bit fields, not after opcode).
             // 24.6.8a CISC bus-aware path: also null — x86 has ModR/M /
-            // disp / imm as separate fields, can't pack into a single
-            // immediate slot. Bake-constants optimization is a follow-up
-            // (24.6.8d) that would replace this with structured per-op
-            // metadata.
+            // disp / imm as separate fields, the byte-by-byte order is
+            // tracked via the new PackedTailBytes/ImmConsumed mechanism
+            // (24.6.8d) below.
             uint? immediate = null;
             if (_busLengthOracle is null && _instrSizeBytes == 0u && thisLength > 1)
             {
@@ -382,8 +388,32 @@ public sealed class BlockDetector
                 }
                 immediate = imm;
             }
+
+            // 24.6.8d — CISC immediate-baking. For x86 (bus-oracle path)
+            // when the trailing bytes fit in a ulong (up to 8 bytes after
+            // the opcode → total length ≤ 9), pre-fetch them little-endian
+            // packed. X86 FetchImm8/FetchImm16 emitters consume this in
+            // block-JIT mode via shift+trunc on an i64 constant, replacing
+            // the per-byte memory_read_8 trampoline. Per Gemini 2026-05-10:
+            // ulong constants are zero-cost in LLVM (compile-time evaluated)
+            // and cover ~95% of real 8086 instructions (8086 non-prefixed
+            // max = 1+1+2+2 = 6 bytes; only string ops with two segment
+            // overrides exceed). Length > 9 leaves tail null → emitters
+            // fall back to the bus path beyond what's packed.
+            ulong? packedTail = null;
+            if (_busLengthOracle is not null && thisLength is > 1 and <= 9)
+            {
+                ulong tail = 0;
+                int trailingCount = (int)(thisLength - 1u);
+                for (int b = 0; b < trailingCount; b++)
+                {
+                    tail |= (ulong)bus.ReadByte(pc + 1u + (uint)b) << (b * 8);
+                }
+                packedTail = tail;
+            }
+
             instrs.Add(new DecodedBlockInstruction(pc, word, decoded, (byte)thisLength,
-                IsFollowedBranch: willFollow, Immediate: immediate));
+                IsFollowedBranch: willFollow, Immediate: immediate, PackedTailBytes: packedTail));
 
             if (willFollow)
             {

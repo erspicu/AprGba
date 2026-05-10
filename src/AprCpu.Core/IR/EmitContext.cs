@@ -126,7 +126,7 @@ public sealed unsafe class EmitContext
     /// the executor's per-step "pre-set R15" memory write). Per-instr
     /// mode leaves it null so the legacy load-from-GPR[15] path runs.
     /// </summary>
-    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord, uint? baseAddress = null, byte? lengthBytes = null, int currentInstructionCycleCost = 0, int currentInstructionExtraTakenCycles = 0)
+    public void BeginInstruction(EncodingFormat format, InstructionDef def, LLVMValueRef instructionWord, uint? baseAddress = null, byte? lengthBytes = null, int currentInstructionCycleCost = 0, int currentInstructionExtraTakenCycles = 0, ulong? packedTailBytes = null)
     {
         Format = format;
         Def = def;
@@ -137,6 +137,47 @@ public sealed unsafe class EmitContext
         CurrentInstructionCycleCost = currentInstructionCycleCost;
         CurrentInstructionExtraTakenCycles = currentInstructionExtraTakenCycles;
         PcWriteEmittedInCurrentInstruction = false;
+        CurrentInstructionImmConsumed = 0;
+        CurrentInstructionPackedTailBytes = packedTailBytes;
+    }
+
+    /// <summary>
+    /// 24.6.8d — pre-fetched trailing-byte payload for the current
+    /// instruction (CISC ISAs only; null in per-instr mode and for
+    /// fixed-width ISAs). When set, x86 FetchImm8 / FetchImm16 emit a
+    /// shift+trunc on this i64 constant instead of a memory_read_8
+    /// extern. See <see cref="DecodedBlockInstruction.PackedTailBytes"/>.
+    /// </summary>
+    public ulong? CurrentInstructionPackedTailBytes { get; private set; }
+
+    /// <summary>
+    /// 24.6.8d — CISC immediate-baking offset tracker. x86 emitters can
+    /// invoke <see cref="X86_16Emitters.FetchImm8"/> / FetchImm16 multiple
+    /// times within a single instruction body (e.g. ModR/M byte → disp8 →
+    /// imm8 sequence in MOV r/m8, imm8 with [BX+disp]). When block-JIT
+    /// has packed the trailing bytes into <see cref="Instruction"/>, each
+    /// fetch must extract from a different bit offset; this counter
+    /// tracks "how many bytes after the opcode have already been consumed
+    /// by prior fetches in THIS instruction." Reset to 0 by
+    /// <see cref="BeginInstruction"/>; bumped by 1 / 2 by FetchImm8 /
+    /// FetchImm16 in their constant-extraction fast path. Per-instr
+    /// (non-block) callers ignore this — they go through the bus path
+    /// regardless.
+    /// </summary>
+    public int CurrentInstructionImmConsumed { get; private set; }
+
+    /// <summary>
+    /// 24.6.8d — atomically reserve <paramref name="bytes"/> trailing
+    /// bytes for the current FetchImm call and return the OFFSET (in
+    /// bytes after the opcode) where extraction should start. Used by
+    /// FetchImm8/FetchImm16 fast path to compute shift = (1 + offset) * 8
+    /// against <see cref="Instruction"/>.
+    /// </summary>
+    public int ReserveImmediateBytes(int bytes)
+    {
+        var offset = CurrentInstructionImmConsumed;
+        CurrentInstructionImmConsumed += bytes;
+        return offset;
     }
 
     /// <summary>
