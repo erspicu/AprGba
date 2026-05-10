@@ -1,0 +1,42 @@
+{
+  "name": "Misc",
+  "comment": "8086 single-byte flag-manipulation + IO ops (24.6.7d). INT/IRET/INTO + DIV/IDIV (with INT 0) + BCD ops live in a future sub-step.\n\nFLAGS bit positions: CF=0, PF=2, AF=4, ZF=6, SF=7, TF=8, IF=9, DF=10, OF=11.",
+
+  "formats": [
+    { "name": "Clc", "fields": {}, "mask": "0xFF", "match": "0xF8",
+      "instructions": [{ "mnemonic": "CLC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CLC", "cycles": { "form": "2" }, "steps": [{ "op": "x86_clear_flag_bit", "bit_pos": 0 }] }] },
+    { "name": "Stc", "fields": {}, "mask": "0xFF", "match": "0xF9",
+      "instructions": [{ "mnemonic": "STC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §STC", "cycles": { "form": "2" }, "steps": [{ "op": "x86_set_flag_bit", "bit_pos": 0 }] }] },
+    { "name": "Cli", "fields": {}, "mask": "0xFF", "match": "0xFA",
+      "instructions": [{ "mnemonic": "CLI", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CLI", "cycles": { "form": "2" }, "steps": [{ "op": "x86_clear_flag_bit", "bit_pos": 9 }] }] },
+    { "name": "Sti", "fields": {}, "mask": "0xFF", "match": "0xFB",
+      "instructions": [{ "mnemonic": "STI", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §STI", "cycles": { "form": "2" }, "steps": [{ "op": "x86_set_flag_bit", "bit_pos": 9 }] }] },
+    { "name": "Cld", "fields": {}, "mask": "0xFF", "match": "0xFC",
+      "instructions": [{ "mnemonic": "CLD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CLD", "cycles": { "form": "2" }, "steps": [{ "op": "x86_clear_flag_bit", "bit_pos": 10 }] }] },
+    { "name": "Std", "fields": {}, "mask": "0xFF", "match": "0xFD",
+      "instructions": [{ "mnemonic": "STD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §STD", "cycles": { "form": "2" }, "steps": [{ "op": "x86_set_flag_bit", "bit_pos": 10 }] }] },
+    { "name": "Cmc", "fields": {}, "mask": "0xFF", "match": "0xF5",
+      "instructions": [{ "mnemonic": "CMC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CMC", "cycles": { "form": "2" }, "steps": [{ "op": "x86_cmc" }] }] },
+    { "name": "Sahf", "fields": {}, "mask": "0xFF", "match": "0x9E",
+      "instructions": [{ "mnemonic": "SAHF", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SAHF", "cycles": { "form": "4" }, "steps": [{ "op": "x86_sahf" }] }] },
+    { "name": "Lahf", "fields": {}, "mask": "0xFF", "match": "0x9F",
+      "instructions": [{ "mnemonic": "LAHF", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §LAHF", "cycles": { "form": "4" }, "steps": [{ "op": "x86_lahf" }] }] },
+
+    { "name": "InAlImm8", "fields": {}, "mask": "0xFF", "match": "0xE4",
+      "instructions": [{ "mnemonic": "IN", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §IN", "cycles": { "form": "10" }, "steps": [{ "op": "x86_in_imm8", "width": 8 }] }] },
+    { "name": "InAxImm8", "fields": {}, "mask": "0xFF", "match": "0xE5",
+      "instructions": [{ "mnemonic": "IN", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §IN", "cycles": { "form": "10" }, "steps": [{ "op": "x86_in_imm8", "width": 16 }] }] },
+    { "name": "OutImm8Al", "fields": {}, "mask": "0xFF", "match": "0xE6",
+      "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "10" }, "steps": [{ "op": "x86_out_imm8", "width": 8 }] }] },
+    { "name": "OutImm8Ax", "fields": {}, "mask": "0xFF", "match": "0xE7",
+      "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "10" }, "steps": [{ "op": "x86_out_imm8", "width": 16 }] }] },
+    { "name": "InAlDx", "fields": {}, "mask": "0xFF", "match": "0xEC",
+      "instructions": [{ "mnemonic": "IN", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §IN", "cycles": { "form": "8" }, "steps": [{ "op": "x86_in_dx", "width": 8 }] }] },
+    { "name": "InAxDx", "fields": {}, "mask": "0xFF", "match": "0xED",
+      "instructions": [{ "mnemonic": "IN", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §IN", "cycles": { "form": "8" }, "steps": [{ "op": "x86_in_dx", "width": 16 }] }] },
+    { "name": "OutDxAl", "fields": {}, "mask": "0xFF", "match": "0xEE",
+      "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "8" }, "steps": [{ "op": "x86_out_dx", "width": 8 }] }] },
+    { "name": "OutDxAx", "fields": {}, "mask": "0xFF", "match": "0xEF",
+      "instructions": [{ "mnemonic": "OUT", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OUT", "cycles": { "form": "8" }, "steps": [{ "op": "x86_out_dx", "width": 16 }] }] }
+  ]
+}

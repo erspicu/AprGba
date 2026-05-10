@@ -157,6 +157,20 @@ public static class X86_16Emitters
         reg.Register(new X86ScasbEmitter());
         reg.Register(new X86ScaswEmitter());
 
+        // 24.6.7d — flag-manip + IO. Each set/clear writes one FLAGS bit;
+        // CMC toggles. SAHF/LAHF transfer between AH and FLAGS low byte.
+        // IN/OUT are no-op stubs (just advance IP) since the framework
+        // has no IO bus concept yet.
+        reg.Register(new X86SetFlagBitEmitter());
+        reg.Register(new X86ClearFlagBitEmitter());
+        reg.Register(new X86CmcEmitter());
+        reg.Register(new X86SahfEmitter());
+        reg.Register(new X86LahfEmitter());
+        reg.Register(new X86InImm8Emitter());
+        reg.Register(new X86InDxEmitter());
+        reg.Register(new X86OutImm8Emitter());
+        reg.Register(new X86OutDxEmitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -3932,6 +3946,172 @@ internal sealed class X86ScaswEmitter : IMicroOpEmitter
         X86AluHelpers.BuildAluW16(ctx, "cmp", ax, rhs, "scasw");
         var delta = X86StringHelpers.BuildDfDelta(ctx, 2, "scasw");
         X86StringHelpers.WriteDi(ctx, ctx.Builder.BuildAdd(di, delta, "scasw_di_n"));
+    }
+}
+
+// ============================================================================
+// 24.6.7d — flag-manipulation + IO ops.
+//
+// Generic SET/CLEAR-flag-bit emitter takes a `bit_pos` JSON parameter and
+// writes the named FLAGS bit. Used by all six standalone bit set/clear
+// opcodes (CLC/STC/CLI/STI/CLD/STD).
+//
+// CMC toggles CF.
+// SAHF copies AH (8 bits) into FLAGS bits 7:0.
+// LAHF copies FLAGS bits 7:0 into AH.
+//
+// IN/OUT use a no-op stub (just consume the port byte if applicable
+// and advance IP via the existing fetch helper). Future: wire to a
+// proper IO bus when MMIO peripherals are needed.
+// ============================================================================
+
+internal sealed class X86SetFlagBitEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_set_flag_bit";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var bitPos = step.Raw.GetProperty("bit_pos").GetInt32();
+        var i16 = LLVMTypeRef.Int16;
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        var f = ctx.Builder.BuildLoad2(i16, fPtr, "sf_f");
+        var mask = LLVMValueRef.CreateConstInt(i16, 1u << bitPos, false);
+        var newF = ctx.Builder.BuildOr(f, mask, "sf_new");
+        ctx.Builder.BuildStore(newF, fPtr);
+    }
+}
+
+internal sealed class X86ClearFlagBitEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_clear_flag_bit";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var bitPos = step.Raw.GetProperty("bit_pos").GetInt32();
+        var i16 = LLVMTypeRef.Int16;
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        var f = ctx.Builder.BuildLoad2(i16, fPtr, "cf_f");
+        var notMask = LLVMValueRef.CreateConstInt(i16,
+            (ulong)(unchecked((ushort)~(1 << bitPos))), false);
+        var newF = ctx.Builder.BuildAnd(f, notMask, "cf_new");
+        ctx.Builder.BuildStore(newF, fPtr);
+    }
+}
+
+internal sealed class X86CmcEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_cmc";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        var f = ctx.Builder.BuildLoad2(i16, fPtr, "cmc_f");
+        var newF = ctx.Builder.BuildXor(f,
+            LLVMValueRef.CreateConstInt(i16, 1, false), "cmc_new");
+        ctx.Builder.BuildStore(newF, fPtr);
+    }
+}
+
+internal sealed class X86SahfEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_sahf";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var ah = X86_16Emitters.ReadGpr8(ctx, 4, "sahf_ah");   // byteIdx 4 = AH
+        var ah16 = ctx.Builder.BuildZExt(ah, i16, "sahf_ah16");
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        var f = ctx.Builder.BuildLoad2(i16, fPtr, "sahf_f");
+        // Replace low byte of FLAGS with AH.
+        var keep = ctx.Builder.BuildAnd(f,
+            LLVMValueRef.CreateConstInt(i16, 0xFF00, false), "sahf_keep");
+        var newF = ctx.Builder.BuildOr(keep, ah16, "sahf_new");
+        ctx.Builder.BuildStore(newF, fPtr);
+    }
+}
+
+internal sealed class X86LahfEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_lahf";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        var f = ctx.Builder.BuildLoad2(i16, fPtr, "lahf_f");
+        var ah16 = ctx.Builder.BuildAnd(f,
+            LLVMValueRef.CreateConstInt(i16, 0x00FF, false), "lahf_ah16");
+        var ah = ctx.Builder.BuildTrunc(ah16, i8, "lahf_ah");
+        X86_16Emitters.WriteGpr8(ctx, 4, ah);   // AH
+    }
+}
+
+// ============================================================================
+// IN AL/AX, imm8/DX  +  OUT imm8/DX, AL/AX. The framework has no IO bus
+// concept yet — IN reads always return 0xFF / 0xFFFF (open bus); OUT
+// silently discards. The IP advance for the immediate port byte
+// happens via FetchImm8.
+// ============================================================================
+
+internal sealed class X86InImm8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_in_imm8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var width = step.Raw.GetProperty("width").GetInt32();
+        // Consume the port byte (advances IP).
+        X86_16Emitters.FetchImm8(ctx, "in_port");
+        if (width == 8)
+        {
+            var i8 = LLVMTypeRef.Int8;
+            X86_16Emitters.WriteGpr8(ctx, 0,
+                LLVMValueRef.CreateConstInt(i8, 0xFF, false));
+        }
+        else
+        {
+            var i16 = LLVMTypeRef.Int16;
+            X86_16Emitters.WriteGpr16(ctx, 0,
+                LLVMValueRef.CreateConstInt(i16, 0xFFFF, false));
+        }
+    }
+}
+
+internal sealed class X86InDxEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_in_dx";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var width = step.Raw.GetProperty("width").GetInt32();
+        if (width == 8)
+        {
+            var i8 = LLVMTypeRef.Int8;
+            X86_16Emitters.WriteGpr8(ctx, 0,
+                LLVMValueRef.CreateConstInt(i8, 0xFF, false));
+        }
+        else
+        {
+            var i16 = LLVMTypeRef.Int16;
+            X86_16Emitters.WriteGpr16(ctx, 0,
+                LLVMValueRef.CreateConstInt(i16, 0xFFFF, false));
+        }
+    }
+}
+
+internal sealed class X86OutImm8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_out_imm8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // Consume the port byte (advances IP). Width param is informational
+        // for now since we discard the value.
+        X86_16Emitters.FetchImm8(ctx, "out_port");
+    }
+}
+
+internal sealed class X86OutDxEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_out_dx";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // No-op — port DX, value AL/AX both ignored.
     }
 }
 

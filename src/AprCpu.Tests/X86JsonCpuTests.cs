@@ -2528,6 +2528,135 @@ public class X86JsonCpuTests
         Assert.False(cpu.State.FlagZ);   // last comparison was unequal
     }
 
+    // ---------------- 24.6.7d — flag manip + IO ----------------
+
+    /// <summary>0xF8 CLC — clear CF. Pre-set CF=1 → after CLC, CF=0.</summary>
+    [Fact]
+    public void Step_Clc_ClearsCarry()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF8, 0xF4 });
+        var s = cpu.State;
+        s.FlagC = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>0xF9 STC — set CF.</summary>
+    [Fact]
+    public void Step_Stc_SetsCarry()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF9, 0xF4 });
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.True(cpu.State.FlagC);
+    }
+
+    /// <summary>0xF5 CMC — toggle CF (1→0).</summary>
+    [Fact]
+    public void Step_Cmc_TogglesCarry()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF5, 0xF4 });
+        var s = cpu.State;
+        s.FlagC = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>0xFC CLD then 0xFD STD — exercise DF bit.</summary>
+    [Fact]
+    public void Step_CldStd_TogglesDf()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xFC, 0xFD, 0xF4 });
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.True(cpu.State.FlagD);   // STD set DF=1
+    }
+
+    /// <summary>0xFA CLI / 0xFB STI exercise IF bit.</summary>
+    [Fact]
+    public void Step_CliSti_TogglesIf()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xFA, 0xFB, 0xF4 });
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.True(cpu.State.FlagI);   // STI set IF=1
+    }
+
+    /// <summary>
+    /// 0x9E SAHF — copy AH to FLAGS bits 7:0. AH=0x05 (= 0000_0101) sets
+    /// CF=1 (bit 0), PF=1 (bit 2), AF=0, ZF=0, SF=0.
+    /// </summary>
+    [Fact]
+    public void Step_Sahf_CopiesAhToFlagsLow()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x9E, 0xF4 });
+        var s = cpu.State;
+        s.A.H = 0x05;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.True(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagP);
+        Assert.False(cpu.State.FlagA);
+        Assert.False(cpu.State.FlagZ);
+        Assert.False(cpu.State.FlagS);
+    }
+
+    /// <summary>
+    /// 0x9F LAHF — copy FLAGS bits 7:0 to AH. With CF=1, PF=0, ZF=1, SF=1
+    /// → low byte = 0x01 | 0x40 | 0x80 | 0x02 (bit 1 reserved-but-FLAGS
+    /// storage may have it) = 0xC3 or so. Just check the salient bits.
+    /// </summary>
+    [Fact]
+    public void Step_Lahf_CopiesFlagsLowToAh()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x9F, 0xF4 });
+        var s = cpu.State;
+        s.FlagC = true;
+        s.FlagZ = true;
+        s.FlagS = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        // CF (bit 0), ZF (bit 6), SF (bit 7) must all be set in AH.
+        Assert.Equal(0x01, cpu.State.A.H & 0x01);
+        Assert.Equal(0x40, cpu.State.A.H & 0x40);
+        Assert.Equal(0x80, cpu.State.A.H & 0x80);
+    }
+
+    /// <summary>0xE4 IN AL, imm8 — open-bus stub returns 0xFF.</summary>
+    [Fact]
+    public void Step_InAlImm8_OpenBusReturnsFF()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xE4, 0x60, 0xF4 });
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xFF, cpu.State.A.L);
+        // IP advanced past port byte → 0x103.
+        Assert.Equal(0x103, cpu.State.IP);
+    }
+
+    /// <summary>0xE6 OUT imm8, AL — silent no-op, just advances IP past port byte.</summary>
+    [Fact]
+    public void Step_OutImm8Al_NoOpAdvancesIp()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xB0, 0x42, 0xE6, 0x60, 0xF4 });
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x42, cpu.State.A.L);   // AL unchanged after OUT
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,
