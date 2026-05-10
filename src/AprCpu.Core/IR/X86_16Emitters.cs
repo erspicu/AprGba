@@ -1981,13 +1981,65 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
         var basePart = ctx.Builder.BuildOr(b2z, b3sh, $"{label}_bp");
         var protBase = ctx.Builder.BuildOr(basePart, b4sh, $"{label}_pbase");
 
+        // Sprint 27.11c — check descriptor.P bit (AccessRights bit 7).
+        // P=0 → segment-not-present fault: set EXC_PENDING=1, EXC_VECTOR=11
+        // (#NP), EXC_ERROR=selector & 0xFFFC. Skip cache update so the
+        // hidden cache stays at its previous (last-good) value. The
+        // visible sreg field was already written by the caller; that's
+        // a known minor architectural drift (Intel aborts the load
+        // entirely on #NP) and is bounded by the EXC_PENDING flag —
+        // future sprints can add a "rewind visible sreg on fault" pass
+        // before the next instruction dispatches.
+        var pMask = ctx.Builder.BuildAnd(bytes[5],
+            LLVMValueRef.CreateConstInt(i8, 0x80, false), $"{label}_pmask");
+        var pSet = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, pMask,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_pset");
+
+        var presentBB    = ctx.Function.AppendBasicBlock($"{label}_present");
+        var notPresentBB = ctx.Function.AppendBasicBlock($"{label}_np");
+        ctx.Builder.BuildCondBr(pSet, presentBB, notPresentBB);
+
+        // P=1 — populate the hidden cache from the descriptor.
+        ctx.Builder.PositionAtEnd(presentBB);
         ctx.Builder.BuildStore(protBase, basePtr);
         ctx.Builder.BuildStore(limit,    limitPtr);
         ctx.Builder.BuildStore(bytes[5], accessPtr);
         ctx.Builder.BuildBr(doneBB);
 
+        // P=0 — raise #NP via the EXC_* slots; do NOT touch the cache.
+        ctx.Builder.PositionAtEnd(notPresentBB);
+        EmitRaiseException(ctx, /* vector */ 0x0B, /* selector */ sel16, $"{label}_np");
+        ctx.Builder.BuildBr(doneBB);
+
         // === Done ===
         ctx.Builder.PositionAtEnd(doneBB);
+    }
+
+    /// <summary>
+    /// Sprint 27.11c — write the i80286 exception slots (EXC_PENDING=1,
+    /// EXC_VECTOR=vector, EXC_ERROR=selector &amp; 0xFFFC). Caller is
+    /// responsible for branching to a fault path before invoking this;
+    /// no cache / sreg side effects are performed here.
+    /// </summary>
+    private static void EmitRaiseException(
+        EmitContext ctx, byte vector, LLVMValueRef sel16, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+
+        var pendingPtr = ctx.GepStatusRegister("EXC_PENDING");
+        var vectorPtr  = ctx.GepStatusRegister("EXC_VECTOR");
+        var errorPtr   = ctx.GepStatusRegister("EXC_ERROR");
+
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pendingPtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, vector, false), vectorPtr);
+        // error code = selector with low 2 bits (RPL) cleared; bit 2 (TI)
+        // preserved so a fault handler can tell GDT vs LDT. Bit 0 (EXT)
+        // would be set for a CPU-generated fault during interrupt
+        // delivery; we leave it 0 for the software-load case.
+        var errMasked = ctx.Builder.BuildAnd(sel16,
+            LLVMValueRef.CreateConstInt(i16, 0xFFFC, false), $"{label}_errm");
+        ctx.Builder.BuildStore(errMasked, errorPtr);
     }
 }
 
