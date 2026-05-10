@@ -1946,6 +1946,35 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
 
         // === Protected-mode arm: GDT descriptor fetch ===
         ctx.Builder.PositionAtEnd(protBB);
+
+        // Sprint 27.11d — NULL-selector check (SS only, PE=1).
+        // Intel 80286 PRM §10.3.4: loading SS with a NULL selector
+        // (index = 0) raises #GP(0) immediately. Loading DS/ES with
+        // NULL is allowed (deferred fault when accessed — handled in
+        // a future sprint, out of scope here). CS comes through this
+        // emitter too but MOV CS is reserved/UD on real hardware;
+        // ignore that case for now.
+        if (segName == "SS")
+        {
+            var selIdxMask = ctx.Builder.BuildAnd(sel16,
+                LLVMValueRef.CreateConstInt(i16, 0xFFFC, false), $"{label}_idxm");
+            var isNull = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, selIdxMask,
+                LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_null");
+
+            var nullGpBB  = ctx.Function.AppendBasicBlock($"{label}_nullgp");
+            var protCont  = ctx.Function.AppendBasicBlock($"{label}_protcont");
+            ctx.Builder.BuildCondBr(isNull, nullGpBB, protCont);
+
+            ctx.Builder.PositionAtEnd(nullGpBB);
+            // #GP error code per Intel = selector & 0xFFFC. For a NULL
+            // selector that's 0; we still pass sel16 through the helper
+            // for shape consistency.
+            EmitRaiseException(ctx, /* vector */ 0x0D, sel16, $"{label}_nullgp");
+            ctx.Builder.BuildBr(doneBB);
+
+            ctx.Builder.PositionAtEnd(protCont);
+        }
+
         var gdtBase = ctx.Builder.BuildLoad2(i32,
             ctx.GepStatusRegister("GDTR_BASE"), $"{label}_gdt");
         var selZ2 = ctx.Builder.BuildZExt(sel16, i32, $"{label}_selz2");

@@ -36,6 +36,18 @@ CODE_PROLOGUE = bytes([
 ])
 assert len(CODE_PROLOGUE) == 21
 
+# Sprint 27.11d — NULL-SS demo. Same prologue shape (LGDT + LMSW to enter
+# pmode), but then loads NULL into SS to trigger #GP.
+CODE_NULL_SS = bytes([
+    0xB8, 0xF1, 0xFF,           # mov ax, 0xFFF1
+    0x0F, 0x01, 0x16, 0x40, 0x01,  # lgdt [0x140]
+    0x0F, 0x01, 0xF0,           # lmsw ax
+    0xB8, 0x00, 0x00,           # mov ax, 0x0000   (NULL selector)
+    0x8E, 0xD0,                 # mov ss, ax       (#GP expected, PE=1)
+    0xF4,                       # hlt
+])
+assert len(CODE_NULL_SS) == 17
+
 # GDTR image: 6 bytes at file offset 0x40 (segment offset 0x140).
 #   limit = 0x10 (room for 2 descriptors)
 #   base  = 0x150 (segment offset where GDT lives)
@@ -56,14 +68,14 @@ def build_descriptor(limit: int, base: int, access: int) -> bytes:
     ])
 
 
-def build_com(access_byte: int) -> bytes:
-    # 0x40 - 21 = 43 bytes of NOP padding to reach offset 0x40 for GDTR image.
-    pad1 = bytes([0x90] * (0x40 - len(CODE_PROLOGUE)))
+def build_com(access_byte: int, code: bytes = CODE_PROLOGUE) -> bytes:
+    # NOP-pad code to reach file offset 0x40 (segment offset 0x140) for GDTR image.
+    pad1 = bytes([0x90] * (0x40 - len(code)))
     # 0x50 - (0x40 + 6) = 10 bytes of padding before GDT.
     pad2 = bytes([0x00] * (0x50 - (0x40 + len(GDTR_IMAGE))))
     gdt_entry_1 = build_descriptor(limit=0xFFFF, base=0x100, access=access_byte)
     return (
-        CODE_PROLOGUE
+        code
         + pad1
         + GDTR_IMAGE
         + pad2
@@ -76,14 +88,17 @@ def main():
     out_dir = Path(__file__).resolve().parent.parent / "test-roms" / "x86"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    entry = build_com(access_byte=0x92)   # P=1, S=1, writable data, DPL=0
-    np    = build_com(access_byte=0x12)   # P=0, S=1, writable data, DPL=0
+    entry   = build_com(access_byte=0x92)                     # P=1, S=1, writable data, DPL=0
+    np      = build_com(access_byte=0x12)                     # P=0, S=1, writable data, DPL=0
+    null_ss = build_com(access_byte=0x92, code=CODE_NULL_SS)  # GDT[1] unused (NULL load)
 
     (out_dir / "27-pmode-entry.com").write_bytes(entry)
     (out_dir / "27-pmode-np.com").write_bytes(np)
+    (out_dir / "27-pmode-null-ss.com").write_bytes(null_ss)
 
     print(f"wrote {len(entry)} bytes -> 27-pmode-entry.com")
     print(f"wrote {len(np)} bytes -> 27-pmode-np.com")
+    print(f"wrote {len(null_ss)} bytes -> 27-pmode-null-ss.com")
 
 
 if __name__ == "__main__":
