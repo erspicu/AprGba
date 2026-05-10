@@ -810,6 +810,171 @@ public class X86JsonCpuTests
         Assert.Equal(0x4444, cpu.State.DS);
     }
 
+    // ---------------- 24.6.5f — PUSH / POP family ----------------
+
+    /// <summary>
+    /// 0x53 PUSH BX (encoding 010 = BX). Pre-set SP=0x0200, SS=0;
+    /// after push, SP=0x01FE, MEM[0:01FE]=BX low, [0:01FF]=BX high.
+    /// </summary>
+    [Fact]
+    public void Step_PushBx()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x53, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0xCAFE;
+        s.SP  = 0x0200;
+        s.SS  = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x01FE, cpu.State.SP);
+        Assert.Equal(0xFE, mem.ReadByte(0x01FE));
+        Assert.Equal(0xCA, mem.ReadByte(0x01FF));
+    }
+
+    /// <summary>
+    /// 8088 PUSH SP quirk: 0x54 PUSH SP pushes the NEW (post-decrement)
+    /// SP value, not the original. Pre-set SP=0x0200 → push → MEM should
+    /// hold 0x01FE (the new SP), not 0x0200.
+    /// </summary>
+    [Fact]
+    public void Step_PushSp_8088Quirk_PushesNewSp()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x54, 0xF4 });
+        var s = cpu.State;
+        s.SP = 0x0200;
+        s.SS = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x01FE, cpu.State.SP);
+        // Pushed value should be 0x01FE (new SP), NOT 0x0200 (old SP).
+        Assert.Equal(0xFE, mem.ReadByte(0x01FE));
+        Assert.Equal(0x01, mem.ReadByte(0x01FF));
+    }
+
+    /// <summary>
+    /// PUSH BX then POP CX should leave CX = original BX. SP returns
+    /// to its starting value.
+    /// </summary>
+    [Fact]
+    public void Step_PushBxPopCx_RoundTrip()
+    {
+        // mov bx, 0x1234   BB 34 12
+        // push bx          53
+        // pop cx           59
+        // hlt              F4
+        var (cpu, _) = Setup(new byte[] { 0xBB, 0x34, 0x12, 0x53, 0x59, 0xF4 });
+        var s = cpu.State;
+        s.SP = 0x0200;
+        s.SS = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 16 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x1234, cpu.State.C.X);
+        Assert.Equal(0x0200, cpu.State.SP);
+    }
+
+    /// <summary>
+    /// 0x06 PUSH ES then 0x07 POP ES. Round-trips ES through stack.
+    /// </summary>
+    [Fact]
+    public void Step_PushPopSeg_Es()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x06, 0x07, 0xF4 });
+        var s = cpu.State;
+        s.ES = 0xBEEF;
+        s.SP = 0x0200; s.SS = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xBEEF, cpu.State.ES);
+        Assert.Equal(0x0200, cpu.State.SP);
+    }
+
+    /// <summary>
+    /// 0x9C PUSHF — verify reserved-bit pattern: bit 1 + bits 12-15 forced
+    /// to 1 in the pushed word. Only CF + PF + ZF are set in FLAGS for
+    /// this test, so pushed = 0xF000 | 0x0002 | (CF=1) | (PF=1<<2) | (ZF=1<<6)
+    ///                       = 0xF047
+    /// </summary>
+    [Fact]
+    public void Step_Pushf_ReservedBitsForced()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x9C, 0xF4 });
+        var s = cpu.State;
+        s.FlagC = true; s.FlagP = true; s.FlagZ = true;
+        s.SP = 0x0200; s.SS = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        ushort pushed = (ushort)(mem.ReadByte(0x01FE) | (mem.ReadByte(0x01FF) << 8));
+        Assert.Equal(0xF047, pushed);
+    }
+
+    /// <summary>
+    /// PUSHF / POPF round-trip preserves the architectural flag bits.
+    /// </summary>
+    [Fact]
+    public void Step_PushfPopf_RoundTripPreservesFlags()
+    {
+        // pushf            9C
+        // mov ax, 0xFFFF   B8 FF FF   (clobber AX so we know it's untouched)
+        // popf             9D
+        // hlt              F4
+        var (cpu, _) = Setup(new byte[] { 0x9C, 0xB8, 0xFF, 0xFF, 0x9D, 0xF4 });
+        var s = cpu.State;
+        s.FlagC = true; s.FlagS = true; s.FlagZ = true;
+        s.SP = 0x0200; s.SS = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 16 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.True(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagS);
+        Assert.True(cpu.State.FlagZ);
+        Assert.Equal(0x0200, cpu.State.SP);
+    }
+
+    /// <summary>
+    /// 0x8F /0 POP r/m16: pop into [BX]. Pre-stack value 0x1234, BX=0x80,
+    /// after pop MEM[DS:80] = 0x1234.
+    /// </summary>
+    [Fact]
+    public void Step_PopRm16_ToMemory()
+    {
+        // pre-push value via mov [SP-2], 0x1234 setup is awkward —
+        // simpler: pre-fill stack memory directly.
+        var (cpu, mem) = Setup(new byte[] { 0x8F, 0x07, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x80;
+        s.SP  = 0x01FE;
+        s.SS  = 0;
+        s.DS  = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        // SS:SP holds the value to pop
+        mem.WriteByte(0x01FE, 0x34);
+        mem.WriteByte(0x01FF, 0x12);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0200, cpu.State.SP);
+        Assert.Equal(0x34, mem.ReadByte(0x80));
+        Assert.Equal(0x12, mem.ReadByte(0x81));
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

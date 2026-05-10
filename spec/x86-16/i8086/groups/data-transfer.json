@@ -307,6 +307,118 @@
           ]
         }
       ]
+    },
+
+    {
+      "name":  "PushReg16",
+      "comment": "0x50-0x57 PUSH r16 — opcode encodes destination GPR in low 3 bits. 8088 PUSH-SP quirk handled inside emitter (decrement-then-read).",
+      "fields": { "reg": "2:0" },
+      "mask":  "0xF8",
+      "match": "0x50",
+      "instructions": [
+        {
+          "mnemonic":   "PUSH",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §PUSH",
+          "cycles":     { "form": "11" },
+          "steps": [
+            { "op": "x86_push_reg16_field", "field": "reg" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "PopReg16",
+      "comment": "0x58-0x5F POP r16 — opcode encodes destination GPR in low 3 bits.",
+      "fields": { "reg": "2:0" },
+      "mask":  "0xF8",
+      "match": "0x58",
+      "instructions": [
+        {
+          "mnemonic":   "POP",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §POP",
+          "cycles":     { "form": "8" },
+          "steps": [
+            { "op": "x86_pop_reg16_field", "field": "reg" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "PushEs",
+      "fields": {}, "mask": "0xFF", "match": "0x06",
+      "instructions": [{ "mnemonic": "PUSH", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §PUSH", "cycles": { "form": "10" }, "steps": [{ "op": "x86_push_seg", "seg": "ES" }] }]
+    },
+    {
+      "name":  "PushCs",
+      "fields": {}, "mask": "0xFF", "match": "0x0E",
+      "instructions": [{ "mnemonic": "PUSH", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §PUSH", "cycles": { "form": "10" }, "steps": [{ "op": "x86_push_seg", "seg": "CS" }] }]
+    },
+    {
+      "name":  "PushSs",
+      "fields": {}, "mask": "0xFF", "match": "0x16",
+      "instructions": [{ "mnemonic": "PUSH", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §PUSH", "cycles": { "form": "10" }, "steps": [{ "op": "x86_push_seg", "seg": "SS" }] }]
+    },
+    {
+      "name":  "PushDs",
+      "fields": {}, "mask": "0xFF", "match": "0x1E",
+      "instructions": [{ "mnemonic": "PUSH", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §PUSH", "cycles": { "form": "10" }, "steps": [{ "op": "x86_push_seg", "seg": "DS" }] }]
+    },
+
+    {
+      "name":  "PopEs",
+      "comment": "0x07 POP ES. (No POP CS at 0x0F — 8086 silicon does pop CS but all assemblers reject it; later x86 reuses 0x0F as 2-byte opcode prefix. We omit it.)",
+      "fields": {}, "mask": "0xFF", "match": "0x07",
+      "instructions": [{ "mnemonic": "POP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §POP", "cycles": { "form": "8" }, "steps": [{ "op": "x86_pop_seg", "seg": "ES" }] }]
+    },
+    {
+      "name":  "PopSs",
+      "fields": {}, "mask": "0xFF", "match": "0x17",
+      "instructions": [{ "mnemonic": "POP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §POP", "cycles": { "form": "8" }, "steps": [{ "op": "x86_pop_seg", "seg": "SS" }] }]
+    },
+    {
+      "name":  "PopDs",
+      "fields": {}, "mask": "0xFF", "match": "0x1F",
+      "instructions": [{ "mnemonic": "POP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §POP", "cycles": { "form": "8" }, "steps": [{ "op": "x86_pop_seg", "seg": "DS" }] }]
+    },
+
+    {
+      "name":  "Pushf",
+      "comment": "0x9C PUSHF. Reserved bits forced per 8086 layout: bits 1+12-15 = 1, bits 3+5 = 0; the 9 architectural flags preserved.",
+      "fields": {}, "mask": "0xFF", "match": "0x9C",
+      "instructions": [{ "mnemonic": "PUSHF", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §PUSHF", "cycles": { "form": "10" }, "steps": [{ "op": "x86_push_flags" }] }]
+    },
+    {
+      "name":  "Popf",
+      "fields": {}, "mask": "0xFF", "match": "0x9D",
+      "instructions": [{ "mnemonic": "POPF", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §POPF", "cycles": { "form": "8" }, "steps": [{ "op": "x86_pop_flags" }] }]
+    },
+
+    {
+      "name":  "PopRm16",
+      "comment": "0x8F /0 POP r/m16. Other 8F /N (1..7) are invalid on 8086 — modrm.reg is dispatched at decode time but we only register /0 here; invalid /N would silently take this path (acceptable since they're undefined on 8086 anyway).\n\nNote 0xFF /6 PUSH r/m16 deliberately omitted from 24.6.5f because the FF group contains 8 different opcode-extension variants (/0=INC, /1=DEC, /2=CALL near, /3=CALL far, /4=JMP near, /5=JMP far, /6=PUSH, /7=invalid). They will be added together in 24.6.7 when CALL/JMP indirect land.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0x8F",
+      "instructions": [
+        {
+          "mnemonic": "POP",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §POP",
+          "cycles": { "form": "8" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_pop_modrm_w16" }
+          ]
+        }
+      ]
     }
 
   ]

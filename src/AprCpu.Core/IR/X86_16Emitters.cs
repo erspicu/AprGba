@@ -64,6 +64,18 @@ public static class X86_16Emitters
         reg.Register(new X86ReadSregFieldEmitter());
         reg.Register(new X86WriteSregFieldEmitter());
 
+        // 24.6.5f — PUSH/POP family. SS:SP-relative stack ops with the
+        // 8088 PUSH-SP quirk (decrement-then-read so PUSH SP pushes the
+        // new SP value).
+        reg.Register(new X86PushReg16FieldEmitter());
+        reg.Register(new X86PopReg16FieldEmitter());
+        reg.Register(new X86PushSegEmitter());
+        reg.Register(new X86PopSegEmitter());
+        reg.Register(new X86PushFlagsEmitter());
+        reg.Register(new X86PopFlagsEmitter());
+        reg.Register(new X86PushModRmW16Emitter());
+        reg.Register(new X86PopModRmW16Emitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -1430,5 +1442,327 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
         ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
         ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+// ============================================================================
+// 24.6.5f — PUSH / POP family. All flavors share two SS:SP primitives:
+//
+//   PushW16(value):
+//       SP -= 2
+//       MEM[SS:SP] = value
+//
+//   PopW16() → value:
+//       value = MEM[SS:SP]
+//       SP += 2
+//
+// 8088 PUSH-SP quirk: silicon decrements SP BEFORE reading the operand
+// register, so PUSH SP pushes the NEW (decremented) SP. We implement
+// this naturally by ordering "decrement SP first, then read GPR" in
+// every reg-source emitter — for fields other than SP the read is
+// independent of SP, so the order doesn't matter; for SP itself the
+// reader sees the post-decrement value, matching silicon. POP has no
+// analogous quirk (POP SP just overwrites SP with the popped value).
+// ============================================================================
+
+internal static class X86StackHelpers
+{
+    /// <summary>SP -= 2; MEM[SS:SP] = value16.</summary>
+    public static void PushW16(EmitContext ctx, LLVMValueRef value16, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var spPtr = ctx.GepGpr(4);   // SP is GPR index 4 in ModR/M order
+        var spOld = ctx.Builder.BuildLoad2(i16, spPtr, $"{label}_sp_old");
+        var spNew = ctx.Builder.BuildSub(spOld,
+            LLVMValueRef.CreateConstInt(i16, 2, false), $"{label}_sp_new");
+        ctx.Builder.BuildStore(spNew, spPtr);
+
+        var ss = X86_16Emitters.LoadSeg16(ctx, "SS", $"{label}_ss");
+        X86_16Emitters.SegmentedWrite16(ctx, ss, spNew, value16, $"{label}_w");
+    }
+
+    /// <summary>Read MEM[SS:SP] → i16; SP += 2.</summary>
+    public static LLVMValueRef PopW16(EmitContext ctx, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var spPtr = ctx.GepGpr(4);
+        var spOld = ctx.Builder.BuildLoad2(i16, spPtr, $"{label}_sp_old");
+        var ss = X86_16Emitters.LoadSeg16(ctx, "SS", $"{label}_ss");
+        var v  = X86_16Emitters.SegmentedRead16(ctx, ss, spOld, $"{label}_v");
+
+        var spNew = ctx.Builder.BuildAdd(spOld,
+            LLVMValueRef.CreateConstInt(i16, 2, false), $"{label}_sp_new");
+        ctx.Builder.BuildStore(spNew, spPtr);
+        return v;
+    }
+}
+
+// ============================================================================
+// x86_push_reg16_field — 0x50-0x57 PUSH r16. The 3-bit reg field encoded
+// in the opcode's low bits selects the source GPR (000=AX..111=DI). The
+// SP decrement happens BEFORE the GPR read so PUSH SP captures the new
+// (decremented) SP value, matching 8088 silicon.
+//
+// JSON shape: { "op": "x86_push_reg16_field", "field": "<name>" }
+// ============================================================================
+
+internal sealed class X86PushReg16FieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_push_reg16_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        // Decrement SP first (8088 PUSH-SP quirk).
+        var spPtr = ctx.GepGpr(4);
+        var spOld = ctx.Builder.BuildLoad2(i16, spPtr, "psh_sp_old");
+        var spNew = ctx.Builder.BuildSub(spOld,
+            LLVMValueRef.CreateConstInt(i16, 2, false), "psh_sp_new");
+        ctx.Builder.BuildStore(spNew, spPtr);
+
+        // Now read GPR by field — for field=SP this gets the post-decrement value.
+        var sel = ctx.Resolve(fieldName);
+        var endBB     = ctx.Function.AppendBasicBlock("psh_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("psh_default");
+        var arms      = new LLVMBasicBlockRef[8];
+        var armVals   = new LLVMValueRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"psh_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            armVals[i] = X86_16Emitters.ReadGpr16(ctx, i, $"psh_{i}_v");
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        var defVal = LLVMValueRef.CreateConstInt(i16, 0, false);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i16, "psh_value");
+        var inVals   = new LLVMValueRef[9];
+        var inBlocks = new LLVMBasicBlockRef[9];
+        for (int i = 0; i < 8; i++) { inVals[i] = armVals[i]; inBlocks[i] = arms[i]; }
+        inVals[8] = defVal; inBlocks[8] = defaultBB;
+        phi.AddIncoming(inVals, inBlocks, 9);
+
+        // Write the value to SS:newSP.
+        var ss = X86_16Emitters.LoadSeg16(ctx, "SS", "psh_ss");
+        X86_16Emitters.SegmentedWrite16(ctx, ss, spNew, phi, "psh_w");
+    }
+}
+
+// ============================================================================
+// x86_pop_reg16_field — 0x58-0x5F POP r16. POP has no quirk — read at
+// SS:SP first, increment SP, write to GPR. POP SP overwrites SP with
+// the popped value (the SP+=2 happens, then the GPR write replaces it).
+//
+// JSON shape: { "op": "x86_pop_reg16_field", "field": "<name>" }
+// ============================================================================
+
+internal sealed class X86PopReg16FieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_pop_reg16_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var v = X86StackHelpers.PopW16(ctx, "pop");
+
+        var sel = ctx.Resolve(fieldName);
+        var endBB     = ctx.Function.AppendBasicBlock("pop_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("pop_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"pop_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            X86_16Emitters.WriteGpr16(ctx, i, v);
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+// ============================================================================
+// x86_push_seg / x86_pop_seg — PUSH/POP segment register (0x06/0x0E/0x16/0x1E
+// for PUSH; 0x07/0x17/0x1F for POP — there is no POP CS at 0x0F, that
+// byte is reserved for the 80286+ 2-byte opcode prefix).
+//
+// JSON shape: { "op": "x86_push_seg", "seg": "ES" }
+//             { "op": "x86_pop_seg",  "seg": "ES" }
+// ============================================================================
+
+internal sealed class X86PushSegEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_push_seg";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var segName = step.Raw.GetProperty("seg").GetString()!;
+        var v = X86_16Emitters.LoadSeg16(ctx, segName, $"psh_{segName}");
+        X86StackHelpers.PushW16(ctx, v, $"psh_{segName}");
+    }
+}
+
+internal sealed class X86PopSegEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_pop_seg";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var segName = step.Raw.GetProperty("seg").GetString()!;
+        var v = X86StackHelpers.PopW16(ctx, $"pop_{segName}");
+        var p = ctx.GepStatusRegister(segName);
+        ctx.Builder.BuildStore(v, p);
+    }
+}
+
+// ============================================================================
+// x86_push_flags / x86_pop_flags — PUSHF (0x9C) / POPF (0x9D).
+//
+// 8086 reserved-bit policy (per Intel iAPX 86,88 manual):
+//   bits 1, 12-15: forced to 1 on PUSHF
+//   bits 3, 5:     forced to 0 on PUSHF
+//   bits 0, 2, 4, 6, 7, 8, 9, 10, 11: the 9 architectural flags
+//
+// PUSHF mask: pushed = (FLAGS & 0x0FD7) | 0xF002
+//   0x0FD7 = real flag bits (CF/PF/AF/ZF/SF/TF/IF/DF/OF) preserved
+//   0xF002 = bit 1 + bits 12-15 forced to 1
+//
+// POPF: write the popped value as-is into FLAGS storage. Reserved bits
+// in our representation are read-mostly (only PUSHF/PUSHFD observe them).
+// Tom Harte SST coverage in 24.6.7 will surface any silicon-quirk
+// mismatches; this minimal mask is correct for non-reserved-bit
+// programs (i.e. all real software).
+// ============================================================================
+
+internal sealed class X86PushFlagsEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_push_flags";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        var raw = ctx.Builder.BuildLoad2(i16, fPtr, "psh_flags_raw");
+        var keep = ctx.Builder.BuildAnd(raw,
+            LLVMValueRef.CreateConstInt(i16, 0x0FD7, false), "psh_flags_keep");
+        var masked = ctx.Builder.BuildOr(keep,
+            LLVMValueRef.CreateConstInt(i16, 0xF002, false), "psh_flags_masked");
+        X86StackHelpers.PushW16(ctx, masked, "psh_flags");
+    }
+}
+
+internal sealed class X86PopFlagsEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_pop_flags";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var v = X86StackHelpers.PopW16(ctx, "pop_flags");
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        ctx.Builder.BuildStore(v, fPtr);
+    }
+}
+
+// ============================================================================
+// x86_push_modrm_w16 / x86_pop_modrm_w16 — PUSH r/m16 (0xFF /6) and
+// POP r/m16 (0x8F /0). Both follow the existing fetch_modrm +
+// modrm_compute_ea pattern, then route through the appropriate
+// stack helper depending on mod=11 vs memory.
+//
+// PUSH r/m16:
+//   if mod=11: SP-=2; write GPR[rm] (post-decrement value if rm=SP)
+//   else:      load value from EA; SP-=2; write value to SS:SP
+//
+// POP r/m16:
+//   read at SS:SP; SP+=2; write to GPR[rm] OR memory (overwrites SP if rm=SP)
+// ============================================================================
+
+internal sealed class X86PushModRmW16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_push_modrm_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var mod = ctx.Resolve("modrm_mod");
+        var rm  = ctx.Resolve("modrm_rm");
+
+        var isReg = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, mod,
+            LLVMValueRef.CreateConstInt(i32, 3, false), "pshrm_isreg");
+
+        var regBB = ctx.Function.AppendBasicBlock("pshrm_reg");
+        var memBB = ctx.Function.AppendBasicBlock("pshrm_mem");
+        var endBB = ctx.Function.AppendBasicBlock("pshrm_end");
+        ctx.Builder.BuildCondBr(isReg, regBB, memBB);
+
+        // Reg path: same as push_reg16_field — decrement SP, then read GPR.
+        ctx.Builder.PositionAtEnd(regBB);
+        var spPtr = ctx.GepGpr(4);
+        var spOld = ctx.Builder.BuildLoad2(i16, spPtr, "pshrm_sp_old");
+        var spNew = ctx.Builder.BuildSub(spOld,
+            LLVMValueRef.CreateConstInt(i16, 2, false), "pshrm_sp_new");
+        ctx.Builder.BuildStore(spNew, spPtr);
+        // Switch on rm to pick the GPR (after decrement, so SP gives new value).
+        var armEnd     = ctx.Function.AppendBasicBlock("pshrm_arm_end");
+        var armDef     = ctx.Function.AppendBasicBlock("pshrm_arm_def");
+        var armBlocks  = new LLVMBasicBlockRef[8];
+        var armVals    = new LLVMValueRef[8];
+        for (int i = 0; i < 8; i++) armBlocks[i] = ctx.Function.AppendBasicBlock($"pshrm_arm_{i}");
+        var sw = ctx.Builder.BuildSwitch(rm, armDef, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), armBlocks[i]);
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(armBlocks[i]);
+            armVals[i] = X86_16Emitters.ReadGpr16(ctx, i, $"pshrm_arm_{i}_v");
+            ctx.Builder.BuildBr(armEnd);
+        }
+        ctx.Builder.PositionAtEnd(armDef);
+        var defVal = LLVMValueRef.CreateConstInt(i16, 0, false);
+        ctx.Builder.BuildBr(armEnd);
+        ctx.Builder.PositionAtEnd(armEnd);
+        var phi = ctx.Builder.BuildPhi(i16, "pshrm_v");
+        var pIns = new LLVMValueRef[9]; var pBlk = new LLVMBasicBlockRef[9];
+        for (int i = 0; i < 8; i++) { pIns[i] = armVals[i]; pBlk[i] = armBlocks[i]; }
+        pIns[8] = defVal; pBlk[8] = armDef;
+        phi.AddIncoming(pIns, pBlk, 9);
+        var ssReg = X86_16Emitters.LoadSeg16(ctx, "SS", "pshrm_ss");
+        X86_16Emitters.SegmentedWrite16(ctx, ssReg, spNew, phi, "pshrm_w");
+        ctx.Builder.BuildBr(endBB);
+
+        // Mem path: load operand value from EA first, then push.
+        ctx.Builder.PositionAtEnd(memBB);
+        var seg = ctx.Resolve("ea_seg");
+        var off = ctx.Resolve("ea_off");
+        var memVal = X86_16Emitters.SegmentedRead16(ctx, seg, off, "pshrm_mem_v");
+        X86StackHelpers.PushW16(ctx, memVal, "pshrm_mem");
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+internal sealed class X86PopModRmW16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_pop_modrm_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // Pop the value first (read + SP+=2), then write to dest. For
+        // mod=11 r/m=SP this overwrites SP with the popped value (not
+        // SP+2) — that's the architectural semantic.
+        var v = X86StackHelpers.PopW16(ctx, "poprm");
+        X86ModRmMemHelpers.BuildStoreW16(ctx, v);
     }
 }
