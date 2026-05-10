@@ -1,13 +1,13 @@
 # 8086 移植計畫 — 最低環境 CPU 驗證 + 截圖證明
 
-> **Status**：**IN PROGRESS**（2026-05-10）— 24.0–24.5 完工 (13 commits, 6
-> paper-quality screenshots, 1.31M Tom Harte SST cases 全綠)；
-> 24.6 JSON-driven port: **24.6.1–24.6.6 + 24.6.7 整段 完工** (26 commits,
-> 159/159 JsonCpu tests + 832/832 T1，~217 unique opcodes — 完整
-> data-transfer + ALU + 控流 + shift count=1+CL + string+REP +
-> flag-manip/IO + INT/IRET + FE/FF group + BCD + DIV/IDIV)；
-> **24.6.8 卡在 framework refactor (BlockDetector length oracle 不夠彈性)**；
-> 24.6.9 待 24.6.8；24.7 + 24.8 為後續 milestone。
+> **Status**：**24.6 完工**（2026-05-10）— 24.0–24.5 (13 commits) +
+> 24.6.1–24.6.9 (29 commits) 全部 ship。Three-backend parity:
+> legacy (1.31M Tom Harte SST) / json-llvm (per-instr) / json-block-llvm
+> (block-JIT). T1 836/836 全綠. 6 paper-quality screenshots × 2 backends
+> (legacy + json-block) = 12 PNGs，SHA256 pixel-identical 配對全綠。
+> "Framework genericity for 4 CPUs" claim 端到端達成：ARM7TDMI / LR35902 /
+> Ricoh 2A03 / Intel 8086 都走同一條 SpecCompiler → LLVM IR → ORC LLJIT
+> pipeline。後續：24.7 (80186 inheritance) + 24.8 (80286 protected mode)。
 >
 > **Trigger**：第 4 顆 CPU 候選 = Intel 8086（用以前寫的 Apr86 emulator
 > 當 reference oracle 的部分）。要解決的核心問題：8086 是 CISC、segmented
@@ -294,14 +294,12 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 
 ## 8. Phase plan
 
-> **目前累計**（2026-05-10）：39 個 commits（24.0 → 24.5：13 + 24.6.1 →
-> 24.6.7b2：26）；T1 baseline 832/832 全綠；JSON-driven backend 已覆蓋
-> **~217 unique opcodes** — **24.6.5 + 24.6.6 + 24.6.7 整段 ✅**。
-> 完整 data-transfer + ALU + 控流 + shift count=1+CL + string ops +
-> REP/REPE/REPNE + INT/IRET + flag-manip + IO + FE/FF group + BCD +
-> DIV/IDIV。**24.6.8 (block-JIT) 卡在 framework refactor 需求**（見下表
-> 註記），**24.6.9 (demo 重跑) 取決於 24.6.8**；24.7 (80186) + 24.8
-> (80286) 是後續 milestone。
+> **目前累計**（2026-05-10）：**24.6 整段 ✅**。42 個 commits（24.0 → 24.5：13 +
+> 24.6.1 → 24.6.9：29）；T1 836/836 全綠；JSON-driven backend 覆蓋
+> **~217 unique opcodes**；三 backend (legacy / json-llvm /
+> json-block-llvm) 全綠；6 demo screenshots × 2 backend SHA256
+> pixel-identical。剩 24.7 (80186 inheritance) + 24.8 (80286 protected
+> mode) 為後續 milestone。
 
 | Phase | 內容 | 成果 | 狀態 | Commit / 紀錄 |
 |---|---|---|---|---|
@@ -348,8 +346,8 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | 24.6.7f | BCD ops — DAA/DAS/AAA/AAS/AAM/AAD (silicon flag quirks partial; full Tom Harte SST validation deferred) | 5 tests；6 opcodes | ✅ | `f65cd13` |
 | 24.6.7g | DIV/IDIV r/m8 + r/m16 (F6/F7 /6 /7) — quotient/remainder; divide-by-zero silently no-op (INT 0 trap deferred); flags undefined per Intel | 4 tests；4 sub-ops | ✅ | `5958c0b` |
 | 24.6.7b2 | Shift by CL (D2/D3) — SHL/SHR/SAR via LLVM precomputed shifts; ROL/ROR/RCL/RCR fall back to count=1 IR (silicon-accurate count>1 deferred). count=0 → no-op. | 5 tests；2 group opcodes | ✅ | `f70f260` |
-| 24.6.8 | Block-JIT mode — alloca + mem2reg + IR-level cycle budget (à la N1.B' for NES) | 需要先 framework refactor — BlockDetector 的 length oracle 是 `Func<byte, int>` 回 1-4 bytes，但 8086 instruction 1-15 bytes 且 length 取決於 ModR/M (不只 opcode)。`Func<IBus, uint pc, int>` + 提高 max-len cap 是必要 framework extension。Multi-commit work；單一 session 無法 ship。 | 🚧 framework-blocked | — |
-| 24.6.9 | Re-run 24.5 demos through json-block backend | 取決於 24.6.8。一旦 block-JIT ship，re-run trivial。 | ⏳ blocked-by 24.6.8 | — |
+| 24.6.8 | Block-JIT mode — Gemini 2026-05-10 review 確認 framework refactor 必要；做了 minimal extension：BlockDetector 加 `Func<IMemoryBus, uint, int>` overload + max-len cap 4→15；x86 length oracle 含 prefix walking + ModR/M 看 mod 算 disp + F6/F7 看 reg 算 imm；BlockFunctionBuilder PC pre-write 擴展支援 "IP" register name | 4 tests ✅；Three-backend parity 達成 (legacy / json-llvm / json-block-llvm) | ✅ | `08d8ef8` |
+| 24.6.9 | Re-run 24.5 demos through json-block — 6 demos (hello-cga/primes/fibonacci/mandelbrot/string-copy/factorial) | result/x86-16/jit-block/*.png 6 張 SHA256 pixel-identical 對 legacy 版 | ✅ | `6f0045a` |
 | **24.6b** | (optional) Lockstep diff legacy vs Apr86（限 .com 程式範圍） | Apr86 reference cross-check | ⏳ | — |
 | **24.7** | 80186 spec — 透過 inheritance (#23) | ENTER/LEAVE demo + result/x86-16/enter-leave-i80186.png | ⏳ | — |
 | **24.8** | 80286 real-mode + protected-mode demos | 4 顆 CPU 全綠 + result/x86-16/protmode-msr-i80286.png | ⏳ | — |
