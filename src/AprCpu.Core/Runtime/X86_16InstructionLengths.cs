@@ -53,6 +53,36 @@ public static class X86_16InstructionLengths
         byte opcode = bus.ReadByte(cur);
         cur++;
 
+        // Sprint 26.2 — 80286 0x0F escape prefix. The "real" opcode is the
+        // SECOND byte; our length table covers the i80286 system-instruction
+        // subset (0F 00 / 01 / 02 / 03 + ModR/M, 0F 06 = CLTS no operand,
+        // 0F 20-27 reserved on 286, 0F 30+ later 386+ stuff). For unknown
+        // 0F XX combinations return 2 (defensive — caller will see decode
+        // failure rather than over-walking the instruction stream).
+        //
+        // Decoder dispatch (which formats to match against) lands in
+        // sprint 26.3; this function only computes length so BlockDetector
+        // doesn't end the block on a 0F prefix.
+        if (opcode == 0x0F && cur < pc + 15)
+        {
+            byte op2 = bus.ReadByte(cur);
+            cur++;
+            // 0F 00 (LLDT/SLDT/LTR/STR/VERR/VERW group): ModR/M + maybe disp.
+            // 0F 01 (LGDT/LIDT/SGDT/SIDT/SMSW/LMSW group): same.
+            // 0F 02 (LAR), 0F 03 (LSL): ModR/M + maybe disp.
+            if (op2 is 0x00 or 0x01 or 0x02 or 0x03 && cur < pc + 15)
+            {
+                byte modrm = bus.ReadByte(cur);
+                cur++;
+                cur += (uint)ModRmDispBytes(modrm);
+            }
+            // 0F 06 CLTS: 2 bytes total, no operand.
+            // 0F 07 LOADALL (286 undocumented): 2 bytes — treat same.
+            // anything else: 2 bytes (defensive).
+            var total0F = (int)(cur - pc);
+            return total0F > 15 ? 15 : total0F;
+        }
+
         // F6/F7 group: length depends on modrm.reg.
         // /0=TEST (with imm), /1=alias TEST (with imm), /2=NOT, /3=NEG,
         // /4=MUL, /5=IMUL, /6=DIV, /7=IDIV.
