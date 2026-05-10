@@ -1801,8 +1801,6 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
         var inArr     = step.Raw.GetProperty("in");
         var valueName = inArr[0].GetString()!;
 
-        var i8  = LLVMTypeRef.Int8;
-        var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
         var sel   = ctx.Resolve(fieldName);
         var value = ctx.Resolve(valueName);
@@ -1825,10 +1823,6 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
             sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
 
         var names = new[] { "ES", "CS", "SS", "DS" };
-        // Real-mode access-rights default per Intel: CS = 0x9B (executable),
-        // ES/SS/DS = 0x93 (writable data). Reset/SetEntryPoint already use
-        // these; same defaults here on segment-register write keep cache
-        // consistent.
         var accessByIdx = new byte[] { 0x93, 0x9B, 0x93, 0x93 };
         for (int i = 0; i < 4; i++)
         {
@@ -1836,28 +1830,9 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
             var p = ctx.GepStatusRegister(names[i]);
             ctx.Builder.BuildStore(value, p);
 
-            // Sprint 27.10d wave 7 — when cache slots are declared, also
-            // update <seg>_BASE/_LIMIT/_ACCESS from the new selector.
-            // Real-mode behavior: BASE = sel << 4, LIMIT = 0xFFFF, ACCESS
-            // = real-mode default.
-            // Phase 27.x future: if MSW.PE = 1 (protected mode), this
-            // arm would instead read the descriptor from GDT/LDT and
-            // populate cache from it. Currently the protected-mode
-            // path is identical to real-mode (cache base = sel << 4)
-            // because no descriptor fetch is wired yet — the wave 7
-            // ground sits below; later sprints make protected mode
-            // diverge.
             if (hasCacheSlots)
             {
-                var selZ = ctx.Builder.BuildZExt(value, i32, $"wsreg_{i}_selz");
-                var baseShift = ctx.Builder.BuildShl(selZ,
-                    LLVMValueRef.CreateConstInt(i32, 4, false), $"wsreg_{i}_basesh");
-                ctx.Builder.BuildStore(baseShift,
-                    ctx.GepStatusRegister(names[i] + "_BASE"));
-                ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i16, 0xFFFF, false),
-                    ctx.GepStatusRegister(names[i] + "_LIMIT"));
-                ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, accessByIdx[i], false),
-                    ctx.GepStatusRegister(names[i] + "_ACCESS"));
+                EmitSegCacheUpdate(ctx, names[i], value, accessByIdx[i], $"wsreg_{i}");
             }
             ctx.Builder.BuildBr(endBB);
         }
@@ -1865,6 +1840,97 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
         ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
         ctx.Builder.PositionAtEnd(endBB);
+    }
+
+    /// <summary>
+    /// Sprint 27.10d wave 8 — emit cache-update IR for one segment register.
+    /// Branches on MSW.PE:
+    ///   PE=0 (real mode): BASE = sel << 4, LIMIT = 0xFFFF, ACCESS = default.
+    ///   PE=1 (protected mode): GDT[sel.index].descriptor → BASE/LIMIT/ACCESS.
+    /// LDT (TI=1) selectors fall through to the GDT path for now — proper
+    /// LDT handling needs LDTR descriptor lookup first (deferred to a future
+    /// sprint; affects only programs that actually load LDT-based selectors,
+    /// which our demos don't).
+    /// Privilege check (CPL/RPL/DPL) deferred to Sprint 27.11 (#GP exception
+    /// model).
+    /// </summary>
+    private static void EmitSegCacheUpdate(
+        EmitContext ctx, string segName, LLVMValueRef sel16, byte realModeAccess, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var basePtr   = ctx.GepStatusRegister(segName + "_BASE");
+        var limitPtr  = ctx.GepStatusRegister(segName + "_LIMIT");
+        var accessPtr = ctx.GepStatusRegister(segName + "_ACCESS");
+
+        // Read MSW.PE bit.
+        var msw = ctx.Builder.BuildLoad2(i16, ctx.GepStatusRegister("MSW"), $"{label}_msw");
+        var peMask = ctx.Builder.BuildAnd(msw,
+            LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_peM");
+        var pe = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, peMask,
+            LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_pe");
+
+        var realBB = ctx.Function.AppendBasicBlock($"{label}_real");
+        var protBB = ctx.Function.AppendBasicBlock($"{label}_prot");
+        var doneBB = ctx.Function.AppendBasicBlock($"{label}_done");
+        ctx.Builder.BuildCondBr(pe, protBB, realBB);
+
+        // === Real-mode arm ===
+        ctx.Builder.PositionAtEnd(realBB);
+        var selZ = ctx.Builder.BuildZExt(sel16, i32, $"{label}_selz");
+        var realBase = ctx.Builder.BuildShl(selZ,
+            LLVMValueRef.CreateConstInt(i32, 4, false), $"{label}_realbase");
+        ctx.Builder.BuildStore(realBase, basePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i16, 0xFFFF, false), limitPtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, realModeAccess, false), accessPtr);
+        ctx.Builder.BuildBr(doneBB);
+
+        // === Protected-mode arm: GDT descriptor fetch ===
+        ctx.Builder.PositionAtEnd(protBB);
+        var gdtBase = ctx.Builder.BuildLoad2(i32,
+            ctx.GepStatusRegister("GDTR_BASE"), $"{label}_gdt");
+        var selZ2 = ctx.Builder.BuildZExt(sel16, i32, $"{label}_selz2");
+        // sel.index * 8 = selector with low 3 bits cleared
+        var idxBytes = ctx.Builder.BuildAnd(selZ2,
+            LLVMValueRef.CreateConstInt(i32, 0xFFF8, false), $"{label}_idxb");
+        var descAddr = ctx.Builder.BuildAdd(gdtBase, idxBytes, $"{label}_dsc");
+
+        // Read 8 descriptor bytes. (Bytes 6-7 = reserved on 286, ignored.)
+        var bytes = new LLVMValueRef[6];
+        for (int b = 0; b < 6; b++)
+        {
+            var off = ctx.Builder.BuildAdd(descAddr,
+                LLVMValueRef.CreateConstInt(i32, (uint)b, false), $"{label}_a{b}");
+            bytes[b] = MemoryEmitters.CallRead8(ctx, off, $"{label}_b{b}");
+        }
+
+        // limit = byte0 | (byte1 << 8) at i16
+        var b0z = ctx.Builder.BuildZExt(bytes[0], i16, $"{label}_b0z");
+        var b1z = ctx.Builder.BuildZExt(bytes[1], i16, $"{label}_b1z");
+        var b1sh = ctx.Builder.BuildShl(b1z,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_b1sh");
+        var limit = ctx.Builder.BuildOr(b0z, b1sh, $"{label}_lim");
+
+        // base = byte2 | (byte3 << 8) | (byte4 << 16) at i32
+        var b2z = ctx.Builder.BuildZExt(bytes[2], i32, $"{label}_b2z");
+        var b3z = ctx.Builder.BuildZExt(bytes[3], i32, $"{label}_b3z");
+        var b4z = ctx.Builder.BuildZExt(bytes[4], i32, $"{label}_b4z");
+        var b3sh = ctx.Builder.BuildShl(b3z,
+            LLVMValueRef.CreateConstInt(i32, 8, false), $"{label}_b3sh");
+        var b4sh = ctx.Builder.BuildShl(b4z,
+            LLVMValueRef.CreateConstInt(i32, 16, false), $"{label}_b4sh");
+        var basePart = ctx.Builder.BuildOr(b2z, b3sh, $"{label}_bp");
+        var protBase = ctx.Builder.BuildOr(basePart, b4sh, $"{label}_pbase");
+
+        ctx.Builder.BuildStore(protBase, basePtr);
+        ctx.Builder.BuildStore(limit,    limitPtr);
+        ctx.Builder.BuildStore(bytes[5], accessPtr);
+        ctx.Builder.BuildBr(doneBB);
+
+        // === Done ===
+        ctx.Builder.PositionAtEnd(doneBB);
     }
 }
 
