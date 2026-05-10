@@ -504,6 +504,18 @@ public static class X86_16Emitters
         return MemoryEmitters.CallRead8(ctx, lin, label);
     }
 
+    /// <summary>Sprint 27.13b — read 8-bit from precomputed 32-bit base + 16-bit offset.
+    /// Used by ModR/M load/store helpers to consume ea_base directly (which on
+    /// i80286 is the cache-aware base, falling back to (sel &lt;&lt; 4) on i8086/186).</summary>
+    internal static LLVMValueRef SegmentedRead8FromBase(
+        EmitContext ctx, LLVMValueRef base32, LLVMValueRef off16, string label)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var offZ = ctx.Builder.BuildZExt(off16, i32, $"{label}_offz");
+        var lin = ctx.Builder.BuildAdd(base32, offZ, $"{label}_lin");
+        return MemoryEmitters.CallRead8(ctx, lin, label);
+    }
+
     /// <summary>Store an i8 to seg:off via memory_write_8.</summary>
     internal static void SegmentedWrite8(
         EmitContext ctx, LLVMValueRef seg16, LLVMValueRef off16, LLVMValueRef value8, string label)
@@ -518,6 +530,48 @@ public static class X86_16Emitters
     {
         var lin = SegmentedLinear(ctx, segName, off16, $"{label}_lin");
         MemoryEmitters.CallWrite8(ctx, lin, value8);
+    }
+
+    /// <summary>Sprint 27.13b — write 8-bit at precomputed 32-bit base + 16-bit offset.</summary>
+    internal static void SegmentedWrite8FromBase(
+        EmitContext ctx, LLVMValueRef base32, LLVMValueRef off16, LLVMValueRef value8, string label)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var offZ = ctx.Builder.BuildZExt(off16, i32, $"{label}_offz");
+        var lin = ctx.Builder.BuildAdd(base32, offZ, $"{label}_lin");
+        MemoryEmitters.CallWrite8(ctx, lin, value8);
+    }
+
+    /// <summary>Sprint 27.13b — read 16-bit at precomputed 32-bit base + 16-bit offset.</summary>
+    internal static LLVMValueRef SegmentedRead16FromBase(
+        EmitContext ctx, LLVMValueRef base32, LLVMValueRef off16, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var lo = SegmentedRead8FromBase(ctx, base32, off16, $"{label}_lo");
+        var off1 = ctx.Builder.BuildAdd(off16,
+            LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_off1");
+        var hi = SegmentedRead8FromBase(ctx, base32, off1, $"{label}_hi");
+        var loZ  = ctx.Builder.BuildZExt(lo, i16, $"{label}_loz");
+        var hiZ  = ctx.Builder.BuildZExt(hi, i16, $"{label}_hiz");
+        var hiSh = ctx.Builder.BuildShl(hiZ,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi_sh");
+        return ctx.Builder.BuildOr(hiSh, loZ, label);
+    }
+
+    /// <summary>Sprint 27.13b — write 16-bit at precomputed 32-bit base + 16-bit offset.</summary>
+    internal static void SegmentedWrite16FromBase(
+        EmitContext ctx, LLVMValueRef base32, LLVMValueRef off16, LLVMValueRef value16, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var lo = ctx.Builder.BuildTrunc(value16, i8, $"{label}_lo");
+        SegmentedWrite8FromBase(ctx, base32, off16, lo, $"{label}_loW");
+        var hi16 = ctx.Builder.BuildLShr(value16,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi16");
+        var hi   = ctx.Builder.BuildTrunc(hi16, i8, $"{label}_hi");
+        var off1 = ctx.Builder.BuildAdd(off16,
+            LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_off1");
+        SegmentedWrite8FromBase(ctx, base32, off1, hi, $"{label}_hiW");
     }
 
     /// <summary>
@@ -1394,11 +1448,11 @@ internal static class X86ModRmMemHelpers
         var regBlock = ctx.Builder.InsertBlock;
         ctx.Builder.BuildBr(endBB);
 
-        // mem path — segmented read at ea_seg:ea_off.
+        // mem path — Sprint 27.13b: read at ea_base:ea_off (cache-aware).
         ctx.Builder.PositionAtEnd(memBB);
-        var seg = ctx.Resolve("ea_seg");
+        var memBase = ctx.Resolve("ea_base");
         var off = ctx.Resolve("ea_off");
-        var memVal = X86_16Emitters.SegmentedRead8(ctx, seg, off, $"{outName}_mem_v");
+        var memVal = X86_16Emitters.SegmentedRead8FromBase(ctx, memBase, off, $"{outName}_mem_v");
         var memBlock = ctx.Builder.InsertBlock;
         ctx.Builder.BuildBr(endBB);
 
@@ -1428,9 +1482,10 @@ internal static class X86ModRmMemHelpers
         ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(memBB);
-        var seg = ctx.Resolve("ea_seg");
+        // Sprint 27.13b — read via cache-aware ea_base.
+        var memBase = ctx.Resolve("ea_base");
         var off = ctx.Resolve("ea_off");
-        var memVal = X86_16Emitters.SegmentedRead16(ctx, seg, off, $"{outName}_mem_v");
+        var memVal = X86_16Emitters.SegmentedRead16FromBase(ctx, memBase, off, $"{outName}_mem_v");
         var memBlock = ctx.Builder.InsertBlock;
         ctx.Builder.BuildBr(endBB);
 
@@ -1458,9 +1513,10 @@ internal static class X86ModRmMemHelpers
         ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(memBB);
-        var seg = ctx.Resolve("ea_seg");
+        // Sprint 27.13b — store via cache-aware ea_base.
+        var stw8Base = ctx.Resolve("ea_base");
         var off = ctx.Resolve("ea_off");
-        X86_16Emitters.SegmentedWrite8(ctx, seg, off, value8, "stw8_w");
+        X86_16Emitters.SegmentedWrite8FromBase(ctx, stw8Base, off, value8, "stw8_w");
         ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(endBB);
@@ -1484,9 +1540,10 @@ internal static class X86ModRmMemHelpers
         ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(memBB);
-        var seg = ctx.Resolve("ea_seg");
+        // Sprint 27.13b — store via cache-aware ea_base.
+        var stw16Base = ctx.Resolve("ea_base");
         var off = ctx.Resolve("ea_off");
-        X86_16Emitters.SegmentedWrite16(ctx, seg, off, value16, "stw16_w");
+        X86_16Emitters.SegmentedWrite16FromBase(ctx, stw16Base, off, value16, "stw16_w");
         ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(endBB);
