@@ -109,6 +109,26 @@
         { "op": "x86_modrm_load_w16", "out": "lhs" },
         { "op": "x86_shift_rotate_w16_count1" }
       ]}]
+    },
+    {
+      "name": "ShiftRotateD2",
+      "comment": "0xD2 r/m8, CL — same dispatcher as D0 but count from CL. SHL/SHR/SAR via LLVM precomputed shifts; ROL/ROR/RCL/RCR currently emit count=1 IR (silicon-accurate count>1 deferred).",
+      "fields": {}, "mask": "0xFF", "match": "0xD2",
+      "instructions": [{ "mnemonic": "ShiftRot8_CL", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §shifts/rotates", "cycles": { "form": "8" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8", "out": "lhs" },
+        { "op": "x86_shift_rotate_w8_count_cl" }
+      ]}]
+    },
+    {
+      "name": "ShiftRotateD3",
+      "comment": "0xD3 r/m16, CL — 16-bit counterpart of D2.",
+      "fields": {}, "mask": "0xFF", "match": "0xD3",
+      "instructions": [{ "mnemonic": "ShiftRot16_CL", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §shifts/rotates", "cycles": { "form": "8" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16", "out": "lhs" },
+        { "op": "x86_shift_rotate_w16_count_cl" }
+      ]}]
     }
 
   ]

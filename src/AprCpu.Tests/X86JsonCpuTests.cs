@@ -3067,6 +3067,85 @@ public class X86JsonCpuTests
         Assert.Equal(0x1234, cpu.State.A.X);
     }
 
+    // ---------------- 24.6.7b2 — shift by CL (D2/D3) ----------------
+
+    /// <summary>0xD2 /4 SHL AL, CL with CL=3: AL=0x05 → 0x28.</summary>
+    [Fact]
+    public void Step_ShlAlCl_ByThree()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD2, 0xE0, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x05; s.C.L = 3;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x28, cpu.State.A.L);   // 5 << 3
+    }
+
+    /// <summary>SHL AL, CL with CL=0 → AL unchanged, no flag update.</summary>
+    [Fact]
+    public void Step_ShlAlCl_CountZero_NoOp()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD2, 0xE0, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x42; s.C.L = 0;
+        s.FlagC = true;     // would normally be cleared by shift; verify preserved
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x42, cpu.State.A.L);
+        Assert.True(cpu.State.FlagC);   // CF preserved per "count=0 doesn't touch flags"
+    }
+
+    /// <summary>0xD2 /5 SHR AL, CL with CL=2: AL=0x80 → 0x20.</summary>
+    [Fact]
+    public void Step_ShrAlCl_ByTwo()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD2, 0xE8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x80; s.C.L = 2;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x20, cpu.State.A.L);
+    }
+
+    /// <summary>0xD2 /7 SAR AL, CL with CL=3: AL=0x80 (-128) → 0xF0 (-16).</summary>
+    [Fact]
+    public void Step_SarAlCl_ArithmeticShift()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD2, 0xF8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x80; s.C.L = 3;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xF0, cpu.State.A.L);
+    }
+
+    /// <summary>0xD3 /4 SHL AX, CL with CL=4: AX=0x0001 → 0x0010.</summary>
+    [Fact]
+    public void Step_ShlAxCl_W16()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD3, 0xE0, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x0001; s.C.L = 4;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0010, cpu.State.A.X);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,
