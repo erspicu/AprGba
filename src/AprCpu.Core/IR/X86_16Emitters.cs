@@ -196,9 +196,10 @@ public static class X86_16Emitters
         reg.Register(new X86AamEmitter());
         reg.Register(new X86AadEmitter());
 
-        // Phase 26 — 80286 system instructions (real-mode subset).
+        // Phase 26/27 — 80286 system instructions (real-mode subset).
         reg.Register(new X86Clts286StubEmitter());
         reg.Register(new X86286ZeroOneDispatchEmitter());
+        reg.Register(new X86286ZeroZeroDispatchEmitter());
 
         // Phase 25 — 80186 additions (referenced from i80186 spec via
         // inheritance overlay). 12 new opcodes + PUSH SP silicon-quirk fix.
@@ -5632,6 +5633,83 @@ internal sealed class X86Clts286StubEmitter : IMicroOpEmitter
     {
         // intentionally empty — no IR generated; LLVM will see only the
         // BlockFunctionBuilder's auto-br at the end of execBB.
+    }
+}
+
+// x86_286_zero_zero_dispatch — 0F 00 group on i80286. ModR/M.reg selects:
+//   /0 SLDT r/m16   ✅ Sprint 27.3 — read LDTR, store to r/m16
+//   /1 STR r/m16    ✅ Sprint 27.3 — read TR, store to r/m16
+//   /2 LLDT r/m16   ✅ Sprint 27.3 — load r/m16, write to LDTR
+//   /3 LTR r/m16    ✅ Sprint 27.3 — load r/m16, write to TR
+//   /4 VERR r/m16   ✅ Sprint 27.3 — real-mode no-op (clears ZF)
+//   /5 VERW r/m16   ✅ Sprint 27.3 — real-mode no-op (clears ZF)
+//   /6 /7 invalid (treated as no-op stub)
+internal sealed class X86286ZeroZeroDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_286_zero_zero_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var sel = ctx.Resolve("modrm_reg");
+        var endBB     = ctx.Function.AppendBasicBlock("z00_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("z00_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"z00_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        // /0 SLDT: store LDTR to r/m16.
+        ctx.Builder.PositionAtEnd(arms[0]);
+        var ldtrV = ctx.Builder.BuildLoad2(i16, ctx.GepStatusRegister("LDTR"), "z00_0_ldtr");
+        X86ModRmMemHelpers.BuildStoreW16(ctx, ldtrV);
+        ctx.Builder.BuildBr(endBB);
+
+        // /1 STR: store TR to r/m16.
+        ctx.Builder.PositionAtEnd(arms[1]);
+        var trV = ctx.Builder.BuildLoad2(i16, ctx.GepStatusRegister("TR"), "z00_1_tr");
+        X86ModRmMemHelpers.BuildStoreW16(ctx, trV);
+        ctx.Builder.BuildBr(endBB);
+
+        // /2 LLDT: load r/m16, write to LDTR.
+        ctx.Builder.PositionAtEnd(arms[2]);
+        var ldtrSrc = X86ModRmMemHelpers.BuildLoadW16(ctx, "z00_2_src");
+        ctx.Builder.BuildStore(ldtrSrc, ctx.GepStatusRegister("LDTR"));
+        ctx.Builder.BuildBr(endBB);
+
+        // /3 LTR: load r/m16, write to TR.
+        ctx.Builder.PositionAtEnd(arms[3]);
+        var trSrc = X86ModRmMemHelpers.BuildLoadW16(ctx, "z00_3_src");
+        ctx.Builder.BuildStore(trSrc, ctx.GepStatusRegister("TR"));
+        ctx.Builder.BuildBr(endBB);
+
+        // /4 VERR + /5 VERW: real-mode no-op. Per Intel 80286 PRM, VERR/VERW
+        // in real mode is undefined; common behavior is clearing ZF (segment
+        // not verifiable). We implement the ZF=0 clear so the demo can
+        // observe the no-op semantics.
+        for (int armIdx = 4; armIdx <= 5; armIdx++)
+        {
+            ctx.Builder.PositionAtEnd(arms[armIdx]);
+            var flags = X86CtrlHelpers.LoadFlags(ctx, $"z00_{armIdx}");
+            // Clear ZF (bit 6) — flags & ~(1 << 6).
+            var cleared = ctx.Builder.BuildAnd(flags,
+                LLVMValueRef.CreateConstInt(i16, unchecked((ushort)~(1 << 6)), false),
+                $"z00_{armIdx}_zf_clear");
+            ctx.Builder.BuildStore(cleared, ctx.GepStatusRegister("FLAGS"));
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        // /6 /7 — invalid (stub no-op).
+        ctx.Builder.PositionAtEnd(arms[6]);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[7]);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
     }
 }
 

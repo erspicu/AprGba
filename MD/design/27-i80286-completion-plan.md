@@ -99,7 +99,7 @@ multi-week effort for 27b.
 |---|---|---|---|
 | 27.1 MSW + real LMSW | ✅ | `95e5138` | 2026-05-11 |
 | 27.2 LGDT/LIDT + GDTR/IDTR | ✅ | `5c2a70a` | 2026-05-11 |
-| 27.3 0F 00 group | ⏳ pending | — | — |
+| 27.3 0F 00 group | ✅ | (pending) | 2026-05-11 |
 | 27.4 LAR/LSL stubs | ⏳ pending | — | — |
 | 27.5 27a closure docs | ⏳ pending | — | — |
 

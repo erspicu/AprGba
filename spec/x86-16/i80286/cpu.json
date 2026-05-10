@@ -84,6 +84,18 @@
         "width_bits": 32,
         "comment":    "Sprint 27.2 — IDTR base address. Same shape as GDTR_BASE.",
         "fields": {}
+      },
+      {
+        "name":       "LDTR",
+        "width_bits": 16,
+        "comment":    "Sprint 27.3 — Local Descriptor Table register. 16-bit selector (real-mode is just an opaque 16-bit value; Phase 27b protected-mode dereferences it through GDT). LLDT writes; SLDT reads. Reset = 0.",
+        "fields": {}
+      },
+      {
+        "name":       "TR",
+        "width_bits": 16,
+        "comment":    "Sprint 27.3 — Task Register selector. Same shape as LDTR. LTR writes; STR reads. Reset = 0.",
+        "fields": {}
       }
     ]
   },
