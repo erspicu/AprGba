@@ -76,6 +76,11 @@ public static class X86_16Emitters
         reg.Register(new X86PushModRmW16Emitter());
         reg.Register(new X86PopModRmW16Emitter());
 
+        // 24.6.5g — XCHG / LEA / LDS / LES.
+        reg.Register(new X86XchgAxReg16FieldEmitter());
+        reg.Register(new X86LeaEmitter());
+        reg.Register(new X86LoadFarPointerEmitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -1764,5 +1769,179 @@ internal sealed class X86PopModRmW16Emitter : IMicroOpEmitter
         // SP+2) — that's the architectural semantic.
         var v = X86StackHelpers.PopW16(ctx, "poprm");
         X86ModRmMemHelpers.BuildStoreW16(ctx, v);
+    }
+}
+
+// ============================================================================
+// 24.6.5g — XCHG AX, r16 (90-97). Opcode encodes the OTHER register in
+// low 3 bits. 0x90 = XCHG AX,AX semantically equals NOP and is shadowed
+// by the smoke group's NOP entry (mask=0xFF beats the broader mask=0xF8
+// here). 0x91-0x97 all swap AX with CX/DX/BX/SP/BP/SI/DI.
+//
+// JSON shape: { "op": "x86_xchg_ax_reg16_field", "field": "<name>" }
+// ============================================================================
+
+internal sealed class X86XchgAxReg16FieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_xchg_ax_reg16_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        // Snapshot AX BEFORE writing anything, so the swap is atomic.
+        var axOrig = X86_16Emitters.ReadGpr16(ctx, 0, "xchg_ax_orig");
+
+        // Read the other reg via runtime field dispatch (8-arm switch).
+        var sel = ctx.Resolve(fieldName);
+        var endBB     = ctx.Function.AppendBasicBlock("xchg_other_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("xchg_other_default");
+        var arms      = new LLVMBasicBlockRef[8];
+        var armVals   = new LLVMValueRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"xchg_other_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            armVals[i] = X86_16Emitters.ReadGpr16(ctx, i, $"xchg_other_{i}_v");
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        var defVal = LLVMValueRef.CreateConstInt(i16, 0, false);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var otherVal = ctx.Builder.BuildPhi(i16, "xchg_other_v");
+        var pIns = new LLVMValueRef[9]; var pBlk = new LLVMBasicBlockRef[9];
+        for (int i = 0; i < 8; i++) { pIns[i] = armVals[i]; pBlk[i] = arms[i]; }
+        pIns[8] = defVal; pBlk[8] = defaultBB;
+        otherVal.AddIncoming(pIns, pBlk, 9);
+
+        // AX := otherVal (always — index 0)
+        X86_16Emitters.WriteGpr16(ctx, 0, otherVal);
+
+        // GPR[field] := axOrig — runtime switch on field again.
+        var endBB2     = ctx.Function.AppendBasicBlock("xchg_writeback_end");
+        var defaultBB2 = ctx.Function.AppendBasicBlock("xchg_writeback_default");
+        var arms2 = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms2[i] = ctx.Function.AppendBasicBlock($"xchg_wb_{i}");
+        var sw2 = ctx.Builder.BuildSwitch(sel, defaultBB2, 8);
+        for (int i = 0; i < 8; i++)
+            sw2.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms2[i]);
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms2[i]);
+            X86_16Emitters.WriteGpr16(ctx, i, axOrig);
+            ctx.Builder.BuildBr(endBB2);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB2);
+        ctx.Builder.BuildBr(endBB2);
+        ctx.Builder.PositionAtEnd(endBB2);
+    }
+}
+
+// ============================================================================
+// 24.6.5g — LEA r16, m (0x8D). Computes the effective address from the
+// ModR/M byte but does NOT load — writes the EA offset to GPR[modrm.reg].
+// Spec convention is fetch_modrm + compute_ea + this emitter, which
+// pulls ea_off out of the value cache.
+//
+// mod=11 LEA r,r is undefined per Intel; we emit the EA computation
+// anyway (which produces 0 for the mod=11 path) and write that value.
+//
+// JSON shape: { "op": "x86_lea" }
+// ============================================================================
+
+internal sealed class X86LeaEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_lea";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var off = ctx.Resolve("ea_off");      // i16 from compute_ea
+        var sel = ctx.Resolve("modrm_reg");
+
+        var endBB     = ctx.Function.AppendBasicBlock("lea_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("lea_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"lea_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            X86_16Emitters.WriteGpr16(ctx, i, off);
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+// ============================================================================
+// 24.6.5g — LDS / LES (C4/C5): load 32-bit far pointer.
+//   mem[0..1] → GPR[modrm_reg] (16-bit offset)
+//   mem[2..3] → DS or ES        (16-bit segment)
+//
+// Both reads share the SAME ea_seg (the segment computed by
+// modrm_compute_ea — usually DS, possibly overridden). Offset wraps
+// within the segment for the +2 high-half read.
+//
+// mod=11 forms are undefined per Intel (no memory operand); emitter
+// silently uses the bogus EA from compute_ea, matching the broader
+// no-trap policy.
+//
+// JSON shape: { "op": "x86_load_far_pointer", "dest_seg": "ES" | "DS" }
+// ============================================================================
+
+internal sealed class X86LoadFarPointerEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_load_far_pointer";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var destSeg = step.Raw.GetProperty("dest_seg").GetString()!;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var seg = ctx.Resolve("ea_seg");
+        var off = ctx.Resolve("ea_off");
+
+        // Read offset half (16 bits at ea_seg:ea_off).
+        var offsetHalf = X86_16Emitters.SegmentedRead16(ctx, seg, off, "lfp_off");
+
+        // Read segment half (16 bits at ea_seg:ea_off+2).
+        var off2 = ctx.Builder.BuildAdd(off,
+            LLVMValueRef.CreateConstInt(i16, 2, false), "lfp_off2");
+        var segHalf = X86_16Emitters.SegmentedRead16(ctx, seg, off2, "lfp_seg");
+
+        // Write offset to GPR[modrm_reg] via the existing field-dispatched
+        // write helper inlined here (8-arm switch).
+        var sel = ctx.Resolve("modrm_reg");
+        var endBB     = ctx.Function.AppendBasicBlock("lfp_wgpr_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("lfp_wgpr_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"lfp_wgpr_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            X86_16Emitters.WriteGpr16(ctx, i, offsetHalf);
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+
+        // Write segment to the named destination (DS or ES).
+        var p = ctx.GepStatusRegister(destSeg);
+        ctx.Builder.BuildStore(segHalf, p);
     }
 }

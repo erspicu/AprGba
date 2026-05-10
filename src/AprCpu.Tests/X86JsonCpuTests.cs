@@ -975,6 +975,167 @@ public class X86JsonCpuTests
         Assert.Equal(0x12, mem.ReadByte(0x81));
     }
 
+    // ---------------- 24.6.5g — XCHG / LEA / LDS / LES ----------------
+
+    /// <summary>
+    /// 0x86 XCHG r/m8, r8 reg-direct: 86 D8 → xchg al, bl
+    /// (modrm=D8: mod=11 reg=011=BL rm=000=AL)
+    /// </summary>
+    [Fact]
+    public void Step_XchgAlBl_RegDirect()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x86, 0xD8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x11; s.A.H = 0xAA;   // verify high half preserved
+        s.B.L = 0x99; s.B.H = 0xBB;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x99, cpu.State.A.L);
+        Assert.Equal(0xAA, cpu.State.A.H);
+        Assert.Equal(0x11, cpu.State.B.L);
+        Assert.Equal(0xBB, cpu.State.B.H);
+    }
+
+    /// <summary>
+    /// 0x87 XCHG r/m16, r16 with memory: 87 1E 80 00 → xchg [0x80], bx
+    /// (modrm=1E: mod=00 reg=011=BX rm=110 = direct disp16)
+    /// </summary>
+    [Fact]
+    public void Step_XchgWordWithMemory()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x87, 0x1E, 0x80, 0x00, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0xBEEF;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x80, 0xCD);
+        mem.WriteByte(0x81, 0xAB);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xABCD, cpu.State.B.X);   // BX got the old memory value
+        Assert.Equal(0xEF, mem.ReadByte(0x80));
+        Assert.Equal(0xBE, mem.ReadByte(0x81));
+    }
+
+    /// <summary>
+    /// 0x91-0x97 XCHG AX, r16: 0x93 xchg ax, bx.
+    /// </summary>
+    [Fact]
+    public void Step_XchgAxBx_ShortForm()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x93, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x1111;
+        s.B.X = 0x2222;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x2222, cpu.State.A.X);
+        Assert.Equal(0x1111, cpu.State.B.X);
+    }
+
+    /// <summary>
+    /// 0x90 still dispatches to NOP (smoke group's mask=0xFF wins over
+    /// XchgAxR16's mask=0xF8). Neither AX nor any other reg should change.
+    /// </summary>
+    [Fact]
+    public void Step_0x90_StillDispatchesToNop_NotXchgAxAx()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x90, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0xABCD;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xABCD, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// 0x8D 1F → lea bx, [bx]. EA = BX (mod=00 rm=111). After LEA,
+    /// BX = original BX (since [bx] addressing mode evaluates to BX).
+    /// Boring but tests the basic flow.
+    /// </summary>
+    [Fact]
+    public void Step_LeaBx_AtBx()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x8D, 0x1F, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x1234;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x1234, cpu.State.B.X);
+    }
+
+    /// <summary>
+    /// 0x8D 47 0A → lea ax, [bx+0x0A]. Pre-set BX=0x100; expect AX=0x10A.
+    /// LEA must NOT touch memory.
+    /// </summary>
+    [Fact]
+    public void Step_LeaAx_BxPlusDisp8()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x8D, 0x47, 0x0A, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x100;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        // Memory at the EA — should NOT be touched by LEA
+        mem.WriteByte(0x10A, 0xFF);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x010A, cpu.State.A.X);
+        Assert.Equal(0xFF, mem.ReadByte(0x10A));   // memory unchanged
+    }
+
+    /// <summary>
+    /// 0xC5 1E 50 00 → lds bx, [0x0050]. Memory at DS:0x50 contains a
+    /// 32-bit far pointer: low 16 bits → BX, high 16 bits → DS.
+    /// Pre-fill mem[0x50..0x53] = 0x34, 0x12, 0x00, 0x40 → BX=0x1234, DS=0x4000.
+    /// </summary>
+    [Fact]
+    public void Step_Lds_LoadsRegAndDs()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xC5, 0x1E, 0x50, 0x00, 0xF4 });
+        mem.WriteByte(0x50, 0x34);
+        mem.WriteByte(0x51, 0x12);
+        mem.WriteByte(0x52, 0x00);
+        mem.WriteByte(0x53, 0x40);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x1234, cpu.State.B.X);
+        Assert.Equal(0x4000, cpu.State.DS);
+    }
+
+    /// <summary>
+    /// 0xC4 06 50 00 → les ax, [0x0050]. Same shape as LDS but → ES.
+    /// </summary>
+    [Fact]
+    public void Step_Les_LoadsRegAndEs()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xC4, 0x06, 0x50, 0x00, 0xF4 });
+        mem.WriteByte(0x50, 0xFE);
+        mem.WriteByte(0x51, 0xCA);
+        mem.WriteByte(0x52, 0x00);
+        mem.WriteByte(0x53, 0x80);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xCAFE, cpu.State.A.X);
+        Assert.Equal(0x8000, cpu.State.ES);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

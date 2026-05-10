@@ -419,6 +419,142 @@
           ]
         }
       ]
+    },
+
+    {
+      "name":  "XchgRm8R8",
+      "comment": "0x86 XCHG r/m8, r8 — atomic swap (treated as LOCK-able on later x86; on 8086 it's just a swap). Snapshot reg before writing, then store reg→r/m and snapshot→reg.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0x86",
+      "instructions": [
+        {
+          "mnemonic": "XCHG",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §XCHG",
+          "cycles": { "form": "4" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_modrm_load_w8",     "out": "memval" },
+            { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "regval" },
+            { "op": "x86_modrm_store_w8",    "in": ["regval"] },
+            { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["memval"] }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "XchgRm16R16",
+      "comment": "0x87 XCHG r/m16, r16 — word-width counterpart of 86.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0x87",
+      "instructions": [
+        {
+          "mnemonic": "XCHG",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §XCHG",
+          "cycles": { "form": "4" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_modrm_load_w16",     "out": "memval" },
+            { "op": "x86_read_reg16_field",   "field": "modrm_reg", "out": "regval" },
+            { "op": "x86_modrm_store_w16",    "in": ["regval"] },
+            { "op": "x86_write_reg16_field",  "field": "modrm_reg", "in": ["memval"] }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "XchgAxR16",
+      "comment": "0x91-0x97 XCHG AX, r16 — opcode encodes the OTHER reg in low 3 bits. 0x90 (XCHG AX,AX = NOP) is shadowed by the smoke group's mask=0xFF entry, so this broader mask=0xF8 entry only fires for 0x91-0x97.",
+      "fields": { "reg": "2:0" },
+      "mask":  "0xF8",
+      "match": "0x90",
+      "instructions": [
+        {
+          "mnemonic": "XCHG",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §XCHG",
+          "cycles": { "form": "3" },
+          "steps": [
+            { "op": "x86_xchg_ax_reg16_field", "field": "reg" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "Lea",
+      "comment": "0x8D LEA r16, m — compute the effective address from ModR/M and write the OFFSET to GPR[modrm.reg]; no memory load happens. mod=11 LEA r16,r16 is undefined per Intel; we silently let the EA emitter's mod=11 zero placeholder flow through.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0x8D",
+      "instructions": [
+        {
+          "mnemonic": "LEA",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §LEA",
+          "cycles": { "form": "2" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_lea" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "Les",
+      "comment": "0xC4 LES r16, m32 — load 32-bit far pointer: low 16 bits of memory operand → GPR[modrm.reg], high 16 bits → ES.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0xC4",
+      "instructions": [
+        {
+          "mnemonic": "LES",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §LDS/LES",
+          "cycles": { "form": "16" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_load_far_pointer", "dest_seg": "ES" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "Lds",
+      "comment": "0xC5 LDS r16, m32 — same as LES but loads DS from the high half.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0xC5",
+      "instructions": [
+        {
+          "mnemonic": "LDS",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §LDS/LES",
+          "cycles": { "form": "16" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_load_far_pointer", "dest_seg": "DS" }
+          ]
+        }
+      ]
     }
 
   ]
