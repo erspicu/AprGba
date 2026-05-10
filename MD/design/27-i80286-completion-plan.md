@@ -14,12 +14,15 @@
 > `EmitSegCacheUpdate` + `EmitRaiseException` helpers landed here).
 > **Predecessor**: Phase 26 v1 (`6b1e2d6`..`7e6cf16`) — minimum-viable real-mode
 > 80286 shipped with chain depth=3, 0F prefix infra, CLTS+SMSW.
-> **Goal**: finish the 80286 implementation. Two tracks:
->   - **Phase 27a — real-mode completion** (~5 sprints, ~1-2 weeks)
->   - **Phase 27b — protected mode** (~5-8 sprints, ~3-4 weeks)
+> **Goal (achieved)**: finish the 80286 implementation. Two tracks:
+>   - **Phase 27a — real-mode completion** (5 sprints) ✅
+>   - **Phase 27b — protected mode** (22 sprints, micro-sprint cadence) ✅
+>     (Sprint 27.12 TSS task switching intentionally deferred to a
+>     separate phase — additive on top of the helpers landed here.)
 >
-> Closure note for Phase 26 listed the deferred work; this doc plans
-> how to land it.
+> Closure note for Phase 26 listed the deferred work; this doc planned
+> how to land it. Both tracks are now closed; this doc is preserved as
+> historical record + sprint-status reference.
 
 ---
 
@@ -98,9 +101,12 @@ Multi-week. Ordered by what's blocking what:
 
 Total ~3-4 weeks. This is where the real complexity lives.
 
-**Phase 27b is intentionally deferred from the current /loop session.**
-Realistic plan: Phase 27a in this session (or two), then a fresh
-multi-week effort for 27b.
+**Outcome (2026-05-11)**: Phase 27b closed in a single extended /loop
+session via micro-sprint cadence (27.6 → 27.14, see status table below).
+Sprint 27.12 (TSS task switching) intentionally deferred — additive on
+top of `EmitSegCacheUpdate` + `EmitRaiseException` helpers, well-defined
+for a future phase. Closure note:
+`MD/performance/202605110200-i80286-pmode-fault-model-complete.md`.
 
 ---
 
@@ -116,32 +122,68 @@ multi-week effort for 27b.
 
 ## Phase 27b Sprint Status
 
-| Sprint | Status |
-|---|---|
-| 27.6  Descriptor + selector helpers | ✅ | `11fdc98` | 2026-05-11 |
-| 27.7  Descriptor lookup (mem -> Descriptor) | ✅ | `9f819b5` | 2026-05-11 |
-| 27.8  PE bit helper + Msw struct | ✅ partial (PE detection only; segment-load fetch in 27.10) | `0dd6404` | 2026-05-11 |
-| 27.9  Privilege levels (CPL/RPL/DPL) | ✅ | `553909c` | 2026-05-11 |
-| 27.10a Helper integration test | ✅ | `cefed78` | 2026-05-11 |
-| 27.10b Hidden segment cache slots (ES/CS/SS/DS Base/Limit) | ✅ | `97e19ea` | 2026-05-11 |
-| 27.10c SegmentedLinear uses cached Base | ✅ infra (not activated) | `412fc7a` | 2026-05-11 |
+22 micro-sprints, all landed 2026-05-11. Grouped by track for readability;
+chronological order within each track.
+
+### Track 1 — Descriptor-fetch infrastructure (Sprints 27.6 → 27.10d)
+
+| Sprint | Status | Commit | 完成日 |
+|---|---|---|---|
+| 27.6  Descriptor + Selector records, parse/build helpers | ✅ | `11fdc98` | 2026-05-11 |
+| 27.7  ReadDescriptor / WriteDescriptor over IMemoryBus | ✅ | `9f819b5` | 2026-05-11 |
+| 27.8  Msw struct + IsProtectedMode (PE-bit reader) | ✅ | `0dd6404` | 2026-05-11 |
+| 27.9  Privilege-level helpers (CPL/RPL/DPL) | ✅ | `553909c` | 2026-05-11 |
+| 27.10a Helper integration test (end-to-end mock) | ✅ | `cefed78` | 2026-05-11 |
+| 27.10b Hidden cache slots: <seg>_BASE/_LIMIT/_ACCESS × 4 | ✅ | `97e19ea` | 2026-05-11 |
+| 27.10c SegmentedLinear by-name overload (cache-aware infra) | ✅ | `412fc7a` | 2026-05-11 |
 | 27.10d wave 1 — FetchImm uses CS_BASE | ✅ | `2531bd8` | 2026-05-11 |
 | 27.10d wave 2 — Stack ops + by-name Read/Write overloads | ✅ | `126e2cc` | 2026-05-11 |
 | 27.10d wave 3 — PushReg/PushModRm/PushSpPreDec by-name | ✅ | `66dc4df` | 2026-05-11 |
 | 27.10d wave 4 — ea_base alias (EA-compute foundation) | ✅ | `3605c42` | 2026-05-11 |
-| 27.10d wave 5 — ea_base cache lookup (override path) | ✅ partial | `7d529f3` | 2026-05-11 |
+| 27.10d wave 5 — ea_base cache lookup (override path) | ✅ | `7d529f3` | 2026-05-11 |
 | 27.10d wave 6 — segIdx tracking, unified cache lookup | ✅ | `c765352` | 2026-05-11 |
 | 27.10d wave 7 — MOV sreg updates cache (real-mode shape) | ✅ | `3851757` | 2026-05-11 |
 | 27.10d wave 8 — Descriptor-fetch path in MOV sreg (PE=1) | ✅ | `fb45845` | 2026-05-11 |
-| 27.11a Exception state slots (EXC_PENDING/VECTOR/ERROR) | ✅ | `7249bb8` | 2026-05-11 |
-| 27.11b Expose EXC_* in X86State + verbose dump | ✅ | `0f2e6f2` | 2026-05-11 |
+
+### Track 1 — End-to-end activation (Sprints 27.13a/b)
+
+| Sprint | Status | Commit | 完成日 |
+|---|---|---|---|
+| 27.13a Protected-mode entry demo + ea_base consumer gap surfaced | ✅ | `c5f51a0` | 2026-05-11 |
+| 27.13b Migrate ModR/M consumers to ea_base — gap closed | ✅ | `ed4b2d4` | 2026-05-11 |
+
+After 27.13b: `MSW.PE = 1` produces visible behavioral change in
+running programs — `27-pmode-entry.com` reads `BX=0xF1B8` from
+descriptor base 0x100 instead of `BX=0x0080` from real-mode
+`(sel << 4)` fallback.
+
+### Track 2 — Exception model (Sprints 27.11a → 27.11f)
+
+| Sprint | Status | Commit | 完成日 |
+|---|---|---|---|
+| 27.11a Exception state slots (EXC_PENDING / VECTOR / ERROR) | ✅ | `7249bb8` | 2026-05-11 |
+| 27.11b Expose EXC_* in X86State + verbose CLI dump | ✅ | `0f2e6f2` | 2026-05-11 |
 | 27.11c P-bit check + #NP fault (first end-to-end fault path) | ✅ | `bb790bd` | 2026-05-11 |
-| 27.11d NULL-SS → #GP (PE=1) | ✅ | `7c57f5a` | 2026-05-11 |
+| 27.11d NULL-selector → #GP for SS load (PE=1) | ✅ | `7c57f5a` | 2026-05-11 |
 | 27.11e DPL/RPL/CPL privilege check → #GP | ✅ | `1284d4f` | 2026-05-11 |
 | 27.11f Segment-type check (SS=writable-data, DS/ES≠system) | ✅ | `92176e3` | 2026-05-11 |
-| 27.12 TSS task switching | ⏳ deferred (multi-day, separate phase) | — | — |
-| 27.14 Phase 27b closure docs | ✅ | (this commit) | 2026-05-11 |
-| 27.12 TSS task switching | ⏳ pending | — | — |
-| 27.13a Protected-mode entry demo + gap surfaced | ✅ partial | `c5f51a0` | 2026-05-11 |
-| 27.13b Migrate ea_seg consumers → ea_base (closes the gap) | ✅ | `ed4b2d4` | 2026-05-11 |
-| 27.14 27b closure + visual demo | ⏳ pending | — | — |
+
+After 27.11f: 4-baseline-check fault model live (P / NULL-SS / DPL /
+type), all sharing the `EmitRaiseException` helper for consistent
+EXC_* slot population.
+
+### Closure
+
+| Sprint | Status | Commit | 完成日 |
+|---|---|---|---|
+| 27.14 Phase 27b closure docs + 5-ROM fault matrix demo | ✅ | `4066b66` | 2026-05-11 |
+
+### Deferred to a future phase
+
+| Sprint | Why deferred |
+|---|---|
+| 27.12 TSS task switching | Multi-day. Requires TSS descriptor type + busy-bit toggle + state save/restore IR. Additive on top of `EmitSegCacheUpdate` + `EmitRaiseException`; demos do not need it. |
+| LDT (TI=1) descriptor lookup | Falls through to GDT today. No demo loads LDT-based selectors. |
+| CS load via far jump/call/iret in PE=1 | Different IR shape (privilege-transition + conforming/non-conforming code descriptors + possibly call gates). MOV sreg covers ES/SS/DS only. |
+| Visible-sreg rewind on fault | Visible field updates before fault check fires; bounded by EXC_PENDING. Detailed in closure note "Architectural drift acknowledged". |
+| Code-segment readable subcheck for DS/ES | Loading code into DS via MOV is unusual; no demo exercises it. Would be a ~30-line extension to 27.11f. |
