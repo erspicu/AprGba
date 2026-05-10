@@ -6,7 +6,8 @@
 > 159/159 JsonCpu tests + 832/832 T1，~217 unique opcodes — 完整
 > data-transfer + ALU + 控流 + shift count=1+CL + string+REP +
 > flag-manip/IO + INT/IRET + FE/FF group + BCD + DIV/IDIV)；
-> 24.6.8 (block-JIT) + 24.6.9 (demo 重跑) + 24.7 + 24.8 待做。
+> **24.6.8 卡在 framework refactor (BlockDetector length oracle 不夠彈性)**；
+> 24.6.9 待 24.6.8；24.7 + 24.8 為後續 milestone。
 >
 > **Trigger**：第 4 顆 CPU 候選 = Intel 8086（用以前寫的 Apr86 emulator
 > 當 reference oracle 的部分）。要解決的核心問題：8086 是 CISC、segmented
@@ -298,8 +299,9 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 > **~217 unique opcodes** — **24.6.5 + 24.6.6 + 24.6.7 整段 ✅**。
 > 完整 data-transfer + ALU + 控流 + shift count=1+CL + string ops +
 > REP/REPE/REPNE + INT/IRET + flag-manip + IO + FE/FF group + BCD +
-> DIV/IDIV。剩 24.6.8 (block-JIT) + 24.6.9 (demo 重跑) + 24.7 (80186) +
-> 24.8 (80286)。
+> DIV/IDIV。**24.6.8 (block-JIT) 卡在 framework refactor 需求**（見下表
+> 註記），**24.6.9 (demo 重跑) 取決於 24.6.8**；24.7 (80186) + 24.8
+> (80286) 是後續 milestone。
 
 | Phase | 內容 | 成果 | 狀態 | Commit / 紀錄 |
 |---|---|---|---|---|
@@ -346,8 +348,8 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | 24.6.7f | BCD ops — DAA/DAS/AAA/AAS/AAM/AAD (silicon flag quirks partial; full Tom Harte SST validation deferred) | 5 tests；6 opcodes | ✅ | `f65cd13` |
 | 24.6.7g | DIV/IDIV r/m8 + r/m16 (F6/F7 /6 /7) — quotient/remainder; divide-by-zero silently no-op (INT 0 trap deferred); flags undefined per Intel | 4 tests；4 sub-ops | ✅ | `5958c0b` |
 | 24.6.7b2 | Shift by CL (D2/D3) — SHL/SHR/SAR via LLVM precomputed shifts; ROL/ROR/RCL/RCR fall back to count=1 IR (silicon-accurate count>1 deferred). count=0 → no-op. | 5 tests；2 group opcodes | ✅ | `f70f260` |
-| 24.6.8 | Block-JIT mode — alloca + mem2reg + IR-level cycle budget (à la N1.B' for NES) | 三 backend (legacy / json-instr / json-block) 同步 | ⏳ | — |
-| 24.6.9 | Re-run 24.5 demos through json-block backend | result/x86-16/jit-*.png 與 legacy pixel-identical 6 張新截圖 | ⏳ | — |
+| 24.6.8 | Block-JIT mode — alloca + mem2reg + IR-level cycle budget (à la N1.B' for NES) | 需要先 framework refactor — BlockDetector 的 length oracle 是 `Func<byte, int>` 回 1-4 bytes，但 8086 instruction 1-15 bytes 且 length 取決於 ModR/M (不只 opcode)。`Func<IBus, uint pc, int>` + 提高 max-len cap 是必要 framework extension。Multi-commit work；單一 session 無法 ship。 | 🚧 framework-blocked | — |
+| 24.6.9 | Re-run 24.5 demos through json-block backend | 取決於 24.6.8。一旦 block-JIT ship，re-run trivial。 | ⏳ blocked-by 24.6.8 | — |
 | **24.6b** | (optional) Lockstep diff legacy vs Apr86（限 .com 程式範圍） | Apr86 reference cross-check | ⏳ | — |
 | **24.7** | 80186 spec — 透過 inheritance (#23) | ENTER/LEAVE demo + result/x86-16/enter-leave-i80186.png | ⏳ | — |
 | **24.8** | 80286 real-mode + protected-mode demos | 4 顆 CPU 全綠 + result/x86-16/protmode-msr-i80286.png | ⏳ | — |
