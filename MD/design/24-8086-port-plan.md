@@ -2,11 +2,11 @@
 
 > **Status**：**IN PROGRESS**（2026-05-10）— 24.0–24.5 完工 (13 commits, 6
 > paper-quality screenshots, 1.31M Tom Harte SST cases 全綠)；
-> 24.6 JSON-driven port: **24.6.1–24.6.5g 完工** (12 commits, 56/56
-> JsonCpu tests + 729/729 T1，full data-transfer group through framework
-> — NOP / HLT / 全 MOV / PUSH / POP / XCHG / LEA / LDS / LES / 4
-> segment-override prefixes; 69 unique opcodes covered)；
-> 24.6.6–9 + 24.7 + 24.8 待做。
+> 24.6 JSON-driven port: **24.6.1–24.6.6e 完工** (17 commits, 94/94
+> JsonCpu tests + 767/767 T1，full data-transfer + ALU surface through
+> framework — 145 unique opcodes covered including all 8 ALU ops × 6
+> forms, MUL/IMUL/CBW/CWD, INC/DEC, TEST/NOT/NEG)；
+> 24.6.7-9 + 24.7 + 24.8 待做（控流 + 移位 + 字串 + DIV/IDIV + INT + BCD）。
 >
 > **Trigger**：第 4 顆 CPU 候選 = Intel 8086（用以前寫的 Apr86 emulator
 > 當 reference oracle 的部分）。要解決的核心問題：8086 是 CISC、segmented
@@ -293,12 +293,14 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 
 ## 8. Phase plan
 
-> **目前累計**（2026-05-10）：25 個 commits（24.0 → 24.5：13 + 24.6.1 →
-> 24.6.5g：12）；T1 baseline 729/729 全綠；JSON-driven backend 已覆蓋
-> **69 unique opcodes**：完整 MOV / PUSH / POP / XCHG / LEA / LDS / LES /
-> segment override prefixes / NOP / HLT。**24.6.5 整段 ✅ 完成**。
-> 剩 24.6.6 (ALU + 9-flag) + 24.6.7 (控流/移位/字串/INT/BCD/IO) + 24.6.8
-> (block-JIT) + 24.6.9 (demo 重跑) + 24.7 + 24.8。
+> **目前累計**（2026-05-10）：30 個 commits（24.0 → 24.5：13 + 24.6.1 →
+> 24.6.6e：17）；T1 baseline 767/767 全綠；JSON-driven backend 已覆蓋
+> **145 unique opcodes**：完整 MOV / PUSH / POP / XCHG / LEA / LDS / LES /
+> segment override prefixes / 8 ALU ops × 6 forms (00-3D) / INC/DEC r16
+> / 0x80-0x83 ALU r/m,imm group / TEST / NOT / NEG / MUL / IMUL /
+> CBW / CWD / NOP / HLT。**24.6.5 + 24.6.6 整段 ✅ 完成**（DIV/IDIV +
+> BCD 留 24.6.7）。剩 24.6.7 (控流/移位/字串/DIV-IDIV/INT/BCD/IO) +
+> 24.6.8 (block-JIT) + 24.6.9 (demo 重跑) + 24.7 + 24.8。
 
 | Phase | 內容 | 成果 | 狀態 | Commit / 紀錄 |
 |---|---|---|---|---|
@@ -328,8 +330,13 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | 24.6.5e | MOV r/m, imm (C6/C7) + MOV moffs (A0-A3) + MOV sreg/r,r (8C/8E) — 加 `LoadDefaultOrOverrideSegment` helper, 4 moffs emitters, 2 sreg field emitters；C6/C7 純 reuse 既有 fetch_imm + modrm_store | 11 tests；7 opcodes ✅ | ✅ | `ab2a023` |
 | 24.6.5f | PUSH/POP r16 (50-5F) + PUSH/POP sreg + PUSHF/POPF + POP r/m (8F /0)；FF /6 PUSH r/m 延到 24.6.7 跟 FF group 一起 | 7 tests；19 opcodes；SS:SP helper + 8088 PUSH-SP quirk + PUSHF reserved-bit mask | ✅ | `1ab9bb9` |
 | 24.6.5g | XCHG r/m,r (86/87) + XCHG AX,r16 (91-97; 90 仍是 NOP via mask shadow) + LEA (8D) + LDS/LES (C4/C5) — 加 xchg_ax_reg16_field, lea, load_far_pointer 3 個 emitter | 8 tests；11 opcodes；LEA 不碰 memory；LDS/LES 雙 16-bit read | ✅ | `7ad24a8` |
-| 24.6.6 | ALU group — ADD/OR/ADC/SBB/AND/SUB/XOR/CMP across 6 forms × 8-bit/16-bit + 9-flag IR computation (CF/PF/AF/ZF/SF/OF rules in LLVM IR mirroring `X86Alu.cs`) | ~80 opcodes；Tom Harte SST 8088 v2 ALU 子集全綠 | ⏳ | — |
-| 24.6.7 | Control flow (JMP/Jcc/CALL/RET/LOOP/JCXZ) + shift/rotate (D0-D3) + string ops + REP prefix + INT/IRET + BCD + IO | ~120 opcodes；Tom Harte 1.31M 全綠 through json backend | ⏳ | — |
+| **24.6.6** | ALU group + 9-flag IR computation | 145 - 69 = **76 new opcodes**；38 new tests；DIV/IDIV+BCD 留 24.6.7 | ✅ | (子項見下) |
+| 24.6.6a | ALU framework + ADD across 6 forms (00-05) — `X86AluHelpers.BuildAluW{8,16}` 加全 9-flag IR (CF/PF/AF/ZF/SF/OF) + `x86_alu_w{8,16}` emitter + `x86_read/write_named_gpr` (AL/AX 等) | 8 tests；ADD 6 opcodes；PF 用 `@llvm.ctpop.i8` | ✅ | `e997ade` |
+| 24.6.6b | OR/ADC/SBB/AND/SUB/XOR/CMP — 7 ops × 6 forms = 42 opcodes via JSON 機械填寫；W8 logical-flag bug 修正 (i1 false 改用 explicit `Int1` const) | 8 tests；CMP 不寫回 | ✅ | `5556ed9` |
+| 24.6.6c | INC/DEC r16 (40-4F) + 0x80-0x83 ALU r/m,imm group (CMP 不寫回) + 0x83 sext-imm8 + W16 logical-flag bug 修正 (24.6.6b 漏到 W16) | 8 tests；20 opcodes | ✅ | `3862d08` |
+| 24.6.6d | TEST (84/85/A8/A9) + NOT + NEG + F6/F7 group dispatcher (/0=TEST, /2=NOT, /3=NEG, /4-7 deferred) | 7 tests；6 opcodes；imm fetch 在 dispatcher arms 內避免錯誤 IP advance | ✅ | `172be20` |
+| 24.6.6e | MUL/IMUL (F6/F7 /4 /5) — 8088 high-byte SF/ZF/PF quirk + CBW (98) + CWD (99)；DIV/IDIV (/6 /7) 仍延後 | 7 tests；2 standalone + MUL/IMUL 走 dispatcher | ✅ | `e2c7e1b` |
+| 24.6.7 | Control flow (JMP/Jcc/CALL/RET/LOOP/JCXZ) + shift/rotate (D0-D3) + string ops + REP prefix + INT/IRET + DIV/IDIV (delayed from 24.6.6) + BCD + IO + FF group rest (INC/DEC/CALL/JMP/PUSH r/m) | ~140 opcodes；Tom Harte 1.31M 全綠 through json backend | ⏳ | — |
 | 24.6.8 | Block-JIT mode — alloca + mem2reg + IR-level cycle budget (à la N1.B' for NES) | 三 backend (legacy / json-instr / json-block) 同步 | ⏳ | — |
 | 24.6.9 | Re-run 24.5 demos through json-block backend | result/x86-16/jit-*.png 與 legacy pixel-identical 6 張新截圖 | ⏳ | — |
 | **24.6b** | (optional) Lockstep diff legacy vs Apr86（限 .com 程式範圍） | Apr86 reference cross-check | ⏳ | — |
@@ -346,14 +353,20 @@ Tom Harte SST cases 全綠）。**legacy backend 已是「8086 emulator 並排�
 在」狀態**，但要讓 8086 真正成為 framework 第 4 顆 CPU、走同一條 SpecCompiler
 + LLVM JIT pipeline，**24.6 JSON-driven port 是必做的下一步**。
 
-**24.6 進度 (2026-05-10)**：sub-phase **24.6.1 → 24.6.5g 完成** —
-**24.6.5 整段 ✅**。JSON-driven 8086 已能透過 framework SpecCompiler +
-LLVM JIT 跑全部 data-transfer group（69 opcodes）：MOV r/imm, r/r/m
-(全 ModR/M), r/m,imm, moffs, sreg, segment override prefixes, PUSH/POP
-r16/sreg/FLAGS, POP r/m, XCHG (3 forms), LEA, LDS, LES, plus NOP/HLT。
-8088 PUSH-SP quirk + PUSHF reserved-bit mask 都正確處理。729/729 T1
-tests 全綠。剩 24.6.6 (ALU + 9-flag) + 24.6.7 (控流 / 移位 / 字串 /
-INT / BCD / IO) + 24.6.8 (block-JIT) + 24.6.9 (demo 重跑)。
+**24.6 進度 (2026-05-10)**：sub-phase **24.6.1 → 24.6.6e 完成** —
+**24.6.5 + 24.6.6 整段 ✅**。JSON-driven 8086 已能透過 framework
+SpecCompiler + LLVM JIT 跑：data-transfer group (69 opcodes) +
+arithmetic group (76 opcodes) = **145 unique opcodes**：
+- MOV (全 forms + segment override prefixes)
+- PUSH/POP (r16/sreg/FLAGS + POP r/m)；8088 PUSH-SP quirk + PUSHF reserved-bit mask
+- XCHG (3 forms) / LEA / LDS / LES / NOP / HLT
+- 8 ALU ops (ADD/OR/ADC/SBB/AND/SUB/XOR/CMP) × 6 forms = 48 opcodes
+- INC/DEC r16 (CF preserved) / 0x80-0x83 ALU r/m,imm group (含 0x83 sext-imm8)
+- TEST / NOT / NEG / MUL / IMUL (8088 high-byte SF/ZF/PF quirk) / CBW / CWD
+- 完整 9-flag IR computation (CF/PF/AF/ZF/SF/OF) — PF 用 `@llvm.ctpop.i8`
+
+767/767 T1 tests 全綠。剩 24.6.7 (控流 / 移位 / 字串 / DIV-IDIV / INT /
+BCD / IO / FF group rest) + 24.6.8 (block-JIT) + 24.6.9 (demo 重跑)。
 
 **最早可截圖 milestone**：**24.3 結束**（hello-cga.com → PNG）— 已達成。
 **最早 paper-quality milestone**：**24.5 結束**（6 個 demo 截圖 + Tom Harte
