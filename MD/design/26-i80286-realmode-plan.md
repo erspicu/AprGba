@@ -1,6 +1,10 @@
 # Phase 26 — Intel 80286 real-mode implementation plan
 
-> **Status**: ready-to-execute (2026-05-10)
+> **Status**: ✅ **CLOSED v1** (2026-05-10/11) — minimum-viable real-mode
+> 80286 shipped: chain depth=3 working, 0F prefix infra, CLTS + SMSW.
+> Full real-mode completion (LMSW write, LGDT/LIDT/etc.) + protected
+> mode = Phase 27 multi-week future work.
+> Closure note: `MD/performance/202605110000-i80286-realmode-v1.md`.
 > **Parent design**: [23-cpu-spec-inheritance.md](23-cpu-spec-inheritance.md) +
 > [25-i80186-implementation-plan.md](25-i80186-implementation-plan.md)
 > **Predecessor**: Phase 25 (i80186 — completed `4ec2465`, depth-2 chain shipped)
@@ -236,6 +240,6 @@ Phase 27 (protected mode) 才完成上述。預計 Phase 27 自己會分 5-8 個
 | 26.2 0F prefix (length only) | ✅ partial | `089b108` | 2026-05-10 |
 | 26.2b 0F decoder dispatch | ✅ | `19635de` | 2026-05-10 |
 | 26.3 SMSW emitter (1st observable 286) | ✅ partial | `e5d023f` | 2026-05-10 |
-| 26.4 State + MSW | ⏳ pending | — | — |
-| 26.5 CLI + tests | ⏳ pending | — | — |
-| 26.6 Docs | ⏳ pending | — | — |
+| 26.4 State + MSW | ⏸️ **deferred to Phase 27** | — | — |
+| 26.5 CLI + tests | ✅ folded into 26.3 + 26.6 | — | — |
+| 26.6 Docs (closure note) | ✅ | (this commit) | 2026-05-10/11 |
