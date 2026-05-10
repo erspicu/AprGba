@@ -118,7 +118,11 @@ multi-week effort for 27b.
 | 27.10a Helper integration test | ✅ | `cefed78` | 2026-05-11 |
 | 27.10b Hidden segment cache slots (ES/CS/SS/DS Base/Limit) | ✅ | `97e19ea` | 2026-05-11 |
 | 27.10c SegmentedLinear uses cached Base | ✅ infra (not activated) | `412fc7a` | 2026-05-11 |
-| 27.10d Protected-mode segment-load IR (descriptor + privilege checks) | ⏳ pending | — | — |
+| 27.10d wave 1 — FetchImm uses CS_BASE | ✅ | `2531bd8` | 2026-05-11 |
+| 27.10d wave 2 — ModR/M / Read/Write by-name | ⏳ pending | — | — |
+| 27.10d wave 3 — Stack ops (PUSHA/POPA/ENTER) by-name | ⏳ pending | — | — |
+| 27.10d wave 4 — SDT helpers by-name | ⏳ pending | — | — |
+| 27.10d wave 5 — Protected-mode segment-load IR (the actual descriptor lookup) | ⏳ pending | — | — |
 | 27.11 New exception model | ⏳ pending | — | — |
 | 27.12 TSS task switching | ⏳ pending | — | — |
 | 27.13 Protected-mode entry (LMSW PE) | ⏳ pending | — | — |
