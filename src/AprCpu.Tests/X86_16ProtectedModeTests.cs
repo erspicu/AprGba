@@ -176,6 +176,48 @@ public class X86_16ProtectedModeTests
     }
 
     [Fact]
+    public void IsProtectedMode_Reads_PE_Bit()
+    {
+        // Build a state buffer with MSW at offset 32 = 0xFFF0 (real mode).
+        var state = new byte[64];
+        state[32] = 0xF0; state[33] = 0xFF;
+        Assert.False(IsProtectedMode(state, 32));
+
+        // Set PE bit.
+        state[32] = 0xF1;
+        Assert.True(IsProtectedMode(state, 32));
+
+        // Top bits don't matter.
+        state[32] = 0x01; state[33] = 0x00;
+        Assert.True(IsProtectedMode(state, 32));
+    }
+
+    [Fact]
+    public void IsProtectedMode_Bounds_Check()
+    {
+        var state = new byte[10];
+        Assert.Throws<ArgumentOutOfRangeException>(() => IsProtectedMode(state, 9));
+        Assert.Throws<ArgumentOutOfRangeException>(() => IsProtectedMode(state, 100));
+    }
+
+    [Fact]
+    public void Msw_Constants_And_Bits()
+    {
+        Assert.False(Msw.RealMode.Pe);
+        Assert.True(Msw.ProtectedMode.Pe);
+        Assert.Equal(0xFFF0, Msw.RealMode.Raw);
+        Assert.Equal(0xFFF1, Msw.ProtectedMode.Raw);
+
+        var m = Msw.RealMode.WithPe(true);
+        Assert.True(m.Pe);
+        Assert.Equal(0xFFF1, m.Raw);
+
+        var ts = m.WithTs(true);
+        Assert.True(ts.Ts);
+        Assert.Equal(0xFFF9, ts.Raw);
+    }
+
+    [Fact]
     public void ReadDescriptor_Uses_LDT_Base_When_Selector_Has_TI_Bit()
     {
         var bus = new FlatMemoryBus(0x10000);

@@ -152,4 +152,39 @@ public static class X86_16ProtectedMode
         BuildDescriptor(d, buf);
         for (int i = 0; i < 8; i++) bus.WriteByte(addr + (uint)i, buf[i]);
     }
+
+    /// <summary>
+    /// Sprint 27.8 — does the CPU's MSW.PE bit (bit 0) report protected
+    /// mode? Reads MSW from the state buffer at <paramref name="mswOffset"/>.
+    /// A future Sprint 27.10 segmentation rewrite consults this on every
+    /// segment-register load to decide between "real mode shift-and-add"
+    /// and "protected mode descriptor lookup".
+    /// </summary>
+    public static bool IsProtectedMode(byte[] state, int mswOffset)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        if ((uint)mswOffset + 1 >= (uint)state.Length)
+            throw new ArgumentOutOfRangeException(nameof(mswOffset),
+                $"MSW offset {mswOffset} out of state buffer (size {state.Length}).");
+        ushort msw = (ushort)(state[mswOffset] | (state[mswOffset + 1] << 8));
+        return (msw & 0x0001) != 0;
+    }
+
+    /// <summary>
+    /// Sprint 27.8 — packed MSW value. Useful for tests that want to
+    /// build / inspect MSW outside the emulator's state buffer.
+    /// </summary>
+    public readonly record struct Msw(ushort Raw)
+    {
+        public bool Pe => (Raw & 0x0001) != 0;
+        public bool Mp => (Raw & 0x0002) != 0;
+        public bool Em => (Raw & 0x0004) != 0;
+        public bool Ts => (Raw & 0x0008) != 0;
+
+        public static Msw RealMode { get; } = new(0xFFF0);   // 80286 reset
+        public static Msw ProtectedMode { get; } = new(0xFFF1);  // PE bit set, others reset
+
+        public Msw WithPe(bool v) => new((ushort)((Raw & ~0x1) | (v ? 1 : 0)));
+        public Msw WithTs(bool v) => new((ushort)((Raw & ~0x8) | (v ? 8 : 0)));
+    }
 }
