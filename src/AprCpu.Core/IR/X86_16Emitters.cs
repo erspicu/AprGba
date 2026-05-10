@@ -200,6 +200,7 @@ public static class X86_16Emitters
         reg.Register(new X86Clts286StubEmitter());
         reg.Register(new X86286ZeroOneDispatchEmitter());
         reg.Register(new X86286ZeroZeroDispatchEmitter());
+        reg.Register(new X86286LarLslStubEmitter());
 
         // Phase 25 — 80186 additions (referenced from i80186 spec via
         // inheritance overlay). 12 new opcodes + PUSH SP silicon-quirk fix.
@@ -5633,6 +5634,24 @@ internal sealed class X86Clts286StubEmitter : IMicroOpEmitter
     {
         // intentionally empty — no IR generated; LLVM will see only the
         // BlockFunctionBuilder's auto-br at the end of execBB.
+    }
+}
+
+// x86_286_lar_lsl_stub — Sprint 27.4. Real-mode behavior of LAR (0F 02)
+// and LSL (0F 03): per Intel 80286 PRM, descriptor-table lookup which
+// is meaningless in real mode. Common implementations clear FLAGS.ZF
+// to indicate "segment not verified". We do that.
+internal sealed class X86286LarLslStubEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_286_lar_lsl_stub";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var flags = X86CtrlHelpers.LoadFlags(ctx, "lar_lsl");
+        var cleared = ctx.Builder.BuildAnd(flags,
+            LLVMValueRef.CreateConstInt(i16, unchecked((ushort)~(1 << 6)), false),
+            "lar_lsl_zf_clear");
+        ctx.Builder.BuildStore(cleared, ctx.GepStatusRegister("FLAGS"));
     }
 }
 

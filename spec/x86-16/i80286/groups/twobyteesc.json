@@ -69,6 +69,51 @@
         },
 
         {
+          "name": "Lar",
+          "comment": "0F 02 LAR r16, r/m16 — load access rights byte. Real-mode: no-op (clears FLAGS.ZF per typical impl; descriptor lookup is Phase 27b).",
+          "fields": {},
+          "mask":  "0xFF",
+          "match": "0x02",
+          "instructions": [
+            {
+              "id": "LAR_r16_rm16",
+              "mnemonic": "LAR",
+              "since": "Intel80286",
+              "writes_pc": "never",
+              "manual_ref": "Intel 80286 PRM §LAR",
+              "cycles": { "form": "16" },
+              "steps": [
+                { "op": "x86_fetch_modrm" },
+                { "op": "x86_modrm_compute_ea" },
+                { "op": "x86_286_lar_lsl_stub" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "Lsl",
+          "comment": "0F 03 LSL r16, r/m16 — load segment limit. Real-mode: no-op (same shape as LAR).",
+          "fields": {},
+          "mask":  "0xFF",
+          "match": "0x03",
+          "instructions": [
+            {
+              "id": "LSL_r16_rm16",
+              "mnemonic": "LSL",
+              "since": "Intel80286",
+              "writes_pc": "never",
+              "manual_ref": "Intel 80286 PRM §LSL",
+              "cycles": { "form": "16" },
+              "steps": [
+                { "op": "x86_fetch_modrm" },
+                { "op": "x86_modrm_compute_ea" },
+                { "op": "x86_286_lar_lsl_stub" }
+              ]
+            }
+          ]
+        },
+
+        {
           "name": "ZeroOneGroup286",
           "comment": "0F 01 group — ModR/M.reg selects SGDT(0)/SIDT(1)/LGDT(2)/LIDT(3)/SMSW(4)/[5 reserved]/LMSW(6)/[7 INVLPG/386+]. Phase 26 v1: dispatcher emitter routes only /4 SMSW; others throw NotImplementedException. The dispatch happens at RUNTIME inside the emitter (matching the F6/F7 group pattern in 8086 base spec) since modrm_reg is part of the ModR/M byte that comes AFTER the dispatch word — selector-based static dispatch wouldn't see it.",
           "fields": {},
