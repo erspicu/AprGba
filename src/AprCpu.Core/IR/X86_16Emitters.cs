@@ -1255,6 +1255,20 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
 
         ctx.Values["ea_off"] = eaOff;
         ctx.Values["ea_seg"] = eaSeg;
+
+        // Sprint 27.10d wave 4 — emit ea_base alongside ea_seg.
+        // Currently ea_base = (ea_seg as i32) << 4 (real-mode shift), so
+        // it produces the same linear-base as the legacy
+        // SegmentedLinear(by-value) path. Wave 5 will replace this with
+        // a runtime switch on the resolved segment to load the correct
+        // <seg>_BASE cache slot when the spec declares them (i80286+);
+        // until then ea_base is a no-op alias for shifted ea_seg, which
+        // means downstream consumers can already migrate to "use ea_base
+        // directly" without any behavioral change.
+        var eaSegZ = ctx.Builder.BuildZExt(eaSeg, i32, "ea_base_segz");
+        var eaBase = ctx.Builder.BuildShl(eaSegZ,
+            LLVMValueRef.CreateConstInt(i32, 4, false), "ea_base");
+        ctx.Values["ea_base"] = eaBase;
     }
 }
 
