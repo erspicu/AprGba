@@ -111,4 +111,12 @@ multi-week effort for 27b.
 
 | Sprint | Status |
 |---|---|
-| 27.6-27.14 | ⏸️ deferred to dedicated future session (multi-week) |
+| 27.6  Descriptor + selector helpers | ✅ | `11fdc98` | 2026-05-11 |
+| 27.7  Descriptor lookup (mem -> Descriptor) | ⏳ pending | — | — |
+| 27.8  Real LGDT/LIDT + segment-load descriptor fetch | ⏳ pending | — | — |
+| 27.9  Privilege levels (CPL/RPL/DPL) | ⏳ pending | — | — |
+| 27.10 Segmentation rewrite | ⏳ pending | — | — |
+| 27.11 New exception model | ⏳ pending | — | — |
+| 27.12 TSS task switching | ⏳ pending | — | — |
+| 27.13 Protected-mode entry (LMSW PE) | ⏳ pending | — | — |
+| 27.14 27b closure + visual demo | ⏳ pending | — | — |
