@@ -81,6 +81,17 @@ public static class X86_16Emitters
         reg.Register(new X86LeaEmitter());
         reg.Register(new X86LoadFarPointerEmitter());
 
+        // 24.6.6 — ALU + 9-flag IR computation. Single emitter per width
+        // takes `kind` (add/or/adc/sbb/and/sub/xor/cmp) as a JSON
+        // parameter; lhs/rhs/out reference the value cache.
+        reg.Register(new X86AluW8Emitter());
+        reg.Register(new X86AluW16Emitter());
+
+        // Named-GPR helpers for fixed-register operands (AL/AH/AX, etc.)
+        // used by the AL/AX-immediate ALU forms (0x04/0x05/0x0C/0x0D/...).
+        reg.Register(new X86ReadNamedGprEmitter());
+        reg.Register(new X86WriteNamedGprEmitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -1943,5 +1954,479 @@ internal sealed class X86LoadFarPointerEmitter : IMicroOpEmitter
         // Write segment to the named destination (DS or ES).
         var p = ctx.GepStatusRegister(destSeg);
         ctx.Builder.BuildStore(segHalf, p);
+    }
+}
+
+// ============================================================================
+// 24.6.6 — ALU + 9-flag IR computation.
+//
+// Mirrors X86Alu.cs (the silicon-accurate hand-coded oracle in the legacy
+// backend) at the LLVM IR level. Each ALU op emits:
+//   1. The arithmetic/logical computation at i32 width (so carry/borrow
+//      bits beyond the operand width are observable).
+//   2. The flag rules for that op kind (CF/PF/AF/ZF/SF/OF — only those
+//      affected; logical ops force CF/OF/AF=0, arithmetic ops compute all).
+//   3. Truncation back to the operand width for the result.
+//   4. FLAGS-register update via masked OR (preserve unaffected bits).
+//
+// FLAGS bit layout in the spec:
+//   CF=0, PF=2, AF=4, ZF=6, SF=7, OF=11
+// Mask of "ALU-affected" bits: 0x08D5 = (1<<0)|(1<<2)|(1<<4)|(1<<6)|(1<<7)|(1<<11)
+//
+// Parity flag uses LLVM's @llvm.ctpop intrinsic on the low byte. Even
+// parity → PF=1, odd → PF=0. (8086 PF reflects only the low 8 bits of
+// the result regardless of operand width.)
+//
+// JSON shape:
+//   { "op": "x86_alu_w8" | "x86_alu_w16",
+//     "kind": "add"|"or"|"adc"|"sbb"|"and"|"sub"|"xor"|"cmp",
+//     "lhs":  "<cache name>",
+//     "rhs":  "<cache name>",
+//     "out":  "<cache name>" }
+//
+// CMP follows the SUB flag rules but does NOT cache its result (the
+// caller's spec just omits the writeback step).
+// ============================================================================
+
+internal static class X86AluHelpers
+{
+    /// <summary>
+    /// Emit the parity check for the low 8 bits of <paramref name="value"/>:
+    /// PF = 1 when the byte has an even number of set bits, 0 otherwise.
+    /// Uses @llvm.ctpop.i8 intrinsic via a declared extern. Returns i1.
+    /// </summary>
+    private static LLVMValueRef BuildParityEven(EmitContext ctx, LLVMValueRef byteVal, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+
+        // Declare i8 @llvm.ctpop.i8(i8) on first reference.
+        var ctpopName = "llvm.ctpop.i8";
+        var fn = ctx.Module.GetNamedFunction(ctpopName);
+        if (fn.Handle == IntPtr.Zero)
+        {
+            var fnType = LLVMTypeRef.CreateFunction(i8, new[] { i8 }, false);
+            fn = ctx.Module.AddFunction(ctpopName, fnType);
+        }
+        var fnType2 = LLVMTypeRef.CreateFunction(i8, new[] { i8 }, false);
+        var pop = ctx.Builder.BuildCall2(fnType2, fn, new[] { byteVal }, $"{label}_pop");
+
+        var lsb = ctx.Builder.BuildAnd(pop,
+            LLVMValueRef.CreateConstInt(i8, 1, false), $"{label}_pop_lsb");
+        // Even = (lsb == 0)
+        return ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, lsb,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_pf");
+    }
+
+    /// <summary>
+    /// Pack 6 individual i1 flags into the low bits of a 16-bit value at
+    /// the canonical FLAGS positions (CF/PF/AF/ZF/SF/OF). Returns i16.
+    /// </summary>
+    private static LLVMValueRef BuildPackedFlags(
+        EmitContext ctx,
+        LLVMValueRef cf, LLVMValueRef pf, LLVMValueRef af,
+        LLVMValueRef zf, LLVMValueRef sf, LLVMValueRef of,
+        string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        LLVMValueRef ZxShl(LLVMValueRef bit, int pos, string n)
+        {
+            var z = ctx.Builder.BuildZExt(bit, i16, $"{label}_{n}_z");
+            if (pos == 0) return z;
+            return ctx.Builder.BuildShl(z,
+                LLVMValueRef.CreateConstInt(i16, (ulong)pos, false), $"{label}_{n}_sh");
+        }
+        var bcf = ZxShl(cf, 0, "cf");
+        var bpf = ZxShl(pf, 2, "pf");
+        var baf = ZxShl(af, 4, "af");
+        var bzf = ZxShl(zf, 6, "zf");
+        var bsf = ZxShl(sf, 7, "sf");
+        var bof = ZxShl(of, 11, "of");
+
+        var t1 = ctx.Builder.BuildOr(bcf, bpf, $"{label}_t1");
+        var t2 = ctx.Builder.BuildOr(t1, baf, $"{label}_t2");
+        var t3 = ctx.Builder.BuildOr(t2, bzf, $"{label}_t3");
+        var t4 = ctx.Builder.BuildOr(t3, bsf, $"{label}_t4");
+        return ctx.Builder.BuildOr(t4, bof, $"{label}_packed");
+    }
+
+    /// <summary>
+    /// Merge new flag bits at the 6 ALU-affected positions into FLAGS,
+    /// preserving the other bits (TF/IF/DF, reserved bits, etc.).
+    /// Mask of affected bits = 0x08D5.
+    /// </summary>
+    private static void StoreAluFlags(EmitContext ctx, LLVMValueRef packed, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        var current = ctx.Builder.BuildLoad2(i16, fPtr, $"{label}_flags_cur");
+        var mask = LLVMValueRef.CreateConstInt(i16, 0x08D5, false);
+        var notMask = LLVMValueRef.CreateConstInt(i16, (ulong)(unchecked((ushort)~0x08D5)), false);
+        var keep = ctx.Builder.BuildAnd(current, notMask, $"{label}_flags_keep");
+        var maskedNew = ctx.Builder.BuildAnd(packed, mask, $"{label}_flags_new_masked");
+        var merged = ctx.Builder.BuildOr(keep, maskedNew, $"{label}_flags_merged");
+        ctx.Builder.BuildStore(merged, fPtr);
+    }
+
+    /// <summary>
+    /// Emit the 8-bit ALU op of <paramref name="kind"/> on
+    /// (<paramref name="lhs"/>, <paramref name="rhs"/>). Returns the i8 result.
+    /// Updates the FLAGS register's CF/PF/AF/ZF/SF/OF bits per the kind's rules.
+    /// </summary>
+    public static LLVMValueRef BuildAluW8(
+        EmitContext ctx, string kind, LLVMValueRef lhs8, LLVMValueRef rhs8, string label)
+    {
+        var i1  = LLVMTypeRef.Int1;
+        var i8  = LLVMTypeRef.Int8;
+        var i32 = LLVMTypeRef.Int32;
+
+        bool isLogical = kind is "and" or "or" or "xor";
+        bool isAdd     = kind is "add" or "adc";
+        bool isSub     = kind is "sub" or "sbb" or "cmp";
+        bool useCarry  = kind is "adc" or "sbb";
+
+        // Widen to i32 for carry detection.
+        var aZ = ctx.Builder.BuildZExt(lhs8, i32, $"{label}_a32");
+        var bZ = ctx.Builder.BuildZExt(rhs8, i32, $"{label}_b32");
+
+        // Carry-in for ADC/SBB (read CF from FLAGS).
+        LLVMValueRef cfIn32;
+        if (useCarry)
+        {
+            var fPtr = ctx.GepStatusRegister("FLAGS");
+            var f16  = ctx.Builder.BuildLoad2(LLVMTypeRef.Int16, fPtr, $"{label}_f16");
+            var f32  = ctx.Builder.BuildZExt(f16, i32, $"{label}_f32");
+            cfIn32 = ctx.Builder.BuildAnd(f32,
+                LLVMValueRef.CreateConstInt(i32, 1, false), $"{label}_cfin");
+        }
+        else
+        {
+            cfIn32 = LLVMValueRef.CreateConstInt(i32, 0, false);
+        }
+
+        // Compute the raw result at i32 width.
+        LLVMValueRef raw32 = kind switch
+        {
+            "add" => ctx.Builder.BuildAdd(aZ, bZ, $"{label}_raw"),
+            "adc" => ctx.Builder.BuildAdd(ctx.Builder.BuildAdd(aZ, bZ, $"{label}_ab"), cfIn32, $"{label}_raw"),
+            "sub" => ctx.Builder.BuildSub(aZ, bZ, $"{label}_raw"),
+            "sbb" => ctx.Builder.BuildSub(ctx.Builder.BuildSub(aZ, bZ, $"{label}_ab"), cfIn32, $"{label}_raw"),
+            "cmp" => ctx.Builder.BuildSub(aZ, bZ, $"{label}_raw"),
+            "and" => ctx.Builder.BuildAnd(aZ, bZ, $"{label}_raw"),
+            "or"  => ctx.Builder.BuildOr (aZ, bZ, $"{label}_raw"),
+            "xor" => ctx.Builder.BuildXor(aZ, bZ, $"{label}_raw"),
+            _ => throw new InvalidOperationException($"unknown ALU kind '{kind}'"),
+        };
+
+        // Truncate to i8 result.
+        var r8  = ctx.Builder.BuildTrunc(raw32, i8, $"{label}_r8");
+        var r32 = ctx.Builder.BuildZExt(r8, i32, $"{label}_r32");
+
+        // -------- flag computation --------
+        LLVMValueRef cf, of, af;
+
+        if (isLogical)
+        {
+            cf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+                LLVMValueRef.CreateConstInt(i32, 0, false),
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_cf0");
+            of = cf;   // both 0
+            af = cf;   // 0 (Tom Harte v2 convention)
+        }
+        else if (isSub)
+        {
+            // CF = (raw32 & 0x100) != 0 — borrow into MSB
+            var c100 = ctx.Builder.BuildAnd(raw32,
+                LLVMValueRef.CreateConstInt(i32, 0x100, false), $"{label}_cmask");
+            cf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, c100,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_cf");
+            // OF = ((a^b) & (a^r)) & 0x80
+            var xab = ctx.Builder.BuildXor(aZ, bZ, $"{label}_xab");
+            var xar = ctx.Builder.BuildXor(aZ, r32, $"{label}_xar");
+            var both = ctx.Builder.BuildAnd(xab, xar, $"{label}_xboth");
+            var omask = ctx.Builder.BuildAnd(both,
+                LLVMValueRef.CreateConstInt(i32, 0x80, false), $"{label}_omask");
+            of = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, omask,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_of");
+            // AF = ((a^b^r) & 0x10) != 0
+            var afXor = ctx.Builder.BuildXor(ctx.Builder.BuildXor(aZ, bZ, $"{label}_afx1"), r32, $"{label}_afx2");
+            var afMask = ctx.Builder.BuildAnd(afXor,
+                LLVMValueRef.CreateConstInt(i32, 0x10, false), $"{label}_afmask");
+            af = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, afMask,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_af");
+        }
+        else // add/adc
+        {
+            var c100 = ctx.Builder.BuildAnd(raw32,
+                LLVMValueRef.CreateConstInt(i32, 0x100, false), $"{label}_cmask");
+            cf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, c100,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_cf");
+            // OF = ((a^r) & (b^r)) & 0x80
+            var xar = ctx.Builder.BuildXor(aZ, r32, $"{label}_xar");
+            var xbr = ctx.Builder.BuildXor(bZ, r32, $"{label}_xbr");
+            var both = ctx.Builder.BuildAnd(xar, xbr, $"{label}_xboth");
+            var omask = ctx.Builder.BuildAnd(both,
+                LLVMValueRef.CreateConstInt(i32, 0x80, false), $"{label}_omask");
+            of = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, omask,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_of");
+            // AF — same XOR formula as sub
+            var afXor = ctx.Builder.BuildXor(ctx.Builder.BuildXor(aZ, bZ, $"{label}_afx1"), r32, $"{label}_afx2");
+            var afMask = ctx.Builder.BuildAnd(afXor,
+                LLVMValueRef.CreateConstInt(i32, 0x10, false), $"{label}_afmask");
+            af = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, afMask,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_af");
+        }
+
+        // SF = high bit of result
+        var sfMask = ctx.Builder.BuildAnd(r8,
+            LLVMValueRef.CreateConstInt(i8, 0x80, false), $"{label}_sfmask");
+        var sf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, sfMask,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_sf");
+        // ZF = result == 0
+        var zf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, r8,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_zf");
+        // PF = parity-even of low byte
+        var pf = BuildParityEven(ctx, r8, label);
+
+        var packed = BuildPackedFlags(ctx, cf, pf, af, zf, sf, of, label);
+        StoreAluFlags(ctx, packed, label);
+
+        return r8;
+    }
+
+    /// <summary>16-bit counterpart of <see cref="BuildAluW8"/>.</summary>
+    public static LLVMValueRef BuildAluW16(
+        EmitContext ctx, string kind, LLVMValueRef lhs16, LLVMValueRef rhs16, string label)
+    {
+        var i1  = LLVMTypeRef.Int1;
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        bool isLogical = kind is "and" or "or" or "xor";
+        bool isAdd     = kind is "add" or "adc";
+        bool isSub     = kind is "sub" or "sbb" or "cmp";
+        bool useCarry  = kind is "adc" or "sbb";
+
+        var aZ = ctx.Builder.BuildZExt(lhs16, i32, $"{label}_a32");
+        var bZ = ctx.Builder.BuildZExt(rhs16, i32, $"{label}_b32");
+
+        LLVMValueRef cfIn32;
+        if (useCarry)
+        {
+            var fPtr = ctx.GepStatusRegister("FLAGS");
+            var f16  = ctx.Builder.BuildLoad2(i16, fPtr, $"{label}_f16");
+            var f32  = ctx.Builder.BuildZExt(f16, i32, $"{label}_f32");
+            cfIn32 = ctx.Builder.BuildAnd(f32,
+                LLVMValueRef.CreateConstInt(i32, 1, false), $"{label}_cfin");
+        }
+        else
+        {
+            cfIn32 = LLVMValueRef.CreateConstInt(i32, 0, false);
+        }
+
+        LLVMValueRef raw32 = kind switch
+        {
+            "add" => ctx.Builder.BuildAdd(aZ, bZ, $"{label}_raw"),
+            "adc" => ctx.Builder.BuildAdd(ctx.Builder.BuildAdd(aZ, bZ, $"{label}_ab"), cfIn32, $"{label}_raw"),
+            "sub" => ctx.Builder.BuildSub(aZ, bZ, $"{label}_raw"),
+            "sbb" => ctx.Builder.BuildSub(ctx.Builder.BuildSub(aZ, bZ, $"{label}_ab"), cfIn32, $"{label}_raw"),
+            "cmp" => ctx.Builder.BuildSub(aZ, bZ, $"{label}_raw"),
+            "and" => ctx.Builder.BuildAnd(aZ, bZ, $"{label}_raw"),
+            "or"  => ctx.Builder.BuildOr (aZ, bZ, $"{label}_raw"),
+            "xor" => ctx.Builder.BuildXor(aZ, bZ, $"{label}_raw"),
+            _ => throw new InvalidOperationException($"unknown ALU kind '{kind}'"),
+        };
+
+        var r16 = ctx.Builder.BuildTrunc(raw32, i16, $"{label}_r16");
+        var r32 = ctx.Builder.BuildZExt(r16, i32, $"{label}_r32");
+
+        LLVMValueRef cf, of, af;
+
+        if (isLogical)
+        {
+            cf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+                LLVMValueRef.CreateConstInt(i32, 0, false),
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_cf0");
+            of = cf;
+            af = cf;
+        }
+        else if (isSub)
+        {
+            var c10000 = ctx.Builder.BuildAnd(raw32,
+                LLVMValueRef.CreateConstInt(i32, 0x10000, false), $"{label}_cmask");
+            cf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, c10000,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_cf");
+            var xab = ctx.Builder.BuildXor(aZ, bZ, $"{label}_xab");
+            var xar = ctx.Builder.BuildXor(aZ, r32, $"{label}_xar");
+            var both = ctx.Builder.BuildAnd(xab, xar, $"{label}_xboth");
+            var omask = ctx.Builder.BuildAnd(both,
+                LLVMValueRef.CreateConstInt(i32, 0x8000, false), $"{label}_omask");
+            of = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, omask,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_of");
+            var afXor = ctx.Builder.BuildXor(ctx.Builder.BuildXor(aZ, bZ, $"{label}_afx1"), r32, $"{label}_afx2");
+            var afMask = ctx.Builder.BuildAnd(afXor,
+                LLVMValueRef.CreateConstInt(i32, 0x10, false), $"{label}_afmask");
+            af = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, afMask,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_af");
+        }
+        else
+        {
+            var c10000 = ctx.Builder.BuildAnd(raw32,
+                LLVMValueRef.CreateConstInt(i32, 0x10000, false), $"{label}_cmask");
+            cf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, c10000,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_cf");
+            var xar = ctx.Builder.BuildXor(aZ, r32, $"{label}_xar");
+            var xbr = ctx.Builder.BuildXor(bZ, r32, $"{label}_xbr");
+            var both = ctx.Builder.BuildAnd(xar, xbr, $"{label}_xboth");
+            var omask = ctx.Builder.BuildAnd(both,
+                LLVMValueRef.CreateConstInt(i32, 0x8000, false), $"{label}_omask");
+            of = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, omask,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_of");
+            var afXor = ctx.Builder.BuildXor(ctx.Builder.BuildXor(aZ, bZ, $"{label}_afx1"), r32, $"{label}_afx2");
+            var afMask = ctx.Builder.BuildAnd(afXor,
+                LLVMValueRef.CreateConstInt(i32, 0x10, false), $"{label}_afmask");
+            af = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, afMask,
+                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_af");
+        }
+
+        var sfMask = ctx.Builder.BuildAnd(r16,
+            LLVMValueRef.CreateConstInt(i16, 0x8000, false), $"{label}_sfmask");
+        var sf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, sfMask,
+            LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_sf");
+        var zf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, r16,
+            LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_zf");
+        // PF reflects only the low byte regardless of width.
+        var rLowByte = ctx.Builder.BuildTrunc(r16, i8, $"{label}_rlow");
+        var pf = BuildParityEven(ctx, rLowByte, label);
+
+        var packed = BuildPackedFlags(ctx, cf, pf, af, zf, sf, of, label);
+        StoreAluFlags(ctx, packed, label);
+
+        return r16;
+    }
+}
+
+internal sealed class X86AluW8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_alu_w8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var kind = step.Raw.GetProperty("kind").GetString()!;
+        var lhsName = step.Raw.GetProperty("lhs").GetString()!;
+        var rhsName = step.Raw.GetProperty("rhs").GetString()!;
+        var lhs = ctx.Resolve(lhsName);
+        var rhs = ctx.Resolve(rhsName);
+        var r = X86AluHelpers.BuildAluW8(ctx, kind, lhs, rhs, $"alu8_{kind}");
+        if (step.Raw.TryGetProperty("out", out var outProp))
+        {
+            ctx.Values[outProp.GetString()!] = r;
+        }
+    }
+}
+
+internal sealed class X86AluW16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_alu_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var kind = step.Raw.GetProperty("kind").GetString()!;
+        var lhsName = step.Raw.GetProperty("lhs").GetString()!;
+        var rhsName = step.Raw.GetProperty("rhs").GetString()!;
+        var lhs = ctx.Resolve(lhsName);
+        var rhs = ctx.Resolve(rhsName);
+        var r = X86AluHelpers.BuildAluW16(ctx, kind, lhs, rhs, $"alu16_{kind}");
+        if (step.Raw.TryGetProperty("out", out var outProp))
+        {
+            ctx.Values[outProp.GetString()!] = r;
+        }
+    }
+}
+
+// ============================================================================
+// x86_read_named_gpr / x86_write_named_gpr — fixed-register access by
+// name (AL/AH/CL/CH/DL/DH/BL/BH/AX/CX/DX/BX/SP/BP/SI/DI). Used by
+// instructions like ADD AL, imm8 where the operand register is hardcoded
+// in the opcode rather than encoded in a ModR/M field.
+//
+// JSON shape:
+//   { "op": "x86_read_named_gpr",  "name": "AL", "out": "<name>" }
+//   { "op": "x86_write_named_gpr", "name": "AX", "in":  ["<name>"] }
+// ============================================================================
+
+internal sealed class X86ReadNamedGprEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_read_named_gpr";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var name    = step.Raw.GetProperty("name").GetString()!;
+        var outName = step.Raw.GetProperty("out").GetString()!;
+        ctx.Values[outName] = ReadNamedGpr(ctx, name, outName);
+    }
+
+    internal static LLVMValueRef ReadNamedGpr(EmitContext ctx, string name, string label)
+    {
+        // Map name to (parent index, half) — same encoding as ModR/M sreg/byte.
+        // 16-bit: 0=AX 1=CX 2=DX 3=BX 4=SP 5=BP 6=SI 7=DI
+        // 8-bit:  byteIdx 0..7 = AL CL DL BL AH CH DH BH
+        switch (name)
+        {
+            case "AL": return X86_16Emitters.ReadGpr8(ctx, 0, label);
+            case "CL": return X86_16Emitters.ReadGpr8(ctx, 1, label);
+            case "DL": return X86_16Emitters.ReadGpr8(ctx, 2, label);
+            case "BL": return X86_16Emitters.ReadGpr8(ctx, 3, label);
+            case "AH": return X86_16Emitters.ReadGpr8(ctx, 4, label);
+            case "CH": return X86_16Emitters.ReadGpr8(ctx, 5, label);
+            case "DH": return X86_16Emitters.ReadGpr8(ctx, 6, label);
+            case "BH": return X86_16Emitters.ReadGpr8(ctx, 7, label);
+            case "AX": return X86_16Emitters.ReadGpr16(ctx, 0, label);
+            case "CX": return X86_16Emitters.ReadGpr16(ctx, 1, label);
+            case "DX": return X86_16Emitters.ReadGpr16(ctx, 2, label);
+            case "BX": return X86_16Emitters.ReadGpr16(ctx, 3, label);
+            case "SP": return X86_16Emitters.ReadGpr16(ctx, 4, label);
+            case "BP": return X86_16Emitters.ReadGpr16(ctx, 5, label);
+            case "SI": return X86_16Emitters.ReadGpr16(ctx, 6, label);
+            case "DI": return X86_16Emitters.ReadGpr16(ctx, 7, label);
+            default:
+                throw new InvalidOperationException($"x86_read_named_gpr: unknown register '{name}'");
+        }
+    }
+}
+
+internal sealed class X86WriteNamedGprEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_write_named_gpr";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var name    = step.Raw.GetProperty("name").GetString()!;
+        var inArr   = step.Raw.GetProperty("in");
+        var valName = inArr[0].GetString()!;
+        var v = ctx.Resolve(valName);
+        WriteNamedGpr(ctx, name, v);
+    }
+
+    internal static void WriteNamedGpr(EmitContext ctx, string name, LLVMValueRef value)
+    {
+        switch (name)
+        {
+            case "AL": X86_16Emitters.WriteGpr8(ctx, 0, value); return;
+            case "CL": X86_16Emitters.WriteGpr8(ctx, 1, value); return;
+            case "DL": X86_16Emitters.WriteGpr8(ctx, 2, value); return;
+            case "BL": X86_16Emitters.WriteGpr8(ctx, 3, value); return;
+            case "AH": X86_16Emitters.WriteGpr8(ctx, 4, value); return;
+            case "CH": X86_16Emitters.WriteGpr8(ctx, 5, value); return;
+            case "DH": X86_16Emitters.WriteGpr8(ctx, 6, value); return;
+            case "BH": X86_16Emitters.WriteGpr8(ctx, 7, value); return;
+            case "AX": X86_16Emitters.WriteGpr16(ctx, 0, value); return;
+            case "CX": X86_16Emitters.WriteGpr16(ctx, 1, value); return;
+            case "DX": X86_16Emitters.WriteGpr16(ctx, 2, value); return;
+            case "BX": X86_16Emitters.WriteGpr16(ctx, 3, value); return;
+            case "SP": X86_16Emitters.WriteGpr16(ctx, 4, value); return;
+            case "BP": X86_16Emitters.WriteGpr16(ctx, 5, value); return;
+            case "SI": X86_16Emitters.WriteGpr16(ctx, 6, value); return;
+            case "DI": X86_16Emitters.WriteGpr16(ctx, 7, value); return;
+            default:
+                throw new InvalidOperationException($"x86_write_named_gpr: unknown register '{name}'");
+        }
     }
 }

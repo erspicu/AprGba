@@ -106,14 +106,16 @@ public class X86JsonCpuTests
     }
 
     /// <summary>
-    /// Step() returns -1 for an opcode the spec doesn't yet cover (e.g. 0x00
-    /// in 24.6.4 — only NOP/HLT are wired). IP must NOT advance; the caller
-    /// can fall through to legacy or extend the spec.
+    /// Step() returns -1 for an opcode the spec doesn't yet cover.
+    /// 0x0F is undefined on 8086 (was POP CS in early silicon, then
+    /// reserved as the 2-byte opcode prefix on 80286+) — we never wire
+    /// it. IP must NOT advance; the caller can fall through to legacy
+    /// or extend the spec.
     /// </summary>
     [Fact]
     public void Step_UnknownOpcode_ReturnsMinusOneAndPreservesIp()
     {
-        var (cpu, _) = Setup(new byte[] { 0x00, 0x00 });
+        var (cpu, _) = Setup(new byte[] { 0x0F, 0x00 });
 
         var rc = cpu.Step();
         Assert.Equal(-1, rc);
@@ -1134,6 +1136,166 @@ public class X86JsonCpuTests
         Assert.True(cpu.Halted);
         Assert.Equal(0xCAFE, cpu.State.A.X);
         Assert.Equal(0x8000, cpu.State.ES);
+    }
+
+    // ---------------- 24.6.6a — ADD (00-05) + 9-flag IR ----------------
+
+    /// <summary>
+    /// 0x00 D8 → ADD AL, BL. AL=0x10 + BL=0x20 = 0x30. No carry, no overflow.
+    /// </summary>
+    [Fact]
+    public void Step_AddAlBl_NoFlags()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x00, 0xD8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x10; s.B.L = 0x20;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x30, cpu.State.A.L);
+        Assert.False(cpu.State.FlagC);
+        Assert.False(cpu.State.FlagZ);
+        Assert.False(cpu.State.FlagS);
+        Assert.False(cpu.State.FlagO);
+    }
+
+    /// <summary>
+    /// 0x04 80 → ADD AL, 0x80 with AL=0x80. Result=0x00 (carry out).
+    /// CF=1, ZF=1, SF=0, OF=1 (signed: -128 + -128 overflow).
+    /// </summary>
+    [Fact]
+    public void Step_AddAlImm8_CarryAndOverflow()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x04, 0x80, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x80;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x00, cpu.State.A.L);
+        Assert.True(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagZ);
+        Assert.False(cpu.State.FlagS);
+        Assert.True(cpu.State.FlagO);
+    }
+
+    /// <summary>
+    /// 0x05 imm16 → ADD AX, 0x0001 with AX=0xFFFF. Wraps to 0x0000 with CF=1.
+    /// </summary>
+    [Fact]
+    public void Step_AddAxImm16_WrapAround()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x05, 0x01, 0x00, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0xFFFF;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0000, cpu.State.A.X);
+        Assert.True(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagZ);
+        Assert.False(cpu.State.FlagO);   // 0xFFFF + 0x0001 → no signed overflow
+    }
+
+    /// <summary>
+    /// 0x02 D8 → ADD AL, [BX] (mod=00 reg=011=BL? wait modrm)
+    /// Actually 0x02 is "ADD r8, r/m8". modrm=07: mod=00 reg=000(AL) rm=111(BX).
+    /// AL = AL + [BX]. Pre-set AL=0x10, BX=0x80, mem[0x80]=0x05 → AL=0x15.
+    /// </summary>
+    [Fact]
+    public void Step_AddAl_AtBx_MemoryRead()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x02, 0x07, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x10; s.B.X = 0x80;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x80, 0x05);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x15, cpu.State.A.L);
+    }
+
+    /// <summary>
+    /// AF (auxiliary carry) — 0x10 + 0x10 nibble carry. Pre-set AL=0x18,
+    /// add 0x08 → AL=0x20, AF=1 (low nibble 0x8+0x8 = 0x10 carry).
+    /// </summary>
+    [Fact]
+    public void Step_AddAlImm8_AuxCarryFlag()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x04, 0x08, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x18;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x20, cpu.State.A.L);
+        Assert.True(cpu.State.FlagA);
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>
+    /// PF parity check — result = 0x03 has 2 bits set → even → PF=1.
+    /// 0x04 02 add al,2 with al=1 → al=3, pf=1.
+    /// </summary>
+    [Fact]
+    public void Step_AddAl_ParityEven()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x04, 0x02, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x01;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x03, cpu.State.A.L);
+        Assert.True(cpu.State.FlagP);
+    }
+
+    /// <summary>
+    /// PF — result = 0x01 has 1 bit set → odd → PF=0.
+    /// 0x04 01 add al,1 with al=0 → al=1, pf=0.
+    /// </summary>
+    [Fact]
+    public void Step_AddAl_ParityOdd()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x04, 0x01, 0xF4 });
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x01, cpu.State.A.L);
+        Assert.False(cpu.State.FlagP);
+    }
+
+    /// <summary>
+    /// ADD r/m, r with memory destination: 0x01 06 80 00 → ADD [0x0080], AX
+    /// (modrm=06: mod=00 reg=000=AX rm=110=disp16). Pre-mem 0x80 = 0x100,
+    /// AX=0x200; result memory = 0x300.
+    /// </summary>
+    [Fact]
+    public void Step_AddMemAx_MemoryWrite()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x01, 0x06, 0x80, 0x00, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x200;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x80, 0x00);
+        mem.WriteByte(0x81, 0x01);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        ushort result = (ushort)(mem.ReadByte(0x80) | (mem.ReadByte(0x81) << 8));
+        Assert.Equal(0x0300, result);
     }
 
     /// <summary>

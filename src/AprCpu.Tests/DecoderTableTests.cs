@@ -1139,11 +1139,15 @@ public class DecoderTableTests
         Assert.Equal("x86_halt", d.Instruction.Steps.Single().Op);
     }
 
-    /// <summary>An undefined byte (0x00) returns null since 24.6.2 only wired NOP/HLT.</summary>
+    /// <summary>
+    /// An undefined byte returns null. 0x0F is a stable choice — POP CS
+    /// in 8086 silicon, reserved as 2-byte opcode prefix on 80286+,
+    /// never wired in spec/x86-16/i8086.
+    /// </summary>
     [Fact]
     public void Decode_Intel8086_UndefinedByteIsNull()
     {
         var t = new DecoderTable(Load8086Main());
-        Assert.Null(t.Decode(0x00u));
+        Assert.Null(t.Decode(0x0Fu));
     }
 }

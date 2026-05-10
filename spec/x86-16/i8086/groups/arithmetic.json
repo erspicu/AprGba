@@ -1,0 +1,47 @@
+{
+  "name": "Arithmetic",
+  "comment": "8086 ALU group — 8 ops (ADD/OR/ADC/SBB/AND/SUB/XOR/CMP) across 6 forms (r/m,r 8/16-bit + r,r/m 8/16-bit + AL/AX,imm). 48 opcodes total at 0x00-0x3D, slotted between PUSH/POP sreg (06/07/0E/16/17/1E/1F) and segment override prefixes (26/2E/36/3E) which are wired in the data-transfer group. Each ALU op shares one IR emitter (x86_alu_w8 / x86_alu_w16) parameterised by `kind`; flag rules (CF/PF/AF/ZF/SF/OF) live in X86AluHelpers.\n\n0x80-0x83 group ALU r/m,imm forms + TEST + INC/DEC + NOT/NEG/MUL/IMUL/DIV/IDIV defer to 24.6.6b/c.",
+
+  "formats": [
+    { "name": "AddRm8R8",     "fields": {}, "mask": "0xFF", "match": "0x00", "instructions": [{ "mnemonic": "ADD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADD", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8",     "out": "lhs" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "add", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w8",    "in": ["result"] }
+    ]}]},
+    { "name": "AddRm16R16",   "fields": {}, "mask": "0xFF", "match": "0x01", "instructions": [{ "mnemonic": "ADD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADD", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",    "out": "lhs" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "add", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w16",   "in": ["result"] }
+    ]}]},
+    { "name": "AddR8Rm8",     "fields": {}, "mask": "0xFF", "match": "0x02", "instructions": [{ "mnemonic": "ADD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADD", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w8",     "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "add", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "AddR16Rm16",   "fields": {}, "mask": "0xFF", "match": "0x03", "instructions": [{ "mnemonic": "ADD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADD", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w16",    "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "add", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg16_field", "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "AddAlImm8",    "fields": {}, "mask": "0xFF", "match": "0x04", "instructions": [{ "mnemonic": "ADD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADD", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AL", "out": "lhs" },
+        { "op": "x86_fetch_imm8",        "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "add", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AL", "in": ["result"] }
+    ]}]},
+    { "name": "AddAxImm16",   "fields": {}, "mask": "0xFF", "match": "0x05", "instructions": [{ "mnemonic": "ADD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADD", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AX", "out": "lhs" },
+        { "op": "x86_fetch_imm16",       "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "add", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AX", "in": ["result"] }
+    ]}]}
+  ]
+}
