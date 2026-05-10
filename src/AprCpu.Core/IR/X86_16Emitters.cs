@@ -3462,6 +3462,16 @@ internal sealed class X86JmpRel8Emitter : IMicroOpEmitter
         var i16 = LLVMTypeRef.Int16;
         // fetch_imm8 advances IP first; signed displacement adds to post-fetch IP.
         var disp8 = X86_16Emitters.FetchImm8(ctx, "jmp8_d");
+
+        // 24.6.8e — back-edge fast path: unconditional JMP to a known
+        // intra-block target = unconditional LLVM Br to the target's
+        // pre-BB. No IP write needed (target's pre-BB pre-writes IP).
+        if (ctx.BackEdgeTargetBB is { } target)
+        {
+            ctx.Builder.BuildBr(target);
+            return;
+        }
+
         var disp16 = ctx.Builder.BuildSExt(disp8, i16, "jmp8_dsx");
         var ipPtr = ctx.GepStatusRegister("IP");
         var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "jmp8_ip");
@@ -3480,6 +3490,14 @@ internal sealed class X86JmpRel16Emitter : IMicroOpEmitter
         var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         var disp16 = X86_16Emitters.FetchImm16(ctx, "jmp16_d");
+
+        // 24.6.8e — back-edge fast path (see X86JmpRel8Emitter).
+        if (ctx.BackEdgeTargetBB is { } target)
+        {
+            ctx.Builder.BuildBr(target);
+            return;
+        }
+
         var ipPtr = ctx.GepStatusRegister("IP");
         var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "jmp16_ip");
         var newIp = ctx.Builder.BuildAdd(ip, disp16, "jmp16_newip");
@@ -3501,15 +3519,27 @@ internal sealed class X86JccRel8Emitter : IMicroOpEmitter
 
         var cccc = ctx.Resolve(fieldName);    // i32
 
-        // Always fetch displacement first — IP must advance regardless.
+        // Always fetch displacement first — IP must advance regardless
+        // (block-exit semantics on the not-taken path expect IP to point
+        // past Jcc). In back-edge mode the disp value is dead-code-
+        // eliminated.
         var disp8  = X86_16Emitters.FetchImm8(ctx, "jcc_d");
-        var disp16 = ctx.Builder.BuildSExt(disp8, i16, "jcc_dsx");
 
         // Build the predicate from FLAGS + cccc.
         var flags = X86CtrlHelpers.LoadFlags(ctx, "jcc");
         var pred = X86CtrlHelpers.BuildJccPredicate(ctx, cccc, flags, "jcc");
 
-        // If predicate true: IP += disp; else: no change.
+        // 24.6.8e — back-edge fast path: emit LLVM-internal CondBr to
+        // the target instruction's pre-BB instead of IP write + block
+        // exit. See X86LoopEmitter for the full design rationale.
+        if (ctx.BackEdgeTargetBB is { } target && ctx.BackEdgeFallthroughBB is { } fall)
+        {
+            ctx.Builder.BuildCondBr(pred, target, fall);
+            return;
+        }
+
+        // Default path: IP = pred ? ip+disp : ip; signal PcWritten=pred.
+        var disp16 = ctx.Builder.BuildSExt(disp8, i16, "jcc_dsx");
         var ipPtr = ctx.GepStatusRegister("IP");
         var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "jcc_ip");
         var ipPlus = ctx.Builder.BuildAdd(ip, disp16, "jcc_ipP");
@@ -3558,8 +3588,10 @@ internal sealed class X86LoopEmitter : IMicroOpEmitter
         var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
 
+        // FetchImm8 advances IP regardless of mode (block exit semantics).
+        // In back-edge mode the disp value itself is dead-code-eliminated
+        // because we use the static target BB instead.
         var disp8  = X86_16Emitters.FetchImm8(ctx, "loop_d");
-        var disp16 = ctx.Builder.BuildSExt(disp8, i16, "loop_dsx");
 
         // CX -= 1
         var cx = X86_16Emitters.ReadGpr16(ctx, 1, "loop_cx");
@@ -3567,7 +3599,7 @@ internal sealed class X86LoopEmitter : IMicroOpEmitter
             LLVMValueRef.CreateConstInt(i16, 1, false), "loop_cxN");
         X86_16Emitters.WriteGpr16(ctx, 1, newCx);
 
-        // Predicate: cx != 0
+        // Predicate: cx != 0 (and optionally ZF check for LOOPE/LOOPNE).
         var cxNonZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, newCx,
             LLVMValueRef.CreateConstInt(i16, 0, false), "loop_cxnz");
 
@@ -3584,8 +3616,24 @@ internal sealed class X86LoopEmitter : IMicroOpEmitter
             pred = ctx.Builder.BuildAnd(cxNonZero, zfReq, "loop_pred");
         }
 
+        // 24.6.8e — back-edge fast path. When BlockDetector identified
+        // the LOOP target as another instruction in this same block,
+        // emit a CondBr directly to that instruction's pre-BB instead
+        // of writing IP and exiting the block. Cross-iteration register
+        // state (CX, AX, FLAGS, ...) survives via mem2reg-promoted phi
+        // nodes — what Gemini called "the alloca + mem2reg pattern
+        // gives you cross-block SSA without architectural nightmares."
+        if (ctx.BackEdgeTargetBB is { } target && ctx.BackEdgeFallthroughBB is { } fall)
+        {
+            ctx.Builder.BuildCondBr(pred, target, fall);
+            return;
+        }
+
+        // Default path: compute new IP via Select + signal PcWritten so
+        // the block exits and the dispatcher re-enters at the target.
         var ipPtr = ctx.GepStatusRegister("IP");
         var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "loop_ip");
+        var disp16 = ctx.Builder.BuildSExt(disp8, i16, "loop_dsx");
         var ipPlus = ctx.Builder.BuildAdd(ip, disp16, "loop_ipP");
         var sel = ctx.Builder.BuildSelect(pred, ipPlus, ip, "loop_newip");
         ctx.Builder.BuildStore(sel, ipPtr);

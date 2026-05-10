@@ -151,6 +151,29 @@ public sealed unsafe class EmitContext
     public ulong? CurrentInstructionPackedTailBytes { get; private set; }
 
     /// <summary>
+    /// 24.6.8e — when set (block-JIT only, on instructions that
+    /// BlockDetector identified as intra-block back-edges), the LLVM
+    /// BasicBlock that x86 LOOP / Jcc / JMP rel emitters should branch
+    /// to on TAKEN (instead of writing IP + setting PcWritten=1 + exiting
+    /// the block). Pair with <see cref="BackEdgeFallthroughBB"/> for the
+    /// not-taken side. Reset to null between instructions by
+    /// <see cref="BlockFunctionBuilder"/> — emitters check it inside
+    /// their Emit() to decide between the existing IP-write path and
+    /// the new internal-CFG path.
+    /// </summary>
+    public LLVMBasicBlockRef? BackEdgeTargetBB { get; set; }
+
+    /// <summary>
+    /// 24.6.8e — when <see cref="BackEdgeTargetBB"/> is set, this is the
+    /// BB to fall through to on the NOT-TAKEN side of a conditional back-
+    /// edge branch (LOOP / Jcc / JCXZ). Typically <c>postBBs[i]</c> set by
+    /// <see cref="BlockFunctionBuilder"/> so the existing budget-check +
+    /// advance flow runs unmodified. Unconditional back-edges (JMP rel)
+    /// ignore this field and emit a single <c>BuildBr(BackEdgeTargetBB)</c>.
+    /// </summary>
+    public LLVMBasicBlockRef? BackEdgeFallthroughBB { get; set; }
+
+    /// <summary>
     /// 24.6.8d — CISC immediate-baking offset tracker. x86 emitters can
     /// invoke <see cref="X86_16Emitters.FetchImm8"/> / FetchImm16 multiple
     /// times within a single instruction body (e.g. ModR/M byte → disp8 →

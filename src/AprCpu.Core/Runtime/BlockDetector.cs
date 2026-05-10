@@ -315,6 +315,16 @@ public sealed class BlockDetector
             //   0x18 (JR e8):  target = pc + 2 + sext(e8)
             //   0xC3 (JP nn):  target = nn (LE imm16)
             // CALL/RET/JP HL: not followable (dynamic targets).
+            //
+            // 24.6.8e — also computes targets for x86 (busLengthOracle
+            // path) so BlockDetector can detect intra-block back-edges
+            // for the LLVM-CFG superblock optimization. Computed targets
+            // are checked against the existing block instructions; if a
+            // match is found, BackEdgeTargetIndex is set on the resulting
+            // DecodedBlockInstruction. NOT the same as cross-jump-follow
+            // (which extends the block forward into a new region) —
+            // back-edge keeps the block boundary at the branch but lets
+            // BlockFunctionBuilder emit an internal LLVM CondBr.
             uint? followTarget = null;
             if (_lengthOracle is not null)
             {
@@ -327,6 +337,43 @@ public sealed class BlockDetector
                 else if (op == 0xC3 && thisLength == 3)
                 {
                     followTarget = (word >> 8) & 0xFFFFu;
+                }
+            }
+            else if (_busLengthOracle is not null)
+            {
+                byte op = (byte)(word & 0xFF);
+                bool isJmpOrLoopOrJccRel8 =
+                    op == 0xEB                       // JMP rel8
+                    || (op >= 0x70 && op <= 0x7F)   // Jcc rel8 family
+                    || op == 0xE0 || op == 0xE1     // LOOPNE / LOOPE
+                    || op == 0xE2                    // LOOP
+                    || op == 0xE3;                   // JCXZ
+                bool isJmpRel16 = op == 0xE9;
+                if (isJmpOrLoopOrJccRel8 && thisLength == 2)
+                {
+                    sbyte e8 = (sbyte)bus.ReadByte(pc + 1u);
+                    followTarget = (uint)((int)pc + thisLength + e8) & 0xFFFFu;
+                }
+                else if (isJmpRel16 && thisLength == 3)
+                {
+                    short e16 = (short)(bus.ReadByte(pc + 1u) | (bus.ReadByte(pc + 2u) << 8));
+                    followTarget = (uint)((int)pc + thisLength + e16) & 0xFFFFu;
+                }
+            }
+
+            // 24.6.8e — back-edge detection. If the computed branch
+            // target matches the PC of any instruction already added to
+            // the current block, we've found an intra-block back-edge
+            // (typical of inner loops: LOOP -8 back to add/add). The
+            // DecodedBlockInstruction carries the target's INDEX so
+            // BlockFunctionBuilder can wire the LLVM CondBr to that
+            // instruction's pre-BB.
+            int? backEdgeTargetIndex = null;
+            if (followTarget is uint targetPc)
+            {
+                for (int j = 0; j < instrs.Count; j++)
+                {
+                    if (instrs[j].Pc == targetPc) { backEdgeTargetIndex = j; break; }
                 }
             }
 
@@ -364,7 +411,16 @@ public sealed class BlockDetector
             bool crossJumpRam = Environment.GetEnvironmentVariable("APR_CROSS_JUMP_RAM") is not null;
             if (followTarget is uint t0)
                 isRomToRom = pc <= 0x7FFFu && t0 <= 0x7FFFu;
-            bool willFollow = followTarget is uint t
+            // 24.6.8e — for x86 (busLengthOracle path) followTarget is
+            // computed only to drive intra-block back-edge detection
+            // (BackEdgeTargetIndex below). Disable the linear-extend
+            // cross-jump-follow path to keep block boundaries at
+            // writes_pc instructions; otherwise BlockDetector would
+            // unroll the inner loop body into the block, defeating the
+            // CFG-back-edge optimization (and likely violating Gemini's
+            // "do NOT linearly unroll" guidance for tight CISC loops).
+            bool willFollow = _busLengthOracle is null
+                && followTarget is uint t
                 && !visited.Contains(t)
                 && i + 1 < maxInstructions
                 && (crossJumpRam || isRomToRom);
@@ -413,7 +469,8 @@ public sealed class BlockDetector
             }
 
             instrs.Add(new DecodedBlockInstruction(pc, word, decoded, (byte)thisLength,
-                IsFollowedBranch: willFollow, Immediate: immediate, PackedTailBytes: packedTail));
+                IsFollowedBranch: willFollow, Immediate: immediate, PackedTailBytes: packedTail,
+                BackEdgeTargetIndex: backEdgeTargetIndex));
 
             if (willFollow)
             {

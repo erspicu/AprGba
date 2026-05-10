@@ -122,7 +122,24 @@ public sealed record DecodedBlockInstruction(
     // ISA, length 1 (no trailing bytes), or length > 9 (rare; emitters
     // fall back to the bus path). RISC variable-width ISAs (LR35902,
     // 6502) leave this null and use Immediate / InstructionWord directly.
-    ulong? PackedTailBytes = null);
+    ulong? PackedTailBytes = null,
+    // 24.6.8e — intra-block back-edge target. When this instruction is a
+    // branch (LOOP/Jcc/JMP rel8/rel16) whose statically-computed target
+    // PC matches another instruction inside the same block, BlockDetector
+    // records that target instruction's index here. BlockFunctionBuilder
+    // then directs the branch emitter to emit an LLVM CondBr / Br to
+    // preBBs[BackEdgeTargetIndex] instead of writing IP + setting
+    // PcWritten. This turns a tight inner loop (e.g. add/add/loop) into
+    // an LLVM-native loop within the block function — alloca + mem2reg
+    // give cross-iteration register SSA via phi nodes for free, removing
+    // the dispatcher round-trip per iteration. Per Gemini's 2026-05-10
+    // guidance: this is "intra-function CFG", NOT linear unrolling
+    // (which would (a) blow up LLVM compile time with O(N²) regalloc
+    // and (b) miscompile the iteration end condition). Block still
+    // formally ends at this branch — execution exits the LLVM function
+    // when the loop predicate fails, restoring the dispatcher's
+    // schedule-and-redispatch flow.
+    int? BackEdgeTargetIndex = null);
 
 /// <summary>Why <see cref="BlockDetector"/> stopped collecting instructions.</summary>
 public enum BlockEndReason

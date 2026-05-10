@@ -346,6 +346,19 @@ public sealed unsafe class BlockFunctionBuilder
             // the next instruction (which is the branch target with
             // bi.Pc = target). Cycle cost still gets deducted in postBB.
             builder.PositionAtEnd(execBBs[i]);
+            // 24.6.8e — wire up back-edge targets BEFORE emitting steps so
+            // x86 LOOP / Jcc / JMP-rel emitters can pick them up via ctx.
+            // Cleared after emission to prevent leak into next instr.
+            if (bi.BackEdgeTargetIndex is int bei && bei >= 0 && bei < block.Instructions.Count)
+            {
+                ctx.BackEdgeTargetBB     = preBBs[bei];
+                ctx.BackEdgeFallthroughBB = postBBs[i];
+            }
+            else
+            {
+                ctx.BackEdgeTargetBB     = null;
+                ctx.BackEdgeFallthroughBB = null;
+            }
             if (!bi.IsFollowedBranch)
             {
                 ResolverRegistry.Apply(ctx);
@@ -355,6 +368,8 @@ public sealed unsafe class BlockFunctionBuilder
                         Registry.EmitStep(ctx, step);
                 }
             }
+            ctx.BackEdgeTargetBB     = null;
+            ctx.BackEdgeFallthroughBB = null;
             if (!IsTerminated(builder)) builder.BuildBr(postBBs[i]);
 
             // 3. Post block: did this instruction write PC? If so, deduct
