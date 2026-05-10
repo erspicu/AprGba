@@ -7,9 +7,9 @@
 > **狀態快照**（2026-05-10 更新）：Phase 0/1/2/2.5/2.6/3/4.1/4.2/4.3/4.4/
 > 4.5/5/7（部分）/8 ✅ 完成；**N0-N11 (NES 2A03 + spec-driven runtime
 > 系列)** ✅ 完成（2026-05-09）；**24 系列 (Intel 8086 第 4 顆 CPU)
-> 24.0–24.5 ✅ 完工 + 24.6.1–24.6.5c ✅ JSON-driven port partial**（697/697
-> T1 全綠）；24.6.5d–g + 24.6.6–9 + 24.7 + 24.8 待做。詳見本文件最後新增
-> 的「N 系列」+「24 系列」段。
+> 24.0–24.5 ✅ 完工 + 24.6.1–24.6.7g ✅ JSON-driven port substantial
+> (~213 opcodes)**（827/827 T1 全綠）；24.6.7b2 + 24.6.8–9 + 24.7 + 24.8
+> 待做。詳見本文件最後新增的「N 系列」+「24 系列」段。
 >
 > - **MVP**：GBA 端 test-ROM → 真 Nintendo BIOS LLE → 完整 PPU pipeline
 >   (Mode 0/1/2/3/4 + OBJ + BLDCNT + WIN)。GB 端 BIOS LLE + DMG Nintendo®
@@ -1198,41 +1198,37 @@ claim 的最後 evidence。完整 phase plan 在
 | **24.3** | CGA text framebuffer + PNG 截圖 + magic IO | result/x86-16/hello-cga-i8086.png | ✅ |
 | **24.4** | PUSH/POP/Control flow/Shifts/Rotates/MUL/IMUL/String ops/REP/INT/IRET/BCD/IO 全套 | 1.31M Tom Harte SST cases 全綠；8088 silicon flag quirks 反向工程（PUSH SP 後減值、SHL/SHR AF 規則、MUL 高位元組 SF/ZF/PF） | ✅ |
 | **24.5** | 6 個 hand-crafted .com demo + 截圖 | hello-cga / primes / fibonacci / mandelbrot / string-copy / factorial 6 paper-quality screenshots | ✅ |
-| **24.6** | **JSON-driven port** — 8086 真正成為 framework 第 4 顆 CPU、走同一條 SpecCompiler + LLVM JIT pipeline | partial (24.6.1-5c)；剩 24.6.5d-g + 24.6.6-9 | 🚧 |
-| 24.6.1 | spec scaffolding (`spec/x86-16/i8086/cpu.json` + main.json)；8 GPRs in ModR/M order, 9-flag FLAGS, 4 segs + IP + HALTED | ✅ | `4730945` |
-| 24.6.2 | smoke group：NOP + HLT decode through framework DecoderTable | ✅ | `9a43c73` |
-| 24.6.3 | `X86_16Emitters.cs` 落地 + family dispatch + halt + helpers (FetchImm8/16, SegmentedRead/Write8/16, Read/WriteGpr8/16 with byte-half preservation) | ✅ | `24e5e70` |
-| 24.6.4 | `X86JsonCpu` skeleton：SpecCompiler → ORC LLJIT → live fn pointers + per-instr Step() + State getter + LoadState | ✅ | `01cdeb3` |
-| 24.6.5a | MOV r, imm (B0-BF) — 16 opcodes through field-dispatched write_reg{8,16} + fetch_imm{8,16} | ✅ | `1e992a3` |
-| 24.6.5b | MOV r/m,r 與 r,r/m (88-8B) — `fetch_modrm` + read_reg{8,16}_field, mod=11 reg-direct only | ✅ | `06d9dab` |
-| 24.6.5c | Memory ModR/M — `x86_modrm_compute_ea` (full 8086 EA grammar：BX+SI/BP+disp/disp16/etc.) + `x86_modrm_load/store_w{8,16}` mod-aware emitters；88-8B 全 mod×rm 組合通過 | ✅ | `384eca5` |
-| 24.6.5d | Segment override prefixes (0x26/0x2E/0x36/0x3E) | ⏳ | — |
-| 24.6.5e | MOV r/m,imm (C6/C7) + MOV moffs (A0-A3) + sreg moves (8C/8E) | ⏳ | — |
-| 24.6.5f | PUSH/POP r16 + sreg + PUSHF/POPF + r/m forms | ⏳ | — |
-| 24.6.5g | XCHG (86/87/90-97) + LEA (8D) + LDS/LES (C4/C5) | ⏳ | — |
-| 24.6.6 | ALU group + 9-flag IR computation (CF/PF/AF/ZF/SF/OF rules in LLVM IR mirroring `X86Alu.cs`) | ⏳ | — |
-| 24.6.7 | 控流 + shift/rotate + string ops + REP + INT/IRET + BCD + IO | ⏳ | — |
-| 24.6.8 | block-JIT mode (alloca + mem2reg, 對齊 NES N1.B') | ⏳ | — |
+| **24.6** | **JSON-driven port** — 8086 真正成為 framework 第 4 顆 CPU、走同一條 SpecCompiler + LLVM JIT pipeline | substantial (24.6.1-7g, ~213 opcodes)；剩 24.6.7b2 + 24.6.8-9 | 🚧 |
+| 24.6.1-4 | Spec scaffolding + smoke group + emitter framework + X86JsonCpu skeleton | ✅ 4 commits | `4730945`..`01cdeb3` |
+| 24.6.5a-g | Data-transfer group complete — MOV all forms (B0-BF/88-8B 全 ModR/M/C6/C7/A0-A3/8C/8E/segment overrides) + PUSH/POP family (50-5F/sreg/FLAGS/r/m) + XCHG/LEA/LDS/LES — 69 opcodes | ✅ 7 commits | `1e992a3`..`7ad24a8` |
+| 24.6.6a-e | ALU + 9-flag IR — 8 ops × 6 forms (00-3D, 48 opcodes) + INC/DEC r16 (40-4F) + 80-83 ALU r/m,imm group + TEST/NOT/NEG + MUL/IMUL + CBW/CWD — 76 opcodes | ✅ 5 commits | `e997ade`..`e2c7e1b` |
+| 24.6.7a-g | Control flow + shift count=1 + string ops + REP + flag-manip/IO + INT/IRET + FE/FF group + BCD + DIV/IDIV — ~70 opcodes | ✅ 8 commits | `9aa7f6c`..`5958c0b` |
+| 24.6.7b2 | Shift by CL (D2/D3) — count != 1 path with 8088 silicon flag quirks | ⏳ | — |
+| 24.6.8 | Block-JIT mode (alloca + mem2reg, 對齊 NES N1.B') | ⏳ | — |
 | 24.6.9 | 24.5 demo 透過 json-block backend 重跑：result/x86-16/jit-*.png pixel-identical | ⏳ | — |
 | **24.7** | 80186 spec — 透過 inheritance (#23)：ENTER/LEAVE demo + 截圖 | ⏳ | — |
 | **24.8** | 80286 real-mode + protected-mode demo：4 顆 CPU 全綠 + protmode 截圖 | ⏳ | — |
 
-### 本 session (2026-05-10) 8 個 commits 摘要
+### 本 session (2026-05-10) 累計 commits (~25 feature + ~6 docs)
 
-```
-3fc3963 docs(#24): record 24.6.1-24.6.5c completion
-384eca5 feat(N0c.24.6.5c): memory ModR/M — full 8086 effective-address grammar
-06d9dab feat(N0c.24.6.5b): MOV r/m,r and r,r/m (88-8B) — register-direct ModR/M (mod=11)
-1e992a3 feat(N0c.24.6.5a): MOV r, imm (B0-BF) — first real data-transfer subset through json backend
-01cdeb3 feat(N0c.24.6.4): X86JsonCpu skeleton — per-instr backend, NOP+HLT roundtrip via LLJIT
-24e5e70 feat(N0c.24.6.3): X86_16Emitters.cs scaffolding + family dispatch + halt emitter
-9a43c73 feat(N0c.24.6.2): smoke group — NOP + HLT decode through framework DecoderTable
-4730945 feat(N0c.24.6.1): scaffold spec/x86-16/i8086 — cpu.json + 9 FLAGS + main.json (empty groups)
-```
+完整列表見 `git log 4730945..900facf --oneline`。摘要：
 
-T1 增量：673 → 697 (+24 X86JsonCpu 端到端 tests)；
-**所有 MOV opcode (88-8B 全 ModR/M + B0-BF reg/imm) 已透過 framework
-SpecCompiler + LLVM ORC JIT 跑通 — JSON-driven 8086 第一個能跑的 milestone 達成。**
+- **24.6.1-4**：spec scaffolding + smoke + emitter framework + X86JsonCpu skeleton
+- **24.6.5a-g**：完整 data-transfer (69 opcodes) — 7 commits
+- **24.6.6a-e**：ALU + 9-flag IR (76 opcodes) — 5 commits
+- **24.6.7a-g**：控流 + shift count=1 + 字串 + REP + INT/IRET + flag-manip + IO + FE/FF + BCD + DIV/IDIV (~70 opcodes) — 8 commits
+
+T1 增量：673 → **827** (+154 X86JsonCpu 端到端 tests)；
+JSON-driven 8086 backend 已能跑大部分 8086 程式 (~213 unique opcodes
+through framework SpecCompiler + LLVM ORC JIT) — **framework genericity
+claim for 4th CPU substantively met**.
+
+8088 silicon quirks 正確實作：PUSH SP post-decrement、PUSHF reserved-bit
+mask、MUL high-byte SF/ZF/PF、SHL AF=bit 4 of result、SHR/SAR AF=0、
+DAA high-nibble check uses original AL (not post-low-adjust)。
+
+兩個寫 IR 時抓到的 logical-flag bug 也在 unit test pressure 下被修掉
+(W8 + W16 paths — `(0==0)→TRUE` 而非 i1 false)。
 
 ### 為何 24.6 是 framework genericity 的關鍵
 
