@@ -362,6 +362,41 @@ public class SpecInheritanceTests : IDisposable
     }
 
     [Fact]
+    public void Real_I80286_Spec_Loads_Through_Depth_3_Chain()
+    {
+        // Sprint 26.1 — load the actual i80286 spec from the repo and
+        // verify the chain depth=3 (i80286 -> i80186 -> i8086) works.
+        // i80286's instruction count = i8086's 149 + i80186's 26 + 286's 1
+        // (the CLTS stub) = 176.
+        var repoRoot = LocateRepoRoot();
+        var i80286Cpu = Path.Combine(repoRoot, "spec", "x86-16", "i80286", "cpu.json");
+        Assert.True(File.Exists(i80286Cpu), $"i80286 cpu.json missing at {i80286Cpu}");
+
+        var loaded = SpecLoader.LoadCpuSpec(i80286Cpu);
+
+        Assert.Equal("Intel80286", loaded.Cpu.Architecture.Id);
+        Assert.Equal("Intel80186", loaded.Cpu.Architecture.Extends);
+
+        var main = loaded.InstructionSets["Main"];
+        var allInstr = main.EncodingGroups
+            .SelectMany(g => g.Formats)
+            .SelectMany(f => f.Instructions)
+            .ToList();
+        Assert.True(allInstr.Count >= 149 + 26 + 1,
+            $"expected at least 176 instructions (149 i8086 + 26 i80186 + 1 i80286), got {allInstr.Count}");
+
+        // Provenance flows through three levels:
+        var addRm8R8 = allInstr.First(i => i.Id == "ADD_rm8_r8");
+        Assert.Equal("Intel8086", addRm8R8.OriginCpu);  // originally from base
+
+        var pushaI80186 = allInstr.First(i => i.Id == "PUSHA_noargs");
+        Assert.Equal("Intel80186", pushaI80186.OriginCpu);  // added at i80186
+
+        var clts286 = allInstr.First(i => i.Id == "CLTS_noargs_v1stub");
+        Assert.Equal("Intel80286", clts286.OriginCpu);  // added at i80286
+    }
+
+    [Fact]
     public void Cyclic_Inheritance_Throws()
     {
         // A -> B -> A cycle (B claims to extend A, A claims to extend B).

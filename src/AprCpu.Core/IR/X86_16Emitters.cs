@@ -196,6 +196,9 @@ public static class X86_16Emitters
         reg.Register(new X86AamEmitter());
         reg.Register(new X86AadEmitter());
 
+        // Phase 26 — 80286 stub (full implementation in Sprint 26.3+).
+        reg.Register(new X86Clts286StubEmitter());
+
         // Phase 25 — 80186 additions (referenced from i80186 spec via
         // inheritance overlay). 12 new opcodes + PUSH SP silicon-quirk fix.
         reg.Register(new X86PushSpPreDecrementEmitter());
@@ -5616,6 +5619,21 @@ internal sealed class X86ShiftRotateW16Count1Emitter : IMicroOpEmitter
 // x86_push_sp_pre_decrement — 80186 fix to the 8086 PUSH SP silicon quirk.
 // 8086: SP -= 2; mem[SS:SP] = SP   (i.e. captures the new, decremented SP)
 // 80186: SP_orig = SP; SP -= 2; mem[SS:SP] = SP_orig   (captures original SP)
+// x86_clts_286_stub — Phase 26 Sprint 26.1 placeholder. Real CLTS clears
+// the TS bit in MSW; the v1 stub is a no-op pending Sprint 26.4 (MSW
+// status register addition). Scope: just lets the i80286 spec load +
+// pass schema validation so we can prove the inheritance chain depth=3
+// works (i80286 -> i80186 -> i8086).
+internal sealed class X86Clts286StubEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_clts_286_stub";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // intentionally empty — no IR generated; LLVM will see only the
+        // BlockFunctionBuilder's auto-br at the end of execBB.
+    }
+}
+
 internal sealed class X86PushSpPreDecrementEmitter : IMicroOpEmitter
 {
     public string OpName => "x86_push_sp_pre_decrement";

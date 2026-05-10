@@ -1,0 +1,32 @@
+{
+  "$schema": "../../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+
+  "comment": "Intel 80286 (1982) — 80186 + 13 system instructions reachable via 0x0F escape prefix. Phase 26 ships REAL-MODE only; the system instructions exist in the spec but their semantic implementations are no-op-ish (LMSW/SMSW touch a real MSW register; the descriptor-related ones (LGDT/LIDT/LLDT/LTR/...) store/load to dedicated state slots without enforcing any of the protected-mode invariants those slots would gate. Phase 27 will implement protected mode end-to-end on top of this scaffold.",
+
+  "architecture": {
+    "id":             "Intel80286",
+    "family":         "x86-16",
+    "extends":        "Intel80186",
+    "extends_path":   "../i80186/cpu.json",
+    "endianness":     "little",
+    "word_size_bits": 16
+  },
+
+  "variants": [
+    {
+      "id":       "i80286",
+      "core":     "Intel80286",
+      "features": ["realmode_only_v1"],
+      "notes":    "Intel 80286 — 80186 + 13 system instructions (0x0F-escape encoding). Phase 26 v1: real-mode only. Protected mode (descriptor tables, privilege levels, TSS task switching) deferred to Phase 27."
+    }
+  ],
+
+  "instruction_set_diff": {
+    "Main": {
+      "additions": [
+        { "$include": "groups/i80286-system.json" }
+      ]
+    }
+  }
+}
