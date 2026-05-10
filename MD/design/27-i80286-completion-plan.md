@@ -121,7 +121,7 @@ multi-week effort for 27b.
 | 27.10d wave 1 — FetchImm uses CS_BASE | ✅ | `2531bd8` | 2026-05-11 |
 | 27.10d wave 2 — Stack ops + by-name Read/Write overloads | ✅ | `126e2cc` | 2026-05-11 |
 | 27.10d wave 3 — PushReg/PushModRm/PushSpPreDec by-name | ✅ | `66dc4df` | 2026-05-11 |
-| 27.10d wave 4 — SDT helpers by-name | ⏳ pending | — | — |
+| 27.10d wave 4 — ea_base alias (EA-compute foundation) | ✅ | `3605c42` | 2026-05-11 |
 | 27.10d wave 5 — Protected-mode segment-load IR (the actual descriptor lookup) | ⏳ pending | — | — |
 | 27.11 New exception model | ⏳ pending | — | — |
 | 27.12 TSS task switching | ⏳ pending | — | — |
