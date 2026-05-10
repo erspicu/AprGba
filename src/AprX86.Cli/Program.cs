@@ -170,6 +170,13 @@ Console.WriteLine($"  final state:");
     Console.WriteLine($"    SP={s.SP:X4} BP={s.BP:X4} SI={s.SI:X4} DI={s.DI:X4}");
     Console.WriteLine($"    DS={s.DS:X4} ES={s.ES:X4} SS={s.SS:X4}");
     Console.WriteLine($"    FLAGS={s.GetFlags():X4}  C={(s.FlagC?1:0)} P={(s.FlagP?1:0)} A={(s.FlagA?1:0)} Z={(s.FlagZ?1:0)} S={(s.FlagS?1:0)} O={(s.FlagO?1:0)} D={(s.FlagD?1:0)} I={(s.FlagI?1:0)}");
+    // Sprint 27.11b — surface i80286 exception state. Only print when an
+    // exception is actually pending (avoids cluttering legacy i8086 / i80186
+    // dumps where these slots are always 0).
+    if (s.ExcPending != 0)
+    {
+        Console.WriteLine($"    EXC pending=1 vector=0x{s.ExcVector:X2} error=0x{s.ExcError:X4}");
+    }
 }
 Console.WriteLine($"  halted: {cpu.Halted}");
 

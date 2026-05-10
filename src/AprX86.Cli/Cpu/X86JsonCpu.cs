@@ -70,6 +70,11 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
     private readonly int _flagsOff, _ipOff, _esOff, _csOff, _ssOff, _dsOff, _haltedOff, _segOverrideOff;
     private readonly int _cyclesLeftOff;
 
+    // Sprint 27.11b — i80286 exception slots. -1 sentinel when the loaded
+    // spec doesn't declare them (i8086 / i80186); State getter then
+    // reports 0 / 0 / 0.
+    private readonly int _excPendingOff, _excVectorOff, _excErrorOff;
+
     public X86Memory Memory => _mem;
 
     /// <summary>
@@ -143,6 +148,12 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         _haltedOff      = (int)_rt.StatusOffset("HALTED");
         _segOverrideOff = (int)_rt.StatusOffset("SEG_OVERRIDE");
         _cyclesLeftOff  = (int)_rt.CyclesLeftOffset;
+
+        // Sprint 27.11b — exception state slots (i80286 only). -1 when the
+        // loaded spec doesn't declare them (i8086 / i80186 path).
+        _excPendingOff = TryStatusOffset("EXC_PENDING");
+        _excVectorOff  = TryStatusOffset("EXC_VECTOR");
+        _excErrorOff   = TryStatusOffset("EXC_ERROR");
 
         _state = new byte[(int)_rt.StateSizeBytes];
         _stateHandle = GCHandle.Alloc(_state, GCHandleType.Pinned);
@@ -280,6 +291,20 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
 
     public bool Halted => _state[_haltedOff] != 0;
 
+    /// <summary>
+    /// Sprint 27.11b — try to look up a status-register offset; return -1
+    /// when the loaded spec doesn't declare it. Used for i80286-only
+    /// slots (EXC_PENDING/VECTOR/ERROR, MSW, etc.) that are absent on
+    /// older variants.
+    /// </summary>
+    private int TryStatusOffset(string name)
+    {
+        try { return (int)_rt.StatusOffset(name); }
+        catch (KeyNotFoundException)      { return -1; }
+        catch (ArgumentException)         { return -1; }
+        catch (InvalidOperationException) { return -1; }
+    }
+
     public X86State State
     {
         get
@@ -304,6 +329,11 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
                 IP = ReadU16(_ipOff),
             };
             s.SetFlags(ReadU16(_flagsOff));
+            // Sprint 27.11b — mirror exception slots when the spec
+            // declares them (i80286+). Older variants leave them at 0.
+            if (_excPendingOff >= 0) s.ExcPending = _state[_excPendingOff];
+            if (_excVectorOff  >= 0) s.ExcVector  = _state[_excVectorOff];
+            if (_excErrorOff   >= 0) s.ExcError   = ReadU16(_excErrorOff);
             return s;
         }
     }

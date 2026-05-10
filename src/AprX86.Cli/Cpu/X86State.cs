@@ -60,6 +60,15 @@ public sealed class X86State
     public bool FlagD;      // bit 10 — direction (string ops)
     public bool FlagO;      // bit 11 — overflow
 
+    // Sprint 27.11b — i80286 exception state. Mirrors EXC_PENDING /
+    // EXC_VECTOR / EXC_ERROR slots from the i80286 register file. For
+    // i8086 / i80186 these are always 0 (the spec doesn't declare the
+    // slots, so the backend reads them as 0). Subsequent sprints
+    // (27.11c+) will start populating these from PE=1 fault paths.
+    public byte   ExcPending;   // 0 = no fault, 1 = exception raised
+    public byte   ExcVector;    // 80286 fault number (#GP=13, #NP=11, ...)
+    public ushort ExcError;     // selector + EXT/IDT/TI for #TS/#NP/#SS/#GP
+
     /// <summary>
     /// Reset to architectural power-on / RESET state of an 8086:
     /// CS=0xFFFF, IP=0x0000, all other regs / flags zero. After RESET the
@@ -78,6 +87,8 @@ public sealed class X86State
         IP = 0;
         FlagC = FlagP = FlagA = FlagZ = FlagS = false;
         FlagT = FlagI = FlagD = FlagO = false;
+        ExcPending = ExcVector = 0;
+        ExcError = 0;
     }
 
     /// <summary>
