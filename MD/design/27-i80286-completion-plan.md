@@ -123,7 +123,7 @@ multi-week effort for 27b.
 | 27.10d wave 3 — PushReg/PushModRm/PushSpPreDec by-name | ✅ | `66dc4df` | 2026-05-11 |
 | 27.10d wave 4 — ea_base alias (EA-compute foundation) | ✅ | `3605c42` | 2026-05-11 |
 | 27.10d wave 5 — ea_base cache lookup (override path) | ✅ partial | `7d529f3` | 2026-05-11 |
-| 27.10d wave 6 — segIdx tracking for non-override path | ⏳ pending | — | — |
+| 27.10d wave 6 — segIdx tracking, unified cache lookup | ✅ | `c765352` | 2026-05-11 |
 | 27.10d wave 7 — Protected-mode segment-load IR (descriptor fetch) | ⏳ pending | — | — |
 | 27.11 New exception model | ⏳ pending | — | — |
 | 27.12 TSS task switching | ⏳ pending | — | — |
