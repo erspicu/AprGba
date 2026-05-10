@@ -17,7 +17,7 @@
 | 25.2 ID retrofit (8086) | ✅ | `5d64c00` | 2026-05-10 |
 | 25.3 i80186 spec | ✅ | `a201d82` | 2026-05-10 |
 | 25.4 Emitters | ✅ | `8f2f1c7` | 2026-05-10 |
-| 25.5 CLI wiring | ✅ | (pending) | 2026-05-10 |
+| 25.5 CLI wiring | ✅ | `a8b0c60` | 2026-05-10 |
 | 25.6 Tests + demos | ⏳ pending | — | — |
 | 25.7 Docs + push | ⏳ pending | — | — |
 
