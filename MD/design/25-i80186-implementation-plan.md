@@ -1,6 +1,7 @@
 # Phase 25 — Intel 80186 implementation plan
 
-> **Status**: in-progress (2026-05-10)
+> **Status**: ✅ **COMPLETE** (2026-05-10) — all 7 sprints shipped.
+> Final perf note: `MD/performance/202605102300-i80186-baseline.md`.
 > **Parent design**: [23-cpu-spec-inheritance.md](23-cpu-spec-inheritance.md) (DRAFT v2, Gemini-reviewed)
 > **Predecessor**: Phase 24 (8086 — completed, three-backend parity, 218 MIPS block-JIT)
 > **Goal**: 把 Intel 80186 加入 framework，**主要 demo target 是 spec inheritance + override 機制本身**。
@@ -19,7 +20,7 @@
 | 25.4 Emitters | ✅ | `8f2f1c7` | 2026-05-10 |
 | 25.5 CLI wiring | ✅ | `a8b0c60` | 2026-05-10 |
 | 25.6 Tests + demos | ✅ | `79cb3fa` | 2026-05-10 |
-| 25.7 Docs + push | ⏳ pending | — | — |
+| 25.7 Docs + push | ✅ | (this commit) | 2026-05-10 |
 
 **Sprint 25.1 deliverables**:
 - `src/AprCpu.Core/JsonSpec/JsonMergePatch.cs` (RFC 7386 helper, ~80 行)

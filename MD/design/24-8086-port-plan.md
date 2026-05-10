@@ -349,7 +349,7 @@ Harte tests if 有 8088 跟 80186 / 80286 的 SST)。
 | 24.6.8 | Block-JIT mode — Gemini 2026-05-10 review 確認 framework refactor 必要；做了 minimal extension：BlockDetector 加 `Func<IMemoryBus, uint, int>` overload + max-len cap 4→15；x86 length oracle 含 prefix walking + ModR/M 看 mod 算 disp + F6/F7 看 reg 算 imm；BlockFunctionBuilder PC pre-write 擴展支援 "IP" register name | 4 tests ✅；Three-backend parity 達成 (legacy / json-llvm / json-block-llvm) | ✅ | `08d8ef8` |
 | 24.6.9 | Re-run 24.5 demos through json-block — 6 demos (hello-cga/primes/fibonacci/mandelbrot/string-copy/factorial) | result/x86-16/jit-block/*.png 6 張 SHA256 pixel-identical 對 legacy 版 | ✅ | `6f0045a` |
 | **24.6b** | (optional) Lockstep diff legacy vs Apr86（限 .com 程式範圍） | Apr86 reference cross-check | ⏳ | — |
-| **24.7** | 80186 spec — 透過 inheritance (#23) | ENTER/LEAVE demo + result/x86-16/enter-leave-i80186.png | ⏳ | — |
+| **24.7** | 80186 spec — 透過 inheritance (#23) | ENTER/LEAVE demo + result/x86-16/enter-leave-i80186.png | ✅ | Phase 25 (`585c6b2`..`878dc92`); see [25-i80186-implementation-plan.md](25-i80186-implementation-plan.md) |
 | **24.8** | 80286 real-mode + protected-mode demos | 4 顆 CPU 全綠 + result/x86-16/protmode-msr-i80286.png | ⏳ | — |
 
 **重要 update (2026-05-10)**：phase 24.6 在 doc 原版 v1 裡漏掉 **「JSON-driven
