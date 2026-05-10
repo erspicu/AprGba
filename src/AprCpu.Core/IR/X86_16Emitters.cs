@@ -137,6 +137,13 @@ public static class X86_16Emitters
         reg.Register(new X86RetNearEmitter());
         reg.Register(new X86RetNearImm16Emitter());
 
+        // 24.6.7b — shift/rotate D0/D1 group dispatcher (count=1 only;
+        // count=CL D2/D3 plus full 8088 silicon flag quirks for count>1
+        // deferred to 24.6.7b2 since those paths have undefined flag
+        // semantics that need careful Tom Harte alignment).
+        reg.Register(new X86ShiftRotateW8Count1Emitter());
+        reg.Register(new X86ShiftRotateW16Count1Emitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -3431,5 +3438,432 @@ internal sealed class X86RetNearImm16Emitter : IMicroOpEmitter
         var sp = ctx.Builder.BuildLoad2(i16, spPtr, "retn_sp");
         var newSp = ctx.Builder.BuildAdd(sp, pop16, "retn_spN");
         ctx.Builder.BuildStore(newSp, spPtr);
+    }
+}
+
+// ============================================================================
+// 24.6.7b — D0 / D1 shift/rotate by 1 (the count==1 form). The D2/D3
+// "shift by CL" forms have undefined-or-quirky flag semantics for
+// count != 1 and need careful Tom Harte alignment — deferred to 24.6.7b2.
+//
+// modrm.reg sub-selects:
+//   /0 ROL — rotate left.        CF = old MSB.       OF = MSB(result) XOR CF
+//   /1 ROR — rotate right.       CF = old LSB.       OF = MSB(result) XOR (next-MSB)
+//   /2 RCL — rotate left thru CF. CF_new = old MSB.   OF = MSB(result) XOR CF_new
+//   /3 RCR — rotate right thru CF. CF_new = old LSB. OF = MSB_old XOR new MSB
+//   /4 SHL/SAL — logical shift left.  CF = old MSB.   OF = MSB(result) XOR CF.
+//                                     AF = bit 4 of result (8088 quirk).
+//   /5 SHR — logical shift right. CF = old LSB.       OF = MSB(original).  AF = 0.
+//   /6 SAL — alias for /4 on 8086 silicon.
+//   /7 SAR — arithmetic shift right. CF = old LSB.    OF = 0.              AF = 0.
+//
+// All sub-ops update SF/ZF/PF from the result. Logical (SHL/SHR/SAR)
+// touch AF per kind (8088 silicon quirk). Rotates leave AF unchanged.
+//
+// Implementation: build all 8 result + flag values per arm, store result
+// via X86ModRmMemHelpers.BuildStoreW{8,16}, merge flags into FLAGS.
+// ============================================================================
+
+internal static class X86ShiftHelpers
+{
+    /// <summary>
+    /// Build 6 i1 flag bits (cf/pf/af/zf/sf/of), pack via the ALU helper,
+    /// merge into FLAGS preserving non-affected bits. Same mask 0x08D5
+    /// as ALU ops — shift/rotate also touches all 6 bits.
+    /// </summary>
+    public static void StoreShiftFlags(
+        EmitContext ctx,
+        LLVMValueRef cf, LLVMValueRef pf, LLVMValueRef af,
+        LLVMValueRef zf, LLVMValueRef sf, LLVMValueRef of,
+        string label)
+    {
+        var packed = X86F6GroupDispatchEmitter.X86AluHelpers_BuildPackedFlagsPublic(
+            ctx, cf, pf, af, zf, sf, of, label);
+        X86F6GroupDispatchEmitter.X86AluHelpers_StoreAluFlagsPublic(ctx, packed, label);
+    }
+
+    /// <summary>Read CF bit (i1) from FLAGS.</summary>
+    public static LLVMValueRef ReadCf(EmitContext ctx, string label)
+    {
+        var flags = X86CtrlHelpers.LoadFlags(ctx, label);
+        return X86CtrlHelpers.ExtractFlagBit(ctx, flags, 0, $"{label}_cf");
+    }
+
+    /// <summary>Common SF/ZF/PF triple from an i8 result.</summary>
+    public static (LLVMValueRef sf, LLVMValueRef zf, LLVMValueRef pf) Szp8(
+        EmitContext ctx, LLVMValueRef r8, string label)
+    {
+        var i8 = LLVMTypeRef.Int8;
+        var sfMask = ctx.Builder.BuildAnd(r8,
+            LLVMValueRef.CreateConstInt(i8, 0x80, false), $"{label}_sfm");
+        var sf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, sfMask,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_sf");
+        var zf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, r8,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_zf");
+        var pf = X86F6GroupDispatchEmitter.X86AluHelpers_BuildParityEvenPublic(ctx, r8, label);
+        return (sf, zf, pf);
+    }
+
+    public static (LLVMValueRef sf, LLVMValueRef zf, LLVMValueRef pf) Szp16(
+        EmitContext ctx, LLVMValueRef r16, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var sfMask = ctx.Builder.BuildAnd(r16,
+            LLVMValueRef.CreateConstInt(i16, 0x8000, false), $"{label}_sfm");
+        var sf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, sfMask,
+            LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_sf");
+        var zf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, r16,
+            LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_zf");
+        var rLow = ctx.Builder.BuildTrunc(r16, i8, $"{label}_rlo");
+        var pf = X86F6GroupDispatchEmitter.X86AluHelpers_BuildParityEvenPublic(ctx, rLow, label);
+        return (sf, zf, pf);
+    }
+}
+
+internal sealed class X86ShiftRotateW8Count1Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_shift_rotate_w8_count1";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i1  = LLVMTypeRef.Int1;
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var lhs = ctx.Resolve("lhs");      // i8 — the original value
+        var sel = ctx.Resolve("modrm_reg"); // i32
+
+        var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
+        var cfIn = X86ShiftHelpers.ReadCf(ctx, "shr8");
+
+        // Pre-compute MSB and LSB of the original.
+        var msbMask = ctx.Builder.BuildAnd(lhs,
+            LLVMValueRef.CreateConstInt(i8, 0x80, false), "shr8_msbm");
+        var msb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, msbMask,
+            LLVMValueRef.CreateConstInt(i8, 0, false), "shr8_msb");
+        var lsbMask = ctx.Builder.BuildAnd(lhs,
+            LLVMValueRef.CreateConstInt(i8, 0x01, false), "shr8_lsbm");
+        var lsb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, lsbMask,
+            LLVMValueRef.CreateConstInt(i8, 0, false), "shr8_lsb");
+
+        var endBB     = ctx.Function.AppendBasicBlock("shr8_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("shr8_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"shr8_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        // Helper to build a single arm: compute result, store to r/m, set flags, branch.
+        void EmitArm(int idx, string kind)
+        {
+            ctx.Builder.PositionAtEnd(arms[idx]);
+
+            LLVMValueRef result, cf, of, af;
+
+            switch (kind)
+            {
+                case "rol":
+                    var rolL = ctx.Builder.BuildShl(lhs,
+                        LLVMValueRef.CreateConstInt(i8, 1, false), "rol_l");
+                    var rolR = ctx.Builder.BuildLShr(lhs,
+                        LLVMValueRef.CreateConstInt(i8, 7, false), "rol_r");
+                    result = ctx.Builder.BuildOr(rolL, rolR, "rol_r8");
+                    cf = msb;
+                    {
+                        var rMsbMask = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i8, 0x80, false), "rol_rmsb_m");
+                        var rMsb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, rMsbMask,
+                            LLVMValueRef.CreateConstInt(i8, 0, false), "rol_rmsb");
+                        of = ctx.Builder.BuildXor(rMsb, cf, "rol_of");
+                    }
+                    af = X86CtrlHelpers.ExtractFlagBit(ctx, X86CtrlHelpers.LoadFlags(ctx, "rol_af"), 4, "rol_af_keep");
+                    break;
+
+                case "ror":
+                    var rorR = ctx.Builder.BuildLShr(lhs,
+                        LLVMValueRef.CreateConstInt(i8, 1, false), "ror_r");
+                    var rorL = ctx.Builder.BuildShl(lhs,
+                        LLVMValueRef.CreateConstInt(i8, 7, false), "ror_l");
+                    result = ctx.Builder.BuildOr(rorR, rorL, "ror_r8");
+                    cf = lsb;
+                    {
+                        // OF (count==1) = bit 7 XOR bit 6 of result.
+                        var b7m = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i8, 0x80, false), "ror_b7m");
+                        var b7 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, b7m,
+                            LLVMValueRef.CreateConstInt(i8, 0, false), "ror_b7");
+                        var b6m = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i8, 0x40, false), "ror_b6m");
+                        var b6 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, b6m,
+                            LLVMValueRef.CreateConstInt(i8, 0, false), "ror_b6");
+                        of = ctx.Builder.BuildXor(b7, b6, "ror_of");
+                    }
+                    af = X86CtrlHelpers.ExtractFlagBit(ctx, X86CtrlHelpers.LoadFlags(ctx, "ror_af"), 4, "ror_af_keep");
+                    break;
+
+                case "rcl":
+                    var rclL = ctx.Builder.BuildShl(lhs,
+                        LLVMValueRef.CreateConstInt(i8, 1, false), "rcl_l");
+                    var cfInZ = ctx.Builder.BuildZExt(cfIn, i8, "rcl_cfz");
+                    result = ctx.Builder.BuildOr(rclL, cfInZ, "rcl_r8");
+                    cf = msb;
+                    {
+                        var rMsbMask = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i8, 0x80, false), "rcl_rmsb_m");
+                        var rMsb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, rMsbMask,
+                            LLVMValueRef.CreateConstInt(i8, 0, false), "rcl_rmsb");
+                        of = ctx.Builder.BuildXor(rMsb, cf, "rcl_of");
+                    }
+                    af = X86CtrlHelpers.ExtractFlagBit(ctx, X86CtrlHelpers.LoadFlags(ctx, "rcl_af"), 4, "rcl_af_keep");
+                    break;
+
+                case "rcr":
+                    var rcrR = ctx.Builder.BuildLShr(lhs,
+                        LLVMValueRef.CreateConstInt(i8, 1, false), "rcr_r");
+                    var cfInL = ctx.Builder.BuildShl(
+                        ctx.Builder.BuildZExt(cfIn, i8, "rcr_cfz"),
+                        LLVMValueRef.CreateConstInt(i8, 7, false), "rcr_cfshl");
+                    result = ctx.Builder.BuildOr(rcrR, cfInL, "rcr_r8");
+                    cf = lsb;
+                    {
+                        // OF = old MSB XOR new MSB (i.e. cfIn XOR original MSB).
+                        of = ctx.Builder.BuildXor(cfIn, msb, "rcr_of");
+                    }
+                    af = X86CtrlHelpers.ExtractFlagBit(ctx, X86CtrlHelpers.LoadFlags(ctx, "rcr_af"), 4, "rcr_af_keep");
+                    break;
+
+                case "shl":   // /4 and /6 alias
+                    result = ctx.Builder.BuildShl(lhs,
+                        LLVMValueRef.CreateConstInt(i8, 1, false), "shl_r8");
+                    cf = msb;
+                    {
+                        var rMsbMask = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i8, 0x80, false), "shl_rmsb_m");
+                        var rMsb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, rMsbMask,
+                            LLVMValueRef.CreateConstInt(i8, 0, false), "shl_rmsb");
+                        of = ctx.Builder.BuildXor(rMsb, cf, "shl_of");
+                    }
+                    {
+                        // 8088 SHL AF quirk: AF = bit 4 of result.
+                        var afMask = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i8, 0x10, false), "shl_afm");
+                        af = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, afMask,
+                            LLVMValueRef.CreateConstInt(i8, 0, false), "shl_af");
+                    }
+                    break;
+
+                case "shr":
+                    result = ctx.Builder.BuildLShr(lhs,
+                        LLVMValueRef.CreateConstInt(i8, 1, false), "shr_r8");
+                    cf = lsb;
+                    of = msb;   // OF for SHR count==1 = original MSB
+                    af = i1false; // 8088 SHR AF = 0
+                    break;
+
+                case "sar":
+                    result = ctx.Builder.BuildAShr(lhs,
+                        LLVMValueRef.CreateConstInt(i8, 1, false), "sar_r8");
+                    cf = lsb;
+                    of = i1false;  // OF for SAR count==1 = 0
+                    af = i1false;  // 8088 SAR AF = 0
+                    break;
+
+                default:
+                    throw new InvalidOperationException($"shr8 unknown kind '{kind}'");
+            }
+
+            // Write result back via mod-aware store (mod=11 → reg, else → mem).
+            X86ModRmMemHelpers.BuildStoreW8(ctx, result);
+
+            // Set SF/ZF/PF + cf/af/of via the shared StoreShiftFlags.
+            var (sf, zf, pf) = X86ShiftHelpers.Szp8(ctx, result, $"shr8_{kind}");
+            X86ShiftHelpers.StoreShiftFlags(ctx, cf, pf, af, zf, sf, of, $"shr8_{kind}");
+
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        EmitArm(0, "rol");
+        EmitArm(1, "ror");
+        EmitArm(2, "rcl");
+        EmitArm(3, "rcr");
+        EmitArm(4, "shl");
+        EmitArm(5, "shr");
+        EmitArm(6, "shl");   // /6 = SAL alias for SHL on 8086
+        EmitArm(7, "sar");
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+internal sealed class X86ShiftRotateW16Count1Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_shift_rotate_w16_count1";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i1  = LLVMTypeRef.Int1;
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var lhs = ctx.Resolve("lhs");
+        var sel = ctx.Resolve("modrm_reg");
+
+        var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
+        var cfIn = X86ShiftHelpers.ReadCf(ctx, "shr16");
+
+        var msbMask = ctx.Builder.BuildAnd(lhs,
+            LLVMValueRef.CreateConstInt(i16, 0x8000, false), "shr16_msbm");
+        var msb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, msbMask,
+            LLVMValueRef.CreateConstInt(i16, 0, false), "shr16_msb");
+        var lsbMask = ctx.Builder.BuildAnd(lhs,
+            LLVMValueRef.CreateConstInt(i16, 0x0001, false), "shr16_lsbm");
+        var lsb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, lsbMask,
+            LLVMValueRef.CreateConstInt(i16, 0, false), "shr16_lsb");
+
+        var endBB     = ctx.Function.AppendBasicBlock("shr16_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("shr16_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"shr16_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        void EmitArm(int idx, string kind)
+        {
+            ctx.Builder.PositionAtEnd(arms[idx]);
+
+            LLVMValueRef result, cf, of, af;
+
+            switch (kind)
+            {
+                case "rol":
+                    var rolL = ctx.Builder.BuildShl(lhs,
+                        LLVMValueRef.CreateConstInt(i16, 1, false), "rol_l");
+                    var rolR = ctx.Builder.BuildLShr(lhs,
+                        LLVMValueRef.CreateConstInt(i16, 15, false), "rol_r");
+                    result = ctx.Builder.BuildOr(rolL, rolR, "rol_r16");
+                    cf = msb;
+                    {
+                        var rMsbMask = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i16, 0x8000, false), "rol_rmsb_m");
+                        var rMsb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, rMsbMask,
+                            LLVMValueRef.CreateConstInt(i16, 0, false), "rol_rmsb");
+                        of = ctx.Builder.BuildXor(rMsb, cf, "rol_of");
+                    }
+                    af = X86CtrlHelpers.ExtractFlagBit(ctx, X86CtrlHelpers.LoadFlags(ctx, "rol_af"), 4, "rol_af_keep");
+                    break;
+
+                case "ror":
+                    var rorR = ctx.Builder.BuildLShr(lhs,
+                        LLVMValueRef.CreateConstInt(i16, 1, false), "ror_r");
+                    var rorL = ctx.Builder.BuildShl(lhs,
+                        LLVMValueRef.CreateConstInt(i16, 15, false), "ror_l");
+                    result = ctx.Builder.BuildOr(rorR, rorL, "ror_r16");
+                    cf = lsb;
+                    {
+                        var b15m = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i16, 0x8000, false), "ror_b15m");
+                        var b15 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, b15m,
+                            LLVMValueRef.CreateConstInt(i16, 0, false), "ror_b15");
+                        var b14m = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i16, 0x4000, false), "ror_b14m");
+                        var b14 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, b14m,
+                            LLVMValueRef.CreateConstInt(i16, 0, false), "ror_b14");
+                        of = ctx.Builder.BuildXor(b15, b14, "ror_of");
+                    }
+                    af = X86CtrlHelpers.ExtractFlagBit(ctx, X86CtrlHelpers.LoadFlags(ctx, "ror_af"), 4, "ror_af_keep");
+                    break;
+
+                case "rcl":
+                    var rclL = ctx.Builder.BuildShl(lhs,
+                        LLVMValueRef.CreateConstInt(i16, 1, false), "rcl_l");
+                    var cfInZ = ctx.Builder.BuildZExt(cfIn, i16, "rcl_cfz");
+                    result = ctx.Builder.BuildOr(rclL, cfInZ, "rcl_r16");
+                    cf = msb;
+                    {
+                        var rMsbMask = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i16, 0x8000, false), "rcl_rmsb_m");
+                        var rMsb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, rMsbMask,
+                            LLVMValueRef.CreateConstInt(i16, 0, false), "rcl_rmsb");
+                        of = ctx.Builder.BuildXor(rMsb, cf, "rcl_of");
+                    }
+                    af = X86CtrlHelpers.ExtractFlagBit(ctx, X86CtrlHelpers.LoadFlags(ctx, "rcl_af"), 4, "rcl_af_keep");
+                    break;
+
+                case "rcr":
+                    var rcrR = ctx.Builder.BuildLShr(lhs,
+                        LLVMValueRef.CreateConstInt(i16, 1, false), "rcr_r");
+                    var cfInL = ctx.Builder.BuildShl(
+                        ctx.Builder.BuildZExt(cfIn, i16, "rcr_cfz"),
+                        LLVMValueRef.CreateConstInt(i16, 15, false), "rcr_cfshl");
+                    result = ctx.Builder.BuildOr(rcrR, cfInL, "rcr_r16");
+                    cf = lsb;
+                    of = ctx.Builder.BuildXor(cfIn, msb, "rcr_of");
+                    af = X86CtrlHelpers.ExtractFlagBit(ctx, X86CtrlHelpers.LoadFlags(ctx, "rcr_af"), 4, "rcr_af_keep");
+                    break;
+
+                case "shl":
+                    result = ctx.Builder.BuildShl(lhs,
+                        LLVMValueRef.CreateConstInt(i16, 1, false), "shl_r16");
+                    cf = msb;
+                    {
+                        var rMsbMask = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i16, 0x8000, false), "shl_rmsb_m");
+                        var rMsb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, rMsbMask,
+                            LLVMValueRef.CreateConstInt(i16, 0, false), "shl_rmsb");
+                        of = ctx.Builder.BuildXor(rMsb, cf, "shl_of");
+                    }
+                    {
+                        var afMask = ctx.Builder.BuildAnd(result,
+                            LLVMValueRef.CreateConstInt(i16, 0x10, false), "shl_afm");
+                        af = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, afMask,
+                            LLVMValueRef.CreateConstInt(i16, 0, false), "shl_af");
+                    }
+                    break;
+
+                case "shr":
+                    result = ctx.Builder.BuildLShr(lhs,
+                        LLVMValueRef.CreateConstInt(i16, 1, false), "shr_r16");
+                    cf = lsb;
+                    of = msb;
+                    af = i1false;
+                    break;
+
+                case "sar":
+                    result = ctx.Builder.BuildAShr(lhs,
+                        LLVMValueRef.CreateConstInt(i16, 1, false), "sar_r16");
+                    cf = lsb;
+                    of = i1false;
+                    af = i1false;
+                    break;
+
+                default:
+                    throw new InvalidOperationException($"shr16 unknown kind '{kind}'");
+            }
+
+            X86ModRmMemHelpers.BuildStoreW16(ctx, result);
+
+            var (sf, zf, pf) = X86ShiftHelpers.Szp16(ctx, result, $"shr16_{kind}");
+            X86ShiftHelpers.StoreShiftFlags(ctx, cf, pf, af, zf, sf, of, $"shr16_{kind}");
+
+            ctx.Builder.BuildBr(endBB);
+        }
+
+        EmitArm(0, "rol");
+        EmitArm(1, "ror");
+        EmitArm(2, "rcl");
+        EmitArm(3, "rcr");
+        EmitArm(4, "shl");
+        EmitArm(5, "shr");
+        EmitArm(6, "shl");
+        EmitArm(7, "sar");
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
     }
 }

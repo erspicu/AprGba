@@ -2057,6 +2057,202 @@ public class X86JsonCpuTests
         Assert.Equal(0x105, cpu.State.IP);
     }
 
+    // ---------------- 24.6.7b — shift/rotate (D0/D1, count=1) ----------------
+
+    /// <summary>
+    /// 0xD0 /4 SHL AL, 1: D0 E0 → SHL AL, 1.
+    /// modrm=E0: mod=11 reg=100(=SHL) rm=000(=AL). AL=0x42 (0100_0010) → 0x84 (1000_0100).
+    /// CF=0 (old MSB), SF=1, AF=0, OF=1 (sign change).
+    /// </summary>
+    [Fact]
+    public void Step_ShlAl_ByOne_BasicLeftShift()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD0, 0xE0, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x42;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x84, cpu.State.A.L);
+        Assert.False(cpu.State.FlagC);    // old MSB was 0
+        Assert.True(cpu.State.FlagS);     // result MSB = 1
+        Assert.True(cpu.State.FlagO);     // sign changed (was 0, now 1)
+    }
+
+    /// <summary>SHL with carry-out: AL=0x80 → 0x00, CF=1, ZF=1.</summary>
+    [Fact]
+    public void Step_ShlAl_CarryOut()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD0, 0xE0, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x80;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x00, cpu.State.A.L);
+        Assert.True(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagZ);
+    }
+
+    /// <summary>
+    /// 0xD0 /5 SHR AL, 1: D0 E8 → SHR AL, 1.
+    /// AL=0x81 → 0x40. CF=1 (old LSB), OF=1 (original MSB), AF=0.
+    /// </summary>
+    [Fact]
+    public void Step_ShrAl_ByOne_LogicalRight()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD0, 0xE8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x81;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x40, cpu.State.A.L);
+        Assert.True(cpu.State.FlagC);    // old LSB
+        Assert.True(cpu.State.FlagO);    // original MSB (8088 SHR rule)
+        Assert.False(cpu.State.FlagA);
+    }
+
+    /// <summary>
+    /// 0xD0 /7 SAR AL, 1: D0 F8.
+    /// AL=0x80 (-128) → 0xC0 (-64). CF=0 (old LSB), OF=0, SF=1.
+    /// </summary>
+    [Fact]
+    public void Step_SarAl_ByOne_ArithmeticRight()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD0, 0xF8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x80;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xC0, cpu.State.A.L);   // sign-extended
+        Assert.False(cpu.State.FlagC);
+        Assert.False(cpu.State.FlagO);
+        Assert.True(cpu.State.FlagS);
+    }
+
+    /// <summary>
+    /// 0xD0 /0 ROL AL, 1: D0 C0.
+    /// AL=0x80 → 0x01 (rotated). CF=1 (old MSB now wrapped), OF=1 (sign change).
+    /// </summary>
+    [Fact]
+    public void Step_RolAl_ByOne()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD0, 0xC0, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x80;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x01, cpu.State.A.L);
+        Assert.True(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagO);   // result MSB (0) XOR CF (1) = 1
+    }
+
+    /// <summary>
+    /// 0xD0 /1 ROR AL, 1: D0 C8.
+    /// AL=0x01 → 0x80. CF=1 (old LSB), OF=1 (b7 XOR b6 = 1 XOR 0 = 1).
+    /// </summary>
+    [Fact]
+    public void Step_RorAl_ByOne()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD0, 0xC8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x01;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x80, cpu.State.A.L);
+        Assert.True(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagO);
+    }
+
+    /// <summary>
+    /// 0xD0 /2 RCL AL, 1: D0 D0. AL=0x40, CF_in=1 → AL=0x81 (low bit gets old CF).
+    /// CF_out = 0 (old MSB).
+    /// </summary>
+    [Fact]
+    public void Step_RclAl_ByOne()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD0, 0xD0, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x40; s.FlagC = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x81, cpu.State.A.L);
+        Assert.False(cpu.State.FlagC);    // old MSB was 0
+    }
+
+    /// <summary>
+    /// 0xD0 /3 RCR AL, 1: D0 D8. AL=0x02, CF_in=1 → AL=0x81 (high bit gets old CF, low half preserved shifted).
+    /// CF_out = 0 (old LSB).
+    /// </summary>
+    [Fact]
+    public void Step_RcrAl_ByOne()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD0, 0xD8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x02; s.FlagC = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x81, cpu.State.A.L);
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>
+    /// 0xD1 SHL AX, 1 (16-bit form). AX=0x4000 → 0x8000. CF=0, SF=1, OF=1.
+    /// </summary>
+    [Fact]
+    public void Step_ShlAx_ByOne_W16()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD1, 0xE0, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x4000;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x8000, cpu.State.A.X);
+        Assert.False(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagS);
+        Assert.True(cpu.State.FlagO);
+    }
+
+    /// <summary>
+    /// SHL with mem operand: D0 26 80 00 → SHL byte ptr [0x80], 1.
+    /// Pre-mem 0x80 = 0x42 → 0x84.
+    /// </summary>
+    [Fact]
+    public void Step_ShlMem_ByOne()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xD0, 0x26, 0x80, 0x00, 0xF4 });
+        mem.WriteByte(0x80, 0x42);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x84, mem.ReadByte(0x80));
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,
