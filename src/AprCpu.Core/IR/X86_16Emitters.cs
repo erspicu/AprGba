@@ -243,6 +243,47 @@ public static class X86_16Emitters
         return ctx.Builder.BuildAdd(segShifted, offZ, label);
     }
 
+    /// <summary>
+    /// Sprint 27.10c — compute the linear address using the hidden
+    /// segment-register cache (BASE slot). When the spec declares
+    /// <c>{segName}_BASE</c> (i80286 onward — Sprint 27.10b added these),
+    /// load BASE directly from the cached i32 slot and add offset.
+    /// Otherwise fall back to the legacy <c>(visible_seg &lt;&lt; 4) + off</c>
+    /// formula so i8086 / i80186 backends keep working unchanged.
+    ///
+    /// Sprint 27.10d will re-point existing call sites (FetchImm /
+    /// SegmentedRead* / SegmentedWrite*) to this overload so protected-
+    /// mode segment-register loads (which write a non-shift base into
+    /// the cache) take effect throughout the IR.
+    /// </summary>
+    internal static LLVMValueRef SegmentedLinear(EmitContext ctx, string segName, LLVMValueRef off16, string label)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var offZ = ctx.Builder.BuildZExt(off16, i32, $"{label}_off32");
+
+        // Probe the layout for a cache slot at IR-emit time (once per
+        // call site, no runtime cost).
+        bool hasCache = false;
+        foreach (var sr in ctx.Layout.RegisterFile.Status)
+        {
+            if (sr.Name == segName + "_BASE") { hasCache = true; break; }
+        }
+
+        if (hasCache)
+        {
+            var basePtr = ctx.GepStatusRegister(segName + "_BASE");
+            var segBase = ctx.Builder.BuildLoad2(i32, basePtr, $"{label}_base");
+            return ctx.Builder.BuildAdd(segBase, offZ, label);
+        }
+
+        // Legacy real-mode fallback (i8086 / i80186): (sel << 4) + off.
+        var seg16 = LoadSeg16(ctx, segName, $"{label}_seg");
+        var segZ = ctx.Builder.BuildZExt(seg16, i32, $"{label}_seg32");
+        var segShifted = ctx.Builder.BuildShl(segZ,
+            LLVMValueRef.CreateConstInt(i32, 4, false), $"{label}_seg_sh4");
+        return ctx.Builder.BuildAdd(segShifted, offZ, label);
+    }
+
     /// <summary>Load IP (16-bit status register) → i16.</summary>
     internal static LLVMValueRef LoadIp16(EmitContext ctx, string label)
     {
