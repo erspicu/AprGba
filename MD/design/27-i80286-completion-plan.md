@@ -4,7 +4,14 @@
 > system instruction set landed: 14 of 14 instructions covered,
 > 7 new state registers, 4 verified round-trip demos. Closure note:
 > `MD/performance/202605110100-i80286-realmode-complete.md`.
-> Phase 27b (protected mode) is multi-week future work, deferred.
+>
+> **Phase 27b (protected mode) ✅ COMPLETE** (2026-05-11). Descriptor-
+> based segmentation + 4-check fault model end-to-end on i80286
+> backend. 5-ROM fault matrix demoable. Closure note:
+> `MD/performance/202605110200-i80286-pmode-fault-model-complete.md`.
+> Sprint 27.12 (TSS task switching) deferred to a future phase
+> (multi-day work, well-defined and additive on top of the
+> `EmitSegCacheUpdate` + `EmitRaiseException` helpers landed here).
 > **Predecessor**: Phase 26 v1 (`6b1e2d6`..`7e6cf16`) — minimum-viable real-mode
 > 80286 shipped with chain depth=3, 0F prefix infra, CLTS+SMSW.
 > **Goal**: finish the 80286 implementation. Two tracks:
@@ -132,6 +139,8 @@ multi-week effort for 27b.
 | 27.11d NULL-SS → #GP (PE=1) | ✅ | `7c57f5a` | 2026-05-11 |
 | 27.11e DPL/RPL/CPL privilege check → #GP | ✅ | `1284d4f` | 2026-05-11 |
 | 27.11f Segment-type check (SS=writable-data, DS/ES≠system) | ✅ | `92176e3` | 2026-05-11 |
+| 27.12 TSS task switching | ⏳ deferred (multi-day, separate phase) | — | — |
+| 27.14 Phase 27b closure docs | ✅ | (this commit) | 2026-05-11 |
 | 27.12 TSS task switching | ⏳ pending | — | — |
 | 27.13a Protected-mode entry demo + gap surfaced | ✅ partial | `c5f51a0` | 2026-05-11 |
 | 27.13b Migrate ea_seg consumers → ea_base (closes the gap) | ✅ | `ed4b2d4` | 2026-05-11 |
