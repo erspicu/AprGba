@@ -115,7 +115,10 @@ multi-week effort for 27b.
 | 27.7  Descriptor lookup (mem -> Descriptor) | ✅ | `9f819b5` | 2026-05-11 |
 | 27.8  PE bit helper + Msw struct | ✅ partial (PE detection only; segment-load fetch in 27.10) | `0dd6404` | 2026-05-11 |
 | 27.9  Privilege levels (CPL/RPL/DPL) | ✅ | `553909c` | 2026-05-11 |
-| 27.10 Segmentation rewrite | ⏳ pending | — | — |
+| 27.10a Helper integration test | ✅ | `cefed78` | 2026-05-11 |
+| 27.10b Hidden segment cache slots (ES/CS/SS/DS Base/Limit) | ⏳ pending | — | — |
+| 27.10c SegmentedLinear uses cached Base | ⏳ pending | — | — |
+| 27.10d Protected-mode segment-load IR (descriptor + privilege checks) | ⏳ pending | — | — |
 | 27.11 New exception model | ⏳ pending | — | — |
 | 27.12 TSS task switching | ⏳ pending | — | — |
 | 27.13 Protected-mode entry (LMSW PE) | ⏳ pending | — | — |
