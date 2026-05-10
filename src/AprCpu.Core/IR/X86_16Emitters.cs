@@ -126,6 +126,17 @@ public static class X86_16Emitters
         reg.Register(new X86CbwEmitter());
         reg.Register(new X86CwdEmitter());
 
+        // 24.6.7a — control flow basics: JMP rel8/16, Jcc, JCXZ, LOOP*,
+        // CALL rel16, RET (near).
+        reg.Register(new X86JmpRel8Emitter());
+        reg.Register(new X86JmpRel16Emitter());
+        reg.Register(new X86JccRel8Emitter());
+        reg.Register(new X86JcxzRel8Emitter());
+        reg.Register(new X86LoopEmitter());
+        reg.Register(new X86CallRel16Emitter());
+        reg.Register(new X86RetNearEmitter());
+        reg.Register(new X86RetNearImm16Emitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -3132,5 +3143,293 @@ internal sealed class X86CwdEmitter : IMicroOpEmitter
             LLVMValueRef.CreateConstInt(i32, 16, false), "cwd_dxsh");
         var dx = ctx.Builder.BuildTrunc(dxShift, i16, "cwd_dx");
         X86_16Emitters.WriteGpr16(ctx, 2, dx);
+    }
+}
+
+// ============================================================================
+// 24.6.7a — control flow basics.
+//
+// All branch targets are computed relative to "post-fetch IP" — i.e. the
+// IP value AFTER the displacement bytes have been consumed. So
+// "fetch_imm{8,16}" advances IP correctly first, then we add the (sign-
+// extended) displacement. IP wraps at 16 bits; CS untouched.
+//
+// Jcc condition encoding (8086):
+//   cccc | mnemonic | predicate
+//   0000 | JO       | OF=1
+//   0001 | JNO      | OF=0
+//   0010 | JB/JC    | CF=1
+//   0011 | JNB/JNC  | CF=0
+//   0100 | JZ/JE    | ZF=1
+//   0101 | JNZ/JNE  | ZF=0
+//   0110 | JBE/JNA  | CF|ZF
+//   0111 | JNBE/JA  | !CF & !ZF
+//   1000 | JS       | SF=1
+//   1001 | JNS      | SF=0
+//   1010 | JP/JPE   | PF=1
+//   1011 | JNP/JPO  | PF=0
+//   1100 | JL/JNGE  | SF^OF
+//   1101 | JNL/JGE  | !(SF^OF)
+//   1110 | JLE/JNG  | ZF | (SF^OF)
+//   1111 | JNLE/JG  | !ZF & !(SF^OF)
+// ============================================================================
+
+internal static class X86CtrlHelpers
+{
+    /// <summary>Read FLAGS as i16.</summary>
+    public static LLVMValueRef LoadFlags(EmitContext ctx, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        return ctx.Builder.BuildLoad2(i16, fPtr, $"{label}_flags");
+    }
+
+    /// <summary>Extract a single FLAGS bit as i1 by position.</summary>
+    public static LLVMValueRef ExtractFlagBit(EmitContext ctx, LLVMValueRef flags16, int pos, string name)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i1  = LLVMTypeRef.Int1;
+        var shifted = pos == 0 ? flags16 : ctx.Builder.BuildLShr(flags16,
+            LLVMValueRef.CreateConstInt(i16, (ulong)pos, false), $"{name}_sh");
+        var masked = ctx.Builder.BuildAnd(shifted,
+            LLVMValueRef.CreateConstInt(i16, 1, false), $"{name}_mask");
+        return ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, masked,
+            LLVMValueRef.CreateConstInt(i16, 0, false), $"{name}_i1");
+    }
+
+    /// <summary>
+    /// Build the i1 predicate for a 4-bit Jcc condition value (cccc field).
+    /// Uses a runtime switch on cccc → arm-specific i1 expression.
+    /// </summary>
+    public static LLVMValueRef BuildJccPredicate(
+        EmitContext ctx, LLVMValueRef cccc32, LLVMValueRef flags16, string label)
+    {
+        var i1  = LLVMTypeRef.Int1;
+        var i32 = LLVMTypeRef.Int32;
+
+        var cf = ExtractFlagBit(ctx, flags16, 0,  $"{label}_cf");
+        var pf = ExtractFlagBit(ctx, flags16, 2,  $"{label}_pf");
+        var zf = ExtractFlagBit(ctx, flags16, 6,  $"{label}_zf");
+        var sf = ExtractFlagBit(ctx, flags16, 7,  $"{label}_sf");
+        var of = ExtractFlagBit(ctx, flags16, 11, $"{label}_of");
+
+        var notCf = ctx.Builder.BuildNot(cf, $"{label}_ncf");
+        var notZf = ctx.Builder.BuildNot(zf, $"{label}_nzf");
+        var notSf = ctx.Builder.BuildNot(sf, $"{label}_nsf");
+        var notOf = ctx.Builder.BuildNot(of, $"{label}_nof");
+        var notPf = ctx.Builder.BuildNot(pf, $"{label}_npf");
+        var sfXorOf  = ctx.Builder.BuildXor(sf, of, $"{label}_sxo");
+        var nsfXorOf = ctx.Builder.BuildNot(sfXorOf, $"{label}_nsxo");
+
+        var endBB     = ctx.Function.AppendBasicBlock($"{label}_end");
+        var defaultBB = ctx.Function.AppendBasicBlock($"{label}_default");
+        var arms = new LLVMBasicBlockRef[16];
+        var armVals = new LLVMValueRef[16];
+        for (int i = 0; i < 16; i++) arms[i] = ctx.Function.AppendBasicBlock($"{label}_{i:X}");
+
+        var sw = ctx.Builder.BuildSwitch(cccc32, defaultBB, 16);
+        for (int i = 0; i < 16; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        // Per-arm predicate IR. We POSITION at the arm and produce a value;
+        // each arm just fall-throughs to endBB after producing its value.
+        ctx.Builder.PositionAtEnd(arms[0x0]); armVals[0x0] = of;                                  ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0x1]); armVals[0x1] = notOf;                               ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0x2]); armVals[0x2] = cf;                                  ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0x3]); armVals[0x3] = notCf;                               ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0x4]); armVals[0x4] = zf;                                  ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0x5]); armVals[0x5] = notZf;                               ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0x6]); armVals[0x6] = ctx.Builder.BuildOr(cf, zf, $"{label}_cfOzf"); ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0x7]); armVals[0x7] = ctx.Builder.BuildAnd(notCf, notZf, $"{label}_ncfAnzf"); ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0x8]); armVals[0x8] = sf;                                  ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0x9]); armVals[0x9] = notSf;                               ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0xA]); armVals[0xA] = pf;                                  ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0xB]); armVals[0xB] = notPf;                               ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0xC]); armVals[0xC] = sfXorOf;                             ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0xD]); armVals[0xD] = nsfXorOf;                            ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0xE]); armVals[0xE] = ctx.Builder.BuildOr(zf, sfXorOf, $"{label}_zfOsxo"); ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[0xF]); armVals[0xF] = ctx.Builder.BuildAnd(notZf, nsfXorOf, $"{label}_nzfAnsxo"); ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        var defVal = LLVMValueRef.CreateConstInt(i1, 0, false);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i1, $"{label}_pred");
+        var pIns = new LLVMValueRef[17];
+        var pBlk = new LLVMBasicBlockRef[17];
+        for (int i = 0; i < 16; i++) { pIns[i] = armVals[i]; pBlk[i] = arms[i]; }
+        pIns[16] = defVal; pBlk[16] = defaultBB;
+        phi.AddIncoming(pIns, pBlk, 17);
+        return phi;
+    }
+}
+
+internal sealed class X86JmpRel8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_jmp_rel8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        // fetch_imm8 advances IP first; signed displacement adds to post-fetch IP.
+        var disp8 = X86_16Emitters.FetchImm8(ctx, "jmp8_d");
+        var disp16 = ctx.Builder.BuildSExt(disp8, i16, "jmp8_dsx");
+        var ipPtr = ctx.GepStatusRegister("IP");
+        var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "jmp8_ip");
+        var newIp = ctx.Builder.BuildAdd(ip, disp16, "jmp8_newip");
+        ctx.Builder.BuildStore(newIp, ipPtr);
+    }
+}
+
+internal sealed class X86JmpRel16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_jmp_rel16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var disp16 = X86_16Emitters.FetchImm16(ctx, "jmp16_d");
+        var ipPtr = ctx.GepStatusRegister("IP");
+        var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "jmp16_ip");
+        var newIp = ctx.Builder.BuildAdd(ip, disp16, "jmp16_newip");
+        ctx.Builder.BuildStore(newIp, ipPtr);
+    }
+}
+
+internal sealed class X86JccRel8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_jcc_rel8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("cond_field").GetString()!;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var cccc = ctx.Resolve(fieldName);    // i32
+
+        // Always fetch displacement first — IP must advance regardless.
+        var disp8  = X86_16Emitters.FetchImm8(ctx, "jcc_d");
+        var disp16 = ctx.Builder.BuildSExt(disp8, i16, "jcc_dsx");
+
+        // Build the predicate from FLAGS + cccc.
+        var flags = X86CtrlHelpers.LoadFlags(ctx, "jcc");
+        var pred = X86CtrlHelpers.BuildJccPredicate(ctx, cccc, flags, "jcc");
+
+        // If predicate true: IP += disp; else: no change.
+        var ipPtr = ctx.GepStatusRegister("IP");
+        var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "jcc_ip");
+        var ipPlus = ctx.Builder.BuildAdd(ip, disp16, "jcc_ipP");
+        var sel = ctx.Builder.BuildSelect(pred, ipPlus, ip, "jcc_newip");
+        ctx.Builder.BuildStore(sel, ipPtr);
+    }
+}
+
+internal sealed class X86JcxzRel8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_jcxz_rel8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var disp8  = X86_16Emitters.FetchImm8(ctx, "jcxz_d");
+        var disp16 = ctx.Builder.BuildSExt(disp8, i16, "jcxz_dsx");
+        var cx = X86_16Emitters.ReadGpr16(ctx, 1, "jcxz_cx");
+        var cxZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, cx,
+            LLVMValueRef.CreateConstInt(i16, 0, false), "jcxz_isz");
+        var ipPtr = ctx.GepStatusRegister("IP");
+        var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "jcxz_ip");
+        var ipPlus = ctx.Builder.BuildAdd(ip, disp16, "jcxz_ipP");
+        var sel = ctx.Builder.BuildSelect(cxZero, ipPlus, ip, "jcxz_newip");
+        ctx.Builder.BuildStore(sel, ipPtr);
+    }
+}
+
+internal sealed class X86LoopEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_loop";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // kind: "loop" (no zf check), "loope" (require ZF=1), "loopne" (require ZF=0)
+        var kind = step.Raw.GetProperty("kind").GetString()!;
+        var i1  = LLVMTypeRef.Int1;
+        var i16 = LLVMTypeRef.Int16;
+
+        var disp8  = X86_16Emitters.FetchImm8(ctx, "loop_d");
+        var disp16 = ctx.Builder.BuildSExt(disp8, i16, "loop_dsx");
+
+        // CX -= 1
+        var cx = X86_16Emitters.ReadGpr16(ctx, 1, "loop_cx");
+        var newCx = ctx.Builder.BuildSub(cx,
+            LLVMValueRef.CreateConstInt(i16, 1, false), "loop_cxN");
+        X86_16Emitters.WriteGpr16(ctx, 1, newCx);
+
+        // Predicate: cx != 0
+        var cxNonZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, newCx,
+            LLVMValueRef.CreateConstInt(i16, 0, false), "loop_cxnz");
+
+        LLVMValueRef pred;
+        if (kind == "loop")
+        {
+            pred = cxNonZero;
+        }
+        else
+        {
+            var flags = X86CtrlHelpers.LoadFlags(ctx, "loop");
+            var zf = X86CtrlHelpers.ExtractFlagBit(ctx, flags, 6, "loop_zf");
+            var zfReq = kind == "loope" ? zf : ctx.Builder.BuildNot(zf, "loop_nzf");
+            pred = ctx.Builder.BuildAnd(cxNonZero, zfReq, "loop_pred");
+        }
+
+        var ipPtr = ctx.GepStatusRegister("IP");
+        var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "loop_ip");
+        var ipPlus = ctx.Builder.BuildAdd(ip, disp16, "loop_ipP");
+        var sel = ctx.Builder.BuildSelect(pred, ipPlus, ip, "loop_newip");
+        ctx.Builder.BuildStore(sel, ipPtr);
+    }
+}
+
+internal sealed class X86CallRel16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_call_rel16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var disp16 = X86_16Emitters.FetchImm16(ctx, "call_d");
+        var ipPtr = ctx.GepStatusRegister("IP");
+        var retIp = ctx.Builder.BuildLoad2(i16, ipPtr, "call_retip");
+        // Push return address (post-fetch IP).
+        X86StackHelpers.PushW16(ctx, retIp, "call_push");
+        // Jump.
+        var newIp = ctx.Builder.BuildAdd(retIp, disp16, "call_newip");
+        ctx.Builder.BuildStore(newIp, ipPtr);
+    }
+}
+
+internal sealed class X86RetNearEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_ret_near";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var ipPtr = ctx.GepStatusRegister("IP");
+        var retIp = X86StackHelpers.PopW16(ctx, "ret_pop");
+        ctx.Builder.BuildStore(retIp, ipPtr);
+    }
+}
+
+internal sealed class X86RetNearImm16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_ret_near_imm16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        // RET imm16 — pop IP, then SP += imm16. The imm16 is fetched from
+        // CS:IP BEFORE the pop (so push args can be discarded post-return).
+        var pop16 = X86_16Emitters.FetchImm16(ctx, "retn_d");
+        var ipPtr = ctx.GepStatusRegister("IP");
+        var retIp = X86StackHelpers.PopW16(ctx, "retn_pop");
+        ctx.Builder.BuildStore(retIp, ipPtr);
+        // SP += imm16 (post-pop adjustment to discard caller's pushed args)
+        var spPtr = ctx.GepGpr(4);
+        var sp = ctx.Builder.BuildLoad2(i16, spPtr, "retn_sp");
+        var newSp = ctx.Builder.BuildAdd(sp, pop16, "retn_spN");
+        ctx.Builder.BuildStore(newSp, spPtr);
     }
 }

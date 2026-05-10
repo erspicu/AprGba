@@ -1868,6 +1868,195 @@ public class X86JsonCpuTests
         Assert.Equal(0xFFFF, cpu.State.D.X);
     }
 
+    // ---------------- 24.6.7a — control flow ----------------
+
+    /// <summary>
+    /// 0xEB JMP rel8 forward: 0xEB 0x02 (skip 2 bytes), then HLT.
+    /// IP=0x100 → fetch_imm8 → IP=0x102 → +2 = 0x104. The 2 bytes at
+    /// 0x102/0x103 are filler; HLT lives at 0x104.
+    /// </summary>
+    [Fact]
+    public void Step_JmpRel8_Forward()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xEB, 0x02, 0x00, 0x00, 0xF4 });
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x105, cpu.State.IP);   // post-HLT IP
+    }
+
+    /// <summary>
+    /// JMP backward — 0xEB 0xFE infinite loop (jumps to itself).
+    /// We bail out after a few steps.
+    /// </summary>
+    [Fact]
+    public void Step_JmpRel8_BackwardSelfLoop()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xEB, 0xFE });
+        for (int i = 0; i < 5; i++) cpu.Step();
+        Assert.False(cpu.Halted);
+        Assert.Equal(0x100, cpu.State.IP);   // looped back to start
+    }
+
+    /// <summary>
+    /// 0x74 (JZ/JE) taken when ZF=1.
+    /// Sequence: ZF=1; JZ +2; ... HLT.
+    /// </summary>
+    [Fact]
+    public void Step_Jz_Taken()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x74, 0x02, 0x00, 0x00, 0xF4 });
+        var s = cpu.State;
+        s.FlagZ = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x105, cpu.State.IP);
+    }
+
+    /// <summary>JZ NOT taken when ZF=0 — falls through to next byte.</summary>
+    [Fact]
+    public void Step_Jz_NotTaken()
+    {
+        // jz +2          74 02
+        // mov al, 0xAA   B0 AA   <- this runs because JZ falls through
+        // hlt            F4
+        var (cpu, _) = Setup(new byte[] { 0x74, 0x02, 0xB0, 0xAA, 0xF4 });
+        // ZF default = false
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        // Wait — disp +2 from post-fetch IP=0x102 → target 0x104. Bytes
+        // 0x102=0xB0 0x103=0xAA 0x104=0xF4. With JZ not taken IP stays
+        // at 0x102, so we run "mov al, 0xAA" first then HLT.
+        Assert.Equal(0xAA, cpu.State.A.L);
+    }
+
+    /// <summary>
+    /// JNE/JNZ (0x75) with ZF=0 — taken.
+    /// </summary>
+    [Fact]
+    public void Step_Jne_Taken_WhenZfZero()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x75, 0x02, 0x00, 0x00, 0xF4 });
+        // ZF=false default
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x105, cpu.State.IP);
+    }
+
+    /// <summary>
+    /// CALL rel16 then RET — round-trip through the stack.
+    /// Layout:
+    ///   0x100 mov sp, 0x0200    BC 00 02
+    ///   0x103 call rel16 +0x05  E8 05 00       (3 bytes; IP after = 0x106; jump to 0x10B)
+    ///   0x106 mov al, 0xBB      B0 BB           (executed AFTER ret returns here)
+    ///   0x108 hlt               F4
+    ///   0x109 (filler)          00 00
+    ///   0x10B mov al, 0xAA      B0 AA           (callee body)
+    ///   0x10D ret               C3
+    /// Expected: AL=0xBB (callee's 0xAA gets overwritten by post-return 0xBB).
+    /// </summary>
+    [Fact]
+    public void Step_CallRetNear_RoundTrip()
+    {
+        var (cpu, _) = Setup(new byte[]
+        {
+            0xBC, 0x00, 0x02,    // mov sp, 0x0200
+            0xE8, 0x05, 0x00,    // call +5 → 0x10B
+            0xB0, 0xBB,          // mov al, 0xBB (after return)
+            0xF4,                // hlt
+            0x00, 0x00,          // filler
+            0xB0, 0xAA,          // mov al, 0xAA (callee)
+            0xC3                 // ret
+        });
+        for (int i = 0; i < 32 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xBB, cpu.State.A.L);
+        Assert.Equal(0x0200, cpu.State.SP);   // SP back to original
+    }
+
+    /// <summary>
+    /// LOOP — countdown loop. CX=3; each LOOP decrements and jumps if non-zero.
+    ///   mov cx, 3        B9 03 00
+    ///   inc bx           43           ← loop body
+    ///   loop -3          E2 FD       ← back to inc bx
+    ///   hlt              F4
+    /// After loop: CX=0, BX=3.
+    /// </summary>
+    [Fact]
+    public void Step_Loop_DecCxAndBranch()
+    {
+        var (cpu, _) = Setup(new byte[]
+        {
+            0xB9, 0x03, 0x00,    // mov cx, 3
+            0x43,                // inc bx
+            0xE2, 0xFD,          // loop -3 (back to inc bx)
+            0xF4                 // hlt
+        });
+        for (int i = 0; i < 32 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0000, cpu.State.C.X);
+        Assert.Equal(0x0003, cpu.State.B.X);
+    }
+
+    /// <summary>
+    /// JCXZ — jumps if CX==0, doesn't decrement.
+    ///   mov cx, 0        B9 00 00
+    ///   jcxz +2          E3 02
+    ///   mov al, 0x99     B0 99   ← skipped
+    ///   hlt              F4
+    /// </summary>
+    [Fact]
+    public void Step_Jcxz_TakenWhenCxZero()
+    {
+        var (cpu, _) = Setup(new byte[]
+        {
+            0xB9, 0x00, 0x00,    // mov cx, 0
+            0xE3, 0x02,          // jcxz +2
+            0xB0, 0x99,          // mov al, 0x99 (skipped)
+            0xF4                 // hlt
+        });
+        for (int i = 0; i < 16 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x00, cpu.State.A.L);   // mov skipped
+    }
+
+    /// <summary>
+    /// JS (0x78) when SF=1.
+    /// </summary>
+    [Fact]
+    public void Step_Js_Taken()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x78, 0x02, 0x00, 0x00, 0xF4 });
+        var s = cpu.State;
+        s.FlagS = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x105, cpu.State.IP);
+    }
+
+    /// <summary>
+    /// JL (0x7C) when SF != OF (signed less-than). SF=1, OF=0 → SF^OF=1.
+    /// </summary>
+    [Fact]
+    public void Step_Jl_TakenWhenSfNeqOf()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x7C, 0x02, 0x00, 0x00, 0xF4 });
+        var s = cpu.State;
+        s.FlagS = true;
+        s.FlagO = false;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x105, cpu.State.IP);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

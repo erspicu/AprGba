@@ -1,0 +1,94 @@
+{
+  "name": "ControlFlow",
+  "comment": "8086 control flow — JMP / Jcc / JCXZ / LOOP* / CALL / RET (24.6.7a). Far CALL/JMP, FF group CALL/JMP indirect, INT/IRET, IRETF deferred to 24.6.7b/c. All branch targets are relative to post-fetch IP (after the displacement bytes have been consumed).",
+
+  "formats": [
+
+    {
+      "name": "JmpRel8",
+      "comment": "0xEB JMP rel8 — short jump, signed 8-bit displacement.",
+      "fields": {}, "mask": "0xFF", "match": "0xEB",
+      "instructions": [{ "mnemonic": "JMP", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §JMP", "cycles": { "form": "15" }, "steps": [
+        { "op": "x86_jmp_rel8" }
+      ]}]
+    },
+    {
+      "name": "JmpRel16",
+      "comment": "0xE9 JMP rel16 — near jump, signed 16-bit displacement.",
+      "fields": {}, "mask": "0xFF", "match": "0xE9",
+      "instructions": [{ "mnemonic": "JMP", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §JMP", "cycles": { "form": "15" }, "steps": [
+        { "op": "x86_jmp_rel16" }
+      ]}]
+    },
+
+    {
+      "name": "JccRel8",
+      "comment": "0x70-0x7F Jcc rel8 — 16 conditional jumps with 4-bit cccc field encoding the predicate. Single emitter dispatches at runtime via switch on cccc; both taken and not-taken branches always advance IP past disp8.",
+      "fields": { "cccc": "3:0" },
+      "mask":  "0xF0",
+      "match": "0x70",
+      "instructions": [{ "mnemonic": "Jcc", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §Jcc", "cycles": { "form": "16" }, "steps": [
+        { "op": "x86_jcc_rel8", "cond_field": "cccc" }
+      ]}]
+    },
+
+    {
+      "name": "JcxzRel8",
+      "comment": "0xE3 JCXZ rel8 — jump if CX == 0. Does NOT decrement CX (unlike LOOP).",
+      "fields": {}, "mask": "0xFF", "match": "0xE3",
+      "instructions": [{ "mnemonic": "JCXZ", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §JCXZ", "cycles": { "form": "18" }, "steps": [
+        { "op": "x86_jcxz_rel8" }
+      ]}]
+    },
+
+    {
+      "name": "LoopneRel8",
+      "comment": "0xE0 LOOPNE/LOOPNZ rel8 — CX-=1; if CX != 0 AND ZF=0, jump.",
+      "fields": {}, "mask": "0xFF", "match": "0xE0",
+      "instructions": [{ "mnemonic": "LOOPNE", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §LOOPcc", "cycles": { "form": "19" }, "steps": [
+        { "op": "x86_loop", "kind": "loopne" }
+      ]}]
+    },
+    {
+      "name": "LoopeRel8",
+      "fields": {}, "mask": "0xFF", "match": "0xE1",
+      "instructions": [{ "mnemonic": "LOOPE", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §LOOPcc", "cycles": { "form": "18" }, "steps": [
+        { "op": "x86_loop", "kind": "loope" }
+      ]}]
+    },
+    {
+      "name": "LoopRel8",
+      "fields": {}, "mask": "0xFF", "match": "0xE2",
+      "instructions": [{ "mnemonic": "LOOP", "since": "Intel8086", "writes_pc": "conditional", "manual_ref": "Intel SDM Vol.2 §LOOP", "cycles": { "form": "17" }, "steps": [
+        { "op": "x86_loop", "kind": "loop" }
+      ]}]
+    },
+
+    {
+      "name": "CallRel16",
+      "comment": "0xE8 CALL rel16 — push post-fetch IP, then IP += disp16.",
+      "fields": {}, "mask": "0xFF", "match": "0xE8",
+      "instructions": [{ "mnemonic": "CALL", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §CALL", "cycles": { "form": "19" }, "steps": [
+        { "op": "x86_call_rel16" }
+      ]}]
+    },
+
+    {
+      "name": "RetNear",
+      "comment": "0xC3 RET (near) — pop IP from stack.",
+      "fields": {}, "mask": "0xFF", "match": "0xC3",
+      "instructions": [{ "mnemonic": "RET", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §RET", "cycles": { "form": "16" }, "steps": [
+        { "op": "x86_ret_near" }
+      ]}]
+    },
+    {
+      "name": "RetNearImm16",
+      "comment": "0xC2 RET imm16 — pop IP, then discard imm16 bytes from stack (caller-cleanup convention).",
+      "fields": {}, "mask": "0xFF", "match": "0xC2",
+      "instructions": [{ "mnemonic": "RET", "since": "Intel8086", "writes_pc": "always", "manual_ref": "Intel SDM Vol.2 §RET", "cycles": { "form": "20" }, "steps": [
+        { "op": "x86_ret_near_imm16" }
+      ]}]
+    }
+
+  ]
+}
