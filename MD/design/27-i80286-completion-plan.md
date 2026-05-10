@@ -129,7 +129,8 @@ multi-week effort for 27b.
 | 27.11a Exception state slots (EXC_PENDING/VECTOR/ERROR) | ✅ | `7249bb8` | 2026-05-11 |
 | 27.11b Expose EXC_* in X86State + verbose dump | ✅ | `0f2e6f2` | 2026-05-11 |
 | 27.11c P-bit check + #NP fault (first end-to-end fault path) | ✅ | `bb790bd` | 2026-05-11 |
-| 27.11d+ NULL-selector → #GP + DPL/CPL/RPL checks | ⏳ pending | — | — |
+| 27.11d NULL-SS → #GP (PE=1) | ✅ | `7c57f5a` | 2026-05-11 |
+| 27.11e+ DPL/CPL/RPL checks → #GP | ⏳ pending | — | — |
 | 27.12 TSS task switching | ⏳ pending | — | — |
 | 27.13a Protected-mode entry demo + gap surfaced | ✅ partial | `c5f51a0` | 2026-05-11 |
 | 27.13b Migrate ea_seg consumers → ea_base (closes the gap) | ✅ | `ed4b2d4` | 2026-05-11 |
