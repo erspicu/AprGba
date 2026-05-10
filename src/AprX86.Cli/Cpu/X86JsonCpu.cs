@@ -68,6 +68,7 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
     private readonly int _axOff, _cxOff, _dxOff, _bxOff;
     private readonly int _spOff, _bpOff, _siOff, _diOff;
     private readonly int _flagsOff, _ipOff, _esOff, _csOff, _ssOff, _dsOff, _haltedOff, _segOverrideOff;
+    private readonly int _cyclesLeftOff;
 
     public X86Memory Memory => _mem;
 
@@ -132,6 +133,7 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         _dsOff          = (int)_rt.StatusOffset("DS");
         _haltedOff      = (int)_rt.StatusOffset("HALTED");
         _segOverrideOff = (int)_rt.StatusOffset("SEG_OVERRIDE");
+        _cyclesLeftOff  = (int)_rt.CyclesLeftOffset;
 
         _state = new byte[(int)_rt.StateSizeBytes];
         _stateHandle = GCHandle.Alloc(_state, GCHandleType.Pinned);
@@ -296,6 +298,20 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
                 return -1;
             }
         }
+
+        // Initialize the IR-level cycle budget. BlockFunctionBuilder's
+        // post-instruction "deduct + check exhausted" logic uses this
+        // slot; without setting it the residual zero forces budget exit
+        // after the very first instruction (block-JIT degenerates to
+        // per-instr). Set high enough that a full 64-instruction block
+        // worst-case (each instr cycles.form max ~83 for AAM) won't
+        // exhaust it; budget is a counter, not a real cycle quota.
+        const int budgetInit = 1 << 24;
+        Marshal.WriteInt32((IntPtr)(_statePtr + _cyclesLeftOff), budgetInit);
+        // Clear PcWritten — block exits set it to 1 when control transfers,
+        // and we use the non-zero value as "block exited via PC change"
+        // signal. Stale value from prior call would mis-signal.
+        _statePtr[_rt.PcWrittenOffset] = 0;
 
         var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
         fn(_statePtr);

@@ -516,11 +516,15 @@ public sealed unsafe class BlockFunctionBuilder
     /// written value. Without this routing, a direct state-buffer write
     /// would be silently overwritten by the alloca's stale init value
     /// when SyncToState ran.
+    ///
+    /// 24.6.8: PC register name is now spec-driven — try "PC" first, fall
+    /// back to "IP" (Intel 8086 convention). If neither exists, throw.
     /// </summary>
     private void WritePcConst(EmitContext ctx, uint pcValue)
     {
         // PC location is spec-driven (see StackOps.LocateProgramCounter).
-        // For ARM PC is GPR[15] (i32); for LR35902/MOS6502 it's status reg "PC" (i16).
+        // For ARM PC is GPR[15] (i32); for LR35902/MOS6502 it's status reg "PC" (i16);
+        // for Intel 8086 it's status reg "IP" (i16).
         var pcIdx = Layout.RegisterFile.GeneralPurpose.PcIndex;
         if (pcIdx is int idx)
         {
@@ -530,17 +534,27 @@ public sealed unsafe class BlockFunctionBuilder
         }
         else
         {
-            // Status-reg PC (LR35902 / MOS6502)
-            var ptr = ctx.GepStatusRegister("PC");
-            var def = Layout.GetStatusRegisterDef("PC");
+            string pcName = HasStatusReg("PC") ? "PC"
+                          : HasStatusReg("IP") ? "IP"
+                          : throw new InvalidOperationException(
+                              "WritePcConst: spec has no GPR pc_index and no status register named 'PC' or 'IP'.");
+            var ptr = ctx.GepStatusRegister(pcName);
+            var def = Layout.GetStatusRegisterDef(pcName);
             var t = def.WidthBits switch
             {
                 16 => LLVMTypeRef.Int16,
                 32 => LLVMTypeRef.Int32,
-                _ => throw new NotSupportedException($"PC width {def.WidthBits} unsupported")
+                _ => throw new NotSupportedException($"{pcName} width {def.WidthBits} unsupported")
             };
             ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(t, pcValue, false), ptr);
         }
+    }
+
+    private bool HasStatusReg(string name)
+    {
+        foreach (var sr in Layout.RegisterFile.Status)
+            if (sr.Name == name) return true;
+        return false;
     }
 
     private static bool IsTerminated(LLVMBuilderRef builder)

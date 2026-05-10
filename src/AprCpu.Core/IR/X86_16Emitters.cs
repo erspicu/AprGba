@@ -3422,6 +3422,7 @@ internal sealed class X86JmpRel8Emitter : IMicroOpEmitter
     public string OpName => "x86_jmp_rel8";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
+        var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         // fetch_imm8 advances IP first; signed displacement adds to post-fetch IP.
         var disp8 = X86_16Emitters.FetchImm8(ctx, "jmp8_d");
@@ -3430,6 +3431,8 @@ internal sealed class X86JmpRel8Emitter : IMicroOpEmitter
         var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "jmp8_ip");
         var newIp = ctx.Builder.BuildAdd(ip, disp16, "jmp8_newip");
         ctx.Builder.BuildStore(newIp, ipPtr);
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
     }
 }
 
@@ -3438,12 +3441,15 @@ internal sealed class X86JmpRel16Emitter : IMicroOpEmitter
     public string OpName => "x86_jmp_rel16";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
+        var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         var disp16 = X86_16Emitters.FetchImm16(ctx, "jmp16_d");
         var ipPtr = ctx.GepStatusRegister("IP");
         var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "jmp16_ip");
         var newIp = ctx.Builder.BuildAdd(ip, disp16, "jmp16_newip");
         ctx.Builder.BuildStore(newIp, ipPtr);
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
     }
 }
 
@@ -3453,6 +3459,7 @@ internal sealed class X86JccRel8Emitter : IMicroOpEmitter
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
         var fieldName = step.Raw.GetProperty("cond_field").GetString()!;
+        var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
 
@@ -3472,6 +3479,12 @@ internal sealed class X86JccRel8Emitter : IMicroOpEmitter
         var ipPlus = ctx.Builder.BuildAdd(ip, disp16, "jcc_ipP");
         var sel = ctx.Builder.BuildSelect(pred, ipPlus, ip, "jcc_newip");
         ctx.Builder.BuildStore(sel, ipPtr);
+
+        // 24.6.8b — signal PcWritten to BlockFunctionBuilder when taken so
+        // block-JIT exits the block on a taken branch. Without this, the
+        // next instruction's IP pre-write would clobber the jump target.
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(ctx.Builder.BuildZExt(pred, i8, "jcc_pcw"), pcwSlot);
     }
 }
 
@@ -3480,6 +3493,7 @@ internal sealed class X86JcxzRel8Emitter : IMicroOpEmitter
     public string OpName => "x86_jcxz_rel8";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
+        var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         var disp8  = X86_16Emitters.FetchImm8(ctx, "jcxz_d");
         var disp16 = ctx.Builder.BuildSExt(disp8, i16, "jcxz_dsx");
@@ -3491,6 +3505,9 @@ internal sealed class X86JcxzRel8Emitter : IMicroOpEmitter
         var ipPlus = ctx.Builder.BuildAdd(ip, disp16, "jcxz_ipP");
         var sel = ctx.Builder.BuildSelect(cxZero, ipPlus, ip, "jcxz_newip");
         ctx.Builder.BuildStore(sel, ipPtr);
+        // 24.6.8b — signal PcWritten on taken (cx==0).
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(ctx.Builder.BuildZExt(cxZero, i8, "jcxz_pcw"), pcwSlot);
     }
 }
 
@@ -3502,6 +3519,7 @@ internal sealed class X86LoopEmitter : IMicroOpEmitter
         // kind: "loop" (no zf check), "loope" (require ZF=1), "loopne" (require ZF=0)
         var kind = step.Raw.GetProperty("kind").GetString()!;
         var i1  = LLVMTypeRef.Int1;
+        var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
 
         var disp8  = X86_16Emitters.FetchImm8(ctx, "loop_d");
@@ -3535,6 +3553,9 @@ internal sealed class X86LoopEmitter : IMicroOpEmitter
         var ipPlus = ctx.Builder.BuildAdd(ip, disp16, "loop_ipP");
         var sel = ctx.Builder.BuildSelect(pred, ipPlus, ip, "loop_newip");
         ctx.Builder.BuildStore(sel, ipPtr);
+        // 24.6.8b — signal PcWritten when LOOP iterates (pred=1).
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(ctx.Builder.BuildZExt(pred, i8, "loop_pcw"), pcwSlot);
     }
 }
 
@@ -3543,6 +3564,7 @@ internal sealed class X86CallRel16Emitter : IMicroOpEmitter
     public string OpName => "x86_call_rel16";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
+        var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         var disp16 = X86_16Emitters.FetchImm16(ctx, "call_d");
         var ipPtr = ctx.GepStatusRegister("IP");
@@ -3552,6 +3574,8 @@ internal sealed class X86CallRel16Emitter : IMicroOpEmitter
         // Jump.
         var newIp = ctx.Builder.BuildAdd(retIp, disp16, "call_newip");
         ctx.Builder.BuildStore(newIp, ipPtr);
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
     }
 }
 
@@ -3560,9 +3584,12 @@ internal sealed class X86RetNearEmitter : IMicroOpEmitter
     public string OpName => "x86_ret_near";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
+        var i8 = LLVMTypeRef.Int8;
         var ipPtr = ctx.GepStatusRegister("IP");
         var retIp = X86StackHelpers.PopW16(ctx, "ret_pop");
         ctx.Builder.BuildStore(retIp, ipPtr);
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
     }
 }
 
@@ -3571,6 +3598,7 @@ internal sealed class X86RetNearImm16Emitter : IMicroOpEmitter
     public string OpName => "x86_ret_near_imm16";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
+        var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         // RET imm16 — pop IP, then SP += imm16. The imm16 is fetched from
         // CS:IP BEFORE the pop (so push args can be discarded post-return).
@@ -3583,6 +3611,8 @@ internal sealed class X86RetNearImm16Emitter : IMicroOpEmitter
         var sp = ctx.Builder.BuildLoad2(i16, spPtr, "retn_sp");
         var newSp = ctx.Builder.BuildAdd(sp, pop16, "retn_spN");
         ctx.Builder.BuildStore(newSp, spPtr);
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
     }
 }
 
@@ -4260,6 +4290,7 @@ internal static class X86InterruptHelpers
     /// </summary>
     public static void EmitIntCommon(EmitContext ctx, LLVMValueRef vec32, string label)
     {
+        var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
 
@@ -4300,7 +4331,6 @@ internal static class X86InterruptHelpers
             LLVMValueRef.CreateConstInt(i32, 3, false), $"{label}_addrCs1");
         var newCsHi = MemoryEmitters.CallRead8(ctx, addrCs1, $"{label}_cshi");
 
-        var i8  = LLVMTypeRef.Int8;
         LLVMValueRef Combine(LLVMValueRef lo, LLVMValueRef hi, string n)
         {
             var loZ = ctx.Builder.BuildZExt(lo, i16, $"{n}_lz");
@@ -4314,6 +4344,10 @@ internal static class X86InterruptHelpers
 
         ctx.Builder.BuildStore(newIp16, ipPtr);
         ctx.Builder.BuildStore(newCs16, csPtr);
+
+        // 24.6.8b — INT/IRET unconditionally write IP/CS; signal block exit.
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
     }
 }
 
@@ -4373,6 +4407,7 @@ internal sealed class X86IretEmitter : IMicroOpEmitter
     public string OpName => "x86_iret";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
+        var i8 = LLVMTypeRef.Int8;
         // Reverse of INT entry: pop IP, pop CS, pop FLAGS.
         var newIp = X86StackHelpers.PopW16(ctx, "iret_ip");
         var newCs = X86StackHelpers.PopW16(ctx, "iret_cs");
@@ -4381,6 +4416,9 @@ internal sealed class X86IretEmitter : IMicroOpEmitter
         ctx.Builder.BuildStore(newIp, ctx.GepStatusRegister("IP"));
         ctx.Builder.BuildStore(newCs, ctx.GepStatusRegister("CS"));
         ctx.Builder.BuildStore(newFl, ctx.GepStatusRegister("FLAGS"));
+
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
     }
 }
 
@@ -4747,17 +4785,19 @@ internal sealed class X86FfGroupDispatchEmitter : IMicroOpEmitter
         EmitIncDec(0, "add");   // /0 INC r/m16
         EmitIncDec(1, "sub");   // /1 DEC r/m16
 
-        // /2 CALL near r/m16 — push IP (post-fetch), then IP = lhs.
+        // /2 CALL near r/m16 — push IP (post-fetch), then IP = lhs. Signal block exit.
         ctx.Builder.PositionAtEnd(arms[2]);
         {
             var ipPtr = ctx.GepStatusRegister("IP");
             var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "ffg2_ip");
             X86StackHelpers.PushW16(ctx, ip, "ffg2_psh");
             ctx.Builder.BuildStore(lhs, ipPtr);
+            var pcwSlot2 = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot2);
             ctx.Builder.BuildBr(endBB);
         }
 
-        // /3 CALL far m16:16 — push CS, push IP, load far ptr from EA.
+        // /3 CALL far m16:16 — push CS, push IP, load far ptr from EA. Signal block exit.
         ctx.Builder.PositionAtEnd(arms[3]);
         {
             var ipPtr = ctx.GepStatusRegister("IP");
@@ -4775,18 +4815,22 @@ internal sealed class X86FfGroupDispatchEmitter : IMicroOpEmitter
             var newCs = X86_16Emitters.SegmentedRead16(ctx, seg, off2, "ffg3_newCs");
             ctx.Builder.BuildStore(newIp, ipPtr);
             ctx.Builder.BuildStore(newCs, csPtr);
+            var pcwSlot3 = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot3);
             ctx.Builder.BuildBr(endBB);
         }
 
-        // /4 JMP near r/m16 — IP = lhs.
+        // /4 JMP near r/m16 — IP = lhs. Signal block exit.
         ctx.Builder.PositionAtEnd(arms[4]);
         {
             var ipPtr = ctx.GepStatusRegister("IP");
             ctx.Builder.BuildStore(lhs, ipPtr);
+            var pcwSlot4 = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot4);
             ctx.Builder.BuildBr(endBB);
         }
 
-        // /5 JMP far m16:16 — load far ptr from EA.
+        // /5 JMP far m16:16 — load far ptr from EA. Signal block exit.
         ctx.Builder.PositionAtEnd(arms[5]);
         {
             var seg = ctx.Resolve("ea_seg");
@@ -4797,6 +4841,8 @@ internal sealed class X86FfGroupDispatchEmitter : IMicroOpEmitter
             var newCs = X86_16Emitters.SegmentedRead16(ctx, seg, off2, "ffg5_newCs");
             ctx.Builder.BuildStore(newIp, ctx.GepStatusRegister("IP"));
             ctx.Builder.BuildStore(newCs, ctx.GepStatusRegister("CS"));
+            var pcwSlot5 = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot5);
             ctx.Builder.BuildBr(endBB);
         }
 

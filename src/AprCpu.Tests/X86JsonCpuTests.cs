@@ -3230,6 +3230,66 @@ public class X86JsonCpuTests
     }
 
     /// <summary>
+    /// Regression: block-JIT must honor LOOP back-jumps. Without
+    /// PcWritten signaling on conditional branches, block-JIT runs
+    /// the loop body LINEARLY (LOOP IR sets IP but next instr's IP
+    /// pre-write clobbers it) so CX would only decrement once.
+    ///
+    /// Test: CX=10 + tight LOOP. After completion CX should be 0.
+    /// Pre-fix this test fails with CX=9 (one decrement, no loop).
+    /// </summary>
+    [Fact]
+    public void BlockJit_LoopActuallyLoops_RegressionForPcWrittenBug()
+    {
+        var mem = new X86Memory();
+        mem.LoadBinary(new byte[]
+        {
+            0xB9, 0x0A, 0x00,    // mov cx, 10
+            0xE2, 0xFE,          // loop -2 (jump to self)
+            0xF4                 // hlt
+        }, 0, 0x100);
+        var cpu = new X86JsonCpu(mem, enableBlockJit: true);
+        cpu.Reset();
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 64 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0, cpu.State.C.X);
+    }
+
+    /// <summary>
+    /// Regression: block-JIT must honor Jcc taken/not-taken correctly.
+    /// Construct a loop using DEC + JNZ; verify the loop runs N iterations.
+    /// </summary>
+    [Fact]
+    public void BlockJit_JccTakenIteratesLoop_RegressionForPcWrittenBug()
+    {
+        var mem = new X86Memory();
+        // mov bx, 5      BB 05 00
+        // dec_loop:
+        //   inc ax       40
+        //   dec bx       4B
+        //   jnz dec_loop 75 FC (-4)
+        // hlt            F4
+        mem.LoadBinary(new byte[]
+        {
+            0xBB, 0x05, 0x00,    // mov bx, 5
+            0x40,                // inc ax
+            0x4B,                // dec bx
+            0x75, 0xFC,          // jnz -4
+            0xF4                 // hlt
+        }, 0, 0x100);
+        var cpu = new X86JsonCpu(mem, enableBlockJit: true);
+        cpu.Reset();
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 64 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(5, cpu.State.A.X);
+        Assert.Equal(0, cpu.State.B.X);
+    }
+
+    /// <summary>
     /// Block-JIT with a longer arithmetic sequence — exercises ALU + flag
     /// IR through BlockFunctionBuilder's alloca + mem2reg path.
     /// </summary>
