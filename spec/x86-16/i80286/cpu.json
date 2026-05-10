@@ -27,6 +27,12 @@
       "additions": [
         { "$include": "groups/i80286-system.json" }
       ]
-    }
+    },
+    "instruction_sets_added": [
+      {
+        "name": "TwoByteEsc",
+        "file": "groups/twobyteesc.json"
+      }
+    ]
   }
 }

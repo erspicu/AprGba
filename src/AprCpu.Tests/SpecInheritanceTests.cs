@@ -366,8 +366,9 @@ public class SpecInheritanceTests : IDisposable
     {
         // Sprint 26.1 — load the actual i80286 spec from the repo and
         // verify the chain depth=3 (i80286 -> i80186 -> i8086) works.
-        // i80286's instruction count = i8086's 149 + i80186's 26 + 286's 1
-        // (the CLTS stub) = 176.
+        // 26.2b — also verifies the new instruction_sets_added mechanism:
+        // i80286 introduces a TwoByteEsc set (parent didn't have it) for
+        // 0x0F-prefixed system instructions.
         var repoRoot = LocateRepoRoot();
         var i80286Cpu = Path.Combine(repoRoot, "spec", "x86-16", "i80286", "cpu.json");
         Assert.True(File.Exists(i80286Cpu), $"i80286 cpu.json missing at {i80286Cpu}");
@@ -377,23 +378,33 @@ public class SpecInheritanceTests : IDisposable
         Assert.Equal("Intel80286", loaded.Cpu.Architecture.Id);
         Assert.Equal("Intel80186", loaded.Cpu.Architecture.Extends);
 
+        // Main set inherited intact: 149 i8086 + 26 i80186 = 175 instructions.
         var main = loaded.InstructionSets["Main"];
-        var allInstr = main.EncodingGroups
+        var mainInstr = main.EncodingGroups
             .SelectMany(g => g.Formats)
             .SelectMany(f => f.Instructions)
             .ToList();
-        Assert.True(allInstr.Count >= 149 + 26 + 1,
-            $"expected at least 176 instructions (149 i8086 + 26 i80186 + 1 i80286), got {allInstr.Count}");
+        Assert.True(mainInstr.Count >= 175,
+            $"expected >= 175 instructions in Main (149 i8086 + 26 i80186), got {mainInstr.Count}");
 
-        // Provenance flows through three levels:
-        var addRm8R8 = allInstr.First(i => i.Id == "ADD_rm8_r8");
+        // 26.2b — TwoByteEsc set is the i80286-specific addition.
+        Assert.True(loaded.InstructionSets.ContainsKey("TwoByteEsc"),
+            "i80286 should have a TwoByteEsc set added via instruction_sets_added");
+        var twoByte = loaded.InstructionSets["TwoByteEsc"];
+        var twoByteInstr = twoByte.EncodingGroups
+            .SelectMany(g => g.Formats)
+            .SelectMany(f => f.Instructions)
+            .ToList();
+        Assert.NotEmpty(twoByteInstr);
+        var clts = twoByteInstr.First(i => i.Id == "CLTS_noargs");
+        Assert.Equal("Intel80286", clts.OriginCpu);  // originated at i80286
+
+        // Provenance flows through three levels in Main:
+        var addRm8R8 = mainInstr.First(i => i.Id == "ADD_rm8_r8");
         Assert.Equal("Intel8086", addRm8R8.OriginCpu);  // originally from base
 
-        var pushaI80186 = allInstr.First(i => i.Id == "PUSHA_noargs");
+        var pushaI80186 = mainInstr.First(i => i.Id == "PUSHA_noargs");
         Assert.Equal("Intel80186", pushaI80186.OriginCpu);  // added at i80186
-
-        var clts286 = allInstr.First(i => i.Id == "CLTS_noargs_v1stub");
-        Assert.Equal("Intel80286", clts286.OriginCpu);  // added at i80286
     }
 
     [Fact]

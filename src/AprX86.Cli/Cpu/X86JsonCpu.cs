@@ -157,11 +157,21 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         if (_blockJitEnabled)
         {
             var mainSetSpec = _spec.InstructionSets["Main"];
+
+            // 26.2b — i80286 onward: 0x0F is a two-byte-opcode escape
+            // prefix; second byte dispatches through a TwoByteEsc set.
+            // i8086 / i80186 don't have this set and ignore the wiring.
+            Dictionary<byte, DecoderTable>? prefixSubDecoders = null;
+            if (compileResult.DecoderTables.TryGetValue("TwoByteEsc", out var escDec))
+            {
+                prefixSubDecoders = new Dictionary<byte, DecoderTable> { { 0x0F, escDec } };
+            }
+
             _blockDetector = new BlockDetector(
                 mainSetSpec,
                 _mainDecoder,
                 busLengthOracle: X86_16InstructionLengths.GetLength,
-                prefixSubDecoders: null);
+                prefixSubDecoders: prefixSubDecoders);
             _blockCache = new BlockCache();
         }
     }
@@ -173,10 +183,11 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         // i80186. Fold both into the single base / inheritance spec.
         string subdir = variant switch
         {
-            "i8086" or "i8088"           => "i8086",
+            "i8086" or "i8088"            => "i8086",
             "i80186" or "i80188"          => "i80186",
+            "i80286"                      => "i80286",
             _ => throw new ArgumentException(
-                $"X86JsonCpu: unknown variant '{variant}'. Valid: i8086 | i8088 | i80186 | i80188.",
+                $"X86JsonCpu: unknown variant '{variant}'. Valid: i8086 | i8088 | i80186 | i80188 | i80286.",
                 nameof(variant)),
         };
 

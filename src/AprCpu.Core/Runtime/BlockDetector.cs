@@ -229,14 +229,33 @@ public sealed class BlockDetector
                 // emitters can extract via shift+trunc on a constant
                 // instead of issuing memory_read_8 externs. See packing
                 // block below — this happens once decoded is non-null.
+                //
+                // 26.2b — for Intel 80286 onward, byte 0x0F is a two-byte-
+                // opcode escape prefix; the SECOND byte is the real
+                // dispatch key against a TwoByteEsc decoder table. We
+                // mirror the byte-only path's prefixSubDecoders mechanism:
+                // when the first byte matches a prefix sub-decoder entry,
+                // the second byte gets dispatched through that table
+                // instead of `_decoder`.
                 int lenInt = _busLengthOracle(bus, pc);
                 if (lenInt is < 1 or > 15)
                     throw new InvalidOperationException(
                         $"BlockDetector busLengthOracle returned {lenInt} at pc=0x{pc:X4} in set '{_setSpec.Name}'; expected 1..15.");
                 thisLength = (uint)lenInt;
                 byte first = bus.ReadByte(pc);
-                word    = first;
-                decoded = _decoder.Decode(word);
+
+                if (_prefixSubDecoders is not null
+                    && _prefixSubDecoders.TryGetValue(first, out var subDec))
+                {
+                    byte subOpcode = bus.ReadByte(pc + 1);
+                    word    = subOpcode;
+                    decoded = subDec.Decode(word);
+                }
+                else
+                {
+                    word    = first;
+                    decoded = _decoder.Decode(word);
+                }
             }
             else if (_lengthOracle is null)
             {

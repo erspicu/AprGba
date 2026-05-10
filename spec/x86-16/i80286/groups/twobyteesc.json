@@ -1,0 +1,50 @@
+{
+  "$schema": "../../../schema/cpu-spec.schema.json",
+  "spec_version": "1.0",
+  "name": "TwoByteEsc",
+  "width_bits": 8,
+  "alignment_bytes": 1,
+  "pc_offset_bytes": 0,
+  "endian_within_word": "little",
+  "decode_strategy": "mask_match_priority",
+
+  "comment": [
+    "Intel 80286 two-byte-escape opcodes — entered when BlockDetector",
+    "sees byte 0x0F. The SECOND byte is the dispatch key for this set.",
+    "Mask/match are against that second byte (i.e. 0xFF mask, 0x06 match",
+    "= CLTS for the 0F 06 sequence).",
+    "",
+    "Sprint 26.2b — initial entry list contains only CLTS as a smoke",
+    "test for the 0F-prefix decoder dispatch path. Sprint 26.3 will add",
+    "the LGDT/LIDT/LMSW/SMSW group, and Sprint 26.4 will wire them to",
+    "real implementations against the MSW + GDTR/IDTR state registers."
+  ],
+
+  "encoding_groups": [
+    {
+      "name": "Clts",
+      "comment": "0F 06 CLTS — clear MSW.TS bit. Sprint 26.2b: stub no-op (advances IP only). Sprint 26.4 wires the real MSW.TS clear.",
+      "formats": [
+        {
+          "name": "Clts",
+          "fields": {},
+          "mask":  "0xFF",
+          "match": "0x06",
+          "instructions": [
+            {
+              "id": "CLTS_noargs",
+              "mnemonic": "CLTS",
+              "since": "Intel80286",
+              "writes_pc": "never",
+              "manual_ref": "Intel 80286 PRM §CLTS",
+              "cycles": { "form": "2" },
+              "steps": [
+                { "op": "x86_clts_286_stub" }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

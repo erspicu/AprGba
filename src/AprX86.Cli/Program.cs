@@ -116,7 +116,7 @@ if (backend == "legacy" && variant != "i8086" && variant != "i8088")
 {
     Console.Error.WriteLine(
         $"error: --backend=legacy supports only --variant=i8086|i8088 (got '{variant}'). " +
-        $"Use --backend=json or --backend=json-block for i80186/i80188.");
+        $"Use --backend=json or --backend=json-block for i80186/i80188/i80286.");
     return 6;
 }
 
@@ -189,7 +189,7 @@ static void PrintUsage()
     Console.Error.WriteLine("usage:");
     Console.Error.WriteLine("  apr-x86 --rom=<path> [--entry-seg=<hex>] [--entry-off=<hex>]");
     Console.Error.WriteLine("          [--max-cycles=N] [--backend=legacy|json|json-block]");
-    Console.Error.WriteLine("          [--variant=i8086|i8088|i80186|i80188] [--verbose]");
+    Console.Error.WriteLine("          [--variant=i8086|i8088|i80186|i80188|i80286] [--verbose]");
     Console.Error.WriteLine("          [--screenshot=<path>]");
     Console.Error.WriteLine();
     Console.Error.WriteLine("  apr-x86 --tomharte=<.json[.gz]> [--tomharte-limit=N]");

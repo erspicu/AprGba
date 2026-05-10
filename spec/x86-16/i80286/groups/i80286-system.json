@@ -1,22 +1,2 @@
 [
-  {
-    "name": "Clts286Stub",
-    "comment": "0F 06 CLTS — clear MSW.TS bit. Phase 26 v1 STUB. Real encoding requires 0x0F escape prefix support which lands in Sprint 26.2 (BlockDetector + DecoderTable need to recognize 0x0F as a two-byte-opcode prefix and dispatch the second byte through a separate code path). For now the spec entry exists with a placeholder mask of 0x0F + match 0x0F so it never matches a real instruction byte (no data byte equals 0x0F in the smoke tests we run today). The IR step references x86_clts_286_stub which is a no-op emitter; once Sprint 26.2 wires real 0F decoding + Sprint 26.3 ships proper system emitters, this format gets repointed to mask=0xFF match=0x06 + a 'requires_prefix: 0x0F' tag.",
-    "fields": {},
-    "mask": "0xFF",
-    "match": "0x0F",
-    "instructions": [
-      {
-        "id": "CLTS_noargs_v1stub",
-        "mnemonic": "CLTS",
-        "since": "Intel80286",
-        "writes_pc": "never",
-        "manual_ref": "Intel 80286 PRM §CLTS",
-        "cycles": { "form": "2" },
-        "steps": [
-          { "op": "x86_clts_286_stub" }
-        ]
-      }
-    ]
-  }
 ]

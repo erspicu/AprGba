@@ -141,12 +141,23 @@ public sealed record InstructionSetExtends(
 /// instruction sets. Per RFC 7386 (JSON Merge Patch) at the per-instruction
 /// level — child overrides only declare the fields that change, the rest
 /// inherits from parent.
+///
+/// 26.2b — InstructionSetsAdded carries entirely new instruction sets the
+/// child wants to introduce (parent doesn't have them). Distinct from
+/// PerSet (which only modifies existing sets). Used by i80286 to add a
+/// TwoByteEsc set for 0x0F-prefixed system instructions.
 /// </summary>
 public sealed record InstructionSetDiff(
     /// <summary>
     /// Per instruction-set name (e.g. "Main"), the diff to apply.
     /// </summary>
-    IReadOnlyDictionary<string, PerSetDiff> PerSet);
+    IReadOnlyDictionary<string, PerSetDiff> PerSet,
+    /// <summary>
+    /// 26.2b — child specs can introduce entirely new instruction sets
+    /// the parent doesn't have. Each entry is an InstructionSetRef with
+    /// its own file path (relative to the child cpu.json's directory).
+    /// </summary>
+    IReadOnlyList<InstructionSetRef> InstructionSetsAdded);
 
 /// <summary>
 /// Diff for one named instruction set inside an <see cref="InstructionSetDiff"/>.

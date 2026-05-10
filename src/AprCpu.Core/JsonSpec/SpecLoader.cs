@@ -191,6 +191,32 @@ public static class SpecLoader
             var merged = ApplyDiffToSet(parentSet, diff, child.Architecture.Id, childFilePath, setName);
             result[setName] = merged;
         }
+
+        // 26.2b — load + add entirely new instruction sets the child
+        // introduces (parent didn't have them). Each one's file is
+        // resolved relative to the child cpu.json's directory.
+        var childDir = Path.GetDirectoryName(childFilePath)!;
+        foreach (var addedRef in child.InstructionSetDiff.InstructionSetsAdded)
+        {
+            if (result.ContainsKey(addedRef.Name))
+                throw new SpecValidationException(
+                    $"instruction_sets_added['{addedRef.Name}'] collides with an existing set inherited from parent.",
+                    childFilePath, $"$.instruction_set_diff.instruction_sets_added");
+
+            var setPath = Path.GetFullPath(Path.Combine(childDir, addedRef.File));
+            if (!File.Exists(setPath))
+                throw new SpecValidationException(
+                    $"instruction_sets_added references file '{addedRef.File}' which doesn't exist (resolved to {setPath}).",
+                    childFilePath, $"$.instruction_set_diff.instruction_sets_added");
+
+            using var setDoc = LoadAndResolveDocument(setPath);
+            var newSet = ParseInstructionSetSpec(setDoc.RootElement, setPath);
+            SpecValidator.ValidateInstructionSet(newSet);
+            // Tag added-set instructions with child's OriginCpu for provenance.
+            newSet = TagInstructionsWithOrigin(newSet, child.Architecture.Id);
+            result[addedRef.Name] = newSet;
+        }
+
         return result;
     }
 
@@ -507,12 +533,35 @@ public static class SpecLoader
     /// 25.1 — parse <c>instruction_set_diff</c>. Each top-level key is an
     /// instruction-set name (e.g. "Main"); its value carries optional
     /// <c>additions</c> / <c>overrides</c> / <c>removals</c>.
+    ///
+    /// 26.2b — also accepts a special <c>instruction_sets_added</c> key
+    /// at the top level whose value is an array of new InstructionSetRef
+    /// objects (entirely new sets the child introduces, parent doesn't
+    /// have them). Used by i80286 to add a TwoByteEsc set for 0x0F-
+    /// prefixed instructions.
     /// </summary>
     private static InstructionSetDiff ParseInstructionSetDiff(JsonElement el, string filePath)
     {
         var perSet = new Dictionary<string, PerSetDiff>(StringComparer.Ordinal);
+        var setsAdded = new List<InstructionSetRef>();
         foreach (var prop in el.EnumerateObject())
         {
+            // Special handling for instruction_sets_added top-level key.
+            if (prop.Name == "instruction_sets_added")
+            {
+                if (prop.Value.ValueKind != JsonValueKind.Array)
+                    throw new SpecValidationException(
+                        "instruction_set_diff.instruction_sets_added must be an array.",
+                        filePath, "$.instruction_set_diff.instruction_sets_added");
+                int idx = 0;
+                foreach (var refEl in prop.Value.EnumerateArray())
+                {
+                    setsAdded.Add(ParseInstructionSetRef(refEl, filePath,
+                        $"$.instruction_set_diff.instruction_sets_added[{idx}]"));
+                    idx++;
+                }
+                continue;
+            }
             var setName = prop.Name;
             var setEl = prop.Value;
             if (setEl.ValueKind != JsonValueKind.Object)
@@ -556,7 +605,7 @@ public static class SpecLoader
 
             perSet[setName] = new PerSetDiff(additions, overrides, removals);
         }
-        return new InstructionSetDiff(perSet);
+        return new InstructionSetDiff(perSet, setsAdded);
     }
 
     /// <summary>
