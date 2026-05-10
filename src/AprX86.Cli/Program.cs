@@ -109,8 +109,10 @@ mem.LoadBinary(rom, entrySeg, entryOff);
 
 IX86CpuBackend cpu = backend switch
 {
-    "legacy" => new X86LegacyCpu(mem),
-    _        => throw new NotSupportedException($"backend '{backend}' not yet supported (phase 24.1 only ships legacy stub)"),
+    "legacy"     => new X86LegacyCpu(mem),
+    "json"       => new X86JsonCpu(mem, enableBlockJit: false),
+    "json-block" => new X86JsonCpu(mem, enableBlockJit: true),
+    _            => throw new NotSupportedException($"backend '{backend}' not supported. Valid: legacy / json / json-block."),
 };
 cpu.Reset();
 cpu.SetEntryPoint(entrySeg, entryOff);
@@ -172,7 +174,8 @@ static void PrintUsage()
 {
     Console.Error.WriteLine("usage:");
     Console.Error.WriteLine("  apr-x86 --rom=<path> [--entry-seg=<hex>] [--entry-off=<hex>]");
-    Console.Error.WriteLine("          [--max-cycles=N] [--backend=legacy] [--verbose]");
+    Console.Error.WriteLine("          [--max-cycles=N] [--backend=legacy|json|json-block] [--verbose]");
+    Console.Error.WriteLine("          [--screenshot=<path>]");
     Console.Error.WriteLine();
     Console.Error.WriteLine("  apr-x86 --tomharte=<.json[.gz]> [--tomharte-limit=N]");
     Console.Error.WriteLine("          [--tomharte-stop-on-fail] [--tomharte-max-failures=N]");
