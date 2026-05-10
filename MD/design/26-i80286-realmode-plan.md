@@ -232,7 +232,7 @@ Phase 27 (protected mode) 才完成上述。預計 Phase 27 自己會分 5-8 個
 
 | Sprint | Status | Commit | 完成日 |
 |---|---|---|---|
-| 26.1 i80286 spec | ✅ | (pending) | 2026-05-10 |
+| 26.1 i80286 spec | ✅ | `6b1e2d6` | 2026-05-10 |
 | 26.2 0F prefix | ⏳ pending | — | — |
 | 26.3 Emitters | ⏳ pending | — | — |
 | 26.4 State + MSW | ⏳ pending | — | — |
