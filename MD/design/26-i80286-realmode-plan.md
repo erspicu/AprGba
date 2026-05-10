@@ -235,7 +235,7 @@ Phase 27 (protected mode) 才完成上述。預計 Phase 27 自己會分 5-8 個
 | 26.1 i80286 spec | ✅ | `6b1e2d6` | 2026-05-10 |
 | 26.2 0F prefix (length only) | ✅ partial | `089b108` | 2026-05-10 |
 | 26.2b 0F decoder dispatch | ✅ | `19635de` | 2026-05-10 |
-| 26.3 SMSW emitter (1st observable 286) | ✅ partial | (pending) | 2026-05-10 |
+| 26.3 SMSW emitter (1st observable 286) | ✅ partial | `e5d023f` | 2026-05-10 |
 | 26.4 State + MSW | ⏳ pending | — | — |
 | 26.5 CLI + tests | ⏳ pending | — | — |
 | 26.6 Docs | ⏳ pending | — | — |
