@@ -1451,6 +1451,149 @@ public class X86JsonCpuTests
         Assert.Equal(0x0002, cpu.State.C.X);
     }
 
+    // ---------------- 24.6.6c — INC/DEC r16 + 80-83 ALU group ----------------
+
+    /// <summary>0x40 INC AX. AX=0x10 → 0x11. CF preserved from initial state.</summary>
+    [Fact]
+    public void Step_IncAx_PreservesCarryFlag()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x40, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x10; s.FlagC = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0011, cpu.State.A.X);
+        Assert.True(cpu.State.FlagC);   // CF preserved by INC
+        Assert.False(cpu.State.FlagZ);
+    }
+
+    /// <summary>INC overflow: 0x7FFF → 0x8000 sets OF=1 (signed overflow).</summary>
+    [Fact]
+    public void Step_IncBx_SignedOverflow()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x43, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x7FFF;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x8000, cpu.State.B.X);
+        Assert.True(cpu.State.FlagO);
+        Assert.True(cpu.State.FlagS);
+    }
+
+    /// <summary>0x48 DEC AX from 0x0001 → 0x0000. ZF=1, CF preserved.</summary>
+    [Fact]
+    public void Step_DecAx_ToZero()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x48, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x0001;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0000, cpu.State.A.X);
+        Assert.True(cpu.State.FlagZ);
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>
+    /// 0x83 C0 05 → ADD AX, sext(0x05). modrm=C0: mod=11 reg=000(=ADD) rm=000(=AX).
+    /// AX = 0x100 + 5 = 0x105.
+    /// </summary>
+    [Fact]
+    public void Step_AluGroup_AddAxSextImm8()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x83, 0xC0, 0x05, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x100;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0105, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// 0x83 C0 FF → ADD AX, sext(0xFF) = ADD AX, -1 = SUB AX, 1.
+    /// AX = 0x100 + (-1) = 0xFF.
+    /// </summary>
+    [Fact]
+    public void Step_AluGroup_AddAxNegativeImm()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x83, 0xC0, 0xFF, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x100;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x00FF, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// 0x80 F8 42 → CMP AL, 0x42 (modrm=F8: mod=11 reg=111=CMP rm=000=AL).
+    /// AL=0x42, CMP with 0x42 → ZF=1, AL unchanged.
+    /// </summary>
+    [Fact]
+    public void Step_AluGroup_CmpAlImm8_NoWriteback()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x80, 0xF8, 0x42, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x42;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x42, cpu.State.A.L);
+        Assert.True(cpu.State.FlagZ);
+    }
+
+    /// <summary>
+    /// 0x81 E3 0F 00 → AND BX, 0x000F (modrm=E3: mod=11 reg=100=AND rm=011=BX).
+    /// BX=0xABCD → 0x000D. AND clears CF/OF.
+    /// </summary>
+    [Fact]
+    public void Step_AluGroup_AndBxImm16()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x81, 0xE3, 0x0F, 0x00, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0xABCD; s.FlagC = true; s.FlagO = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x000D, cpu.State.B.X);
+        Assert.False(cpu.State.FlagC);
+        Assert.False(cpu.State.FlagO);
+    }
+
+    /// <summary>
+    /// 0x80 group with memory operand: 0x80 06 80 00 0A → ADD byte ptr [0x80], 0x0A
+    /// (modrm=06: mod=00 reg=000=ADD rm=110=disp16).
+    /// </summary>
+    [Fact]
+    public void Step_AluGroup_AddByteToMemory()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x80, 0x06, 0x80, 0x00, 0x0A, 0xF4 });
+        mem.WriteByte(0x80, 0x05);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0F, mem.ReadByte(0x80));
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

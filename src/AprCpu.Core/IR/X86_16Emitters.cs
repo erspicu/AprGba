@@ -92,6 +92,22 @@ public static class X86_16Emitters
         reg.Register(new X86ReadNamedGprEmitter());
         reg.Register(new X86WriteNamedGprEmitter());
 
+        // 24.6.6c — INC/DEC r16 (40-4F): same ALU flag rules as ADD/SUB
+        // but CF preserved (so a separate path with mask=0x08D4).
+        reg.Register(new X86IncReg16FieldEmitter());
+        reg.Register(new X86DecReg16FieldEmitter());
+
+        // 24.6.6c — 0x80-0x83 ALU r/m, imm group dispatcher. modrm.reg
+        // selects the ALU op at runtime (0=ADD..7=CMP); CMP skips the
+        // writeback step.
+        reg.Register(new X86AluGroupModrmImmW8Emitter());
+        reg.Register(new X86AluGroupModrmImmW16Emitter());
+
+        // 24.6.6c — fetch i8 from CS:IP, sign-extend to i16. Used by 0x83
+        // (ALU r/m16, sign-extended imm8) so the operand fits into the
+        // i16 ALU lane while preserving signed value.
+        reg.Register(new X86FetchImm8SextW16Emitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -2246,11 +2262,11 @@ internal static class X86AluHelpers
 
         if (isLogical)
         {
-            cf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
-                LLVMValueRef.CreateConstInt(i32, 0, false),
-                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_cf0");
-            of = cf;
-            af = cf;
+            // Logical ops force CF/OF/AF=0 — same fix as BuildAluW8.
+            var i1false = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, 0, false);
+            cf = i1false;
+            of = i1false;
+            af = i1false;
         }
         else if (isSub)
         {
@@ -2429,5 +2445,211 @@ internal sealed class X86WriteNamedGprEmitter : IMicroOpEmitter
             default:
                 throw new InvalidOperationException($"x86_write_named_gpr: unknown register '{name}'");
         }
+    }
+}
+
+// ============================================================================
+// 24.6.6c — INC/DEC r16 (0x40-0x47 INC, 0x48-0x4F DEC).
+//
+// Same flag rules as ADD/SUB(r,1) EXCEPT CF is preserved. Affected mask
+// is 0x08D4 (bits 2/4/6/7/11 — PF/AF/ZF/SF/OF) instead of the full ALU
+// 0x08D5. We compute via the existing ALU helper but then post-mask
+// FLAGS to restore the original CF.
+// ============================================================================
+
+internal static class X86IncDecHelpers
+{
+    /// <summary>
+    /// Read CF from FLAGS into i1, run BuildAluW16(add or sub, x, 1),
+    /// then restore CF in the resulting FLAGS storage. Returns the new
+    /// 16-bit value.
+    /// </summary>
+    public static LLVMValueRef BuildIncDecW16(
+        EmitContext ctx, string kind, LLVMValueRef x16, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var fPtr = ctx.GepStatusRegister("FLAGS");
+        var fOld = ctx.Builder.BuildLoad2(i16, fPtr, $"{label}_f_old");
+
+        var one16 = LLVMValueRef.CreateConstInt(i16, 1, false);
+        var r16 = X86AluHelpers.BuildAluW16(ctx, kind, x16, one16, $"{label}_alu");
+
+        // Re-read FLAGS (BuildAluW16 just stored the new value), then
+        // splice the old CF back in: new = (new & ~1) | (old & 1).
+        var fNew = ctx.Builder.BuildLoad2(i16, fPtr, $"{label}_f_new");
+        var newKeep = ctx.Builder.BuildAnd(fNew,
+            LLVMValueRef.CreateConstInt(i16, 0xFFFE, false), $"{label}_f_keep");
+        var oldCf = ctx.Builder.BuildAnd(fOld,
+            LLVMValueRef.CreateConstInt(i16, 0x0001, false), $"{label}_f_oldcf");
+        var merged = ctx.Builder.BuildOr(newKeep, oldCf, $"{label}_f_merged");
+        ctx.Builder.BuildStore(merged, fPtr);
+        return r16;
+    }
+}
+
+internal sealed class X86IncReg16FieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_inc_reg16_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var sel = ctx.Resolve(fieldName);
+        var endBB     = ctx.Function.AppendBasicBlock("inc_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("inc_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"inc_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            var r = X86_16Emitters.ReadGpr16(ctx, i, $"inc_{i}_v");
+            var nr = X86IncDecHelpers.BuildIncDecW16(ctx, "add", r, $"inc_{i}");
+            X86_16Emitters.WriteGpr16(ctx, i, nr);
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+internal sealed class X86DecReg16FieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_dec_reg16_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var i32 = LLVMTypeRef.Int32;
+
+        var sel = ctx.Resolve(fieldName);
+        var endBB     = ctx.Function.AppendBasicBlock("dec_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("dec_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"dec_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            var r = X86_16Emitters.ReadGpr16(ctx, i, $"dec_{i}_v");
+            var nr = X86IncDecHelpers.BuildIncDecW16(ctx, "sub", r, $"dec_{i}");
+            X86_16Emitters.WriteGpr16(ctx, i, nr);
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+// ============================================================================
+// 24.6.6c — 0x80-0x83 ALU r/m, imm group dispatcher. The opcode byte
+// selects width (8/16) and immediate width (8 or sign-extended 8 → 16);
+// modrm.reg selects the ALU op (0=ADD..7=CMP). All in one composite
+// emitter so the conditional writeback (skip for CMP) can be handled
+// inside an 8-arm runtime switch:
+//
+//   switch (modrm_reg) {
+//     case 0: result = ADD(lhs, rhs); modrm_store(result); break;
+//     case 1: result = OR (lhs, rhs); modrm_store(result); break;
+//     ...
+//     case 7: result = CMP(lhs, rhs);            // no writeback
+//   }
+//
+// JSON shape:
+//   { "op": "x86_alu_group_modrm_imm_w8" }   — 0x80, 0x82
+//   { "op": "x86_alu_group_modrm_imm_w16" }  — 0x81 (regular), 0x83 (sext)
+//
+// Spec convention: the lhs is preloaded by modrm_load_w{8,16} → "lhs"
+// and the rhs by fetch_imm{8,16} or sext-imm8 → "rhs" prior to this op.
+// ============================================================================
+
+internal sealed class X86AluGroupModrmImmW8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_alu_group_modrm_imm_w8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var lhs = ctx.Resolve("lhs");
+        var rhs = ctx.Resolve("rhs");
+        var sel = ctx.Resolve("modrm_reg");
+
+        var endBB     = ctx.Function.AppendBasicBlock("alug8_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("alug8_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"alug8_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        var kinds = new[] { "add", "or", "adc", "sbb", "and", "sub", "xor", "cmp" };
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            var r = X86AluHelpers.BuildAluW8(ctx, kinds[i], lhs, rhs, $"alug8_{kinds[i]}");
+            if (kinds[i] != "cmp")
+            {
+                X86ModRmMemHelpers.BuildStoreW8(ctx, r);
+            }
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+internal sealed class X86AluGroupModrmImmW16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_alu_group_modrm_imm_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var lhs = ctx.Resolve("lhs");
+        var rhs = ctx.Resolve("rhs");
+        var sel = ctx.Resolve("modrm_reg");
+
+        var endBB     = ctx.Function.AppendBasicBlock("alug16_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("alug16_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"alug16_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        var kinds = new[] { "add", "or", "adc", "sbb", "and", "sub", "xor", "cmp" };
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            var r = X86AluHelpers.BuildAluW16(ctx, kinds[i], lhs, rhs, $"alug16_{kinds[i]}");
+            if (kinds[i] != "cmp")
+            {
+                X86ModRmMemHelpers.BuildStoreW16(ctx, r);
+            }
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+internal sealed class X86FetchImm8SextW16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fetch_imm8_sext_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var outName = step.Raw.GetProperty("out").GetString()!;
+        var i16 = LLVMTypeRef.Int16;
+        var b = X86_16Emitters.FetchImm8(ctx, outName);
+        ctx.Values[outName] = ctx.Builder.BuildSExt(b, i16, $"{outName}_sext");
     }
 }

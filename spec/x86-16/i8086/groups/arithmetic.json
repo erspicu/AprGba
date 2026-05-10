@@ -323,6 +323,70 @@
         { "op": "x86_read_named_gpr",    "name": "AX", "out": "lhs" },
         { "op": "x86_fetch_imm16",       "out": "rhs" },
         { "op": "x86_alu_w16", "kind": "cmp", "lhs": "lhs", "rhs": "rhs" }
-    ]}]}
+    ]}]},
+
+    {
+      "name": "IncReg16",
+      "comment": "0x40-0x47 INC r16 — destination GPR encoded in low 3 bits. Updates PF/AF/ZF/SF/OF; CF preserved (unlike ADD r,1 which would touch CF).",
+      "fields": { "reg": "2:0" },
+      "mask": "0xF8", "match": "0x40",
+      "instructions": [{ "mnemonic": "INC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §INC", "cycles": { "form": "2" }, "steps": [
+        { "op": "x86_inc_reg16_field", "field": "reg" }
+      ]}]
+    },
+    {
+      "name": "DecReg16",
+      "comment": "0x48-0x4F DEC r16. Same flag rules as SUB r,1 except CF preserved.",
+      "fields": { "reg": "2:0" },
+      "mask": "0xF8", "match": "0x48",
+      "instructions": [{ "mnemonic": "DEC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §DEC", "cycles": { "form": "2" }, "steps": [
+        { "op": "x86_dec_reg16_field", "field": "reg" }
+      ]}]
+    },
+
+    {
+      "name": "AluRm8Imm8Group",
+      "comment": "0x80 ALU r/m8, imm8 — modrm.reg selects the ALU op (0=ADD, 1=OR, 2=ADC, 3=SBB, 4=AND, 5=SUB, 6=XOR, 7=CMP). Composite emitter handles the runtime dispatch + conditional writeback (CMP skips).",
+      "fields": {}, "mask": "0xFF", "match": "0x80",
+      "instructions": [{ "mnemonic": "ALU8", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADD/OR/ADC/SBB/AND/SUB/XOR/CMP", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8", "out": "lhs" },
+        { "op": "x86_fetch_imm8",    "out": "rhs" },
+        { "op": "x86_alu_group_modrm_imm_w8" }
+      ]}]
+    },
+    {
+      "name": "AluRm16Imm16Group",
+      "comment": "0x81 ALU r/m16, imm16 — same dispatch as 0x80 with full 16-bit imm.",
+      "fields": {}, "mask": "0xFF", "match": "0x81",
+      "instructions": [{ "mnemonic": "ALU16", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADD/OR/ADC/SBB/AND/SUB/XOR/CMP", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16", "out": "lhs" },
+        { "op": "x86_fetch_imm16",    "out": "rhs" },
+        { "op": "x86_alu_group_modrm_imm_w16" }
+      ]}]
+    },
+    {
+      "name": "AluRm8Imm8GroupAlias",
+      "comment": "0x82 — alias of 0x80 (Intel docs note 0x82 is identical to 0x80; 8086 silicon decodes both). Same steps.",
+      "fields": {}, "mask": "0xFF", "match": "0x82",
+      "instructions": [{ "mnemonic": "ALU8", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §0x82-alias", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8", "out": "lhs" },
+        { "op": "x86_fetch_imm8",    "out": "rhs" },
+        { "op": "x86_alu_group_modrm_imm_w8" }
+      ]}]
+    },
+    {
+      "name": "AluRm16Imm8SextGroup",
+      "comment": "0x83 ALU r/m16, sign-extended imm8 — saves a byte in encoded size when the immediate fits in a signed byte. Otherwise identical to 0x81.",
+      "fields": {}, "mask": "0xFF", "match": "0x83",
+      "instructions": [{ "mnemonic": "ALU16", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §0x83-sext", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",     "out": "lhs" },
+        { "op": "x86_fetch_imm8_sext_w16", "out": "rhs" },
+        { "op": "x86_alu_group_modrm_imm_w16" }
+      ]}]
+    }
   ]
 }
