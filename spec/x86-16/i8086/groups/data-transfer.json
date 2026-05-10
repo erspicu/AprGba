@@ -135,6 +135,178 @@
           ]
         }
       ]
+    },
+
+    {
+      "name":  "MovRm8Imm8",
+      "comment": "0xC6 /0 MOV r/m8, imm8 — Intel reserves the reg field as /0 but 8086 silicon ignores it (validated by Tom Harte). Steps reuse modrm_compute_ea + modrm_store_w8 with a fetched imm8 value.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0xC6",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "4" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_fetch_imm8",       "out": "imm" },
+            { "op": "x86_modrm_store_w8",   "in": ["imm"] }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovRm16Imm16",
+      "comment": "0xC7 /0 MOV r/m16, imm16 — same as 0xC6 but 16-bit. Reg field ignored.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0xC7",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "4" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_fetch_imm16",      "out": "imm" },
+            { "op": "x86_modrm_store_w16",  "in": ["imm"] }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovAlMoffs8",
+      "comment": "0xA0 MOV AL, moffs8 — fast path for absolute-address byte read into AL. Default segment DS, segment-override prefix applies.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0xA0",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "10" },
+          "steps": [
+            { "op": "x86_mov_acc_moffs_load_w8" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovAxMoffs16",
+      "comment": "0xA1 MOV AX, moffs16 — word-width counterpart of A0. The disp is still 16-bit; the suffix refers to data width.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0xA1",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "10" },
+          "steps": [
+            { "op": "x86_mov_acc_moffs_load_w16" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovMoffs8Al",
+      "comment": "0xA2 MOV moffs8, AL — store AL byte into [seg:disp16].",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0xA2",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "10" },
+          "steps": [
+            { "op": "x86_mov_acc_moffs_store_w8" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovMoffs16Ax",
+      "comment": "0xA3 MOV moffs16, AX — store AX word into [seg:disp16].",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0xA3",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "10" },
+          "steps": [
+            { "op": "x86_mov_acc_moffs_store_w16" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovRm16Sreg",
+      "comment": "0x8C MOV r/m16, sreg — modrm.reg encodes the SOURCE segment register (000=ES, 001=CS, 010=SS, 011=DS); modrm.rm is the destination r/m16 word.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0x8C",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "2" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_read_sreg_field",  "field": "modrm_reg", "out": "src" },
+            { "op": "x86_modrm_store_w16",  "in": ["src"] }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name":  "MovSregRm16",
+      "comment": "0x8E MOV sreg, r/m16 — modrm.reg encodes the DESTINATION segment register; modrm.rm is the source r/m16. Writing CS via reg=001 has undefined behaviour per Intel docs; we treat as a normal segment-reg store for determinism.",
+      "fields": {},
+      "mask":  "0xFF",
+      "match": "0x8E",
+      "instructions": [
+        {
+          "mnemonic":   "MOV",
+          "since":      "Intel8086",
+          "writes_pc":  "never",
+          "manual_ref": "Intel SDM Vol.2 §MOV",
+          "cycles":     { "form": "2" },
+          "steps": [
+            { "op": "x86_fetch_modrm" },
+            { "op": "x86_modrm_compute_ea" },
+            { "op": "x86_modrm_load_w16",     "out": "src" },
+            { "op": "x86_write_sreg_field",   "field": "modrm_reg", "in": ["src"] }
+          ]
+        }
+      ]
     }
 
   ]

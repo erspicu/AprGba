@@ -632,6 +632,184 @@ public class X86JsonCpuTests
         Assert.Equal(0xABCD, cpu.State.A.X);
     }
 
+    // ---------------- 24.6.5e — MOV r/m,imm (C6/C7) ----------------
+
+    /// <summary>
+    /// 0xC7 06 50 00 EF BE  →  mov word ptr [0x0050], 0xBEEF
+    /// (modrm=06: mod=00 reg=000 rm=110 → direct disp16; reg field is
+    /// /0 placeholder, ignored by silicon)
+    /// </summary>
+    [Fact]
+    public void Step_MovWordPtrDirect_Imm16()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xC7, 0x06, 0x50, 0x00, 0xEF, 0xBE, 0xF4 });
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xEF, mem.ReadByte(0x50));
+        Assert.Equal(0xBE, mem.ReadByte(0x51));
+    }
+
+    /// <summary>
+    /// 0xC6 47 02 7F  →  mov byte ptr [bx+0x02], 0x7F
+    /// (modrm=47: mod=01 reg=000 rm=111 → BX+disp8)
+    /// </summary>
+    [Fact]
+    public void Step_MovBytePtrBxDisp8_Imm8()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xC6, 0x47, 0x02, 0x7F, 0xF4 });
+        var s = cpu.State;
+        s.B.X = 0x80;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x7F, mem.ReadByte(0x82));
+    }
+
+    /// <summary>
+    /// 0xC6 mod=11 reg-direct: mov bl, 0x42  →  C6 C3 42
+    /// modrm=C3: mod=11 reg=000 rm=011 (BL). Should write through reg path.
+    /// </summary>
+    [Fact]
+    public void Step_MovC6_RegDirect_BL()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xC6, 0xC3, 0x42, 0xF4 });
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x42, cpu.State.B.L);
+    }
+
+    // ---------------- 24.6.5e — MOV moffs (A0-A3) ----------------
+
+    /// <summary>0xA0 50 00 → mov al, [0x0050]</summary>
+    [Fact]
+    public void Step_MovAlMoffs8()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xA0, 0x50, 0x00, 0xF4 });
+        mem.WriteByte(0x50, 0xAB);
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xAB, cpu.State.A.L);
+    }
+
+    /// <summary>0xA1 80 00 → mov ax, [0x0080]</summary>
+    [Fact]
+    public void Step_MovAxMoffs16()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xA1, 0x80, 0x00, 0xF4 });
+        mem.WriteByte(0x80, 0x34);
+        mem.WriteByte(0x81, 0x12);
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x1234, cpu.State.A.X);
+    }
+
+    /// <summary>0xA2 60 00 → mov [0x0060], al</summary>
+    [Fact]
+    public void Step_MovMoffs8Al()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xB0, 0x99, 0xA2, 0x60, 0x00, 0xF4 });
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x99, mem.ReadByte(0x60));
+    }
+
+    /// <summary>0xA3 70 00 → mov [0x0070], ax (after loading AX with imm)</summary>
+    [Fact]
+    public void Step_MovMoffs16Ax()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xB8, 0xCD, 0xAB, 0xA3, 0x70, 0x00, 0xF4 });
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xCD, mem.ReadByte(0x70));
+        Assert.Equal(0xAB, mem.ReadByte(0x71));
+    }
+
+    /// <summary>
+    /// Moffs honours segment override prefix: 26 A1 50 00 → mov ax, es:[0x50]
+    /// </summary>
+    [Fact]
+    public void Step_MovMoffs_SegOverride()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0x26, 0xA1, 0x50, 0x00, 0xF4 });
+        var s = cpu.State;
+        s.ES = 0x1000;
+        s.DS = 0x2000;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+        mem.WriteByte(0x10050, 0x21);
+        mem.WriteByte(0x10051, 0x43);
+        mem.WriteByte(0x20050, 0x99);   // wrong-segment trap
+        mem.WriteByte(0x20051, 0x99);
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x4321, cpu.State.A.X);
+    }
+
+    // ---------------- 24.6.5e — MOV sreg (8C/8E) ----------------
+
+    /// <summary>
+    /// 0x8E D8 → mov ds, ax. Pre-load AX=0x1234 then move to DS.
+    /// </summary>
+    [Fact]
+    public void Step_MovSregFromReg_DsFromAx()
+    {
+        // mov ax, 0x1234   B8 34 12
+        // mov ds, ax       8E D8  (modrm=D8: mod=11 reg=011=DS rm=000=AX)
+        // hlt              F4
+        var (cpu, _) = Setup(new byte[] { 0xB8, 0x34, 0x12, 0x8E, 0xD8, 0xF4 });
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x1234, cpu.State.DS);
+    }
+
+    /// <summary>
+    /// 0x8C C0 → mov ax, es. Pre-set ES=0xBEEF then read into AX.
+    /// modrm=C0: mod=11 reg=000=ES rm=000=AX.
+    /// </summary>
+    [Fact]
+    public void Step_MovRegFromSreg_AxFromEs()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x8C, 0xC0, 0xF4 });
+        var s = cpu.State;
+        s.ES = 0xBEEF;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xBEEF, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// Round-trip: store and reload all 4 sreg via temporary (proves all
+    /// 4 sreg encodings 00..11 work in both directions).
+    /// </summary>
+    [Fact]
+    public void Step_AllFourSregs_RoundTripViaAx()
+    {
+        // mov ax, 0x1111  B8 11 11
+        // mov es, ax      8E C0  (reg=000=ES)
+        // mov ax, 0x3333  B8 33 33
+        // mov ss, ax      8E D0  (reg=010=SS)
+        // mov ax, 0x4444  B8 44 44
+        // mov ds, ax      8E D8  (reg=011=DS)
+        // hlt             F4
+        var (cpu, _) = Setup(new byte[]
+        {
+            0xB8, 0x11, 0x11, 0x8E, 0xC0,
+            0xB8, 0x33, 0x33, 0x8E, 0xD0,
+            0xB8, 0x44, 0x44, 0x8E, 0xD8,
+            0xF4
+        });
+        for (int i = 0; i < 16 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x1111, cpu.State.ES);
+        Assert.Equal(0x3333, cpu.State.SS);
+        Assert.Equal(0x4444, cpu.State.DS);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

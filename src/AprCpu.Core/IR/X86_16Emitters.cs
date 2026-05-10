@@ -54,6 +54,16 @@ public static class X86_16Emitters
         reg.Register(new X86ModRmStore8Emitter());
         reg.Register(new X86ModRmStore16Emitter());
 
+        // 24.6.5e — moffs (direct disp16) MOV forms (A0-A3) + sreg field
+        // emitters (8C/8E). C6/C7 (MOV r/m, imm) reuse existing fetch_imm
+        // + modrm_store ops, no new emitter needed.
+        reg.Register(new X86MovAccMoffsLoad8Emitter());
+        reg.Register(new X86MovAccMoffsLoad16Emitter());
+        reg.Register(new X86MovAccMoffsStore8Emitter());
+        reg.Register(new X86MovAccMoffsStore16Emitter());
+        reg.Register(new X86ReadSregFieldEmitter());
+        reg.Register(new X86WriteSregFieldEmitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -299,6 +309,70 @@ public static class X86_16Emitters
         var off1 = ctx.Builder.BuildAdd(off16,
             LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_off1");
         SegmentedWrite8(ctx, seg16, off1, hi, $"{label}_hiW");
+    }
+
+    /// <summary>
+    /// Resolve a segment register subject to 24.6.5d's SEG_OVERRIDE
+    /// state slot: if the override is active (slot != 0xFF), pick the
+    /// segment named by the override id (0=ES, 1=CS, 2=SS, 3=DS);
+    /// otherwise load <paramref name="defaultSegName"/>.
+    ///
+    /// Used by moffs forms (A0-A3) and any other emitter that needs an
+    /// override-aware segment without going through the full ModR/M
+    /// machinery. The EA emitter (modrm_compute_ea) inlines the same
+    /// logic for its tail filter.
+    /// </summary>
+    internal static LLVMValueRef LoadDefaultOrOverrideSegment(
+        EmitContext ctx, string defaultSegName, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var defaultSeg = LoadSeg16(ctx, defaultSegName, $"{label}_def");
+
+        var ovrPtr = ctx.GepStatusRegister("SEG_OVERRIDE");
+        var ovr8 = ctx.Builder.BuildLoad2(i8, ovrPtr, $"{label}_ovr8");
+        var ovr32 = ctx.Builder.BuildZExt(ovr8, i32, $"{label}_ovr32");
+        var noOverride = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, ovr32,
+            LLVMValueRef.CreateConstInt(i32, 0xFF, false), $"{label}_no_ovr");
+
+        var applyBB = ctx.Function.AppendBasicBlock($"{label}_apply");
+        var skipBB  = ctx.Function.AppendBasicBlock($"{label}_skip");
+        var endBB   = ctx.Function.AppendBasicBlock($"{label}_end");
+        ctx.Builder.BuildCondBr(noOverride, skipBB, applyBB);
+
+        // Apply path: 4-arm switch on override id.
+        ctx.Builder.PositionAtEnd(applyBB);
+        var defBB = ctx.Function.AppendBasicBlock($"{label}_def_arm");
+        var arms = new LLVMBasicBlockRef[4];
+        var vals = new LLVMValueRef[4];
+        for (int i = 0; i < 4; i++) arms[i] = ctx.Function.AppendBasicBlock($"{label}_arm_{i}");
+        var sw = ctx.Builder.BuildSwitch(ovr32, defBB, 4);
+        for (int i = 0; i < 4; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+        var names = new[] { "ES", "CS", "SS", "DS" };
+        for (int i = 0; i < 4; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            vals[i] = LoadSeg16(ctx, names[i], $"{label}_v_{i}");
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defBB);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(skipBB);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i16, label);
+        var pIns = new LLVMValueRef[6];
+        var pBlk = new LLVMBasicBlockRef[6];
+        for (int i = 0; i < 4; i++) { pIns[i] = vals[i]; pBlk[i] = arms[i]; }
+        pIns[4] = defaultSeg; pBlk[4] = defBB;
+        pIns[5] = defaultSeg; pBlk[5] = skipBB;
+        phi.AddIncoming(pIns, pBlk, 6);
+        return phi;
     }
 }
 
@@ -1185,5 +1259,176 @@ internal sealed class X86ModRmStore16Emitter : IMicroOpEmitter
         var valueName = inArr[0].GetString()!;
         var v = ctx.Resolve(valueName);
         X86ModRmMemHelpers.BuildStoreW16(ctx, v);
+    }
+}
+
+// ============================================================================
+// 24.6.5e — MOV moffs (A0-A3): direct disp16 to/from accumulator (AL/AX).
+//
+// Encoding: opcode + 16-bit little-endian displacement; default segment
+// is DS, but a 24.6.5d segment override prefix can redirect it. No
+// ModR/M byte involved — this is the "fast path" for absolute-address
+// memory access that compilers used to emit a lot for global variables
+// before more flexible addressing modes became common.
+//
+//   0xA0   MOV AL, moffs8     (read  byte from [seg:disp16] into AL)
+//   0xA1   MOV AX, moffs16    (read  word from [seg:disp16] into AX)
+//   0xA2   MOV moffs8, AL     (write AL into [seg:disp16])
+//   0xA3   MOV moffs16, AX    (write AX into [seg:disp16])
+//
+// The "8/16" suffix in moffs8/moffs16 refers to the WIDTH of the data
+// being moved, NOT the displacement — the displacement is always 16-bit.
+//
+// JSON shape (no args): { "op": "x86_mov_acc_moffs_load_w8" }, etc.
+// ============================================================================
+
+internal sealed class X86MovAccMoffsLoad8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_mov_acc_moffs_load_w8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var disp = X86_16Emitters.FetchImm16(ctx, "moffs_disp");
+        var seg  = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "moffs_seg");
+        var data = X86_16Emitters.SegmentedRead8(ctx, seg, disp, "moffs_v");
+        X86_16Emitters.WriteGpr8(ctx, 0, data);   // AL = byte 0 of GPR[0] (AX)
+    }
+}
+
+internal sealed class X86MovAccMoffsLoad16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_mov_acc_moffs_load_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var disp = X86_16Emitters.FetchImm16(ctx, "moffs_disp");
+        var seg  = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "moffs_seg");
+        var data = X86_16Emitters.SegmentedRead16(ctx, seg, disp, "moffs_v");
+        X86_16Emitters.WriteGpr16(ctx, 0, data);  // AX = GPR[0]
+    }
+}
+
+internal sealed class X86MovAccMoffsStore8Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_mov_acc_moffs_store_w8";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var disp = X86_16Emitters.FetchImm16(ctx, "moffs_disp");
+        var seg  = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "moffs_seg");
+        var data = X86_16Emitters.ReadGpr8(ctx, 0, "moffs_al");
+        X86_16Emitters.SegmentedWrite8(ctx, seg, disp, data, "moffs_w");
+    }
+}
+
+internal sealed class X86MovAccMoffsStore16Emitter : IMicroOpEmitter
+{
+    public string OpName => "x86_mov_acc_moffs_store_w16";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var disp = X86_16Emitters.FetchImm16(ctx, "moffs_disp");
+        var seg  = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "moffs_seg");
+        var data = X86_16Emitters.ReadGpr16(ctx, 0, "moffs_ax");
+        X86_16Emitters.SegmentedWrite16(ctx, seg, disp, data, "moffs_w");
+    }
+}
+
+// ============================================================================
+// 24.6.5e — MOV sreg (8C/8E): segment register read/write via ModR/M.
+//
+// The 3-bit ModR/M reg field holds a sreg index in these forms (only
+// values 0..3 are valid — ES/CS/SS/DS — though silicon also accepts
+// 4..7 with implementation-defined behaviour; we treat them as no-op).
+//
+//   0x8C  MOV r/m16, sreg     reg → r/m16
+//   0x8E  MOV sreg, r/m16     r/m16 → reg
+//
+// Writing CS via 0x8E reg=001 has undefined silicon behaviour (different
+// chips behave differently — some reload CS, some ignore). We treat it
+// as a normal segment write to keep behaviour deterministic; software
+// that uses this is malformed.
+//
+// JSON shape:
+//   x86_read_sreg_field   field=<name>  out=<name>      → i16
+//   x86_write_sreg_field  field=<name>  in=[<name>]
+// ============================================================================
+
+internal sealed class X86ReadSregFieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_read_sreg_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var outName   = step.Raw.GetProperty("out").GetString()!;
+
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var sel = ctx.Resolve(fieldName);
+
+        var endBB     = ctx.Function.AppendBasicBlock($"rsreg_{outName}_end");
+        var defaultBB = ctx.Function.AppendBasicBlock($"rsreg_{outName}_default");
+        var arms      = new LLVMBasicBlockRef[4];
+        var armVals   = new LLVMValueRef[4];
+        for (int i = 0; i < 4; i++) arms[i] = ctx.Function.AppendBasicBlock($"rsreg_{outName}_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 4);
+        for (int i = 0; i < 4; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        var names = new[] { "ES", "CS", "SS", "DS" };
+        for (int i = 0; i < 4; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            armVals[i] = X86_16Emitters.LoadSeg16(ctx, names[i], $"rsreg_{outName}_{i}_v");
+            ctx.Builder.BuildBr(endBB);
+        }
+        // Default arm: invalid sreg encoding (4..7). Return 0 — will not
+        // happen with well-formed software.
+        ctx.Builder.PositionAtEnd(defaultBB);
+        var defVal = LLVMValueRef.CreateConstInt(i16, 0, false);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i16, outName);
+        var inVals   = new LLVMValueRef[5];
+        var inBlocks = new LLVMBasicBlockRef[5];
+        for (int i = 0; i < 4; i++) { inVals[i] = armVals[i]; inBlocks[i] = arms[i]; }
+        inVals[4] = defVal; inBlocks[4] = defaultBB;
+        phi.AddIncoming(inVals, inBlocks, 5);
+
+        ctx.Values[outName] = phi;
+    }
+}
+
+internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_write_sreg_field";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var fieldName = step.Raw.GetProperty("field").GetString()!;
+        var inArr     = step.Raw.GetProperty("in");
+        var valueName = inArr[0].GetString()!;
+
+        var i32 = LLVMTypeRef.Int32;
+        var sel   = ctx.Resolve(fieldName);
+        var value = ctx.Resolve(valueName);
+
+        var endBB     = ctx.Function.AppendBasicBlock("wsreg_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("wsreg_default");
+        var arms = new LLVMBasicBlockRef[4];
+        for (int i = 0; i < 4; i++) arms[i] = ctx.Function.AppendBasicBlock($"wsreg_{i}");
+
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 4);
+        for (int i = 0; i < 4; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        var names = new[] { "ES", "CS", "SS", "DS" };
+        for (int i = 0; i < 4; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            var p = ctx.GepStatusRegister(names[i]);
+            ctx.Builder.BuildStore(value, p);
+            ctx.Builder.BuildBr(endBB);
+        }
+        // Default: invalid encoding — silently no-op.
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
     }
 }
