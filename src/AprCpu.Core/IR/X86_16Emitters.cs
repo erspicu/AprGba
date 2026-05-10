@@ -1256,19 +1256,86 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
         ctx.Values["ea_off"] = eaOff;
         ctx.Values["ea_seg"] = eaSeg;
 
-        // Sprint 27.10d wave 4 — emit ea_base alongside ea_seg.
-        // Currently ea_base = (ea_seg as i32) << 4 (real-mode shift), so
-        // it produces the same linear-base as the legacy
-        // SegmentedLinear(by-value) path. Wave 5 will replace this with
-        // a runtime switch on the resolved segment to load the correct
-        // <seg>_BASE cache slot when the spec declares them (i80286+);
-        // until then ea_base is a no-op alias for shifted ea_seg, which
-        // means downstream consumers can already migrate to "use ea_base
-        // directly" without any behavioral change.
-        var eaSegZ = ctx.Builder.BuildZExt(eaSeg, i32, "ea_base_segz");
-        var eaBase = ctx.Builder.BuildShl(eaSegZ,
-            LLVMValueRef.CreateConstInt(i32, 4, false), "ea_base");
-        ctx.Values["ea_base"] = eaBase;
+        // Sprint 27.10d wave 5 — ea_base computation:
+        //   when the spec declares <seg>_BASE cache slots (i80286+) AND
+        //   a segment override prefix is active, load the matching
+        //   <seg>_BASE from the cache. Otherwise fall back to
+        //   (ea_seg << 4) shift — same as wave 4's behavior.
+        // In real mode, <seg>_BASE == visible_seg << 4 (Reset wires this),
+        // so cache and shift produce identical results. The interesting
+        // case is i80286 protected mode where descriptor cache holds a
+        // base that DIFFERS from selector*16; consumers reading ea_base
+        // automatically pick up the descriptor base.
+        bool hasCacheSlots = false;
+        foreach (var sr in ctx.Layout.RegisterFile.Status)
+        {
+            if (sr.Name == "ES_BASE") { hasCacheSlots = true; break; }
+        }
+
+        if (!hasCacheSlots)
+        {
+            // i8086 / i80186 — no cache, just shift.
+            var eaSegZShift = ctx.Builder.BuildZExt(eaSeg, i32, "ea_base_segz");
+            var eaBaseShift = ctx.Builder.BuildShl(eaSegZShift,
+                LLVMValueRef.CreateConstInt(i32, 4, false), "ea_base");
+            ctx.Values["ea_base"] = eaBaseShift;
+            return;
+        }
+
+        // i80286+ — peek at SEG_OVERRIDE again to drive cache lookup.
+        var ovrPtr2 = ctx.GepStatusRegister("SEG_OVERRIDE");
+        var ovr8b = ctx.Builder.BuildLoad2(i8, ovrPtr2, "w5_ovr8");
+        var ovr32b = ctx.Builder.BuildZExt(ovr8b, i32, "w5_ovr32");
+        var noOvr2 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, ovr32b,
+            LLVMValueRef.CreateConstInt(i32, 0xFF, false), "w5_no_ovr");
+
+        var w5CacheBB = ctx.Function.AppendBasicBlock("ea_base_cache");
+        var w5ShiftBB = ctx.Function.AppendBasicBlock("ea_base_shift");
+        var w5JoinBB  = ctx.Function.AppendBasicBlock("ea_base_join");
+        ctx.Builder.BuildCondBr(noOvr2, w5ShiftBB, w5CacheBB);
+
+        // Cache path — 4-arm switch on override value (0..3 = ES/CS/SS/DS).
+        ctx.Builder.PositionAtEnd(w5CacheBB);
+        var w5CacheDefBB = ctx.Function.AppendBasicBlock("ea_base_cache_def");
+        var w5Arms = new LLVMBasicBlockRef[4];
+        var w5Vals = new LLVMValueRef[4];
+        for (int i = 0; i < 4; i++) w5Arms[i] = ctx.Function.AppendBasicBlock($"ea_base_cache_{i}");
+        var w5Sw = ctx.Builder.BuildSwitch(ovr32b, w5CacheDefBB, 4);
+        for (int i = 0; i < 4; i++)
+            w5Sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), w5Arms[i]);
+
+        var w5SegMap = new[] { "ES", "CS", "SS", "DS" };
+        for (int i = 0; i < 4; i++)
+        {
+            ctx.Builder.PositionAtEnd(w5Arms[i]);
+            var basePtr = ctx.GepStatusRegister(w5SegMap[i] + "_BASE");
+            w5Vals[i] = ctx.Builder.BuildLoad2(i32, basePtr, $"ea_base_v_{i}");
+            ctx.Builder.BuildBr(w5JoinBB);
+        }
+        ctx.Builder.PositionAtEnd(w5CacheDefBB);
+        ctx.Builder.BuildBr(w5JoinBB);
+
+        // Shift path — fallback when no override prefix (default seg case
+        // is handled by wave-6+ when EA-compute tracks segIdx through the
+        // rm switch too; today we still use (ea_seg << 4) which equals
+        // the cache value in real mode and matches existing behavior in
+        // protected mode-without-override).
+        ctx.Builder.PositionAtEnd(w5ShiftBB);
+        var w5SegZ = ctx.Builder.BuildZExt(eaSeg, i32, "ea_base_shift_segz");
+        var w5Shifted = ctx.Builder.BuildShl(w5SegZ,
+            LLVMValueRef.CreateConstInt(i32, 4, false), "ea_base_shift_v");
+        ctx.Builder.BuildBr(w5JoinBB);
+
+        // Join phi (4 cache arms + cache-default + shift = 6 incoming).
+        ctx.Builder.PositionAtEnd(w5JoinBB);
+        var eaBaseJoin = ctx.Builder.BuildPhi(i32, "ea_base");
+        var jIns = new LLVMValueRef[6];
+        var jBlk = new LLVMBasicBlockRef[6];
+        for (int i = 0; i < 4; i++) { jIns[i] = w5Vals[i]; jBlk[i] = w5Arms[i]; }
+        jIns[4] = w5Shifted; jBlk[4] = w5ShiftBB;
+        jIns[5] = LLVMValueRef.CreateConstInt(i32, 0, false); jBlk[5] = w5CacheDefBB;
+        eaBaseJoin.AddIncoming(jIns, jBlk, 6);
+        ctx.Values["ea_base"] = eaBaseJoin;
     }
 }
 
