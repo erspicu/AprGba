@@ -2889,6 +2889,101 @@ public class X86JsonCpuTests
         Assert.Equal(0xCA, mem.ReadByte(0x01FF));
     }
 
+    // ---------------- 24.6.7f — BCD ops ----------------
+
+    /// <summary>
+    /// DAA after add: AL=0x15 (BCD 15) — already valid BCD, no adjust.
+    /// AL stays 0x15, CF=0, AF=0.
+    /// </summary>
+    [Fact]
+    public void Step_Daa_AlreadyValid_NoAdjust()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x27, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x15;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x15, cpu.State.A.L);
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>
+    /// DAA: AL=0x0A (low nibble > 9) → AL = 0x0A + 6 = 0x10. AF=1.
+    /// </summary>
+    [Fact]
+    public void Step_Daa_AdjustsLowNibble()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x27, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x0A;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x10, cpu.State.A.L);
+        Assert.True(cpu.State.FlagA);
+    }
+
+    /// <summary>
+    /// AAA with AL=0x0F → AL = (AL+6)&0x0F = 0x05; AH += 1; AF=1, CF=1.
+    /// </summary>
+    [Fact]
+    public void Step_Aaa_BasicCarry()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x37, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x0F;
+        s.A.H = 0x00;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x05, cpu.State.A.L);
+        Assert.Equal(0x01, cpu.State.A.H);
+        Assert.True(cpu.State.FlagA);
+        Assert.True(cpu.State.FlagC);
+    }
+
+    /// <summary>
+    /// AAM 0x0A: AX=0x37 (AL=0x37=55) → AH=55/10=5, AL=55%10=5 → AX=0x0505.
+    /// </summary>
+    [Fact]
+    public void Step_Aam_BcdSplit()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD4, 0x0A, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 55;
+        s.A.H = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0505, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// AAD 0x0A: AX=0x0307 → AL = (3*10) + 7 = 37 = 0x25; AH = 0.
+    /// </summary>
+    [Fact]
+    public void Step_Aad_BcdMerge()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xD5, 0x0A, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x0307;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0025, cpu.State.A.X);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

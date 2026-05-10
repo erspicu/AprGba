@@ -83,6 +83,19 @@
         { "op": "x86_modrm_load_w16", "out": "lhs" },
         { "op": "x86_ff_group_dispatch" }
       ]}]
-    }
+    },
+
+    { "name": "Daa", "fields": {}, "mask": "0xFF", "match": "0x27",
+      "instructions": [{ "mnemonic": "DAA", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §DAA", "cycles": { "form": "4" }, "steps": [{ "op": "x86_daa" }] }] },
+    { "name": "Das", "fields": {}, "mask": "0xFF", "match": "0x2F",
+      "instructions": [{ "mnemonic": "DAS", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §DAS", "cycles": { "form": "4" }, "steps": [{ "op": "x86_das" }] }] },
+    { "name": "Aaa", "fields": {}, "mask": "0xFF", "match": "0x37",
+      "instructions": [{ "mnemonic": "AAA", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AAA", "cycles": { "form": "4" }, "steps": [{ "op": "x86_aaa" }] }] },
+    { "name": "Aas", "fields": {}, "mask": "0xFF", "match": "0x3F",
+      "instructions": [{ "mnemonic": "AAS", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AAS", "cycles": { "form": "4" }, "steps": [{ "op": "x86_aas" }] }] },
+    { "name": "Aam", "fields": {}, "mask": "0xFF", "match": "0xD4",
+      "instructions": [{ "mnemonic": "AAM", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AAM", "cycles": { "form": "83" }, "steps": [{ "op": "x86_aam" }] }] },
+    { "name": "Aad", "fields": {}, "mask": "0xFF", "match": "0xD5",
+      "instructions": [{ "mnemonic": "AAD", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AAD", "cycles": { "form": "60" }, "steps": [{ "op": "x86_aad" }] }] }
   ]
 }

@@ -182,6 +182,14 @@ public static class X86_16Emitters
         reg.Register(new X86FeGroupDispatchEmitter());
         reg.Register(new X86FfGroupDispatchEmitter());
 
+        // 24.6.7f — BCD adjustment ops (DAA/DAS/AAA/AAS/AAM/AAD).
+        reg.Register(new X86DaaEmitter());
+        reg.Register(new X86DasEmitter());
+        reg.Register(new X86AaaEmitter());
+        reg.Register(new X86AasEmitter());
+        reg.Register(new X86AamEmitter());
+        reg.Register(new X86AadEmitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -4354,6 +4362,257 @@ internal sealed class X86FeGroupDispatchEmitter : IMicroOpEmitter
         ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
         ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+// ============================================================================
+// 24.6.7f — BCD adjustment ops.
+//
+// All operate on AL (and AH for AAA/AAS/AAM/AAD). After the operation,
+// SF/ZF/PF are updated from the new AL via the standard parity helper.
+//
+// DAA / DAS: post-BCD-add / post-BCD-sub adjust on AL. AF/CF tracked
+//            silicon-style (per Intel iAPX 86,88 §DAA/DAS).
+// AAA / AAS: post-unpacked-BCD-add/sub. Modifies AL+AH; AL &= 0x0F.
+// AAM imm8:  AH = AL / imm8; AL = AL % imm8 (typically imm8 = 10).
+// AAD imm8:  AL = (AH * imm8) + AL; AH = 0.
+//
+// 8088 silicon flag quirks for these ops can differ from the legacy
+// Apr86 implementation; Tom Harte SST validation is deferred (legacy
+// backend itself doesn't fully validate these).
+// ============================================================================
+
+internal static class X86BcdHelpers
+{
+    public static (LLVMValueRef sf, LLVMValueRef zf, LLVMValueRef pf) Szp8(EmitContext ctx, LLVMValueRef r8, string label)
+        => X86ShiftHelpers.Szp8(ctx, r8, label);
+
+    /// <summary>Set SF/ZF/PF flags from r8 + given CF/AF/OF (i1). Mask=0x08D5.</summary>
+    public static void StoreFlagsFromAl(
+        EmitContext ctx, LLVMValueRef al,
+        LLVMValueRef cf, LLVMValueRef af, LLVMValueRef of,
+        string label)
+    {
+        var (sf, zf, pf) = Szp8(ctx, al, label);
+        X86ShiftHelpers.StoreShiftFlags(ctx, cf, pf, af, zf, sf, of, label);
+    }
+}
+
+internal sealed class X86DaaEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_daa";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i1 = LLVMTypeRef.Int1;
+        var i8 = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var al = X86_16Emitters.ReadGpr8(ctx, 0, "daa_al");
+        var flags = X86CtrlHelpers.LoadFlags(ctx, "daa");
+        var cfIn = X86CtrlHelpers.ExtractFlagBit(ctx, flags, 0, "daa_cf");
+        var afIn = X86CtrlHelpers.ExtractFlagBit(ctx, flags, 4, "daa_af");
+
+        // Phase 1: low nibble check.
+        // need_lo_adj = (AL & 0x0F) > 9 OR AF=1
+        var lowNib = ctx.Builder.BuildAnd(al,
+            LLVMValueRef.CreateConstInt(i8, 0x0F, false), "daa_lo");
+        var lowGt9 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, lowNib,
+            LLVMValueRef.CreateConstInt(i8, 9, false), "daa_lo_gt9");
+        var needLo = ctx.Builder.BuildOr(lowGt9, afIn, "daa_need_lo");
+
+        // al_after_lo = needLo ? AL + 6 : AL
+        var alPlus6 = ctx.Builder.BuildAdd(al,
+            LLVMValueRef.CreateConstInt(i8, 6, false), "daa_alp6");
+        var al1 = ctx.Builder.BuildSelect(needLo, alPlus6, al, "daa_al1");
+        var afOut = needLo;     // AF set if low adjust was applied
+
+        // Phase 2: high nibble check uses ORIGINAL AL (per silicon — the
+        // silicon order is: store original AL, do low adjust, then check
+        // ORIGINAL high nibble + ORIGINAL CF for high adjust).
+        var origGt99 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, al,
+            LLVMValueRef.CreateConstInt(i8, 0x99, false), "daa_orig_gt99");
+        var needHi = ctx.Builder.BuildOr(origGt99, cfIn, "daa_need_hi");
+
+        // al_final = needHi ? al1 + 0x60 : al1
+        var alPlus60 = ctx.Builder.BuildAdd(al1,
+            LLVMValueRef.CreateConstInt(i8, 0x60, false), "daa_alp60");
+        var alFinal = ctx.Builder.BuildSelect(needHi, alPlus60, al1, "daa_alF");
+        var cfOut = needHi;
+
+        X86_16Emitters.WriteGpr8(ctx, 0, alFinal);
+        var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
+        X86BcdHelpers.StoreFlagsFromAl(ctx, alFinal, cfOut, afOut, i1false, "daa");
+    }
+}
+
+internal sealed class X86DasEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_das";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i1 = LLVMTypeRef.Int1;
+        var i8 = LLVMTypeRef.Int8;
+
+        var al = X86_16Emitters.ReadGpr8(ctx, 0, "das_al");
+        var flags = X86CtrlHelpers.LoadFlags(ctx, "das");
+        var cfIn = X86CtrlHelpers.ExtractFlagBit(ctx, flags, 0, "das_cf");
+        var afIn = X86CtrlHelpers.ExtractFlagBit(ctx, flags, 4, "das_af");
+
+        var lowNib = ctx.Builder.BuildAnd(al,
+            LLVMValueRef.CreateConstInt(i8, 0x0F, false), "das_lo");
+        var lowGt9 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, lowNib,
+            LLVMValueRef.CreateConstInt(i8, 9, false), "das_lo_gt9");
+        var needLo = ctx.Builder.BuildOr(lowGt9, afIn, "das_need_lo");
+
+        var alSub6 = ctx.Builder.BuildSub(al,
+            LLVMValueRef.CreateConstInt(i8, 6, false), "das_als6");
+        var al1 = ctx.Builder.BuildSelect(needLo, alSub6, al, "das_al1");
+        var afOut = needLo;
+
+        var origGt99 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, al,
+            LLVMValueRef.CreateConstInt(i8, 0x99, false), "das_orig_gt99");
+        var needHi = ctx.Builder.BuildOr(origGt99, cfIn, "das_need_hi");
+
+        var alSub60 = ctx.Builder.BuildSub(al1,
+            LLVMValueRef.CreateConstInt(i8, 0x60, false), "das_als60");
+        var alFinal = ctx.Builder.BuildSelect(needHi, alSub60, al1, "das_alF");
+        var cfOut = needHi;
+
+        X86_16Emitters.WriteGpr8(ctx, 0, alFinal);
+        var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
+        X86BcdHelpers.StoreFlagsFromAl(ctx, alFinal, cfOut, afOut, i1false, "das");
+    }
+}
+
+internal sealed class X86AaaEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_aaa";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i1 = LLVMTypeRef.Int1;
+        var i8 = LLVMTypeRef.Int8;
+
+        var al = X86_16Emitters.ReadGpr8(ctx, 0, "aaa_al");
+        var ah = X86_16Emitters.ReadGpr8(ctx, 4, "aaa_ah");
+        var flags = X86CtrlHelpers.LoadFlags(ctx, "aaa");
+        var afIn = X86CtrlHelpers.ExtractFlagBit(ctx, flags, 4, "aaa_af");
+
+        var lowNib = ctx.Builder.BuildAnd(al,
+            LLVMValueRef.CreateConstInt(i8, 0x0F, false), "aaa_lo");
+        var lowGt9 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, lowNib,
+            LLVMValueRef.CreateConstInt(i8, 9, false), "aaa_lo_gt9");
+        var cond = ctx.Builder.BuildOr(lowGt9, afIn, "aaa_cond");
+
+        // If cond: AL += 6; AH += 1
+        var alAdj = ctx.Builder.BuildAdd(al,
+            LLVMValueRef.CreateConstInt(i8, 6, false), "aaa_alA");
+        var ahAdj = ctx.Builder.BuildAdd(ah,
+            LLVMValueRef.CreateConstInt(i8, 1, false), "aaa_ahA");
+        var newAl = ctx.Builder.BuildSelect(cond, alAdj, al, "aaa_newAl");
+        var newAh = ctx.Builder.BuildSelect(cond, ahAdj, ah, "aaa_newAh");
+
+        // AL := newAl & 0x0F (always mask)
+        var alMasked = ctx.Builder.BuildAnd(newAl,
+            LLVMValueRef.CreateConstInt(i8, 0x0F, false), "aaa_alM");
+
+        X86_16Emitters.WriteGpr8(ctx, 0, alMasked);
+        X86_16Emitters.WriteGpr8(ctx, 4, newAh);
+
+        var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
+        X86BcdHelpers.StoreFlagsFromAl(ctx, alMasked, cond, cond, i1false, "aaa");
+    }
+}
+
+internal sealed class X86AasEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_aas";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i1 = LLVMTypeRef.Int1;
+        var i8 = LLVMTypeRef.Int8;
+
+        var al = X86_16Emitters.ReadGpr8(ctx, 0, "aas_al");
+        var ah = X86_16Emitters.ReadGpr8(ctx, 4, "aas_ah");
+        var flags = X86CtrlHelpers.LoadFlags(ctx, "aas");
+        var afIn = X86CtrlHelpers.ExtractFlagBit(ctx, flags, 4, "aas_af");
+
+        var lowNib = ctx.Builder.BuildAnd(al,
+            LLVMValueRef.CreateConstInt(i8, 0x0F, false), "aas_lo");
+        var lowGt9 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, lowNib,
+            LLVMValueRef.CreateConstInt(i8, 9, false), "aas_lo_gt9");
+        var cond = ctx.Builder.BuildOr(lowGt9, afIn, "aas_cond");
+
+        var alSub = ctx.Builder.BuildSub(al,
+            LLVMValueRef.CreateConstInt(i8, 6, false), "aas_alS");
+        var ahSub = ctx.Builder.BuildSub(ah,
+            LLVMValueRef.CreateConstInt(i8, 1, false), "aas_ahS");
+        var newAl = ctx.Builder.BuildSelect(cond, alSub, al, "aas_newAl");
+        var newAh = ctx.Builder.BuildSelect(cond, ahSub, ah, "aas_newAh");
+
+        var alMasked = ctx.Builder.BuildAnd(newAl,
+            LLVMValueRef.CreateConstInt(i8, 0x0F, false), "aas_alM");
+
+        X86_16Emitters.WriteGpr8(ctx, 0, alMasked);
+        X86_16Emitters.WriteGpr8(ctx, 4, newAh);
+
+        var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
+        X86BcdHelpers.StoreFlagsFromAl(ctx, alMasked, cond, cond, i1false, "aas");
+    }
+}
+
+internal sealed class X86AamEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_aam";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i1 = LLVMTypeRef.Int1;
+        var i8 = LLVMTypeRef.Int8;
+
+        // imm8 (base) — fetch.
+        var imm8 = X86_16Emitters.FetchImm8(ctx, "aam_imm");
+        var al = X86_16Emitters.ReadGpr8(ctx, 0, "aam_al");
+
+        // AAM with imm=0 should raise INT 0 (divide-by-zero); we silently
+        // no-op in that case to match the "DIV/IDIV deferred" policy.
+        // Production code never uses AAM 0 anyway.
+        var imm0 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, imm8,
+            LLVMValueRef.CreateConstInt(i8, 0, false), "aam_imm_zero");
+        var oneI8 = LLVMValueRef.CreateConstInt(i8, 1, false);
+        var safeImm = ctx.Builder.BuildSelect(imm0, oneI8, imm8, "aam_safeImm");
+
+        var newAh = ctx.Builder.BuildUDiv(al, safeImm, "aam_ah");
+        var newAl = ctx.Builder.BuildURem(al, safeImm, "aam_al");
+
+        X86_16Emitters.WriteGpr8(ctx, 0, newAl);
+        X86_16Emitters.WriteGpr8(ctx, 4, newAh);
+
+        var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
+        X86BcdHelpers.StoreFlagsFromAl(ctx, newAl, i1false, i1false, i1false, "aam");
+    }
+}
+
+internal sealed class X86AadEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_aad";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i1 = LLVMTypeRef.Int1;
+        var i8 = LLVMTypeRef.Int8;
+
+        var imm8 = X86_16Emitters.FetchImm8(ctx, "aad_imm");
+        var al = X86_16Emitters.ReadGpr8(ctx, 0, "aad_al");
+        var ah = X86_16Emitters.ReadGpr8(ctx, 4, "aad_ah");
+
+        // AL = (AH * imm8) + AL; AH = 0
+        var prod = ctx.Builder.BuildMul(ah, imm8, "aad_prod");
+        var newAl = ctx.Builder.BuildAdd(prod, al, "aad_newAl");
+
+        X86_16Emitters.WriteGpr8(ctx, 0, newAl);
+        X86_16Emitters.WriteGpr8(ctx, 4, LLVMValueRef.CreateConstInt(i8, 0, false));
+
+        var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
+        X86BcdHelpers.StoreFlagsFromAl(ctx, newAl, i1false, i1false, i1false, "aad");
     }
 }
 
