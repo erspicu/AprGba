@@ -2,138 +2,95 @@
 """
 Phase 27b protected-mode demo ROM builder.
 
-Generates two .com files in test-roms/x86/:
-  27-pmode-entry.com  — DS load with PRESENT descriptor (P=1, access=0x92)
-                        Expected outcome on i80286 backend:
-                          BX = 0xF1B8  (code at 0x100, first 2 bytes)
-                          EXC_PENDING = 0
-  27-pmode-np.com     — DS load with NOT-PRESENT descriptor (P=0, access=0x12)
-                        Expected outcome on i80286 backend (Sprint 27.11c+):
-                          EXC_PENDING = 1
-                          EXC_VECTOR  = 0x0B  (#NP)
-                          EXC_ERROR   = 0x0008 (selector & 0xFFFC)
+Compiles the .asm sources in ``test-roms/x86/src/27-pmode-*.asm`` with
+NASM into 96-byte .com files in ``test-roms/x86/``. Each .asm uses the
+shared macros in ``desc.inc`` (DESC for an 80286 segment descriptor,
+GDTR_IMAGE for the LIDT/LGDT memory operand).
 
-The two demos share the same code prologue + GDT layout; only the
-access-rights byte of GDT[1] differs. Re-running this script should
-produce byte-identical output for entry.com (sanity / no-drift check).
+Demos and their expected outcome on the i80286 backend
+(see ``MD/performance/202605110200-i80286-pmode-fault-model-complete.md``):
 
-COM-file layout assumption:
-  loaded at CS:0100h (real-mode COM convention)
-  IP starts at 0100h
-  → file byte 0 == segment offset 0x100 == linear 0x100 (CS=0)
+  27-pmode-entry        — happy path; BX=0xF1B8, no EXC.
+  27-pmode-np           — descriptor.P=0     → #NP, error=0x0008.
+  27-pmode-null-ss      — NULL selector → SS → #GP, error=0x0000.
+  27-pmode-dpl-gp       — RPL=3 > DPL=0      → #GP, error=0x0008.
+  27-pmode-ss-bad-type  — code desc → SS     → #GP, error=0x0008.
+
+Pre-NASM versions of this script (commits before this one) hard-coded
+each .com file as a Python ``bytes(...)`` literal, which the .asm
+sources now replace one-for-one (verified byte-identical at the time
+of conversion). Adding a new demo is now a matter of dropping a
+``27-pmode-*.asm`` next to the existing ones.
+
+Requires NASM on PATH (``winget install NASM.NASM``); falls back to the
+default install path on Windows.
 """
-import struct
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
-CODE_PROLOGUE = bytes([
-    0xB8, 0xF1, 0xFF,           # mov ax, 0xFFF1   (PE | reserved bits)
-    0x0F, 0x01, 0x16, 0x40, 0x01,  # lgdt [0x140]
-    0x0F, 0x01, 0xF0,           # lmsw ax          (PE bit goes live)
-    0xB8, 0x08, 0x00,           # mov ax, 0x0008   (selector for GDT[1])
-    0x8E, 0xD8,                 # mov ds, ax       (descriptor fetch)
-    0x8B, 0x1E, 0x00, 0x00,     # mov bx, [0x0000] (read DS:0)
-    0xF4,                       # hlt
-])
-assert len(CODE_PROLOGUE) == 21
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SRC_DIR   = REPO_ROOT / "test-roms" / "x86" / "src"
+OUT_DIR   = REPO_ROOT / "test-roms" / "x86"
 
-# Sprint 27.11d — NULL-SS demo. Same prologue shape (LGDT + LMSW to enter
-# pmode), but then loads NULL into SS to trigger #GP.
-CODE_NULL_SS = bytes([
-    0xB8, 0xF1, 0xFF,           # mov ax, 0xFFF1
-    0x0F, 0x01, 0x16, 0x40, 0x01,  # lgdt [0x140]
-    0x0F, 0x01, 0xF0,           # lmsw ax
-    0xB8, 0x00, 0x00,           # mov ax, 0x0000   (NULL selector)
-    0x8E, 0xD0,                 # mov ss, ax       (#GP expected, PE=1)
-    0xF4,                       # hlt
-])
-assert len(CODE_NULL_SS) == 17
-
-# Sprint 27.11e — DPL fault demo. Loads selector 0x000B (idx=1, RPL=3) into
-# DS while CPL=0. With GDT[1].DPL=0, max(CPL,RPL) = max(0,3) = 3 > 0 = DPL,
-# so the load raises #GP(sel & 0xFFFC = 0x0008).
-CODE_DPL_GP = bytes([
-    0xB8, 0xF1, 0xFF,           # mov ax, 0xFFF1
-    0x0F, 0x01, 0x16, 0x40, 0x01,  # lgdt [0x140]
-    0x0F, 0x01, 0xF0,           # lmsw ax
-    0xB8, 0x0B, 0x00,           # mov ax, 0x000B   (idx=1, RPL=3)
-    0x8E, 0xD8,                 # mov ds, ax       (#GP expected, PE=1)
-    0xF4,                       # hlt
-])
-assert len(CODE_DPL_GP) == 17
-
-# Sprint 27.11f — segment-type fault demo. GDT[1] is built with access=0x9A
-# (P=1, S=1, executable=1, readable=1, DPL=0) — a CODE segment. Loading
-# this into SS in PE=1 must raise #GP because SS requires writable DATA
-# (access bit 1 = writable, bit 3 = exec must be 0). Same prologue length
-# (17 bytes) so the GDT layout offsets are unchanged.
-CODE_SS_BAD_TYPE = bytes([
-    0xB8, 0xF1, 0xFF,           # mov ax, 0xFFF1
-    0x0F, 0x01, 0x16, 0x40, 0x01,  # lgdt [0x140]
-    0x0F, 0x01, 0xF0,           # lmsw ax
-    0xB8, 0x08, 0x00,           # mov ax, 0x0008   (idx=1, RPL=0)
-    0x8E, 0xD0,                 # mov ss, ax       (#GP expected — code desc)
-    0xF4,                       # hlt
-])
-assert len(CODE_SS_BAD_TYPE) == 17
-
-# GDTR image: 6 bytes at file offset 0x40 (segment offset 0x140).
-#   limit = 0x10 (room for 2 descriptors)
-#   base  = 0x150 (segment offset where GDT lives)
-GDTR_IMAGE = struct.pack("<HI", 0x0010, 0x00000150)[:6]
-assert len(GDTR_IMAGE) == 6
-
-# GDT entry [0] is always 8 zero bytes (NULL descriptor).
-GDT_ENTRY_NULL = bytes(8)
+# Hardcoded fallback for the Windows winget install location, since
+# `winget install NASM.NASM` does not add NASM to PATH automatically.
+WINDOWS_NASM_FALLBACK = Path(r"C:\Program Files\NASM\nasm.exe")
 
 
-def build_descriptor(limit: int, base: int, access: int) -> bytes:
-    """80286 8-byte descriptor: limit/base/access/reserved=0/0."""
-    return bytes([
-        limit & 0xFF, (limit >> 8) & 0xFF,
-        base & 0xFF, (base >> 8) & 0xFF, (base >> 16) & 0xFF,
-        access & 0xFF,
-        0x00, 0x00,  # 80286 reserved
-    ])
-
-
-def build_com(access_byte: int, code: bytes = CODE_PROLOGUE) -> bytes:
-    # NOP-pad code to reach file offset 0x40 (segment offset 0x140) for GDTR image.
-    pad1 = bytes([0x90] * (0x40 - len(code)))
-    # 0x50 - (0x40 + 6) = 10 bytes of padding before GDT.
-    pad2 = bytes([0x00] * (0x50 - (0x40 + len(GDTR_IMAGE))))
-    gdt_entry_1 = build_descriptor(limit=0xFFFF, base=0x100, access=access_byte)
-    return (
-        code
-        + pad1
-        + GDTR_IMAGE
-        + pad2
-        + GDT_ENTRY_NULL
-        + gdt_entry_1
+def find_nasm() -> str:
+    on_path = shutil.which("nasm")
+    if on_path:
+        return on_path
+    if os.name == "nt" and WINDOWS_NASM_FALLBACK.exists():
+        return str(WINDOWS_NASM_FALLBACK)
+    raise FileNotFoundError(
+        "nasm not found on PATH. Install via `winget install NASM.NASM` "
+        "(Windows) or your distro's package manager."
     )
 
 
-def main():
-    out_dir = Path(__file__).resolve().parent.parent / "test-roms" / "x86"
-    out_dir.mkdir(parents=True, exist_ok=True)
+def assemble(nasm: str, asm_path: Path, out_path: Path) -> int:
+    cmd = [
+        nasm,
+        "-f", "bin",
+        "-I", str(SRC_DIR) + os.sep,        # include path for desc.inc
+        "-o", str(out_path),
+        str(asm_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stdout)
+        sys.stderr.write(proc.stderr)
+        return proc.returncode
+    return out_path.stat().st_size
 
-    entry        = build_com(access_byte=0x92)                            # P=1, S=1, writable data, DPL=0
-    np           = build_com(access_byte=0x12)                            # P=0
-    null_ss      = build_com(access_byte=0x92, code=CODE_NULL_SS)          # NULL → SS
-    dpl_gp       = build_com(access_byte=0x92, code=CODE_DPL_GP)           # DPL=0, RPL=3 → #GP
-    ss_bad_type  = build_com(access_byte=0x9A, code=CODE_SS_BAD_TYPE)      # code desc → SS → #GP
 
-    (out_dir / "27-pmode-entry.com").write_bytes(entry)
-    (out_dir / "27-pmode-np.com").write_bytes(np)
-    (out_dir / "27-pmode-null-ss.com").write_bytes(null_ss)
-    (out_dir / "27-pmode-dpl-gp.com").write_bytes(dpl_gp)
-    (out_dir / "27-pmode-ss-bad-type.com").write_bytes(ss_bad_type)
+def main() -> int:
+    nasm = find_nasm()
+    print(f"using {nasm}")
 
-    print(f"wrote {len(entry)} bytes -> 27-pmode-entry.com")
-    print(f"wrote {len(np)} bytes -> 27-pmode-np.com")
-    print(f"wrote {len(null_ss)} bytes -> 27-pmode-null-ss.com")
-    print(f"wrote {len(dpl_gp)} bytes -> 27-pmode-dpl-gp.com")
-    print(f"wrote {len(ss_bad_type)} bytes -> 27-pmode-ss-bad-type.com")
+    sources = sorted(SRC_DIR.glob("27-pmode-*.asm"))
+    if not sources:
+        sys.stderr.write(f"no sources found under {SRC_DIR}\n")
+        return 2
+
+    failed = 0
+    for src in sources:
+        out = OUT_DIR / (src.stem + ".com")
+        size = assemble(nasm, src, out)
+        if isinstance(size, int) and size >= 0 and out.exists():
+            print(f"  wrote {size:>3} bytes -> {out.relative_to(REPO_ROOT)}")
+        else:
+            sys.stderr.write(f"  FAILED -> {out.relative_to(REPO_ROOT)}\n")
+            failed += 1
+
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
