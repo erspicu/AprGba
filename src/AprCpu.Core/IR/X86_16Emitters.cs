@@ -496,11 +496,27 @@ public static class X86_16Emitters
         return MemoryEmitters.CallRead8(ctx, lin, label);
     }
 
+    /// <summary>Sprint 27.10d wave 2 — by-name overload uses cached BASE.</summary>
+    internal static LLVMValueRef SegmentedRead8(
+        EmitContext ctx, string segName, LLVMValueRef off16, string label)
+    {
+        var lin = SegmentedLinear(ctx, segName, off16, $"{label}_lin");
+        return MemoryEmitters.CallRead8(ctx, lin, label);
+    }
+
     /// <summary>Store an i8 to seg:off via memory_write_8.</summary>
     internal static void SegmentedWrite8(
         EmitContext ctx, LLVMValueRef seg16, LLVMValueRef off16, LLVMValueRef value8, string label)
     {
         var lin = SegmentedLinear(ctx, seg16, off16, $"{label}_lin");
+        MemoryEmitters.CallWrite8(ctx, lin, value8);
+    }
+
+    /// <summary>Sprint 27.10d wave 2 — by-name overload uses cached BASE.</summary>
+    internal static void SegmentedWrite8(
+        EmitContext ctx, string segName, LLVMValueRef off16, LLVMValueRef value8, string label)
+    {
+        var lin = SegmentedLinear(ctx, segName, off16, $"{label}_lin");
         MemoryEmitters.CallWrite8(ctx, lin, value8);
     }
 
@@ -517,6 +533,23 @@ public static class X86_16Emitters
         var off1 = ctx.Builder.BuildAdd(off16,
             LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_off1");
         var hi = SegmentedRead8(ctx, seg16, off1, $"{label}_hi");
+
+        var loZ  = ctx.Builder.BuildZExt(lo, i16, $"{label}_loz");
+        var hiZ  = ctx.Builder.BuildZExt(hi, i16, $"{label}_hiz");
+        var hiSh = ctx.Builder.BuildShl(hiZ,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi_sh");
+        return ctx.Builder.BuildOr(hiSh, loZ, label);
+    }
+
+    /// <summary>Sprint 27.10d wave 2 — by-name overload uses cached BASE.</summary>
+    internal static LLVMValueRef SegmentedRead16(
+        EmitContext ctx, string segName, LLVMValueRef off16, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var lo = SegmentedRead8(ctx, segName, off16, $"{label}_lo");
+        var off1 = ctx.Builder.BuildAdd(off16,
+            LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_off1");
+        var hi = SegmentedRead8(ctx, segName, off1, $"{label}_hi");
 
         var loZ  = ctx.Builder.BuildZExt(lo, i16, $"{label}_loz");
         var hiZ  = ctx.Builder.BuildZExt(hi, i16, $"{label}_hiz");
@@ -546,6 +579,25 @@ public static class X86_16Emitters
         var off1 = ctx.Builder.BuildAdd(off16,
             LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_off1");
         SegmentedWrite8(ctx, seg16, off1, hi, $"{label}_hiW");
+    }
+
+    /// <summary>Sprint 27.10d wave 2 — by-name overload uses cached BASE.</summary>
+    internal static void SegmentedWrite16(
+        EmitContext ctx, string segName, LLVMValueRef off16, LLVMValueRef value16, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+
+        var lo = ctx.Builder.BuildTrunc(value16, i8, $"{label}_lo");
+        SegmentedWrite8(ctx, segName, off16, lo, $"{label}_loW");
+
+        var hi16 = ctx.Builder.BuildLShr(value16,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_hi16");
+        var hi   = ctx.Builder.BuildTrunc(hi16, i8, $"{label}_hi");
+
+        var off1 = ctx.Builder.BuildAdd(off16,
+            LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_off1");
+        SegmentedWrite8(ctx, segName, off1, hi, $"{label}_hiW");
     }
 
     /// <summary>
@@ -1702,8 +1754,9 @@ internal static class X86StackHelpers
             LLVMValueRef.CreateConstInt(i16, 2, false), $"{label}_sp_new");
         ctx.Builder.BuildStore(spNew, spPtr);
 
-        var ss = X86_16Emitters.LoadSeg16(ctx, "SS", $"{label}_ss");
-        X86_16Emitters.SegmentedWrite16(ctx, ss, spNew, value16, $"{label}_w");
+        // Sprint 27.10d wave 2 — SS by-name picks up SS_BASE cache when
+        // the spec declares it (i80286+).
+        X86_16Emitters.SegmentedWrite16(ctx, "SS", spNew, value16, $"{label}_w");
     }
 
     /// <summary>Read MEM[SS:SP] → i16; SP += 2.</summary>
@@ -1712,8 +1765,8 @@ internal static class X86StackHelpers
         var i16 = LLVMTypeRef.Int16;
         var spPtr = ctx.GepGpr(4);
         var spOld = ctx.Builder.BuildLoad2(i16, spPtr, $"{label}_sp_old");
-        var ss = X86_16Emitters.LoadSeg16(ctx, "SS", $"{label}_ss");
-        var v  = X86_16Emitters.SegmentedRead16(ctx, ss, spOld, $"{label}_v");
+        // Sprint 27.10d wave 2 — SS by-name (cache-aware).
+        var v  = X86_16Emitters.SegmentedRead16(ctx, "SS", spOld, $"{label}_v");
 
         var spNew = ctx.Builder.BuildAdd(spOld,
             LLVMValueRef.CreateConstInt(i16, 2, false), $"{label}_sp_new");

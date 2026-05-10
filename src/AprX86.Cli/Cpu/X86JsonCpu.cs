@@ -224,6 +224,7 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         }
         catch (KeyNotFoundException) { /* spec doesn't declare MSW (i8086/i80186) — no-op */ }
         catch (ArgumentException)    { /* same */ }
+        catch (InvalidOperationException) { /* CpuStateLayout throws this for unknown status reg */ }
 
         // Sprint 27.10b — i80286: initialize hidden segment-register
         // caches from visible selector values (real-mode shift-and-add).
@@ -264,6 +265,7 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         }
         catch (KeyNotFoundException) { /* i8086 / i80186: no cache slots */ }
         catch (ArgumentException)    { /* same */ }
+        catch (InvalidOperationException) { /* CpuStateLayout throws this */ }
     }
 
     public void SetEntryPoint(ushort segment, ushort offset)
