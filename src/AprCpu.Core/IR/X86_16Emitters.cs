@@ -2919,17 +2919,66 @@ internal sealed class X86F6GroupDispatchEmitter : IMicroOpEmitter
         EmitMulW8(ctx, lhs, signed: true);
         ctx.Builder.BuildBr(endBB);
 
-        // /6 DIV / /7 IDIV deferred — divide-by-zero exception + silicon-
-        // quirky flag behaviour need careful Tom Harte alignment in 24.6.7.
-        for (int i = 6; i <= 7; i++)
-        {
-            ctx.Builder.PositionAtEnd(arms[i]);
-            ctx.Builder.BuildBr(endBB);
-        }
+        // /6 DIV r/m8 (unsigned). Divide-by-zero would raise INT 0 in
+        // silicon — we substitute a safe value to avoid LLVM UB and
+        // silently skip the writeback (the architectural exception is
+        // deferred since the dispatcher would have to wire INT 0).
+        ctx.Builder.PositionAtEnd(arms[6]);
+        EmitDivW8(ctx, lhs, signed: false);
+        ctx.Builder.BuildBr(endBB);
+
+        // /7 IDIV r/m8 (signed). Same exception policy.
+        ctx.Builder.PositionAtEnd(arms[7]);
+        EmitDivW8(ctx, lhs, signed: true);
+        ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
         ctx.Builder.PositionAtEnd(endBB);
+    }
+
+    /// <summary>
+    /// Emit DIV/IDIV r/m8.
+    ///   AL = AX / r/m8;   AH = AX % r/m8
+    /// Divide-by-zero (lhs8 == 0) substitutes 1 to avoid LLVM UB; the
+    /// architectural INT 0 raise is deferred. Flags are undefined per
+    /// Intel — we leave FLAGS untouched.
+    /// </summary>
+    private static void EmitDivW8(EmitContext ctx, LLVMValueRef lhs8, bool signed)
+    {
+        var i1  = LLVMTypeRef.Int1;
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var label = signed ? "idiv8" : "div8";
+
+        var divIsZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, lhs8,
+            LLVMValueRef.CreateConstInt(i8, 0, false), $"{label}_zero");
+        var oneI8 = LLVMValueRef.CreateConstInt(i8, 1, false);
+        var safeDiv = ctx.Builder.BuildSelect(divIsZero, oneI8, lhs8, $"{label}_safe");
+
+        var ax = X86_16Emitters.ReadGpr16(ctx, 0, $"{label}_ax");
+        LLVMValueRef axW = signed
+            ? ctx.Builder.BuildSExt(ax, i32, $"{label}_axw")
+            : ctx.Builder.BuildZExt(ax, i32, $"{label}_axw");
+        LLVMValueRef divW = signed
+            ? ctx.Builder.BuildSExt(safeDiv, i32, $"{label}_dw")
+            : ctx.Builder.BuildZExt(safeDiv, i32, $"{label}_dw");
+
+        var q = signed ? ctx.Builder.BuildSDiv(axW, divW, $"{label}_q")
+                       : ctx.Builder.BuildUDiv(axW, divW, $"{label}_q");
+        var r = signed ? ctx.Builder.BuildSRem(axW, divW, $"{label}_r")
+                       : ctx.Builder.BuildURem(axW, divW, $"{label}_r");
+
+        var qI8 = ctx.Builder.BuildTrunc(q, i8, $"{label}_q8");
+        var rI8 = ctx.Builder.BuildTrunc(r, i8, $"{label}_r8");
+
+        var alOld = X86_16Emitters.ReadGpr8(ctx, 0, $"{label}_al_old");
+        var ahOld = X86_16Emitters.ReadGpr8(ctx, 4, $"{label}_ah_old");
+        var newAl = ctx.Builder.BuildSelect(divIsZero, alOld, qI8, $"{label}_newAl");
+        var newAh = ctx.Builder.BuildSelect(divIsZero, ahOld, rI8, $"{label}_newAh");
+        X86_16Emitters.WriteGpr8(ctx, 0, newAl);
+        X86_16Emitters.WriteGpr8(ctx, 4, newAh);
     }
 
     /// <summary>
@@ -3097,17 +3146,61 @@ internal sealed class X86F7GroupDispatchEmitter : IMicroOpEmitter
         EmitMulW16(ctx, lhs, signed: true);
         ctx.Builder.BuildBr(endBB);
 
-        // /6 DIV / /7 IDIV deferred — divide-by-zero exception + silicon
-        // quirks need careful Tom Harte alignment.
-        for (int i = 6; i <= 7; i++)
-        {
-            ctx.Builder.PositionAtEnd(arms[i]);
-            ctx.Builder.BuildBr(endBB);
-        }
+        // /6 DIV / /7 IDIV r/m16. Divide-by-zero substituted to avoid LLVM UB.
+        ctx.Builder.PositionAtEnd(arms[6]);
+        EmitDivW16(ctx, lhs, signed: false);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[7]);
+        EmitDivW16(ctx, lhs, signed: true);
+        ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
         ctx.Builder.PositionAtEnd(endBB);
+    }
+
+    /// <summary>
+    /// Emit DIV/IDIV r/m16:
+    ///   AX = (DX:AX) / r/m16;   DX = (DX:AX) % r/m16
+    /// Divide-by-zero substitutes 1 to avoid LLVM UB; writeback skipped
+    /// when divisor was zero.
+    /// </summary>
+    private static void EmitDivW16(EmitContext ctx, LLVMValueRef lhs16, bool signed)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var label = signed ? "idiv16" : "div16";
+
+        var divIsZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, lhs16,
+            LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_zero");
+        var oneI16 = LLVMValueRef.CreateConstInt(i16, 1, false);
+        var safeDiv = ctx.Builder.BuildSelect(divIsZero, oneI16, lhs16, $"{label}_safe");
+
+        var ax = X86_16Emitters.ReadGpr16(ctx, 0, $"{label}_ax");
+        var dx = X86_16Emitters.ReadGpr16(ctx, 2, $"{label}_dx");
+        // Build DX:AX as i32.
+        var axZ = ctx.Builder.BuildZExt(ax, i32, $"{label}_axz");
+        var dxZ = ctx.Builder.BuildZExt(dx, i32, $"{label}_dxz");
+        var dxSh = ctx.Builder.BuildShl(dxZ,
+            LLVMValueRef.CreateConstInt(i32, 16, false), $"{label}_dxsh");
+        var dxAx = ctx.Builder.BuildOr(dxSh, axZ, $"{label}_dxax");
+
+        LLVMValueRef divW = signed
+            ? ctx.Builder.BuildSExt(safeDiv, i32, $"{label}_dw")
+            : ctx.Builder.BuildZExt(safeDiv, i32, $"{label}_dw");
+
+        var q = signed ? ctx.Builder.BuildSDiv(dxAx, divW, $"{label}_q")
+                       : ctx.Builder.BuildUDiv(dxAx, divW, $"{label}_q");
+        var r = signed ? ctx.Builder.BuildSRem(dxAx, divW, $"{label}_r")
+                       : ctx.Builder.BuildURem(dxAx, divW, $"{label}_r");
+
+        var qI16 = ctx.Builder.BuildTrunc(q, i16, $"{label}_q16");
+        var rI16 = ctx.Builder.BuildTrunc(r, i16, $"{label}_r16");
+
+        var newAx = ctx.Builder.BuildSelect(divIsZero, ax, qI16, $"{label}_newAx");
+        var newDx = ctx.Builder.BuildSelect(divIsZero, dx, rI16, $"{label}_newDx");
+        X86_16Emitters.WriteGpr16(ctx, 0, newAx);
+        X86_16Emitters.WriteGpr16(ctx, 2, newDx);
     }
 
     /// <summary>

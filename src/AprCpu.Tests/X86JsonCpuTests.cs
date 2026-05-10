@@ -2984,6 +2984,89 @@ public class X86JsonCpuTests
         Assert.Equal(0x0025, cpu.State.A.X);
     }
 
+    // ---------------- 24.6.7g — DIV / IDIV ----------------
+
+    /// <summary>
+    /// 0xF6 /6 DIV r/m8 reg-direct: F6 F3 → DIV BL.
+    /// modrm=F3: mod=11 reg=110(=DIV) rm=011(=BL). AX=100, BL=7 → AL=14, AH=2.
+    /// </summary>
+    [Fact]
+    public void Step_DivBl_BasicQuotientRemainder()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF6, 0xF3, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 100;
+        s.B.L = 7;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(14, cpu.State.A.L);   // 100 / 7 = 14
+        Assert.Equal(2,  cpu.State.A.H);   // 100 % 7 = 2
+    }
+
+    /// <summary>
+    /// 0xF6 /7 IDIV r/m8: F6 FB → IDIV BL.
+    /// AX=-50 (0xFFCE in 16-bit), BL=7 → AL=-7 (0xF9), AH=-1 (0xFF).
+    /// Actually -50 / 7 = -7 with remainder -1 (signed division semantics).
+    /// </summary>
+    [Fact]
+    public void Step_IdivBl_NegativeQuotient()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF6, 0xFB, 0xF4 });
+        var s = cpu.State;
+        s.A.X = unchecked((ushort)(short)(-50));   // 0xFFCE
+        s.B.L = 7;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(unchecked((byte)-7), cpu.State.A.L);
+        Assert.Equal(unchecked((byte)-1), cpu.State.A.H);
+    }
+
+    /// <summary>
+    /// 0xF7 /6 DIV r/m16: F7 F3 → DIV BX.
+    /// DX:AX = 0:1000, BX = 3 → AX = 333, DX = 1.
+    /// </summary>
+    [Fact]
+    public void Step_DivBx_W16()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF7, 0xF3, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 1000;
+        s.D.X = 0;
+        s.B.X = 3;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(333, cpu.State.A.X);
+        Assert.Equal(1,   cpu.State.D.X);
+    }
+
+    /// <summary>
+    /// DIV by zero — silently no-op (INT 0 deferred). AX/AH unchanged.
+    /// </summary>
+    [Fact]
+    public void Step_DivBy0_NoOp()
+    {
+        var (cpu, _) = Setup(new byte[] { 0xF6, 0xF3, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0x1234;
+        s.B.L = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        // AX unchanged when divisor is zero.
+        Assert.Equal(0x1234, cpu.State.A.X);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,
