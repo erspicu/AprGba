@@ -60,6 +60,30 @@
         "fields": {
           "PE": "0", "MP": "1", "EM": "2", "TS": "3"
         }
+      },
+      {
+        "name":       "GDTR_LIMIT",
+        "width_bits": 16,
+        "comment":    "Sprint 27.2 — Global Descriptor Table Register limit (16-bit). LGDT writes both LIMIT + BASE; SGDT reads. Reset undefined per Intel; we init 0xFFFF for safety.",
+        "fields": {}
+      },
+      {
+        "name":       "GDTR_BASE",
+        "width_bits": 32,
+        "comment":    "Sprint 27.2 — GDTR base address. 80286 uses low 24 bits; stored in 32-bit slot for layout consistency. LGDT byte 5 of m48 is reserved/zero on 286.",
+        "fields": {}
+      },
+      {
+        "name":       "IDTR_LIMIT",
+        "width_bits": 16,
+        "comment":    "Sprint 27.2 — Interrupt Descriptor Table Register limit. Same shape as GDTR_LIMIT.",
+        "fields": {}
+      },
+      {
+        "name":       "IDTR_BASE",
+        "width_bits": 32,
+        "comment":    "Sprint 27.2 — IDTR base address. Same shape as GDTR_BASE.",
+        "fields": {}
       }
     ]
   },

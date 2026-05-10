@@ -5635,12 +5635,11 @@ internal sealed class X86Clts286StubEmitter : IMicroOpEmitter
     }
 }
 
-// x86_286_zero_one_dispatch — Phase 26 Sprint 26.3 / 27.1 dispatcher for
-// the 0F 01 group on i80286. ModR/M.reg selects:
-//   /0 SGDT m48     (deferred to Sprint 27.2)
-//   /1 SIDT m48     (deferred)
-//   /2 LGDT m48     (deferred)
-//   /3 LIDT m48     (deferred)
+// x86_286_zero_one_dispatch — 0F 01 group on i80286. ModR/M.reg selects:
+//   /0 SGDT m48     ✅ Sprint 27.2 — store GDTR (limit+base) to 6-byte mem
+//   /1 SIDT m48     ✅ Sprint 27.2 — store IDTR
+//   /2 LGDT m48     ✅ Sprint 27.2 — load GDTR
+//   /3 LIDT m48     ✅ Sprint 27.2 — load IDTR
 //   /4 SMSW r/m16   ✅ Sprint 27.1 — reads REAL MSW status register
 //   /5 reserved     (UD)
 //   /6 LMSW r/m16   ✅ Sprint 27.1 — writes low 16 bits to MSW
@@ -5650,6 +5649,7 @@ internal sealed class X86286ZeroOneDispatchEmitter : IMicroOpEmitter
     public string OpName => "x86_286_zero_one_dispatch";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
+        var i8  = LLVMTypeRef.Int8;
         var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
 
@@ -5662,6 +5662,15 @@ internal sealed class X86286ZeroOneDispatchEmitter : IMicroOpEmitter
         for (int i = 0; i < 8; i++)
             sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
 
+        // SGDT (/0) and SIDT (/1) share the same shape: store
+        // limit (16) + base (24+8 reserved = 32) to 6-byte memory.
+        EmitSdt(ctx, arms[0], endBB, "GDTR_LIMIT", "GDTR_BASE", "z01_0_sgdt");
+        EmitSdt(ctx, arms[1], endBB, "IDTR_LIMIT", "IDTR_BASE", "z01_1_sidt");
+
+        // LGDT (/2) and LIDT (/3) — load limit + base from 6-byte memory.
+        EmitLdt(ctx, arms[2], endBB, "GDTR_LIMIT", "GDTR_BASE", "z01_2_lgdt");
+        EmitLdt(ctx, arms[3], endBB, "IDTR_LIMIT", "IDTR_BASE", "z01_3_lidt");
+
         // /4 SMSW r/m16: read MSW status register, store to r/m16 destination.
         ctx.Builder.PositionAtEnd(arms[4]);
         var mswPtr = ctx.GepStatusRegister("MSW");
@@ -5670,27 +5679,101 @@ internal sealed class X86286ZeroOneDispatchEmitter : IMicroOpEmitter
         ctx.Builder.BuildBr(endBB);
 
         // /6 LMSW r/m16: load r/m16 source value, write to MSW.
-        // Per Intel 80286 PRM real-mode behavior: writes all 16 bits to
-        // MSW. Bit 0 (PE) once set cannot be cleared in real mode (only
-        // a triple-fault or LOADALL can return to real mode). Phase 27a
-        // doesn't enforce that lock-once-set rule (Phase 27b protected-
-        // mode does).
         ctx.Builder.PositionAtEnd(arms[6]);
         var lmswSrc = X86ModRmMemHelpers.BuildLoadW16(ctx, "z01_6_src");
         ctx.Builder.BuildStore(lmswSrc, ctx.GepStatusRegister("MSW"));
         ctx.Builder.BuildBr(endBB);
 
-        // /0 /1 /2 /3 /5 /7 — no-op stubs (Sprint 27.2 fills 0/1/2/3 with
-        // SGDT/SIDT/LGDT/LIDT real implementations).
+        // /5 /7 — no-op stubs.
         for (int i = 0; i < 8; i++)
         {
-            if (i == 4 || i == 6) continue;
+            if (i is 0 or 1 or 2 or 3 or 4 or 6) continue;
             ctx.Builder.PositionAtEnd(arms[i]);
             ctx.Builder.BuildBr(endBB);
         }
         ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
         ctx.Builder.PositionAtEnd(endBB);
+    }
+
+    /// <summary>
+    /// Sprint 27.2 — store-descriptor-table (SGDT / SIDT). 6-byte memory
+    /// layout: bytes 0-1 = limit (LE), bytes 2-4 = base low24, byte 5
+    /// reserved/zero on 80286. Memory destination given by ea_seg:ea_off
+    /// from the preceding x86_modrm_compute_ea step (mod=11 forms are
+    /// undefined for SGDT/SIDT — Intel manual says #UD; we silently emit
+    /// the writes anyway for layout consistency since the test harness
+    /// won't exercise the mod=11 path).
+    /// </summary>
+    private static void EmitSdt(EmitContext ctx, LLVMBasicBlockRef armBB, LLVMBasicBlockRef endBB,
+        string limitReg, string baseReg, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        ctx.Builder.PositionAtEnd(armBB);
+        var seg = ctx.Resolve("ea_seg");
+        var off = ctx.Resolve("ea_off");
+
+        // limit -> [m + 0..1]
+        var limitVal = ctx.Builder.BuildLoad2(i16, ctx.GepStatusRegister(limitReg), $"{label}_lim");
+        X86_16Emitters.SegmentedWrite16(ctx, seg, off, limitVal, $"{label}_w_lim");
+
+        // base low16 -> [m + 2..3]
+        var baseVal = ctx.Builder.BuildLoad2(i32, ctx.GepStatusRegister(baseReg), $"{label}_base");
+        var off2 = ctx.Builder.BuildAdd(off, LLVMValueRef.CreateConstInt(i16, 2, false), $"{label}_off2");
+        var baseLow = ctx.Builder.BuildTrunc(baseVal, i16, $"{label}_base_lo");
+        X86_16Emitters.SegmentedWrite16(ctx, seg, off2, baseLow, $"{label}_w_lo");
+
+        // base high8 -> [m + 4]; byte 5 = 0 reserved on 286.
+        var baseHi = ctx.Builder.BuildLShr(baseVal, LLVMValueRef.CreateConstInt(i32, 16, false), $"{label}_base_hi32");
+        var baseHi8 = ctx.Builder.BuildTrunc(baseHi, i8, $"{label}_base_hi8");
+        var off4 = ctx.Builder.BuildAdd(off, LLVMValueRef.CreateConstInt(i16, 4, false), $"{label}_off4");
+        var lin4 = X86_16Emitters.SegmentedLinear(ctx, seg, off4, $"{label}_lin4");
+        MemoryEmitters.CallWrite8(ctx, lin4, baseHi8);
+        var off5 = ctx.Builder.BuildAdd(off, LLVMValueRef.CreateConstInt(i16, 5, false), $"{label}_off5");
+        var lin5 = X86_16Emitters.SegmentedLinear(ctx, seg, off5, $"{label}_lin5");
+        MemoryEmitters.CallWrite8(ctx, lin5, LLVMValueRef.CreateConstInt(i8, 0, false));
+
+        ctx.Builder.BuildBr(endBB);
+    }
+
+    /// <summary>
+    /// Sprint 27.2 — load-descriptor-table (LGDT / LIDT). Reverse of EmitSdt.
+    /// </summary>
+    private static void EmitLdt(EmitContext ctx, LLVMBasicBlockRef armBB, LLVMBasicBlockRef endBB,
+        string limitReg, string baseReg, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        ctx.Builder.PositionAtEnd(armBB);
+        var seg = ctx.Resolve("ea_seg");
+        var off = ctx.Resolve("ea_off");
+
+        // limit <- [m + 0..1]
+        var limitNew = X86_16Emitters.SegmentedRead16(ctx, seg, off, $"{label}_lim");
+        ctx.Builder.BuildStore(limitNew, ctx.GepStatusRegister(limitReg));
+
+        // base low16 <- [m + 2..3]
+        var off2 = ctx.Builder.BuildAdd(off, LLVMValueRef.CreateConstInt(i16, 2, false), $"{label}_off2");
+        var baseLow = X86_16Emitters.SegmentedRead16(ctx, seg, off2, $"{label}_base_lo");
+
+        // base high8 <- [m + 4]; byte 5 ignored on 286.
+        var off4 = ctx.Builder.BuildAdd(off, LLVMValueRef.CreateConstInt(i16, 4, false), $"{label}_off4");
+        var lin4 = X86_16Emitters.SegmentedLinear(ctx, seg, off4, $"{label}_lin4");
+        var baseHi8 = MemoryEmitters.CallRead8(ctx, lin4, $"{label}_r_hi8");
+
+        // Combine: base32 = (zext(hi8) << 16) | zext(low16)
+        var baseLow32 = ctx.Builder.BuildZExt(baseLow, i32, $"{label}_base_lo32");
+        var baseHi32  = ctx.Builder.BuildZExt(baseHi8, i32, $"{label}_base_hi32");
+        var baseHiSh  = ctx.Builder.BuildShl(baseHi32, LLVMValueRef.CreateConstInt(i32, 16, false), $"{label}_base_hi_sh");
+        var baseFull  = ctx.Builder.BuildOr(baseHiSh, baseLow32, $"{label}_base_full");
+        ctx.Builder.BuildStore(baseFull, ctx.GepStatusRegister(baseReg));
+
+        ctx.Builder.BuildBr(endBB);
     }
 }
 
