@@ -2253,6 +2253,153 @@ public class X86JsonCpuTests
         Assert.Equal(0x84, mem.ReadByte(0x80));
     }
 
+    // ---------------- 24.6.7c — string ops (single iteration) ----------------
+
+    /// <summary>0xA4 MOVSB — DS:SI → ES:DI; SI++; DI++.</summary>
+    [Fact]
+    public void Step_Movsb_ForwardCopy()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xA4, 0xF4 });
+        var s = cpu.State;
+        s.SI = 0x100; s.DI = 0x200;
+        s.DS = 0; s.ES = 0;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x300);   // code at 0x300 to keep clear of data
+        // Re-load code at the new entry
+        var code = new byte[] { 0xA4, 0xF4 };
+        mem.LoadBinary(code, 0, 0x300);
+
+        mem.WriteByte(0x100, 0xAB);
+        mem.WriteByte(0x200, 0x00);   // dst initially zero
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xAB, mem.ReadByte(0x200));
+        Assert.Equal(0x101, cpu.State.SI);
+        Assert.Equal(0x201, cpu.State.DI);
+    }
+
+    /// <summary>
+    /// MOVSB with DF=1 — backward copy (SI/DI decrement).
+    /// </summary>
+    [Fact]
+    public void Step_Movsb_BackwardCopy_DfSet()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xA4, 0xF4 });
+        var s = cpu.State;
+        s.SI = 0x100; s.DI = 0x200;
+        s.FlagD = true;   // DF=1
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x300);
+        mem.LoadBinary(new byte[] { 0xA4, 0xF4 }, 0, 0x300);
+        mem.WriteByte(0x100, 0x55);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x55, mem.ReadByte(0x200));
+        Assert.Equal(0x0FF, cpu.State.SI);   // SI decremented
+        Assert.Equal(0x1FF, cpu.State.DI);   // DI decremented
+    }
+
+    /// <summary>0xAA STOSB — AL → ES:DI; DI++.</summary>
+    [Fact]
+    public void Step_Stosb_WritesAlAndAdvancesDi()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xAA, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0xCD;
+        s.DI = 0x100;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x200);
+        mem.LoadBinary(new byte[] { 0xAA, 0xF4 }, 0, 0x200);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xCD, mem.ReadByte(0x100));
+        Assert.Equal(0x101, cpu.State.DI);
+    }
+
+    /// <summary>0xAB STOSW — AX → ES:DI; DI+=2.</summary>
+    [Fact]
+    public void Step_Stosw_WritesAxAndAdvancesDi()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xAB, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0xBEEF;
+        s.DI = 0x100;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x200);
+        mem.LoadBinary(new byte[] { 0xAB, 0xF4 }, 0, 0x200);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xEF, mem.ReadByte(0x100));
+        Assert.Equal(0xBE, mem.ReadByte(0x101));
+        Assert.Equal(0x102, cpu.State.DI);
+    }
+
+    /// <summary>0xAC LODSB — DS:SI → AL; SI++.</summary>
+    [Fact]
+    public void Step_Lodsb_ReadsToAl()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xAC, 0xF4 });
+        var s = cpu.State;
+        s.SI = 0x100;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x200);
+        mem.LoadBinary(new byte[] { 0xAC, 0xF4 }, 0, 0x200);
+        mem.WriteByte(0x100, 0x42);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x42, cpu.State.A.L);
+        Assert.Equal(0x101, cpu.State.SI);
+    }
+
+    /// <summary>
+    /// 0xA6 CMPSB — comparing two equal bytes sets ZF=1; SI++; DI++.
+    /// </summary>
+    [Fact]
+    public void Step_Cmpsb_EqualSetsZf()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xA6, 0xF4 });
+        var s = cpu.State;
+        s.SI = 0x100; s.DI = 0x200;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x300);
+        mem.LoadBinary(new byte[] { 0xA6, 0xF4 }, 0, 0x300);
+        mem.WriteByte(0x100, 0xAA);
+        mem.WriteByte(0x200, 0xAA);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.True(cpu.State.FlagZ);
+        Assert.False(cpu.State.FlagC);
+        Assert.Equal(0x101, cpu.State.SI);
+        Assert.Equal(0x201, cpu.State.DI);
+    }
+
+    /// <summary>
+    /// 0xAE SCASB with AL=0x42 vs mem 0x42 — match → ZF=1.
+    /// </summary>
+    [Fact]
+    public void Step_Scasb_MatchSetsZf()
+    {
+        var (cpu, mem) = Setup(new byte[] { 0xAE, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x42;
+        s.DI = 0x100;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x200);
+        mem.LoadBinary(new byte[] { 0xAE, 0xF4 }, 0, 0x200);
+        mem.WriteByte(0x100, 0x42);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.True(cpu.State.FlagZ);
+        Assert.Equal(0x101, cpu.State.DI);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

@@ -1,0 +1,27 @@
+{
+  "name": "StringOps",
+  "comment": "8086 string operations — MOVS/CMPS/SCAS/LODS/STOS in byte and word forms. 24.6.7c covers single-iteration semantics; REP/REPE/REPNE prefix machinery (counted-loop wrapping) lands in 24.6.7c2 inside X86JsonCpu.Step().\n\nDirection Flag (DF, FLAGS bit 10) drives SI/DI advance: DF=0 → forward (+N), DF=1 → backward (-N). Default after RESET is DF=0.\n\nSegment usage:\n  MOVS/CMPS/LODS source: DS:SI (segment override applies to source)\n  MOVS/CMPS/SCAS/STOS dest: ES:DI (override does NOT apply per Intel — ES is hardcoded)",
+
+  "formats": [
+    { "name": "Movsb", "fields": {}, "mask": "0xFF", "match": "0xA4",
+      "instructions": [{ "mnemonic": "MOVSB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §MOVS", "cycles": { "form": "18" }, "steps": [{ "op": "x86_movsb" }] }] },
+    { "name": "Movsw", "fields": {}, "mask": "0xFF", "match": "0xA5",
+      "instructions": [{ "mnemonic": "MOVSW", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §MOVS", "cycles": { "form": "18" }, "steps": [{ "op": "x86_movsw" }] }] },
+    { "name": "Cmpsb", "fields": {}, "mask": "0xFF", "match": "0xA6",
+      "instructions": [{ "mnemonic": "CMPSB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CMPS", "cycles": { "form": "22" }, "steps": [{ "op": "x86_cmpsb" }] }] },
+    { "name": "Cmpsw", "fields": {}, "mask": "0xFF", "match": "0xA7",
+      "instructions": [{ "mnemonic": "CMPSW", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CMPS", "cycles": { "form": "22" }, "steps": [{ "op": "x86_cmpsw" }] }] },
+    { "name": "Stosb", "fields": {}, "mask": "0xFF", "match": "0xAA",
+      "instructions": [{ "mnemonic": "STOSB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §STOS", "cycles": { "form": "11" }, "steps": [{ "op": "x86_stosb" }] }] },
+    { "name": "Stosw", "fields": {}, "mask": "0xFF", "match": "0xAB",
+      "instructions": [{ "mnemonic": "STOSW", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §STOS", "cycles": { "form": "11" }, "steps": [{ "op": "x86_stosw" }] }] },
+    { "name": "Lodsb", "fields": {}, "mask": "0xFF", "match": "0xAC",
+      "instructions": [{ "mnemonic": "LODSB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §LODS", "cycles": { "form": "12" }, "steps": [{ "op": "x86_lodsb" }] }] },
+    { "name": "Lodsw", "fields": {}, "mask": "0xFF", "match": "0xAD",
+      "instructions": [{ "mnemonic": "LODSW", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §LODS", "cycles": { "form": "12" }, "steps": [{ "op": "x86_lodsw" }] }] },
+    { "name": "Scasb", "fields": {}, "mask": "0xFF", "match": "0xAE",
+      "instructions": [{ "mnemonic": "SCASB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SCAS", "cycles": { "form": "15" }, "steps": [{ "op": "x86_scasb" }] }] },
+    { "name": "Scasw", "fields": {}, "mask": "0xFF", "match": "0xAF",
+      "instructions": [{ "mnemonic": "SCASW", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SCAS", "cycles": { "form": "15" }, "steps": [{ "op": "x86_scasw" }] }] }
+  ]
+}

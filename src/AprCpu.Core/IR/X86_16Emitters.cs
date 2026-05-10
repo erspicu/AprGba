@@ -144,6 +144,19 @@ public static class X86_16Emitters
         reg.Register(new X86ShiftRotateW8Count1Emitter());
         reg.Register(new X86ShiftRotateW16Count1Emitter());
 
+        // 24.6.7c — string ops (one iteration each; REP prefix machinery
+        // in 24.6.7c2). All use DF (FLAGS bit 10) for SI/DI direction.
+        reg.Register(new X86MovsbEmitter());
+        reg.Register(new X86MovswEmitter());
+        reg.Register(new X86CmpsbEmitter());
+        reg.Register(new X86CmpswEmitter());
+        reg.Register(new X86StosbEmitter());
+        reg.Register(new X86StoswEmitter());
+        reg.Register(new X86LodsbEmitter());
+        reg.Register(new X86LodswEmitter());
+        reg.Register(new X86ScasbEmitter());
+        reg.Register(new X86ScaswEmitter());
+
         // Future emitters land here in dependency order — see the file's
         // class-level comment.
     }
@@ -3696,6 +3709,229 @@ internal sealed class X86ShiftRotateW8Count1Emitter : IMicroOpEmitter
         ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
         ctx.Builder.PositionAtEnd(endBB);
+    }
+}
+
+// ============================================================================
+// 24.6.7c — string-op helpers + 10 string-op emitters.
+//
+// Direction Flag (DF) handling:
+//   DF=0 (cleared, the default after RESET) → SI/DI advance forward (+1 byte
+//        for byte ops, +2 for word ops).
+//   DF=1 (set via STD)                       → SI/DI decrement.
+//
+// Source/dest segments:
+//   MOVSB/MOVSW: src DS:SI (segment override applies), dst ES:DI (override
+//                does NOT apply per Intel — ES is hardcoded for the dest).
+//   CMPSB/CMPSW: same dual-segment access.
+//   LODSB/LODSW: src DS:SI (segment override applies).
+//   STOSB/STOSW: dst ES:DI (no override).
+//   SCASB/SCASW: dst ES:DI (no override; scan target).
+//
+// Each emitter does ONE iteration; REP/REPE/REPNE wrapping happens in
+// X86JsonCpu's C# Step() loop (24.6.7c2).
+// ============================================================================
+
+internal static class X86StringHelpers
+{
+    /// <summary>
+    /// Compute the SI/DI delta as i16: +N if DF=0, -N if DF=1.
+    /// </summary>
+    public static LLVMValueRef BuildDfDelta(EmitContext ctx, int width, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var flags = X86CtrlHelpers.LoadFlags(ctx, label);
+        var df = X86CtrlHelpers.ExtractFlagBit(ctx, flags, 10, $"{label}_df");
+        // delta = df ? -width : +width
+        var pos = LLVMValueRef.CreateConstInt(i16, (ulong)width, false);
+        var neg = LLVMValueRef.CreateConstInt(i16, (ulong)(unchecked((ushort)(-width))), false);
+        return ctx.Builder.BuildSelect(df, neg, pos, $"{label}_delta");
+    }
+
+    /// <summary>Read SI (GPR 6) → i16.</summary>
+    public static LLVMValueRef ReadSi(EmitContext ctx, string label)
+        => X86_16Emitters.ReadGpr16(ctx, 6, label);
+
+    /// <summary>Read DI (GPR 7) → i16.</summary>
+    public static LLVMValueRef ReadDi(EmitContext ctx, string label)
+        => X86_16Emitters.ReadGpr16(ctx, 7, label);
+
+    public static void WriteSi(EmitContext ctx, LLVMValueRef v) => X86_16Emitters.WriteGpr16(ctx, 6, v);
+    public static void WriteDi(EmitContext ctx, LLVMValueRef v) => X86_16Emitters.WriteGpr16(ctx, 7, v);
+}
+
+// 0xA4 MOVSB — [DS:SI] → [ES:DI]; SI±1; DI±1
+internal sealed class X86MovsbEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_movsb";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var srcSeg = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "movsb_src");
+        var esSeg  = X86_16Emitters.LoadSeg16(ctx, "ES", "movsb_es");
+        var si = X86StringHelpers.ReadSi(ctx, "movsb_si");
+        var di = X86StringHelpers.ReadDi(ctx, "movsb_di");
+
+        var data = X86_16Emitters.SegmentedRead8(ctx, srcSeg, si, "movsb_v");
+        X86_16Emitters.SegmentedWrite8(ctx, esSeg, di, data, "movsb_w");
+
+        var delta = X86StringHelpers.BuildDfDelta(ctx, 1, "movsb");
+        X86StringHelpers.WriteSi(ctx, ctx.Builder.BuildAdd(si, delta, "movsb_si_n"));
+        X86StringHelpers.WriteDi(ctx, ctx.Builder.BuildAdd(di, delta, "movsb_di_n"));
+    }
+}
+
+// 0xA5 MOVSW
+internal sealed class X86MovswEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_movsw";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var srcSeg = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "movsw_src");
+        var esSeg  = X86_16Emitters.LoadSeg16(ctx, "ES", "movsw_es");
+        var si = X86StringHelpers.ReadSi(ctx, "movsw_si");
+        var di = X86StringHelpers.ReadDi(ctx, "movsw_di");
+
+        var data = X86_16Emitters.SegmentedRead16(ctx, srcSeg, si, "movsw_v");
+        X86_16Emitters.SegmentedWrite16(ctx, esSeg, di, data, "movsw_w");
+
+        var delta = X86StringHelpers.BuildDfDelta(ctx, 2, "movsw");
+        X86StringHelpers.WriteSi(ctx, ctx.Builder.BuildAdd(si, delta, "movsw_si_n"));
+        X86StringHelpers.WriteDi(ctx, ctx.Builder.BuildAdd(di, delta, "movsw_di_n"));
+    }
+}
+
+// 0xA6 CMPSB — compare [DS:SI] vs [ES:DI]; flags via SUB; advance both.
+internal sealed class X86CmpsbEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_cmpsb";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var srcSeg = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "cmpsb_src");
+        var esSeg  = X86_16Emitters.LoadSeg16(ctx, "ES", "cmpsb_es");
+        var si = X86StringHelpers.ReadSi(ctx, "cmpsb_si");
+        var di = X86StringHelpers.ReadDi(ctx, "cmpsb_di");
+
+        var lhs = X86_16Emitters.SegmentedRead8(ctx, srcSeg, si, "cmpsb_l");
+        var rhs = X86_16Emitters.SegmentedRead8(ctx, esSeg, di, "cmpsb_r");
+        // Flag set as if SUB lhs - rhs (matches CMP semantics).
+        X86AluHelpers.BuildAluW8(ctx, "cmp", lhs, rhs, "cmpsb");
+
+        var delta = X86StringHelpers.BuildDfDelta(ctx, 1, "cmpsb");
+        X86StringHelpers.WriteSi(ctx, ctx.Builder.BuildAdd(si, delta, "cmpsb_si_n"));
+        X86StringHelpers.WriteDi(ctx, ctx.Builder.BuildAdd(di, delta, "cmpsb_di_n"));
+    }
+}
+
+internal sealed class X86CmpswEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_cmpsw";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var srcSeg = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "cmpsw_src");
+        var esSeg  = X86_16Emitters.LoadSeg16(ctx, "ES", "cmpsw_es");
+        var si = X86StringHelpers.ReadSi(ctx, "cmpsw_si");
+        var di = X86StringHelpers.ReadDi(ctx, "cmpsw_di");
+
+        var lhs = X86_16Emitters.SegmentedRead16(ctx, srcSeg, si, "cmpsw_l");
+        var rhs = X86_16Emitters.SegmentedRead16(ctx, esSeg, di, "cmpsw_r");
+        X86AluHelpers.BuildAluW16(ctx, "cmp", lhs, rhs, "cmpsw");
+
+        var delta = X86StringHelpers.BuildDfDelta(ctx, 2, "cmpsw");
+        X86StringHelpers.WriteSi(ctx, ctx.Builder.BuildAdd(si, delta, "cmpsw_si_n"));
+        X86StringHelpers.WriteDi(ctx, ctx.Builder.BuildAdd(di, delta, "cmpsw_di_n"));
+    }
+}
+
+// 0xAA STOSB — AL → [ES:DI]; DI±1
+internal sealed class X86StosbEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_stosb";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var esSeg = X86_16Emitters.LoadSeg16(ctx, "ES", "stosb_es");
+        var di = X86StringHelpers.ReadDi(ctx, "stosb_di");
+        var al = X86_16Emitters.ReadGpr8(ctx, 0, "stosb_al");
+        X86_16Emitters.SegmentedWrite8(ctx, esSeg, di, al, "stosb_w");
+        var delta = X86StringHelpers.BuildDfDelta(ctx, 1, "stosb");
+        X86StringHelpers.WriteDi(ctx, ctx.Builder.BuildAdd(di, delta, "stosb_di_n"));
+    }
+}
+
+// 0xAB STOSW — AX → [ES:DI]
+internal sealed class X86StoswEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_stosw";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var esSeg = X86_16Emitters.LoadSeg16(ctx, "ES", "stosw_es");
+        var di = X86StringHelpers.ReadDi(ctx, "stosw_di");
+        var ax = X86_16Emitters.ReadGpr16(ctx, 0, "stosw_ax");
+        X86_16Emitters.SegmentedWrite16(ctx, esSeg, di, ax, "stosw_w");
+        var delta = X86StringHelpers.BuildDfDelta(ctx, 2, "stosw");
+        X86StringHelpers.WriteDi(ctx, ctx.Builder.BuildAdd(di, delta, "stosw_di_n"));
+    }
+}
+
+// 0xAC LODSB — [DS:SI] → AL; SI±1
+internal sealed class X86LodsbEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_lodsb";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var srcSeg = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "lodsb_src");
+        var si = X86StringHelpers.ReadSi(ctx, "lodsb_si");
+        var data = X86_16Emitters.SegmentedRead8(ctx, srcSeg, si, "lodsb_v");
+        X86_16Emitters.WriteGpr8(ctx, 0, data);
+        var delta = X86StringHelpers.BuildDfDelta(ctx, 1, "lodsb");
+        X86StringHelpers.WriteSi(ctx, ctx.Builder.BuildAdd(si, delta, "lodsb_si_n"));
+    }
+}
+
+// 0xAD LODSW — [DS:SI] → AX
+internal sealed class X86LodswEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_lodsw";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var srcSeg = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "lodsw_src");
+        var si = X86StringHelpers.ReadSi(ctx, "lodsw_si");
+        var data = X86_16Emitters.SegmentedRead16(ctx, srcSeg, si, "lodsw_v");
+        X86_16Emitters.WriteGpr16(ctx, 0, data);
+        var delta = X86StringHelpers.BuildDfDelta(ctx, 2, "lodsw");
+        X86StringHelpers.WriteSi(ctx, ctx.Builder.BuildAdd(si, delta, "lodsw_si_n"));
+    }
+}
+
+// 0xAE SCASB — compare AL with [ES:DI]; flags via SUB; DI±1
+internal sealed class X86ScasbEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_scasb";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var esSeg = X86_16Emitters.LoadSeg16(ctx, "ES", "scasb_es");
+        var di = X86StringHelpers.ReadDi(ctx, "scasb_di");
+        var al = X86_16Emitters.ReadGpr8(ctx, 0, "scasb_al");
+        var rhs = X86_16Emitters.SegmentedRead8(ctx, esSeg, di, "scasb_r");
+        X86AluHelpers.BuildAluW8(ctx, "cmp", al, rhs, "scasb");
+        var delta = X86StringHelpers.BuildDfDelta(ctx, 1, "scasb");
+        X86StringHelpers.WriteDi(ctx, ctx.Builder.BuildAdd(di, delta, "scasb_di_n"));
+    }
+}
+
+// 0xAF SCASW
+internal sealed class X86ScaswEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_scasw";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var esSeg = X86_16Emitters.LoadSeg16(ctx, "ES", "scasw_es");
+        var di = X86StringHelpers.ReadDi(ctx, "scasw_di");
+        var ax = X86_16Emitters.ReadGpr16(ctx, 0, "scasw_ax");
+        var rhs = X86_16Emitters.SegmentedRead16(ctx, esSeg, di, "scasw_r");
+        X86AluHelpers.BuildAluW16(ctx, "cmp", ax, rhs, "scasw");
+        var delta = X86StringHelpers.BuildDfDelta(ctx, 2, "scasw");
+        X86StringHelpers.WriteDi(ctx, ctx.Builder.BuildAdd(di, delta, "scasw_di_n"));
     }
 }
 
