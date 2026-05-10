@@ -48,6 +48,19 @@ CODE_NULL_SS = bytes([
 ])
 assert len(CODE_NULL_SS) == 17
 
+# Sprint 27.11e — DPL fault demo. Loads selector 0x000B (idx=1, RPL=3) into
+# DS while CPL=0. With GDT[1].DPL=0, max(CPL,RPL) = max(0,3) = 3 > 0 = DPL,
+# so the load raises #GP(sel & 0xFFFC = 0x0008).
+CODE_DPL_GP = bytes([
+    0xB8, 0xF1, 0xFF,           # mov ax, 0xFFF1
+    0x0F, 0x01, 0x16, 0x40, 0x01,  # lgdt [0x140]
+    0x0F, 0x01, 0xF0,           # lmsw ax
+    0xB8, 0x0B, 0x00,           # mov ax, 0x000B   (idx=1, RPL=3)
+    0x8E, 0xD8,                 # mov ds, ax       (#GP expected, PE=1)
+    0xF4,                       # hlt
+])
+assert len(CODE_DPL_GP) == 17
+
 # GDTR image: 6 bytes at file offset 0x40 (segment offset 0x140).
 #   limit = 0x10 (room for 2 descriptors)
 #   base  = 0x150 (segment offset where GDT lives)
@@ -91,14 +104,17 @@ def main():
     entry   = build_com(access_byte=0x92)                     # P=1, S=1, writable data, DPL=0
     np      = build_com(access_byte=0x12)                     # P=0, S=1, writable data, DPL=0
     null_ss = build_com(access_byte=0x92, code=CODE_NULL_SS)  # GDT[1] unused (NULL load)
+    dpl_gp  = build_com(access_byte=0x92, code=CODE_DPL_GP)   # DPL=0, RPL=3 → #GP
 
     (out_dir / "27-pmode-entry.com").write_bytes(entry)
     (out_dir / "27-pmode-np.com").write_bytes(np)
     (out_dir / "27-pmode-null-ss.com").write_bytes(null_ss)
+    (out_dir / "27-pmode-dpl-gp.com").write_bytes(dpl_gp)
 
     print(f"wrote {len(entry)} bytes -> 27-pmode-entry.com")
     print(f"wrote {len(np)} bytes -> 27-pmode-np.com")
     print(f"wrote {len(null_ss)} bytes -> 27-pmode-null-ss.com")
+    print(f"wrote {len(dpl_gp)} bytes -> 27-pmode-dpl-gp.com")
 
 
 if __name__ == "__main__":

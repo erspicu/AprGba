@@ -2028,8 +2028,46 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
         var notPresentBB = ctx.Function.AppendBasicBlock($"{label}_np");
         ctx.Builder.BuildCondBr(pSet, presentBB, notPresentBB);
 
-        // P=1 — populate the hidden cache from the descriptor.
+        // P=1 — privilege check (data segments) then populate the cache.
         ctx.Builder.PositionAtEnd(presentBB);
+
+        // Sprint 27.11e — data-segment privilege check (Intel 80286 PRM
+        // §6.2.1.1). For ES/SS/DS, the rule is: max(CPL, RPL) <= DPL,
+        // otherwise raise #GP(sel & 0xFFFC). CS comes through this
+        // emitter too but MOV CS is reserved on real hardware; skip the
+        // check there to avoid spurious faults from synthetic test
+        // sequences that touch CS via X86WriteSregFieldEmitter.
+        if (segName != "CS")
+        {
+            // CPL = (visible CS) & 3
+            var cs16 = ctx.Builder.BuildLoad2(i16, ctx.GepStatusRegister("CS"), $"{label}_cs");
+            var cpl  = ctx.Builder.BuildAnd(cs16,
+                LLVMValueRef.CreateConstInt(i16, 0x3, false), $"{label}_cpl");
+            // RPL = sel & 3
+            var rpl  = ctx.Builder.BuildAnd(sel16,
+                LLVMValueRef.CreateConstInt(i16, 0x3, false), $"{label}_rpl");
+            // DPL = (access >> 5) & 3
+            var accZ = ctx.Builder.BuildZExt(bytes[5], i16, $"{label}_accz");
+            var dplShift = ctx.Builder.BuildLShr(accZ,
+                LLVMValueRef.CreateConstInt(i16, 5, false), $"{label}_dplsh");
+            var dpl  = ctx.Builder.BuildAnd(dplShift,
+                LLVMValueRef.CreateConstInt(i16, 0x3, false), $"{label}_dpl");
+            // Fault iff (CPL > DPL) OR (RPL > DPL).
+            var cplGt = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, cpl, dpl, $"{label}_cplgt");
+            var rplGt = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, rpl, dpl, $"{label}_rplgt");
+            var fault = ctx.Builder.BuildOr(cplGt, rplGt, $"{label}_pflt");
+
+            var dplGpBB  = ctx.Function.AppendBasicBlock($"{label}_dplgp");
+            var dplOkBB  = ctx.Function.AppendBasicBlock($"{label}_dplok");
+            ctx.Builder.BuildCondBr(fault, dplGpBB, dplOkBB);
+
+            ctx.Builder.PositionAtEnd(dplGpBB);
+            EmitRaiseException(ctx, /* vector */ 0x0D, sel16, $"{label}_dplgp");
+            ctx.Builder.BuildBr(doneBB);
+
+            ctx.Builder.PositionAtEnd(dplOkBB);
+        }
+
         ctx.Builder.BuildStore(protBase, basePtr);
         ctx.Builder.BuildStore(limit,    limitPtr);
         ctx.Builder.BuildStore(bytes[5], accessPtr);
