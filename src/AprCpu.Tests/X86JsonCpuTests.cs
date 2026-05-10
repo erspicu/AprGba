@@ -3146,6 +3146,114 @@ public class X86JsonCpuTests
         Assert.Equal(0x0010, cpu.State.A.X);
     }
 
+    // ---------------- 24.6.8 — block-JIT mode ----------------
+
+    /// <summary>
+    /// Block-JIT mode runs identical to per-instr backend for a simple
+    /// multi-instruction sequence ending in HLT.
+    /// </summary>
+    [Fact]
+    public void BlockJit_MultiInstrSequence_EndsAtHlt()
+    {
+        var mem = new X86Memory();
+        mem.LoadBinary(new byte[]
+        {
+            0xB8, 0x05, 0x00,    // mov ax, 5
+            0xBB, 0x07, 0x00,    // mov bx, 7
+            0x01, 0xD8,          // add ax, bx (= 12)
+            0xF4                 // hlt
+        }, 0, 0x100);
+        var cpu = new X86JsonCpu(mem, enableBlockJit: true);
+        cpu.Reset();
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 16 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(12,    cpu.State.A.X);
+        Assert.Equal(0x07,  cpu.State.B.X);
+        Assert.Equal("json-block-llvm", cpu.BackendName);
+    }
+
+    /// <summary>
+    /// Block-JIT with control flow: JMP forward through a block, landing
+    /// at HLT. Verifies BlockDetector ends the block at JMP and the next
+    /// dispatch resumes at the jump target.
+    /// </summary>
+    [Fact]
+    public void BlockJit_JmpTarget_LandsCorrectly()
+    {
+        var mem = new X86Memory();
+        mem.LoadBinary(new byte[]
+        {
+            0xB0, 0x42,         // mov al, 0x42
+            0xEB, 0x02,         // jmp +2
+            0x00, 0x00,         // filler
+            0xF4                // hlt
+        }, 0, 0x100);
+        var cpu = new X86JsonCpu(mem, enableBlockJit: true);
+        cpu.Reset();
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 16 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x42, cpu.State.A.L);
+    }
+
+    /// <summary>
+    /// Block-JIT falls back to per-instr Step() when first byte is a
+    /// segment-override prefix. Same end state as per-instr.
+    /// </summary>
+    [Fact]
+    public void BlockJit_PrefixedInstruction_FallsBackToPerInstr()
+    {
+        var mem = new X86Memory();
+        mem.LoadBinary(new byte[]
+        {
+            0x26, 0xA1, 0x50, 0x00,    // ES: mov ax, [0x50]
+            0xF4                        // hlt
+        }, 0, 0x100);
+        // Pre-set ES + payload at ES:0x50.
+        mem.WriteByte(0x10050, 0x12);
+        mem.WriteByte(0x10051, 0x34);
+
+        var cpu = new X86JsonCpu(mem, enableBlockJit: true);
+        cpu.Reset();
+        cpu.SetEntryPoint(0, 0x100);
+        var s = cpu.State;
+        s.ES = 0x1000;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 8 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x3412, cpu.State.A.X);
+    }
+
+    /// <summary>
+    /// Block-JIT with a longer arithmetic sequence — exercises ALU + flag
+    /// IR through BlockFunctionBuilder's alloca + mem2reg path.
+    /// </summary>
+    [Fact]
+    public void BlockJit_ArithmeticSequence_CorrectFlags()
+    {
+        var mem = new X86Memory();
+        mem.LoadBinary(new byte[]
+        {
+            0xB8, 0x10, 0x00,    // mov ax, 0x10
+            0x05, 0x05, 0x00,    // add ax, 5  → 0x15
+            0x05, 0xF0, 0xFF,    // add ax, 0xFFF0 → 0x05 (CF=1)
+            0xF4                 // hlt
+        }, 0, 0x100);
+        var cpu = new X86JsonCpu(mem, enableBlockJit: true);
+        cpu.Reset();
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 16 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0005, cpu.State.A.X);
+        Assert.True(cpu.State.FlagC);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

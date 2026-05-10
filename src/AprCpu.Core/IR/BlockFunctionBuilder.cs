@@ -270,37 +270,51 @@ public sealed unsafe class BlockFunctionBuilder
                 Layout.GepPcWritten(builder, statePtr));
 
             // N1.B' — for architectures whose emitters always read+advance
-            // state PC (no block-JIT bake path) — currently MOS6502 — pre-
-            // write PC = bi.Pc + 1 here. Mirrors per-instr Step's "fetch
-            // opcode + advance PC" dance (the host fetches opcode and
-            // advances PC by 1 before invoking the emitter). With the
-            // alloca + mem2reg slot provider this store hits the PC alloca,
-            // which mem2reg promotes — subsequent in-emitter PC loads
-            // become pure SSA-constant arithmetic, no aliasing penalty.
+            // state PC (no block-JIT bake path) — currently MOS6502 and
+            // 24.6.8 Intel 8086 — pre-write PC = bi.Pc + 1 here. Mirrors
+            // per-instr Step's "fetch opcode + advance PC" dance (the host
+            // fetches opcode and advances PC by 1 before invoking the
+            // emitter). With the alloca + mem2reg slot provider this store
+            // hits the PC alloca, which mem2reg promotes — subsequent
+            // in-emitter PC loads become pure SSA-constant arithmetic,
+            // no aliasing penalty.
             //
-            // Gating: only when the alloca provider is active AND PC is
-            // alloca-backed AND the architecture is variable-width
-            // (lengthOracle present, i.e. block.InstrSizeBytes == 0).
-            // Fixed-width sets (ARM/Thumb) keep the existing
-            // CurrentInstructionBaseAddress / PipelinePcConstant emitter
-            // path; their emitters never bump PC inside the body, so a
-            // pre-write would be wrong.
+            // Gating: only when the alloca provider is active AND the
+            // PC-equivalent status register is alloca-backed AND the
+            // architecture is variable-width (lengthOracle present, i.e.
+            // block.InstrSizeBytes == 0). Fixed-width sets (ARM/Thumb)
+            // keep the existing CurrentInstructionBaseAddress /
+            // PipelinePcConstant emitter path; their emitters never bump
+            // PC inside the body, so a pre-write would be wrong.
+            //
+            // 24.6.8: x86 uses "IP" instead of "PC" — try both names.
+            // For x86, bi.Pc is a 20-bit linear address (CS<<4)+IP, but
+            // the IP slot only stores the 16-bit offset. We compute the
+            // pre-write value from the LOW 16 bits of (bi.Pc + 1), which
+            // is the post-opcode IP value (CS unchanged across the block).
+            string? pcRegName = null;
             if (allocaProvider is not null
                 && block.InstrSizeBytes == 0u
                 && Layout.RegisterFile.GeneralPurpose.PcIndex is null
-                && allocaProvider.HasStatus("PC", null)
                 && Environment.GetEnvironmentVariable("APR_NO_PC_PREWRITE") is null)
             {
-                // PC type from spec — typically i16 (LR35902 / MOS6502).
-                var pcDef = Layout.GetStatusRegisterDef("PC");
+                if (allocaProvider.HasStatus("PC", null)) pcRegName = "PC";
+                else if (allocaProvider.HasStatus("IP", null)) pcRegName = "IP";
+            }
+            if (pcRegName is not null)
+            {
+                var pcDef = Layout.GetStatusRegisterDef(pcRegName);
                 var pcType = pcDef.WidthBits switch
                 {
                     16 => LLVMTypeRef.Int16,
                     32 => LLVMTypeRef.Int32,
-                    _ => throw new NotSupportedException($"PC width {pcDef.WidthBits} unsupported")
+                    _ => throw new NotSupportedException($"{pcRegName} width {pcDef.WidthBits} unsupported")
                 };
-                var pcPtrAlloca = ctx.GepStatusRegister("PC");
-                var pcPreWrite = (uint)((bi.Pc + 1u) & ((1u << pcDef.WidthBits) - 1));
+                var pcPtrAlloca = ctx.GepStatusRegister(pcRegName);
+                // For 8086 the IP slot is 16-bit; bi.Pc may be the linear
+                // 20-bit address. Mask to the IP slot's width.
+                var widthMask = pcDef.WidthBits >= 32 ? 0xFFFFFFFFu : (1u << pcDef.WidthBits) - 1;
+                var pcPreWrite = (uint)((bi.Pc + 1u) & widthMask);
                 builder.BuildStore(
                     LLVMValueRef.CreateConstInt(pcType, pcPreWrite, false),
                     pcPtrAlloca);

@@ -54,6 +54,7 @@ public sealed class BlockDetector
     private readonly InstructionSetSpec _setSpec;
     private readonly uint _instrSizeBytes;          // 0 sentinel for variable-width
     private readonly Func<byte, int>? _lengthOracle;// non-null only for variable-width sets
+    private readonly Func<IMemoryBus, uint, int>? _busLengthOracle; // 24.6.8a — CISC bus-aware
     private readonly IReadOnlyDictionary<byte, DecoderTable>? _prefixSubDecoders; // P0.2
 
     /// <summary>
@@ -110,6 +111,40 @@ public sealed class BlockDetector
         _prefixSubDecoders = prefixSubDecoders;
     }
 
+    /// <summary>
+    /// 24.6.8a — bus-aware length oracle constructor for CISC ISAs (Intel
+    /// 8086 +). Per Gemini's 2026-05-10 review: the byte-only `Func&lt;byte,
+    /// int&gt;` length oracle can't see the ModR/M byte that determines x86
+    /// instruction length, so CISC needs an oracle that walks the bus
+    /// from the current PC. Length is allowed up to 15 bytes (8086 architectural
+    /// max).
+    ///
+    /// When this constructor is used, the regular byte-only `_lengthOracle`
+    /// is left null and the detector takes the bus-aware path. The decoded
+    /// `word` is just the first byte (not LE-packed) — CISC decoders
+    /// dispatch on the first byte and consume operand bytes inside their
+    /// emitters via memory_read_8.
+    ///
+    /// `immediate` field of DecodedBlockInstruction stays null on this path
+    /// — the bake-constants optimization (per Gemini's recommendation
+    /// to extract imm at decode time and pass to emitter) is a follow-up
+    /// (24.6.8d). For now the per-instruction emitters re-fetch via
+    /// memory_read_8 at runtime — semantically correct, perf-suboptimal.
+    /// </summary>
+    public BlockDetector(
+        InstructionSetSpec setSpec,
+        DecoderTable decoder,
+        Func<IMemoryBus, uint, int> busLengthOracle,
+        IReadOnlyDictionary<byte, DecoderTable>? prefixSubDecoders = null)
+    {
+        ArgumentNullException.ThrowIfNull(busLengthOracle);
+        _instrSizeBytes    = 0;
+        _busLengthOracle   = busLengthOracle;
+        _setSpec           = setSpec;
+        _decoder           = decoder;
+        _prefixSubDecoders = prefixSubDecoders;
+    }
+
     /// <summary>The instruction-set this detector is bound to.</summary>
     public string SetName => _setSpec.Name;
 
@@ -120,8 +155,8 @@ public sealed class BlockDetector
     /// </summary>
     public uint InstrSizeBytes => _instrSizeBytes;
 
-    /// <summary>True if instruction length depends on opcode (LR35902).</summary>
-    public bool IsVariableWidth => _lengthOracle is not null;
+    /// <summary>True if instruction length is variable (byte-oracle or bus-oracle).</summary>
+    public bool IsVariableWidth => _lengthOracle is not null || _busLengthOracle is not null;
 
     /// <summary>
     /// Walk memory starting at <paramref name="startPc"/>, decode instructions,
@@ -179,7 +214,24 @@ public sealed class BlockDetector
             uint word;
             DecodedInstruction? decoded;
 
-            if (_lengthOracle is null)
+            if (_busLengthOracle is not null)
+            {
+                // 24.6.8a — CISC bus-aware path (Intel 8086+). The oracle
+                // walks the bus from the current PC to determine the
+                // instruction's total byte count (1-15 for 8086). We
+                // dispatch decode on just the first byte; multi-byte
+                // operand consumption is the per-instruction emitter's
+                // responsibility (memory_read_8 in JIT).
+                int lenInt = _busLengthOracle(bus, pc);
+                if (lenInt is < 1 or > 15)
+                    throw new InvalidOperationException(
+                        $"BlockDetector busLengthOracle returned {lenInt} at pc=0x{pc:X4} in set '{_setSpec.Name}'; expected 1..15.");
+                thisLength = (uint)lenInt;
+                byte first = bus.ReadByte(pc);
+                word    = first;
+                decoded = _decoder.Decode(word);
+            }
+            else if (_lengthOracle is null)
             {
                 // Fixed-width fast path (ARM / Thumb): single bus read of
                 // the full instruction word.
@@ -315,8 +367,13 @@ public sealed class BlockDetector
             // are little-endian; pack into uint. Length-1 (no operand) →
             // null. Fixed-width (no length oracle, _instrSizeBytes != 0)
             // → null (encoding has imm in bit fields, not after opcode).
+            // 24.6.8a CISC bus-aware path: also null — x86 has ModR/M /
+            // disp / imm as separate fields, can't pack into a single
+            // immediate slot. Bake-constants optimization is a follow-up
+            // (24.6.8d) that would replace this with structured per-op
+            // metadata.
             uint? immediate = null;
-            if (_instrSizeBytes == 0u && thisLength > 1)
+            if (_busLengthOracle is null && _instrSizeBytes == 0u && thisLength > 1)
             {
                 uint imm = 0;
                 for (int b = 1; b < thisLength; b++)

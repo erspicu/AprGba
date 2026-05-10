@@ -36,7 +36,7 @@ namespace AprX86.Cli.Cpu;
 
 public sealed unsafe class X86JsonCpu : IX86CpuBackend
 {
-    public string BackendName => "json-llvm";
+    public string BackendName => _blockJitEnabled ? "json-block-llvm" : "json-llvm";
 
     // Static memory reference used by the unmanaged extern shims. Last-call-
     // wins when multiple X86JsonCpu instances exist; the harness only ever
@@ -48,6 +48,12 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
     private readonly HostRuntime                 _rt;
     private readonly DecoderTable                _mainDecoder;
     private readonly SpecCompiler.CompileResult  _compileResult;
+
+    // 24.6.8 — block-JIT (optional, opt-in via ctor flag).
+    private readonly bool                        _blockJitEnabled;
+    private readonly BlockDetector?              _blockDetector;
+    private readonly BlockCache?                 _blockCache;
+    private int                                  _blockGeneration;
 
     // Identity-keyed function-pointer cache (InstructionDef → fn ptr).
     private readonly Dictionary<InstructionDef, IntPtr> _fnPtrByDef
@@ -65,9 +71,10 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
 
     public X86Memory Memory => _mem;
 
-    public X86JsonCpu(X86Memory memory)
+    public X86JsonCpu(X86Memory memory, bool enableBlockJit = false)
     {
         _mem = memory ?? throw new ArgumentNullException(nameof(memory));
+        _blockJitEnabled = enableBlockJit;
 
         var specPath = LocateSpec();
         var compileResult = SpecCompiler.Compile(specPath);
@@ -134,6 +141,18 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         // zeroes the buffer, so seed the default here to keep the EA
         // emitter's "no override unless seen" invariant.
         _state[_segOverrideOff] = 0xFF;
+
+        // 24.6.8 — block-JIT setup (opt-in).
+        if (_blockJitEnabled)
+        {
+            var mainSetSpec = _spec.InstructionSets["Main"];
+            _blockDetector = new BlockDetector(
+                mainSetSpec,
+                _mainDecoder,
+                busLengthOracle: X86_16InstructionLengths.GetLength,
+                prefixSubDecoders: null);
+            _blockCache = new BlockCache();
+        }
     }
 
     private static string LocateSpec()
@@ -229,6 +248,156 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
 
         if (Halted) return 0;
 
+        // 24.6.8 — block-JIT dispatch. Falls back to per-instr StepOne()
+        // when the next byte is a prefix (0x26/2E/36/3E/F0/F2/F3) or when
+        // BlockDetector decides not to compile a block at this PC.
+        if (_blockJitEnabled)
+        {
+            ushort cs0 = ReadU16(_csOff);
+            ushort ip0 = ReadU16(_ipOff);
+            int linear0 = ((cs0 << 4) + ip0) & 0xFFFFF;
+            byte first0 = _mem.ReadByte(linear0);
+            bool isPrefix = first0 is 0x26 or 0x2E or 0x36 or 0x3E or 0xF0 or 0xF2 or 0xF3;
+            if (!isPrefix)
+            {
+                int rc = StepBlock();
+                if (rc >= 0) return rc;
+                // -1 = block-JIT path bailed out (decoder returned null at
+                // this PC, or other unhandled case); fall through to
+                // per-instr Step() which has the broader fallback path.
+            }
+        }
+
+        return StepOne();
+    }
+
+    /// <summary>
+    /// 24.6.8 — block-JIT step. Detect (or hit cache for) the block at the
+    /// current CS:IP linear address, invoke the JIT'd block function, and
+    /// return cycles consumed (currently 1 — cycle accounting deferred).
+    /// </summary>
+    private int StepBlock()
+    {
+        ushort cs = ReadU16(_csOff);
+        ushort ip = ReadU16(_ipOff);
+        uint linearPc = (uint)(((cs << 4) + ip) & 0xFFFFF);
+
+        if (!_blockCache!.TryGet(linearPc, out var entry))
+        {
+            try
+            {
+                entry = CompileBlockAtLinearPc(linearPc);
+                _blockCache.Add(linearPc, entry);
+            }
+            catch (InvalidOperationException)
+            {
+                // Block compile failed (undecodable at startPc, or
+                // BlockDetector found 0 instructions). Bail to per-instr.
+                return -1;
+            }
+        }
+
+        var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
+        fn(_statePtr);
+        return 1;
+    }
+
+    private CachedBlock CompileBlockAtLinearPc(uint linearPc)
+    {
+        int maxInstr = BlockDetector.DefaultMaxInstructions;
+        var maxEnv = Environment.GetEnvironmentVariable("APR_X86_BLOCK_MAX");
+        if (maxEnv is not null && int.TryParse(maxEnv, out var m) && m > 0) maxInstr = m;
+
+        var busAdapter = new MemoryBusAdapter(_mem);
+        var block = _blockDetector!.Detect(busAdapter, linearPc, maxInstructions: maxInstr);
+        if (block.Instructions.Count == 0)
+        {
+            throw new InvalidOperationException(
+                $"X86JsonCpu: BlockDetector found no instructions at linearPc=0x{linearPc:X5}.");
+        }
+
+        var generation = ++_blockGeneration;
+        var moduleName = $"AprX86_BlockJit_pc{linearPc:X5}_g{generation}";
+        var module = LLVMModuleRef.CreateWithName(moduleName);
+        var bfb = new BlockFunctionBuilder(
+            module, _compileResult.Layout,
+            _compileResult.EmitterRegistry, _compileResult.ResolverRegistry)
+        {
+            CyclesPerSpecUnit = _spec.Cpu.IsaMetadata?.CyclesPerSpecUnit ?? 1
+        };
+        var mainSetSpec = _spec.InstructionSets["Main"];
+        bfb.Build(mainSetSpec, block, generation);
+
+        _rt.AddModule(module);
+        var fnName = BlockFunctionBuilder.BlockFunctionName("Main", linearPc, generation);
+        var fnPtr = _rt.GetFunctionPointer(fnName);
+
+        // Coverage range for cache invalidation (currently unused on x86 —
+        // no SMC notification path yet; left for future symmetry with NES).
+        int totalBytes = 0;
+        uint covStart = uint.MaxValue, covEnd = 0;
+        var n = block.Instructions.Count;
+        var instrPcs  = new uint[n];
+        var instrLens = new byte[n];
+        for (int i = 0; i < n; i++)
+        {
+            var bi = block.Instructions[i];
+            totalBytes += bi.LengthBytes;
+            instrPcs[i] = bi.Pc;
+            instrLens[i] = bi.LengthBytes;
+            if (bi.Pc < covStart) covStart = bi.Pc;
+            uint instrEnd = bi.Pc + bi.LengthBytes;
+            if (instrEnd > covEnd) covEnd = instrEnd;
+        }
+        var lastBi = block.Instructions[n - 1];
+        uint nextPcAfterLastInstr = (uint)((lastBi.Pc + lastBi.LengthBytes) & 0xFFFFFu);
+
+        return new CachedBlock(fnPtr, n, totalBytes, nextPcAfterLastInstr,
+            covStart, covEnd, instrPcs, instrLens);
+    }
+
+    /// <summary>
+    /// IMemoryBus adapter so BlockDetector can read instruction bytes from
+    /// X86Memory during cache-miss block detection. Addresses are linear
+    /// (post (CS&lt;&lt;4)+IP), masked to 20 bits per 8086 architectural
+    /// bus width.
+    /// </summary>
+    private sealed class MemoryBusAdapter : IMemoryBus
+    {
+        private readonly X86Memory _mem;
+        public MemoryBusAdapter(X86Memory mem) => _mem = mem;
+        public byte   ReadByte    (uint addr) => _mem.ReadByte((int)(addr & 0xFFFFFu));
+        public ushort ReadHalfword(uint addr) => (ushort)(
+              _mem.ReadByte((int)(addr & 0xFFFFFu))
+            | (_mem.ReadByte((int)((addr + 1) & 0xFFFFFu)) << 8));
+        public uint ReadWord(uint addr) => (uint)(
+              _mem.ReadByte((int)(addr & 0xFFFFFu))
+            | (_mem.ReadByte((int)((addr + 1) & 0xFFFFFu)) << 8)
+            | (_mem.ReadByte((int)((addr + 2) & 0xFFFFFu)) << 16)
+            | (_mem.ReadByte((int)((addr + 3) & 0xFFFFFu)) << 24));
+        public void WriteByte    (uint addr, byte v)   => _mem.WriteByte((int)(addr & 0xFFFFFu), v);
+        public void WriteHalfword(uint addr, ushort v)
+        {
+            _mem.WriteByte((int)(addr & 0xFFFFFu),       (byte)v);
+            _mem.WriteByte((int)((addr + 1) & 0xFFFFFu), (byte)(v >> 8));
+        }
+        public void WriteWord(uint addr, uint v)
+        {
+            _mem.WriteByte((int)(addr & 0xFFFFFu),       (byte)v);
+            _mem.WriteByte((int)((addr + 1) & 0xFFFFFu), (byte)(v >> 8));
+            _mem.WriteByte((int)((addr + 2) & 0xFFFFFu), (byte)(v >> 16));
+            _mem.WriteByte((int)((addr + 3) & 0xFFFFFu), (byte)(v >> 24));
+        }
+    }
+
+    /// <summary>
+    /// Per-instruction Step (the original implementation, renamed). Always
+    /// the slow path — handles segment override + REP prefixes, single
+    /// instruction execution. Block-JIT falls back here for prefixed
+    /// instructions and other paths it can't handle.
+    /// </summary>
+    private int StepOne()
+    {
         // Prefix dispatch — consumes 0x26/0x2E/0x36/0x3E (segment override,
         // 24.6.5d) and 0xF2/0xF3 (REP/REPE/REPNE, 24.6.7c2). All prefixes
         // are single-byte; we accumulate any combination until we hit a
