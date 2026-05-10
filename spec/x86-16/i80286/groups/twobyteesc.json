@@ -43,6 +43,29 @@
               ]
             }
           ]
+        },
+
+        {
+          "name": "ZeroOneGroup286",
+          "comment": "0F 01 group — ModR/M.reg selects SGDT(0)/SIDT(1)/LGDT(2)/LIDT(3)/SMSW(4)/[5 reserved]/LMSW(6)/[7 INVLPG/386+]. Phase 26 v1: dispatcher emitter routes only /4 SMSW; others throw NotImplementedException. The dispatch happens at RUNTIME inside the emitter (matching the F6/F7 group pattern in 8086 base spec) since modrm_reg is part of the ModR/M byte that comes AFTER the dispatch word — selector-based static dispatch wouldn't see it.",
+          "fields": {},
+          "mask":  "0xFF",
+          "match": "0x01",
+          "instructions": [
+            {
+              "id": "ZERO_ONE_GROUP_286",
+              "mnemonic": "ZERO_ONE_GROUP_286",
+              "since": "Intel80286",
+              "writes_pc": "never",
+              "manual_ref": "Intel 80286 PRM §0F 01 group",
+              "cycles": { "form": "2" },
+              "steps": [
+                { "op": "x86_fetch_modrm" },
+                { "op": "x86_modrm_compute_ea" },
+                { "op": "x86_286_zero_one_dispatch" }
+              ]
+            }
+          ]
         }
       ]
     }

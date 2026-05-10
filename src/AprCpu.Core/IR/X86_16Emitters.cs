@@ -196,8 +196,9 @@ public static class X86_16Emitters
         reg.Register(new X86AamEmitter());
         reg.Register(new X86AadEmitter());
 
-        // Phase 26 — 80286 stub (full implementation in Sprint 26.3+).
+        // Phase 26 — 80286 system instructions (real-mode subset).
         reg.Register(new X86Clts286StubEmitter());
+        reg.Register(new X86286ZeroOneDispatchEmitter());
 
         // Phase 25 — 80186 additions (referenced from i80186 spec via
         // inheritance overlay). 12 new opcodes + PUSH SP silicon-quirk fix.
@@ -5631,6 +5632,57 @@ internal sealed class X86Clts286StubEmitter : IMicroOpEmitter
     {
         // intentionally empty — no IR generated; LLVM will see only the
         // BlockFunctionBuilder's auto-br at the end of execBB.
+    }
+}
+
+// x86_286_zero_one_dispatch — Phase 26 Sprint 26.3 dispatcher for the
+// 0F 01 group on i80286. ModR/M.reg selects:
+//   /0 SGDT m48     (deferred to Sprint 26.3+)
+//   /1 SIDT m48     (deferred)
+//   /2 LGDT m48     (deferred)
+//   /3 LIDT m48     (deferred)
+//   /4 SMSW r/m16   ✅ Phase 26 v1 — stores constant 0xFFF0
+//   /5 reserved     (UD)
+//   /6 LMSW r/m16   (deferred to Sprint 26.4 with real MSW state)
+//   /7 INVLPG       (386+, never reachable on 286)
+//
+// Dispatch via runtime switch on modrm_reg (already in ctx.Values from
+// x86_fetch_modrm). Default + non-implemented arms fall through silently
+// (no-op) for now — the demo only exercises /4. Sprint 26.4+ will fill
+// in the rest.
+internal sealed class X86286ZeroOneDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_286_zero_one_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+
+        var sel = ctx.Resolve("modrm_reg");
+        var endBB     = ctx.Function.AppendBasicBlock("z01_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("z01_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"z01_{i}");
+        var sw = ctx.Builder.BuildSwitch(sel, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        // /4 SMSW: store 0xFFF0 (real-mode reset MSW) to r/m16.
+        ctx.Builder.PositionAtEnd(arms[4]);
+        var mswConst = LLVMValueRef.CreateConstInt(i16, 0xFFF0, false);
+        X86ModRmMemHelpers.BuildStoreW16(ctx, mswConst);
+        ctx.Builder.BuildBr(endBB);
+
+        // /0 /1 /2 /3 /6 /7 — no-op stubs (deferred). /5 reserved.
+        for (int i = 0; i < 8; i++)
+        {
+            if (i == 4) continue;
+            ctx.Builder.PositionAtEnd(arms[i]);
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(endBB);
     }
 }
 

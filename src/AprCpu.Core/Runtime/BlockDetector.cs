@@ -213,6 +213,10 @@ public sealed class BlockDetector
             uint thisLength;
             uint word;
             DecodedInstruction? decoded;
+            // 26.2b — when a prefix sub-decoder fires (e.g. 80286 0x0F escape),
+            // the "opcode" starts at byte index 1 instead of 0; PackedTailBytes
+            // tail packing must start AFTER the opcode, i.e. at byte 2.
+            uint busOpcodeStartedAt = 0u;
 
             if (_busLengthOracle is not null)
             {
@@ -250,6 +254,9 @@ public sealed class BlockDetector
                     byte subOpcode = bus.ReadByte(pc + 1);
                     word    = subOpcode;
                     decoded = subDec.Decode(word);
+                    busOpcodeStartedAt = 1u;     // 26.2b — opcode is byte 1 (after 0F escape).
+                                                  // PackedTailBytes packing starts AFTER the
+                                                  // opcode, so byte 2 onward.
                 }
                 else
                 {
@@ -478,13 +485,20 @@ public sealed class BlockDetector
             ulong? packedTail = null;
             if (_busLengthOracle is not null && thisLength is > 1 and <= 9)
             {
-                ulong tail = 0;
-                int trailingCount = (int)(thisLength - 1u);
-                for (int b = 0; b < trailingCount; b++)
+                // 26.2b — opcode may span 1 byte (normal) or 2 bytes (0F-prefixed).
+                // PackedTail starts AFTER the opcode so FetchImm8/16 emitters
+                // see the right byte sequence regardless of prefix presence.
+                uint opcodeBytes = 1u + busOpcodeStartedAt;  // 1 normally, 2 after 0F.
+                if (thisLength > opcodeBytes)
                 {
-                    tail |= (ulong)bus.ReadByte(pc + 1u + (uint)b) << (b * 8);
+                    ulong tail = 0;
+                    int trailingCount = (int)(thisLength - opcodeBytes);
+                    for (int b = 0; b < trailingCount; b++)
+                    {
+                        tail |= (ulong)bus.ReadByte(pc + opcodeBytes + (uint)b) << (b * 8);
+                    }
+                    packedTail = tail;
                 }
-                packedTail = tail;
             }
 
             instrs.Add(new DecodedBlockInstruction(pc, word, decoded, (byte)thisLength,
