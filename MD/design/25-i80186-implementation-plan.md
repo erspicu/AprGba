@@ -1,6 +1,6 @@
 # Phase 25 — Intel 80186 implementation plan
 
-> **Status**: ready-to-execute (2026-05-10)
+> **Status**: in-progress (2026-05-10)
 > **Parent design**: [23-cpu-spec-inheritance.md](23-cpu-spec-inheritance.md) (DRAFT v2, Gemini-reviewed)
 > **Predecessor**: Phase 24 (8086 — completed, three-backend parity, 218 MIPS block-JIT)
 > **Goal**: 把 Intel 80186 加入 framework，**主要 demo target 是 spec inheritance + override 機制本身**。
@@ -8,6 +8,27 @@
 > 80186 vs 8086 ISA 共通度約 96% — 只新增 12 個 opcode + 兩個 silicon
 > quirk override（PUSH SP / shift mask）。是 inheritance 機制的最佳首次
 > validation case：spec 預期 ~250 行 diff（不含繼承的 ~3000 行 8086 spec）。
+
+## 進度 status
+
+| Sprint | Status | Commit | 完成日 |
+|---|---|---|---|
+| 25.1 Inheritance infra | ✅ | `3e23563` | 2026-05-10 |
+| 25.2 ID retrofit (8086) | ⏳ pending | — | — |
+| 25.3 i80186 spec | ⏳ pending | — | — |
+| 25.4 Emitters | ⏳ pending | — | — |
+| 25.5 CLI wiring | ⏳ pending | — | — |
+| 25.6 Tests + demos | ⏳ pending | — | — |
+| 25.7 Docs + push | ⏳ pending | — | — |
+
+**Sprint 25.1 deliverables**:
+- `src/AprCpu.Core/JsonSpec/JsonMergePatch.cs` (RFC 7386 helper, ~80 行)
+- `src/AprCpu.Core/JsonSpec/SpecModel.cs` 加 `Architecture.ExtendsPath`、`InstructionDef.Id` / `OriginCpu` / `OverriddenBy`、`InstructionSetDiff` + `PerSetDiff` records
+- `src/AprCpu.Core/JsonSpec/SpecLoader.cs` 加 `LoadCpuSpecInternal` recursive resolver (depth cap 4 + cycle detect) + `ApplyInstructionSetDiff` + `ApplyDiffToSet` (additions / overrides via JsonMergePatch / removals) + `TagInstructionsWithOrigin` provenance
+- `src/AprCpu.Tests/JsonMergePatchTests.cs` (13 tests, RFC 7386 conformance + spec-inheritance-specific cases)
+- `src/AprCpu.Tests/SpecInheritanceTests.cs` (7 tests, end-to-end via temp tiny CPU specs)
+- T2 18 PNG SHA256 identical = 既有 i8086 spec 完全 backwards-compat
+- T1 838 tests background 跑中
 
 ---
 

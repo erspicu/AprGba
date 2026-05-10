@@ -23,7 +23,12 @@ public sealed record CpuSpec(
     // to framework-baseline behaviour (cycles_per_spec_unit=4 m-cycle×4
     // GB/ARM convention, lazy PC, end-of-block IRQ check). See
     // MD/design/19-declarative-jit-policy.md.
-    IsaMetadata? IsaMetadata = null);
+    IsaMetadata? IsaMetadata = null,
+    // 25.1 — child spec's diff against its parent's instruction sets.
+    // Only meaningful when Architecture.Extends is non-null. Resolved at
+    // load time via SpecLoader's recursive parent resolution + JSON Merge
+    // Patch on overrides. Null when this is a base spec.
+    InstructionSetDiff? InstructionSetDiff = null);
 
 /// <summary>Loaded instruction-set file (e.g. `arm.json`, `thumb.json`).</summary>
 public sealed record InstructionSetSpec(
@@ -49,7 +54,12 @@ public sealed record Architecture(
     string Family,
     string? Extends,
     string Endianness,
-    int WordSizeBits);
+    int WordSizeBits,
+    // 25.1 — relative path to parent cpu.json. Required when Extends is
+    // non-null. Resolved against the current spec file's directory.
+    // Example: i80186/cpu.json sets ExtendsPath = "../i8086/cpu.json".
+    // Null when Extends is null (base spec, no inheritance).
+    string? ExtendsPath = null);
 
 public sealed record CpuVariant(
     string Id,
@@ -126,6 +136,39 @@ public sealed record InstructionSetExtends(
     string Spec,
     string Set);
 
+/// <summary>
+/// 25.1 — declarative diff that a child CPU spec applies to its parent's
+/// instruction sets. Per RFC 7386 (JSON Merge Patch) at the per-instruction
+/// level — child overrides only declare the fields that change, the rest
+/// inherits from parent.
+/// </summary>
+public sealed record InstructionSetDiff(
+    /// <summary>
+    /// Per instruction-set name (e.g. "Main"), the diff to apply.
+    /// </summary>
+    IReadOnlyDictionary<string, PerSetDiff> PerSet);
+
+/// <summary>
+/// Diff for one named instruction set inside an <see cref="InstructionSetDiff"/>.
+/// </summary>
+public sealed record PerSetDiff(
+    /// <summary>
+    /// New instructions to add. Each must carry a unique ID not present in
+    /// the parent's set. The element shape is the raw <c>instructions[]</c>
+    /// JSON used elsewhere — same parser path applied at merge time.
+    /// </summary>
+    IReadOnlyList<JsonElement> AdditionsRaw,
+    /// <summary>
+    /// Map of instruction ID → partial-instruction patch. The ID must
+    /// exist in the parent; the patch is applied via JSON Merge Patch
+    /// (RFC 7386). Throws if ID not found in parent.
+    /// </summary>
+    IReadOnlyDictionary<string, JsonElement> Overrides,
+    /// <summary>
+    /// IDs to remove from the parent's set. Each must exist in the parent.
+    /// </summary>
+    IReadOnlyList<string> Removals);
+
 public sealed record InstructionSetDispatch(
     string Selector,
     IReadOnlyDictionary<string, string> SelectorValues,
@@ -201,7 +244,21 @@ public sealed record InstructionDef(
     IReadOnlyList<string> Quirks,
     string? ManualRef,
     Cycles? Cycles,
-    IReadOnlyList<MicroOpStep> Steps);
+    IReadOnlyList<MicroOpStep> Steps,
+    // 25.1 — stable ID for spec inheritance / override. Optional during
+    // bootstrap (existing 8086 spec retrofitted in sprint 25.2). Once
+    // retrofitted, IDs must be unique within an instruction set, and
+    // `instruction_set_diff.overrides` / `removals` reference instructions
+    // by ID. Convention: <MNEMONIC>_<OPERAND_SHAPE> (see
+    // MD/design/25.2-instruction-id-conventions.md).
+    string? Id = null,
+    // 25.1.4 — provenance: which CPU spec originally defined this
+    // instruction (set on first load) and which CPU spec last overrode
+    // it (set when an inheritance override applies). Both null on the
+    // base spec; `OverriddenBy` is set even on a no-op override (for
+    // audit). Currently informational; spec dump tools surface this.
+    string? OriginCpu = null,
+    string? OverriddenBy = null);
 
 public sealed record InstructionSelector(string Field, string Value)
 {

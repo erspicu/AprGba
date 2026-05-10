@@ -40,19 +40,91 @@ public static class SpecLoader
         return JsonDocument.Parse(assembled, DocOpts);
     }
 
-    /// <summary>Load a cpu.json plus all its referenced instruction-set files.</summary>
+    /// <summary>Load a cpu.json plus all its referenced instruction-set files.
+    ///
+    /// <para>25.1 — when <c>architecture.extends</c> is non-null, the parent
+    /// spec is resolved via <c>architecture.extends_path</c> (relative to
+    /// the current cpu.json) and recursively loaded. The child's
+    /// <c>instruction_set_diff</c> is then applied: additions add new
+    /// instructions, overrides patch existing instructions (RFC 7386
+    /// JSON Merge Patch by ID), removals delete instructions by ID.
+    /// Cycles in the chain throw; chain depth &gt; 4 throws.</para>
+    /// </summary>
     public static LoadedSpec LoadCpuSpec(string cpuJsonPath)
+        => LoadCpuSpecInternal(cpuJsonPath, new HashSet<string>(StringComparer.OrdinalIgnoreCase), depth: 0);
+
+    /// <summary>
+    /// Maximum inheritance chain depth. Per Gemini's 2026-05-09 review:
+    /// deep trees become anti-patterns; capped at 4 (e.g.
+    /// i80286 → i80186 → i8086 → _base_808x is 4 hops).
+    /// </summary>
+    public const int MaxInheritanceDepth = 4;
+
+    private static LoadedSpec LoadCpuSpecInternal(string cpuJsonPath, HashSet<string> inProgress, int depth)
     {
         var fullPath = Path.GetFullPath(cpuJsonPath);
         if (!File.Exists(fullPath))
             throw new SpecValidationException("File not found.", fullPath);
 
-        using var doc = LoadAndResolveDocument(fullPath);
-        var cpu = ParseCpuSpec(doc.RootElement, fullPath);
+        if (depth > MaxInheritanceDepth)
+            throw new SpecValidationException(
+                $"Inheritance chain exceeds maximum depth of {MaxInheritanceDepth}.",
+                fullPath);
 
-        var dir = Path.GetDirectoryName(fullPath)!;
+        if (!inProgress.Add(fullPath))
+            throw new SpecValidationException(
+                $"Cyclic inheritance detected — '{fullPath}' is already being resolved.",
+                fullPath);
+
+        try
+        {
+            using var doc = LoadAndResolveDocument(fullPath);
+            var childCpu = ParseCpuSpec(doc.RootElement, fullPath);
+
+            var dir = Path.GetDirectoryName(fullPath)!;
+
+            // Base case: no parent. Load instruction sets from disk and return.
+            if (childCpu.Architecture.Extends is null)
+            {
+                if (childCpu.Architecture.ExtendsPath is not null)
+                    throw new SpecValidationException(
+                        "architecture.extends_path is set but architecture.extends is null — both must be set together.",
+                        fullPath, "$.architecture.extends");
+                if (childCpu.InstructionSetDiff is not null)
+                    throw new SpecValidationException(
+                        "instruction_set_diff is set but architecture.extends is null — diff only applies to child specs.",
+                        fullPath, "$.instruction_set_diff");
+
+                return LoadBaseCpuSpec(fullPath, childCpu, dir);
+            }
+
+            // Inheriting case: resolve parent + apply diff.
+            if (childCpu.Architecture.ExtendsPath is null)
+                throw new SpecValidationException(
+                    $"architecture.extends is '{childCpu.Architecture.Extends}' but extends_path is null — explicit relative path is required.",
+                    fullPath, "$.architecture.extends_path");
+
+            var parentPath = Path.GetFullPath(Path.Combine(dir, childCpu.Architecture.ExtendsPath));
+            var parent = LoadCpuSpecInternal(parentPath, inProgress, depth + 1);
+
+            // Sanity check: parent's id must match child's declared `extends`.
+            if (!string.Equals(parent.Cpu.Architecture.Id, childCpu.Architecture.Extends, StringComparison.Ordinal))
+                throw new SpecValidationException(
+                    $"architecture.extends declares parent id '{childCpu.Architecture.Extends}' but parent at '{childCpu.Architecture.ExtendsPath}' has id '{parent.Cpu.Architecture.Id}'.",
+                    fullPath, "$.architecture.extends");
+
+            var mergedSets = ApplyInstructionSetDiff(parent, childCpu, fullPath);
+            return new LoadedSpec(fullPath, childCpu, mergedSets);
+        }
+        finally
+        {
+            inProgress.Remove(fullPath);
+        }
+    }
+
+    private static LoadedSpec LoadBaseCpuSpec(string fullPath, CpuSpec cpu, string dir)
+    {
         var sets = new Dictionary<string, InstructionSetSpec>(StringComparer.OrdinalIgnoreCase);
-
         foreach (var setRef in cpu.InstructionSets)
         {
             var setPath = Path.GetFullPath(Path.Combine(dir, setRef.File));
@@ -65,10 +137,243 @@ public static class SpecLoader
             using var setDoc = LoadAndResolveDocument(setPath);
             var set = ParseInstructionSetSpec(setDoc.RootElement, setPath);
             SpecValidator.ValidateInstructionSet(set);
+            // 25.1.4 — tag every instruction in a base spec with OriginCpu so
+            // a future override can reference where it came from.
+            set = TagInstructionsWithOrigin(set, cpu.Architecture.Id);
             sets[setRef.Name] = set;
         }
-
         return new LoadedSpec(fullPath, cpu, sets);
+    }
+
+    /// <summary>
+    /// 25.1 — apply child's <c>instruction_set_diff</c> over parent's loaded
+    /// instruction sets. Returns a fresh dictionary of merged instruction
+    /// sets. Parent's sets that aren't mentioned in the diff pass through
+    /// unchanged (still tagged with parent's OriginCpu).
+    /// </summary>
+    private static IReadOnlyDictionary<string, InstructionSetSpec> ApplyInstructionSetDiff(
+        LoadedSpec parent, CpuSpec child, string childFilePath)
+    {
+        var result = new Dictionary<string, InstructionSetSpec>(StringComparer.OrdinalIgnoreCase);
+        // Start with parent's sets (already tagged with origin).
+        foreach (var (name, parentSet) in parent.InstructionSets)
+            result[name] = parentSet;
+
+        if (child.InstructionSetDiff is null) return result;
+
+        foreach (var (setName, diff) in child.InstructionSetDiff.PerSet)
+        {
+            if (!result.TryGetValue(setName, out var parentSet))
+                throw new SpecValidationException(
+                    $"instruction_set_diff references set '{setName}' which is not present in parent spec.",
+                    childFilePath, $"$.instruction_set_diff.{setName}");
+
+            var merged = ApplyDiffToSet(parentSet, diff, child.Architecture.Id, childFilePath, setName);
+            result[setName] = merged;
+        }
+        return result;
+    }
+
+    private static InstructionSetSpec ApplyDiffToSet(
+        InstructionSetSpec parentSet,
+        PerSetDiff diff,
+        string childCpuId,
+        string childFilePath,
+        string setName)
+    {
+        // Flatten parent instructions to a working list keyed by ID for easy
+        // lookup. Instructions without IDs (pre-25.2 retrofit) can't be
+        // referenced by overrides/removals — only by additions.
+        // Each entry preserves its (groupIndex, formatIndex, instrIndex)
+        // for re-emit at the end.
+        var workingGroups = parentSet.EncodingGroups.Select(g =>
+            new EncodingGroup(g.Name, g.AppliesWhen,
+                g.Formats.Select(f => new EncodingFormat(
+                    f.Name, f.Comment, f.Pattern, f.Fields, f.Mask, f.Match, f.Operands,
+                    f.Instructions.ToList())).ToList())).ToList();
+
+        // ===== removals =====
+        foreach (var rmId in diff.Removals)
+        {
+            bool removed = false;
+            foreach (var g in workingGroups)
+            {
+                foreach (var f in g.Formats)
+                {
+                    var list = (List<InstructionDef>)f.Instructions;
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        if (list[i].Id == rmId) { list.RemoveAt(i); removed = true; break; }
+                    }
+                    if (removed) break;
+                }
+                if (removed) break;
+            }
+            if (!removed)
+                throw new SpecValidationException(
+                    $"instruction_set_diff['{setName}'].removals references id '{rmId}' which is not present in parent.",
+                    childFilePath, $"$.instruction_set_diff.{setName}.removals");
+        }
+
+        // ===== overrides =====
+        foreach (var (id, partial) in diff.Overrides)
+        {
+            bool patched = false;
+            foreach (var g in workingGroups)
+            {
+                foreach (var f in g.Formats)
+                {
+                    var list = (List<InstructionDef>)f.Instructions;
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        if (list[i].Id != id) continue;
+                        var parentInstr = list[i];
+                        var parentRaw = SerializeInstructionDef(parentInstr);
+                        var mergedNode = JsonMergePatch.Apply(parentRaw, System.Text.Json.Nodes.JsonNode.Parse(partial.GetRawText()));
+                        if (mergedNode is null)
+                            throw new SpecValidationException(
+                                $"override of '{id}' produced null result.",
+                                childFilePath, $"$.instruction_set_diff.{setName}.overrides.{id}");
+                        using var mergedDoc = JsonDocument.Parse(mergedNode.ToJsonString());
+                        var mergedInstr = ParseInstructionDef(mergedDoc.RootElement, childFilePath,
+                            $"$.instruction_set_diff.{setName}.overrides.{id}");
+                        // Preserve OriginCpu (where instruction was first
+                        // defined) and tag OverriddenBy = current child.
+                        mergedInstr = mergedInstr with
+                        {
+                            OriginCpu = parentInstr.OriginCpu ?? parentInstr.Mnemonic, // fallback if origin lost
+                            OverriddenBy = childCpuId
+                        };
+                        list[i] = mergedInstr;
+                        patched = true;
+                        break;
+                    }
+                    if (patched) break;
+                }
+                if (patched) break;
+            }
+            if (!patched)
+                throw new SpecValidationException(
+                    $"instruction_set_diff['{setName}'].overrides references id '{id}' which is not present in parent.",
+                    childFilePath, $"$.instruction_set_diff.{setName}.overrides.{id}");
+        }
+
+        // ===== additions =====
+        // Additions go into the FIRST format whose mask matches the new
+        // instruction's encoding... but we don't have a generic way to
+        // assign a new instruction to a format without explicit declaration.
+        // For simplicity we put all additions into a synthetic group named
+        // "_additions_<childCpuId>" with one format per addition. This
+        // preserves the additions' own format declarations from the JSON.
+        // Convention: each addition is a full encoding-format-like object
+        // with embedded `instructions: [...]`. If the addition is a flat
+        // instruction (no format wrapper) we synthesize a format around it
+        // using its own `mask` / `match` fields.
+        if (diff.AdditionsRaw.Count > 0)
+        {
+            var addFormats = new List<EncodingFormat>();
+            foreach (var raw in diff.AdditionsRaw)
+            {
+                // The addition is expected to be an EncodingFormat-shaped
+                // object (with `instructions`) — i.e. same structure as
+                // parent's encoding_groups[*].formats[*].
+                var fmt = ParseEncodingFormat(raw, parentSet.WidthBits, childFilePath,
+                    $"$.instruction_set_diff.{setName}.additions");
+                // Tag every instruction in this addition with OriginCpu = childCpuId.
+                var taggedInstrs = fmt.Instructions.Select(i =>
+                    i with { OriginCpu = childCpuId }).ToList();
+                addFormats.Add(fmt with { Instructions = taggedInstrs });
+            }
+
+            // Validate ID uniqueness across parent + additions.
+            var parentIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var g in workingGroups)
+                foreach (var f in g.Formats)
+                    foreach (var i in f.Instructions)
+                        if (i.Id is not null) parentIds.Add(i.Id);
+
+            foreach (var f in addFormats)
+                foreach (var i in f.Instructions)
+                {
+                    if (i.Id is not null && parentIds.Contains(i.Id))
+                        throw new SpecValidationException(
+                            $"addition '{i.Id}' collides with an existing instruction in parent — use overrides instead.",
+                            childFilePath, $"$.instruction_set_diff.{setName}.additions");
+                }
+
+            workingGroups.Add(new EncodingGroup(
+                Name: $"_additions_{childCpuId}",
+                AppliesWhen: null,
+                Formats: addFormats));
+        }
+
+        // Re-build set with merged groups.
+        return parentSet with { EncodingGroups = workingGroups };
+    }
+
+    /// <summary>
+    /// 25.1.4 — tag every instruction in a freshly-loaded base spec with
+    /// <c>OriginCpu = cpuId</c> so future overrides can identify provenance.
+    /// </summary>
+    private static InstructionSetSpec TagInstructionsWithOrigin(InstructionSetSpec set, string cpuId)
+    {
+        var groups = set.EncodingGroups.Select(g =>
+            g with { Formats = g.Formats.Select(f =>
+                f with { Instructions = f.Instructions.Select(i =>
+                    i with { OriginCpu = i.OriginCpu ?? cpuId }).ToList() }).ToList() }).ToList();
+        return set with { EncodingGroups = groups };
+    }
+
+    /// <summary>
+    /// 25.1 — re-serialize an InstructionDef back to its JSON shape so
+    /// JsonMergePatch can operate on it. Only the fields that ParseInstructionDef
+    /// can re-read are written; provenance / Id are preserved.
+    /// </summary>
+    private static System.Text.Json.Nodes.JsonNode SerializeInstructionDef(InstructionDef instr)
+    {
+        var obj = new System.Text.Json.Nodes.JsonObject();
+        if (instr.Id is not null) obj["id"] = instr.Id;
+        obj["mnemonic"] = instr.Mnemonic;
+        if (instr.Since is not null) obj["since"] = instr.Since;
+        if (instr.Until is not null) obj["until"] = instr.Until;
+        if (instr.RequiresFeature is not null) obj["requires_feature"] = instr.RequiresFeature;
+        if (instr.Unconditional) obj["unconditional"] = true;
+        if (instr.WritesPc is not null) obj["writes_pc"] = instr.WritesPc;
+        if (instr.WritesMemory.Count > 0)
+        {
+            var arr = new System.Text.Json.Nodes.JsonArray();
+            foreach (var w in instr.WritesMemory) arr.Add(w);
+            obj["writes_memory"] = arr;
+        }
+        if (instr.ChangesMode) obj["changes_mode"] = true;
+        if (instr.SwitchesInstructionSet) obj["switches_instruction_set"] = true;
+        if (instr.RequiresIoBarrier) obj["requires_io_barrier"] = true;
+        if (instr.Quirks.Count > 0)
+        {
+            var arr = new System.Text.Json.Nodes.JsonArray();
+            foreach (var q in instr.Quirks) arr.Add(q);
+            obj["quirks"] = arr;
+        }
+        if (instr.ManualRef is not null) obj["manual_ref"] = instr.ManualRef;
+        if (instr.Cycles is not null)
+        {
+            var c = new System.Text.Json.Nodes.JsonObject();
+            if (instr.Cycles.Form is not null) c["form"] = instr.Cycles.Form;
+            obj["cycles"] = c;
+        }
+        // Steps — serialize each step's Raw element.
+        var stepsArr = new System.Text.Json.Nodes.JsonArray();
+        foreach (var step in instr.Steps)
+            stepsArr.Add(System.Text.Json.Nodes.JsonNode.Parse(step.Raw.GetRawText()));
+        obj["steps"] = stepsArr;
+        if (instr.Selector is not null)
+        {
+            var sel = new System.Text.Json.Nodes.JsonObject();
+            sel["field"] = instr.Selector.Field;
+            sel["value"] = instr.Selector.Value;
+            obj["selector"] = sel;
+        }
+        return obj;
     }
 
     /// <summary>Load a single instruction-set file directly (testing helper).</summary>
@@ -99,14 +404,90 @@ public static class SpecLoader
         var modes    = TryGetObject(root, "processor_modes", out var pm) ? ParseProcessorModes(pm, filePath) : null;
         var vectors  = ParseList(root, "exception_vectors", ParseExceptionVector, filePath, "$.exception_vectors");
         var sets     = ParseList(root, "instruction_sets", ParseInstructionSetRef, filePath, "$.instruction_sets");
-        if (sets.Count == 0)
-            throw new SpecValidationException("instruction_sets must contain at least one entry.", filePath, "$.instruction_sets");
+        // 25.1 — base specs must declare at least one instruction set; child
+        // specs (architecture.extends != null) inherit sets from parent
+        // and may legitimately leave instruction_sets empty.
+        bool hasExtends = false;
+        if (TryGetObject(root, "architecture", out var archEl)
+            && archEl.TryGetProperty("extends", out var extEl)
+            && extEl.ValueKind == JsonValueKind.String
+            && !string.IsNullOrEmpty(extEl.GetString()))
+        {
+            hasExtends = true;
+        }
+        if (sets.Count == 0 && !hasExtends)
+            throw new SpecValidationException(
+                "instruction_sets must contain at least one entry (or set architecture.extends to inherit from a parent).",
+                filePath, "$.instruction_sets");
         var dispatch = TryGetObject(root, "instruction_set_dispatch", out var d) ? ParseDispatch(d, filePath) : null;
         var memory   = TryGetObject(root, "memory_model", out var mm) ? ParseMemoryModel(mm, filePath) : null;
         var custom   = ParseList(root, "custom_micro_ops", ParseCustomMicroOp, filePath, "$.custom_micro_ops");
         var isaMeta  = TryGetObject(root, "isa_metadata", out var im) ? ParseIsaMetadata(im, filePath) : null;
 
-        return new CpuSpec(specVer, arch, variants, regFile, modes, vectors, sets, dispatch, memory, custom, isaMeta);
+        // 25.1 — optional instruction_set_diff for child specs that
+        // extend a parent. Only sane when arch.Extends is non-null;
+        // SpecLoader.LoadCpuSpec validates this combination.
+        InstructionSetDiff? diff = null;
+        if (TryGetObject(root, "instruction_set_diff", out var diffEl))
+            diff = ParseInstructionSetDiff(diffEl, filePath);
+
+        return new CpuSpec(specVer, arch, variants, regFile, modes, vectors, sets, dispatch, memory, custom, isaMeta, diff);
+    }
+
+    /// <summary>
+    /// 25.1 — parse <c>instruction_set_diff</c>. Each top-level key is an
+    /// instruction-set name (e.g. "Main"); its value carries optional
+    /// <c>additions</c> / <c>overrides</c> / <c>removals</c>.
+    /// </summary>
+    private static InstructionSetDiff ParseInstructionSetDiff(JsonElement el, string filePath)
+    {
+        var perSet = new Dictionary<string, PerSetDiff>(StringComparer.Ordinal);
+        foreach (var prop in el.EnumerateObject())
+        {
+            var setName = prop.Name;
+            var setEl = prop.Value;
+            if (setEl.ValueKind != JsonValueKind.Object)
+                throw new SpecValidationException(
+                    $"instruction_set_diff['{setName}'] must be an object.",
+                    filePath, $"$.instruction_set_diff.{setName}");
+
+            // additions: array of raw instruction objects (parsed at merge time
+            // through the same ParseInstructionDef path).
+            var additions = new List<JsonElement>();
+            if (setEl.TryGetProperty("additions", out var addEl)
+                && addEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var instr in addEl.EnumerateArray())
+                    additions.Add(instr.Clone());
+            }
+
+            // overrides: object mapping ID → partial-instruction patch.
+            var overrides = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+            if (setEl.TryGetProperty("overrides", out var ovEl)
+                && ovEl.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var ov in ovEl.EnumerateObject())
+                    overrides[ov.Name] = ov.Value.Clone();
+            }
+
+            // removals: array of ID strings.
+            var removals = new List<string>();
+            if (setEl.TryGetProperty("removals", out var rmEl)
+                && rmEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var id in rmEl.EnumerateArray())
+                {
+                    if (id.ValueKind != JsonValueKind.String)
+                        throw new SpecValidationException(
+                            $"instruction_set_diff['{setName}'].removals must be an array of strings.",
+                            filePath, $"$.instruction_set_diff.{setName}.removals");
+                    removals.Add(id.GetString()!);
+                }
+            }
+
+            perSet[setName] = new PerSetDiff(additions, overrides, removals);
+        }
+        return new InstructionSetDiff(perSet);
     }
 
     /// <summary>
@@ -143,7 +524,8 @@ public static class SpecLoader
             Family:       ReqString(el, "family", filePath, "$.architecture.family"),
             Extends:      OptString(el, "extends"),
             Endianness:   OptString(el, "endianness") ?? "little",
-            WordSizeBits: OptInt(el, "word_size_bits") ?? 32);
+            WordSizeBits: OptInt(el, "word_size_bits") ?? 32,
+            ExtendsPath:  OptString(el, "extends_path"));
     }
 
     private static CpuVariant ParseVariant(JsonElement el, string filePath, string jsonPath)
@@ -510,7 +892,12 @@ public static class SpecLoader
             Quirks:                    ParseStringList(el, "quirks"),
             ManualRef:                 OptString(el, "manual_ref"),
             Cycles:                    cycles,
-            Steps:                     steps);
+            Steps:                     steps,
+            // 25.1 — parse optional `id`. Required for instructions that
+            // a child spec wants to override / remove (sprint 25.2 retrofits
+            // existing 8086 spec with IDs). Until then the field stays null
+            // and inheritance can only do additions.
+            Id:                        OptString(el, "id"));
     }
 
     private static MicroOpStep ParseMicroOpStep(JsonElement el, string filePath, string jsonPath)
