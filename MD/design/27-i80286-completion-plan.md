@@ -1,6 +1,10 @@
 # Phase 27 — Intel 80286 completion plan
 
-> **Status**: starting (2026-05-11)
+> **Status**: Phase 27a ✅ **COMPLETE** (2026-05-11). Real-mode 80286
+> system instruction set landed: 14 of 14 instructions covered,
+> 7 new state registers, 4 verified round-trip demos. Closure note:
+> `MD/performance/202605110100-i80286-realmode-complete.md`.
+> Phase 27b (protected mode) is multi-week future work, deferred.
 > **Predecessor**: Phase 26 v1 (`6b1e2d6`..`7e6cf16`) — minimum-viable real-mode
 > 80286 shipped with chain depth=3, 0F prefix infra, CLTS+SMSW.
 > **Goal**: finish the 80286 implementation. Two tracks:
@@ -100,8 +104,8 @@ multi-week effort for 27b.
 | 27.1 MSW + real LMSW | ✅ | `95e5138` | 2026-05-11 |
 | 27.2 LGDT/LIDT + GDTR/IDTR | ✅ | `5c2a70a` | 2026-05-11 |
 | 27.3 0F 00 group | ✅ | `13dd781` | 2026-05-11 |
-| 27.4 LAR/LSL stubs | ✅ | (pending) | 2026-05-11 |
-| 27.5 27a closure docs | ⏳ pending | — | — |
+| 27.4 LAR/LSL stubs | ✅ | `78cf9fd` | 2026-05-11 |
+| 27.5 27a closure docs | ✅ | (this commit) | 2026-05-11 |
 
 ## Phase 27b Sprint Status
 
