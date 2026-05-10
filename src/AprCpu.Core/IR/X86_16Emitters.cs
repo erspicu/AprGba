@@ -1801,9 +1801,19 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
         var inArr     = step.Raw.GetProperty("in");
         var valueName = inArr[0].GetString()!;
 
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
         var sel   = ctx.Resolve(fieldName);
         var value = ctx.Resolve(valueName);
+
+        // Sprint 27.10d wave 7 — does the spec declare hidden cache slots?
+        // (i80286+ sets these via Sprint 27.10b register_file diff.)
+        bool hasCacheSlots = false;
+        foreach (var sr in ctx.Layout.RegisterFile.Status)
+        {
+            if (sr.Name == "ES_BASE") { hasCacheSlots = true; break; }
+        }
 
         var endBB     = ctx.Function.AppendBasicBlock("wsreg_end");
         var defaultBB = ctx.Function.AppendBasicBlock("wsreg_default");
@@ -1815,11 +1825,40 @@ internal sealed class X86WriteSregFieldEmitter : IMicroOpEmitter
             sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
 
         var names = new[] { "ES", "CS", "SS", "DS" };
+        // Real-mode access-rights default per Intel: CS = 0x9B (executable),
+        // ES/SS/DS = 0x93 (writable data). Reset/SetEntryPoint already use
+        // these; same defaults here on segment-register write keep cache
+        // consistent.
+        var accessByIdx = new byte[] { 0x93, 0x9B, 0x93, 0x93 };
         for (int i = 0; i < 4; i++)
         {
             ctx.Builder.PositionAtEnd(arms[i]);
             var p = ctx.GepStatusRegister(names[i]);
             ctx.Builder.BuildStore(value, p);
+
+            // Sprint 27.10d wave 7 — when cache slots are declared, also
+            // update <seg>_BASE/_LIMIT/_ACCESS from the new selector.
+            // Real-mode behavior: BASE = sel << 4, LIMIT = 0xFFFF, ACCESS
+            // = real-mode default.
+            // Phase 27.x future: if MSW.PE = 1 (protected mode), this
+            // arm would instead read the descriptor from GDT/LDT and
+            // populate cache from it. Currently the protected-mode
+            // path is identical to real-mode (cache base = sel << 4)
+            // because no descriptor fetch is wired yet — the wave 7
+            // ground sits below; later sprints make protected mode
+            // diverge.
+            if (hasCacheSlots)
+            {
+                var selZ = ctx.Builder.BuildZExt(value, i32, $"wsreg_{i}_selz");
+                var baseShift = ctx.Builder.BuildShl(selZ,
+                    LLVMValueRef.CreateConstInt(i32, 4, false), $"wsreg_{i}_basesh");
+                ctx.Builder.BuildStore(baseShift,
+                    ctx.GepStatusRegister(names[i] + "_BASE"));
+                ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i16, 0xFFFF, false),
+                    ctx.GepStatusRegister(names[i] + "_LIMIT"));
+                ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, accessByIdx[i], false),
+                    ctx.GepStatusRegister(names[i] + "_ACCESS"));
+            }
             ctx.Builder.BuildBr(endBB);
         }
         // Default: invalid encoding — silently no-op.
