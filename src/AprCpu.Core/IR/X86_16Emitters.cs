@@ -1829,9 +1829,9 @@ internal sealed class X86PushReg16FieldEmitter : IMicroOpEmitter
         inVals[8] = defVal; inBlocks[8] = defaultBB;
         phi.AddIncoming(inVals, inBlocks, 9);
 
-        // Write the value to SS:newSP.
-        var ss = X86_16Emitters.LoadSeg16(ctx, "SS", "psh_ss");
-        X86_16Emitters.SegmentedWrite16(ctx, ss, spNew, phi, "psh_w");
+        // Write the value to SS:newSP. Sprint 27.10d wave 3 — by-name
+        // SS picks up SS_BASE cache on i80286+.
+        X86_16Emitters.SegmentedWrite16(ctx, "SS", spNew, phi, "psh_w");
     }
 }
 
@@ -2016,8 +2016,8 @@ internal sealed class X86PushModRmW16Emitter : IMicroOpEmitter
         for (int i = 0; i < 8; i++) { pIns[i] = armVals[i]; pBlk[i] = armBlocks[i]; }
         pIns[8] = defVal; pBlk[8] = armDef;
         phi.AddIncoming(pIns, pBlk, 9);
-        var ssReg = X86_16Emitters.LoadSeg16(ctx, "SS", "pshrm_ss");
-        X86_16Emitters.SegmentedWrite16(ctx, ssReg, spNew, phi, "pshrm_w");
+        // Sprint 27.10d wave 3 — by-name SS for cache-aware base.
+        X86_16Emitters.SegmentedWrite16(ctx, "SS", spNew, phi, "pshrm_w");
         ctx.Builder.BuildBr(endBB);
 
         // Mem path: load operand value from EA first, then push.
@@ -5982,8 +5982,8 @@ internal sealed class X86PushSpPreDecrementEmitter : IMicroOpEmitter
         var spNew = ctx.Builder.BuildSub(spOld,
             LLVMValueRef.CreateConstInt(i16, 2, false), "psh_sp_new");
         ctx.Builder.BuildStore(spNew, spPtr);
-        var ss = X86_16Emitters.LoadSeg16(ctx, "SS", "psh_ss");
-        X86_16Emitters.SegmentedWrite16(ctx, ss, spNew, spOld, "psh_w");
+        // Sprint 27.10d wave 3 — by-name SS (cache-aware on i80286+).
+        X86_16Emitters.SegmentedWrite16(ctx, "SS", spNew, spOld, "psh_w");
     }
 }
 
