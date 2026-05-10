@@ -2127,11 +2127,12 @@ internal static class X86AluHelpers
 
         if (isLogical)
         {
-            cf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
-                LLVMValueRef.CreateConstInt(i32, 0, false),
-                LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_cf0");
-            of = cf;   // both 0
-            af = cf;   // 0 (Tom Harte v2 convention)
+            // Logical ops force CF/OF/AF=0. Use an explicit i1 false
+            // constant — earlier "(0==0)" pattern accidentally gave TRUE.
+            var i1false = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int1, 0, false);
+            cf = i1false;
+            of = i1false;
+            af = i1false;
         }
         else if (isSub)
         {

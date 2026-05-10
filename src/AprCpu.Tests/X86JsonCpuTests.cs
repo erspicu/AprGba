@@ -1298,6 +1298,159 @@ public class X86JsonCpuTests
         Assert.Equal(0x0300, result);
     }
 
+    // ---------------- 24.6.6b — OR/ADC/SBB/AND/SUB/XOR/CMP ----------------
+
+    /// <summary>SUB AL, BL: AL=0x10 - BL=0x20 = 0xF0 with CF=1 (borrow), SF=1.</summary>
+    [Fact]
+    public void Step_SubAlBl_Borrow()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x28, 0xD8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x10; s.B.L = 0x20;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xF0, cpu.State.A.L);
+        Assert.True(cpu.State.FlagC);
+        Assert.True(cpu.State.FlagS);
+        Assert.False(cpu.State.FlagZ);
+    }
+
+    /// <summary>CMP AL, BL — same as SUB but does NOT modify AL.</summary>
+    [Fact]
+    public void Step_CmpAlBl_DoesNotWriteBack()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x38, 0xD8, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x42; s.B.L = 0x42;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x42, cpu.State.A.L);   // AL unchanged
+        Assert.True(cpu.State.FlagZ);         // equal → ZF=1
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>OR AL, imm8 — logical op clears CF and OF.</summary>
+    [Fact]
+    public void Step_OrAlImm8_LogicalClearsCfOf()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x0C, 0x0F, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0xF0; s.FlagC = true; s.FlagO = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0xFF, cpu.State.A.L);
+        Assert.False(cpu.State.FlagC);
+        Assert.False(cpu.State.FlagO);
+        Assert.True(cpu.State.FlagS);
+        Assert.True(cpu.State.FlagP);   // 0xFF has 8 bits → even
+    }
+
+    /// <summary>AND AL, imm8 — logical AND.</summary>
+    [Fact]
+    public void Step_AndAlImm8_BasicMask()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x24, 0x0F, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0xAB;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0B, cpu.State.A.L);
+        Assert.False(cpu.State.FlagS);
+        Assert.False(cpu.State.FlagZ);
+    }
+
+    /// <summary>XOR AL, AL — classic zero-AL idiom; sets ZF=1.</summary>
+    [Fact]
+    public void Step_XorAlAl_ClearsRegSetsZf()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x32, 0xC0, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x55;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x00, cpu.State.A.L);
+        Assert.True(cpu.State.FlagZ);
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>
+    /// ADC AL, imm8 with CF=1 — 0x10 + 0x20 + 1 = 0x31. Verifies ADC reads CF.
+    /// </summary>
+    [Fact]
+    public void Step_AdcAlImm8_ReadsCarryIn()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x14, 0x20, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x10; s.FlagC = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x31, cpu.State.A.L);
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>
+    /// SBB with CF=1 — 0x20 - 0x10 - 1 = 0x0F. Verifies SBB reads CF as borrow.
+    /// </summary>
+    [Fact]
+    public void Step_SbbAlImm8_ReadsBorrowIn()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x1C, 0x10, 0xF4 });
+        var s = cpu.State;
+        s.A.L = 0x20; s.FlagC = true;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 4 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0F, cpu.State.A.L);
+        Assert.False(cpu.State.FlagC);
+    }
+
+    /// <summary>
+    /// 32-bit ripple add via ADD/ADC chain on word pair.
+    ///   add ax, bx     01 D8       low half + carry
+    ///   adc cx, dx     11 D1       high half + previous CF
+    /// AX|CX = 0x00010000, BX|DX = 0xFFFFF000, expect AX|CX = 0x0001F000?
+    /// Actually let's do simpler: AX = 0xFFFF, CX = 0x0001; BX = 0x0001, DX = 0x0000.
+    /// Total = 0x0001FFFF + 0x00000001 = 0x00020000.
+    /// After add ax, bx: AX = 0x0000, CF=1
+    /// After adc cx, dx: CX = 0x0001 + 0x0000 + 1 = 0x0002
+    /// Result: CX:AX = 0x00020000.
+    /// </summary>
+    [Fact]
+    public void Step_AddAdcChain_32BitRippleAdd()
+    {
+        var (cpu, _) = Setup(new byte[] { 0x01, 0xD8, 0x11, 0xD1, 0xF4 });
+        var s = cpu.State;
+        s.A.X = 0xFFFF; s.C.X = 0x0001;
+        s.B.X = 0x0001; s.D.X = 0x0000;
+        cpu.LoadState(s);
+        cpu.SetEntryPoint(0, 0x100);
+
+        for (int i = 0; i < 16 && !cpu.Halted; i++) cpu.Step();
+        Assert.True(cpu.Halted);
+        Assert.Equal(0x0000, cpu.State.A.X);
+        Assert.Equal(0x0002, cpu.State.C.X);
+    }
+
     /// <summary>
     /// LoadState mirrors a full architectural snapshot onto the spec
     /// buffer; State getter must round-trip the same values out (GPRs,

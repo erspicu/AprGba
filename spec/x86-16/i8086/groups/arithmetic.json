@@ -42,6 +42,287 @@
         { "op": "x86_fetch_imm16",       "out": "rhs" },
         { "op": "x86_alu_w16", "kind": "add", "lhs": "lhs", "rhs": "rhs", "out": "result" },
         { "op": "x86_write_named_gpr",   "name": "AX", "in": ["result"] }
+    ]}]},
+
+    { "name": "OrRm8R8",      "fields": {}, "mask": "0xFF", "match": "0x08", "instructions": [{ "mnemonic": "OR",  "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OR",  "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8",     "out": "lhs" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "or", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w8",    "in": ["result"] }
+    ]}]},
+    { "name": "OrRm16R16",    "fields": {}, "mask": "0xFF", "match": "0x09", "instructions": [{ "mnemonic": "OR",  "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OR",  "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",    "out": "lhs" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "or", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w16",   "in": ["result"] }
+    ]}]},
+    { "name": "OrR8Rm8",      "fields": {}, "mask": "0xFF", "match": "0x0A", "instructions": [{ "mnemonic": "OR",  "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OR",  "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w8",     "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "or", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "OrR16Rm16",    "fields": {}, "mask": "0xFF", "match": "0x0B", "instructions": [{ "mnemonic": "OR",  "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OR",  "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w16",    "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "or", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg16_field", "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "OrAlImm8",     "fields": {}, "mask": "0xFF", "match": "0x0C", "instructions": [{ "mnemonic": "OR",  "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OR",  "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AL", "out": "lhs" },
+        { "op": "x86_fetch_imm8",        "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "or", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AL", "in": ["result"] }
+    ]}]},
+    { "name": "OrAxImm16",    "fields": {}, "mask": "0xFF", "match": "0x0D", "instructions": [{ "mnemonic": "OR",  "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §OR",  "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AX", "out": "lhs" },
+        { "op": "x86_fetch_imm16",       "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "or", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AX", "in": ["result"] }
+    ]}]},
+
+    { "name": "AdcRm8R8",     "fields": {}, "mask": "0xFF", "match": "0x10", "instructions": [{ "mnemonic": "ADC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADC", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8",     "out": "lhs" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "adc", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w8",    "in": ["result"] }
+    ]}]},
+    { "name": "AdcRm16R16",   "fields": {}, "mask": "0xFF", "match": "0x11", "instructions": [{ "mnemonic": "ADC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADC", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",    "out": "lhs" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "adc", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w16",   "in": ["result"] }
+    ]}]},
+    { "name": "AdcR8Rm8",     "fields": {}, "mask": "0xFF", "match": "0x12", "instructions": [{ "mnemonic": "ADC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADC", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w8",     "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "adc", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "AdcR16Rm16",   "fields": {}, "mask": "0xFF", "match": "0x13", "instructions": [{ "mnemonic": "ADC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADC", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w16",    "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "adc", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg16_field", "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "AdcAlImm8",    "fields": {}, "mask": "0xFF", "match": "0x14", "instructions": [{ "mnemonic": "ADC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADC", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AL", "out": "lhs" },
+        { "op": "x86_fetch_imm8",        "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "adc", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AL", "in": ["result"] }
+    ]}]},
+    { "name": "AdcAxImm16",   "fields": {}, "mask": "0xFF", "match": "0x15", "instructions": [{ "mnemonic": "ADC", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §ADC", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AX", "out": "lhs" },
+        { "op": "x86_fetch_imm16",       "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "adc", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AX", "in": ["result"] }
+    ]}]},
+
+    { "name": "SbbRm8R8",     "fields": {}, "mask": "0xFF", "match": "0x18", "instructions": [{ "mnemonic": "SBB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SBB", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8",     "out": "lhs" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "sbb", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w8",    "in": ["result"] }
+    ]}]},
+    { "name": "SbbRm16R16",   "fields": {}, "mask": "0xFF", "match": "0x19", "instructions": [{ "mnemonic": "SBB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SBB", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",    "out": "lhs" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "sbb", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w16",   "in": ["result"] }
+    ]}]},
+    { "name": "SbbR8Rm8",     "fields": {}, "mask": "0xFF", "match": "0x1A", "instructions": [{ "mnemonic": "SBB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SBB", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w8",     "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "sbb", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "SbbR16Rm16",   "fields": {}, "mask": "0xFF", "match": "0x1B", "instructions": [{ "mnemonic": "SBB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SBB", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w16",    "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "sbb", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg16_field", "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "SbbAlImm8",    "fields": {}, "mask": "0xFF", "match": "0x1C", "instructions": [{ "mnemonic": "SBB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SBB", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AL", "out": "lhs" },
+        { "op": "x86_fetch_imm8",        "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "sbb", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AL", "in": ["result"] }
+    ]}]},
+    { "name": "SbbAxImm16",   "fields": {}, "mask": "0xFF", "match": "0x1D", "instructions": [{ "mnemonic": "SBB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SBB", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AX", "out": "lhs" },
+        { "op": "x86_fetch_imm16",       "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "sbb", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AX", "in": ["result"] }
+    ]}]},
+
+    { "name": "AndRm8R8",     "fields": {}, "mask": "0xFF", "match": "0x20", "instructions": [{ "mnemonic": "AND", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AND", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8",     "out": "lhs" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "and", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w8",    "in": ["result"] }
+    ]}]},
+    { "name": "AndRm16R16",   "fields": {}, "mask": "0xFF", "match": "0x21", "instructions": [{ "mnemonic": "AND", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AND", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",    "out": "lhs" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "and", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w16",   "in": ["result"] }
+    ]}]},
+    { "name": "AndR8Rm8",     "fields": {}, "mask": "0xFF", "match": "0x22", "instructions": [{ "mnemonic": "AND", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AND", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w8",     "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "and", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "AndR16Rm16",   "fields": {}, "mask": "0xFF", "match": "0x23", "instructions": [{ "mnemonic": "AND", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AND", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w16",    "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "and", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg16_field", "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "AndAlImm8",    "fields": {}, "mask": "0xFF", "match": "0x24", "instructions": [{ "mnemonic": "AND", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AND", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AL", "out": "lhs" },
+        { "op": "x86_fetch_imm8",        "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "and", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AL", "in": ["result"] }
+    ]}]},
+    { "name": "AndAxImm16",   "fields": {}, "mask": "0xFF", "match": "0x25", "instructions": [{ "mnemonic": "AND", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §AND", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AX", "out": "lhs" },
+        { "op": "x86_fetch_imm16",       "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "and", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AX", "in": ["result"] }
+    ]}]},
+
+    { "name": "SubRm8R8",     "fields": {}, "mask": "0xFF", "match": "0x28", "instructions": [{ "mnemonic": "SUB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SUB", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8",     "out": "lhs" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "sub", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w8",    "in": ["result"] }
+    ]}]},
+    { "name": "SubRm16R16",   "fields": {}, "mask": "0xFF", "match": "0x29", "instructions": [{ "mnemonic": "SUB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SUB", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",    "out": "lhs" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "sub", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w16",   "in": ["result"] }
+    ]}]},
+    { "name": "SubR8Rm8",     "fields": {}, "mask": "0xFF", "match": "0x2A", "instructions": [{ "mnemonic": "SUB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SUB", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w8",     "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "sub", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "SubR16Rm16",   "fields": {}, "mask": "0xFF", "match": "0x2B", "instructions": [{ "mnemonic": "SUB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SUB", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w16",    "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "sub", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg16_field", "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "SubAlImm8",    "fields": {}, "mask": "0xFF", "match": "0x2C", "instructions": [{ "mnemonic": "SUB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SUB", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AL", "out": "lhs" },
+        { "op": "x86_fetch_imm8",        "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "sub", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AL", "in": ["result"] }
+    ]}]},
+    { "name": "SubAxImm16",   "fields": {}, "mask": "0xFF", "match": "0x2D", "instructions": [{ "mnemonic": "SUB", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §SUB", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AX", "out": "lhs" },
+        { "op": "x86_fetch_imm16",       "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "sub", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AX", "in": ["result"] }
+    ]}]},
+
+    { "name": "XorRm8R8",     "fields": {}, "mask": "0xFF", "match": "0x30", "instructions": [{ "mnemonic": "XOR", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §XOR", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8",     "out": "lhs" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "xor", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w8",    "in": ["result"] }
+    ]}]},
+    { "name": "XorRm16R16",   "fields": {}, "mask": "0xFF", "match": "0x31", "instructions": [{ "mnemonic": "XOR", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §XOR", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",    "out": "lhs" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "xor", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_modrm_store_w16",   "in": ["result"] }
+    ]}]},
+    { "name": "XorR8Rm8",     "fields": {}, "mask": "0xFF", "match": "0x32", "instructions": [{ "mnemonic": "XOR", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §XOR", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w8",     "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "xor", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg8_field",  "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "XorR16Rm16",   "fields": {}, "mask": "0xFF", "match": "0x33", "instructions": [{ "mnemonic": "XOR", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §XOR", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w16",    "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "xor", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_reg16_field", "field": "modrm_reg", "in": ["result"] }
+    ]}]},
+    { "name": "XorAlImm8",    "fields": {}, "mask": "0xFF", "match": "0x34", "instructions": [{ "mnemonic": "XOR", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §XOR", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AL", "out": "lhs" },
+        { "op": "x86_fetch_imm8",        "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "xor", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AL", "in": ["result"] }
+    ]}]},
+    { "name": "XorAxImm16",   "fields": {}, "mask": "0xFF", "match": "0x35", "instructions": [{ "mnemonic": "XOR", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §XOR", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AX", "out": "lhs" },
+        { "op": "x86_fetch_imm16",       "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "xor", "lhs": "lhs", "rhs": "rhs", "out": "result" },
+        { "op": "x86_write_named_gpr",   "name": "AX", "in": ["result"] }
+    ]}]},
+
+    { "name": "CmpRm8R8",     "fields": {}, "mask": "0xFF", "match": "0x38", "instructions": [{ "mnemonic": "CMP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CMP", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w8",     "out": "lhs" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "cmp", "lhs": "lhs", "rhs": "rhs" }
+    ]}]},
+    { "name": "CmpRm16R16",   "fields": {}, "mask": "0xFF", "match": "0x39", "instructions": [{ "mnemonic": "CMP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CMP", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_modrm_load_w16",    "out": "lhs" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "cmp", "lhs": "lhs", "rhs": "rhs" }
+    ]}]},
+    { "name": "CmpR8Rm8",     "fields": {}, "mask": "0xFF", "match": "0x3A", "instructions": [{ "mnemonic": "CMP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CMP", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg8_field",   "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w8",     "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "cmp", "lhs": "lhs", "rhs": "rhs" }
+    ]}]},
+    { "name": "CmpR16Rm16",   "fields": {}, "mask": "0xFF", "match": "0x3B", "instructions": [{ "mnemonic": "CMP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CMP", "cycles": { "form": "3" }, "steps": [
+        { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" },
+        { "op": "x86_read_reg16_field",  "field": "modrm_reg", "out": "lhs" },
+        { "op": "x86_modrm_load_w16",    "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "cmp", "lhs": "lhs", "rhs": "rhs" }
+    ]}]},
+    { "name": "CmpAlImm8",    "fields": {}, "mask": "0xFF", "match": "0x3C", "instructions": [{ "mnemonic": "CMP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CMP", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AL", "out": "lhs" },
+        { "op": "x86_fetch_imm8",        "out": "rhs" },
+        { "op": "x86_alu_w8", "kind": "cmp", "lhs": "lhs", "rhs": "rhs" }
+    ]}]},
+    { "name": "CmpAxImm16",   "fields": {}, "mask": "0xFF", "match": "0x3D", "instructions": [{ "mnemonic": "CMP", "since": "Intel8086", "writes_pc": "never", "manual_ref": "Intel SDM Vol.2 §CMP", "cycles": { "form": "4" }, "steps": [
+        { "op": "x86_read_named_gpr",    "name": "AX", "out": "lhs" },
+        { "op": "x86_fetch_imm16",       "out": "rhs" },
+        { "op": "x86_alu_w16", "kind": "cmp", "lhs": "lhs", "rhs": "rhs" }
     ]}]}
   ]
 }
