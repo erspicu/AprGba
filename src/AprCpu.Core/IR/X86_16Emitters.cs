@@ -341,8 +341,11 @@ public static class X86_16Emitters
         }
         else
         {
-            var cs16  = LoadSeg16(ctx, "CS", $"{label}_cs");
-            var lin32 = SegmentedLinear(ctx, cs16, ip16, $"{label}_lin");
+            // Sprint 27.10d — switched to by-name overload so CS_BASE
+            // cache (Sprint 27.10b) gets used when the spec declares it
+            // (i80286+). i8086 / i80186 fall back to legacy (CS<<4)+IP
+            // automatically inside SegmentedLinear.
+            var lin32 = SegmentedLinear(ctx, "CS", ip16, $"{label}_lin");
             b = MemoryEmitters.CallRead8(ctx, lin32, label);
         }
 
@@ -389,13 +392,13 @@ public static class X86_16Emitters
         }
         else
         {
-            var cs16 = LoadSeg16(ctx, "CS", $"{label}_cs");
-            var lin0 = SegmentedLinear(ctx, cs16, ip16, $"{label}_lin0");
+            // Sprint 27.10d — by-name overload, see FetchImm8 comment.
+            var lin0 = SegmentedLinear(ctx, "CS", ip16, $"{label}_lin0");
             var lo8  = MemoryEmitters.CallRead8(ctx, lin0, $"{label}_lo");
 
             var ipPlus1 = ctx.Builder.BuildAdd(ip16,
                 LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_ip1");
-            var lin1 = SegmentedLinear(ctx, cs16, ipPlus1, $"{label}_lin1");
+            var lin1 = SegmentedLinear(ctx, "CS", ipPlus1, $"{label}_lin1");
             var hi8  = MemoryEmitters.CallRead8(ctx, lin1, $"{label}_hi");
 
             var loZ  = ctx.Builder.BuildZExt(lo8, i16, $"{label}_loz");
