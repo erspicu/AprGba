@@ -96,7 +96,23 @@
         "width_bits": 16,
         "comment":    "Sprint 27.3 — Task Register selector. Same shape as LDTR. LTR writes; STR reads. Reset = 0.",
         "fields": {}
-      }
+      },
+
+      { "name": "ES_BASE",   "width_bits": 32, "fields": {}, "comment": "Sprint 27.10b — hidden segment-register cache: 24-bit base address. Real-mode init: visible ES << 4. Protected-mode load: from descriptor.BaseLow24 after descriptor lookup + privilege check (Sprint 27.10d)." },
+      { "name": "ES_LIMIT",  "width_bits": 16, "fields": {}, "comment": "Sprint 27.10b — hidden cache: limit. Real-mode init: 0xFFFF (full segment). Protected-mode: from descriptor.Limit." },
+      { "name": "ES_ACCESS", "width_bits": 8,  "fields": {}, "comment": "Sprint 27.10b — hidden cache: access rights byte (descriptor.AccessRights). Real-mode init: 0x93 (P=1, S=1, type=writable data, accessed)." },
+
+      { "name": "CS_BASE",   "width_bits": 32, "fields": {}, "comment": "Sprint 27.10b — hidden CS cache. Real-mode init: visible CS << 4 = 0xFFFF0 at reset (since CS=0xFFFF after Reset())." },
+      { "name": "CS_LIMIT",  "width_bits": 16, "fields": {}, "comment": "Sprint 27.10b — hidden CS limit. Real-mode init: 0xFFFF." },
+      { "name": "CS_ACCESS", "width_bits": 8,  "fields": {}, "comment": "Sprint 27.10b — hidden CS access. Real-mode init: 0x9B (P=1, S=1, code, readable, accessed)." },
+
+      { "name": "SS_BASE",   "width_bits": 32, "fields": {}, "comment": "Sprint 27.10b — hidden SS cache. Real-mode init: visible SS << 4 = 0 at reset." },
+      { "name": "SS_LIMIT",  "width_bits": 16, "fields": {}, "comment": "Sprint 27.10b — hidden SS limit. Real-mode init: 0xFFFF." },
+      { "name": "SS_ACCESS", "width_bits": 8,  "fields": {}, "comment": "Sprint 27.10b — hidden SS access. Real-mode init: 0x93." },
+
+      { "name": "DS_BASE",   "width_bits": 32, "fields": {}, "comment": "Sprint 27.10b — hidden DS cache. Real-mode init: visible DS << 4 = 0 at reset." },
+      { "name": "DS_LIMIT",  "width_bits": 16, "fields": {}, "comment": "Sprint 27.10b — hidden DS limit. Real-mode init: 0xFFFF." },
+      { "name": "DS_ACCESS", "width_bits": 8,  "fields": {}, "comment": "Sprint 27.10b — hidden DS access. Real-mode init: 0x93." }
     ]
   },
 

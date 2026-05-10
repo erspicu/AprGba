@@ -224,13 +224,55 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         }
         catch (KeyNotFoundException) { /* spec doesn't declare MSW (i8086/i80186) — no-op */ }
         catch (ArgumentException)    { /* same */ }
+
+        // Sprint 27.10b — i80286: initialize hidden segment-register
+        // caches from visible selector values (real-mode shift-and-add).
+        // After Reset(): CS=0xFFFF means CS_BASE = 0xFFFF0; ES/SS/DS=0
+        // means BASE=0. All limits = 0xFFFF; access rights = real-mode
+        // defaults (code/data writable).
+        InitSegmentCache("ES", 0x0000, 0xFFFF, 0x93);
+        InitSegmentCache("CS", 0xFFFF, 0xFFFF, 0x9B);
+        InitSegmentCache("SS", 0x0000, 0xFFFF, 0x93);
+        InitSegmentCache("DS", 0x0000, 0xFFFF, 0x93);
+
         _activeMem = _mem;
+    }
+
+    /// <summary>
+    /// Sprint 27.10b — write the hidden cache slots for a single
+    /// segment register, using the real-mode (selector &lt;&lt; 4) base.
+    /// No-op when the loaded spec doesn't declare these slots
+    /// (i8086 / i80186).
+    /// </summary>
+    private void InitSegmentCache(string segName, ushort sel, ushort limit, byte access)
+    {
+        try
+        {
+            int baseOff = (int)_rt.StatusOffset(segName + "_BASE");
+            uint baseAddr = (uint)sel << 4;
+            _state[baseOff + 0] = (byte)(baseAddr & 0xFF);
+            _state[baseOff + 1] = (byte)((baseAddr >> 8) & 0xFF);
+            _state[baseOff + 2] = (byte)((baseAddr >> 16) & 0xFF);
+            _state[baseOff + 3] = (byte)((baseAddr >> 24) & 0xFF);
+
+            int limOff = (int)_rt.StatusOffset(segName + "_LIMIT");
+            _state[limOff + 0] = (byte)(limit & 0xFF);
+            _state[limOff + 1] = (byte)((limit >> 8) & 0xFF);
+
+            int accOff = (int)_rt.StatusOffset(segName + "_ACCESS");
+            _state[accOff] = access;
+        }
+        catch (KeyNotFoundException) { /* i8086 / i80186: no cache slots */ }
+        catch (ArgumentException)    { /* same */ }
     }
 
     public void SetEntryPoint(ushort segment, ushort offset)
     {
         WriteU16(_csOff, segment);
         WriteU16(_ipOff, offset);
+        // Sprint 27.10b — keep hidden CS cache in sync with the visible
+        // selector. SegmentedLinear in Sprint 27.10c will read CS_BASE.
+        InitSegmentCache("CS", segment, 0xFFFF, 0x9B);
         _activeMem = _mem;
     }
 
