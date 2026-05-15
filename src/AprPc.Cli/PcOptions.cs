@@ -40,6 +40,8 @@ public sealed class PcOptions
     public bool    TraceInt     { get; set; }
     public bool    TraceIo      { get; set; }
     public bool    TraceIrq     { get; set; }
+    public bool    TraceCpu     { get; set; }
+    public int?    TraceCpuMax  { get; set; }
     public bool    Verbose      { get; set; }
 
     /// <summary>
@@ -61,6 +63,8 @@ public sealed class PcOptions
             else if (arg == "--trace-int")   o.TraceInt = true;
             else if (arg == "--trace-io")    o.TraceIo = true;
             else if (arg == "--trace-irq")   o.TraceIrq = true;
+            else if (arg == "--trace-cpu")   o.TraceCpu = true;
+            else if (arg.StartsWith("--trace-cpu-max=")) o.TraceCpuMax = int.Parse(arg["--trace-cpu-max=".Length..]);
             else if (arg == "--verbose")     o.Verbose = true;
             // Value flags --key=value.
             else if (arg.StartsWith("--floppy-a="))   o.FloppyAPath = arg["--floppy-a=".Length..];

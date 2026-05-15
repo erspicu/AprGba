@@ -265,6 +265,21 @@ public sealed class PcSystemRunner : IDisposable
                         Interlocked.Increment(ref _instructionsExecuted);
                         continue;
                     }
+                    // Phase 28.8b — optional CPU step trace.
+                    if (_options.TraceCpu &&
+                        (_options.TraceCpuMax is null || _instructionsExecuted < _options.TraceCpuMax.Value))
+                    {
+                        var stForTrace = _cpu.State;
+                        Console.Error.WriteLine(
+                            $"  [CPU] step#{_instructionsExecuted,6} " +
+                            $"CS:IP={stForTrace.CS:X4}:{stForTrace.IP:X4} " +
+                            $"AX={stForTrace.A.X:X4} BX={stForTrace.B.X:X4} " +
+                            $"CX={stForTrace.C.X:X4} DX={stForTrace.D.X:X4} " +
+                            $"DS={stForTrace.DS:X4} SS={stForTrace.SS:X4} SP={stForTrace.SP:X4} " +
+                            $"FL={stForTrace.GetFlags():X4} " +
+                            $"op={_bus!.ReadByte(((stForTrace.CS << 4) + stForTrace.IP) & 0xFFFFF):X2}");
+                    }
+
                     _cpu.Step();
                     Interlocked.Increment(ref _instructionsExecuted);
                 }

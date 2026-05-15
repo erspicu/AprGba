@@ -83,14 +83,18 @@ internal static class HeadlessRunner
         // if the ROM never HLTs.
         long limit = opts.MaxCycles ?? 1_000_000;
         long startCount = runner.InstructionsExecuted;
-        var deadline = DateTime.UtcNow.AddSeconds(30);
+        // Phase 28.8b — FreeDOS boot takes much longer than 30 s on
+        // our HLE path. Scale deadline by max-cycles so larger limits
+        // don't trip the timeout prematurely; minimum 30 s.
+        int deadlineSeconds = Math.Max(30, (int)Math.Min(int.MaxValue, limit / 200_000));
+        var deadline = DateTime.UtcNow.AddSeconds(deadlineSeconds);
 
         while (runner.InstructionsExecuted - startCount < limit)
         {
             if (runner.Cpu is { Halted: true }) break;
             if (DateTime.UtcNow >= deadline)
             {
-                Console.Error.WriteLine("apr-pc: headless timeout (30s)");
+                Console.Error.WriteLine($"apr-pc: headless timeout ({deadlineSeconds}s)");
                 runner.Stop();
                 return 4;
             }

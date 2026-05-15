@@ -73,6 +73,15 @@ public sealed class HleBios
     /// </summary>
     public void Install()
     {
+        // Phase 28.8b — INT 8 (IRQ 0 PIT) + INT 9 (IRQ 1 keyboard).
+        // Default handlers are no-op (just IRET). Real BIOS would
+        // chain INT 8 → INT 1Ch user timer; user programs that
+        // install their own handler will see priority over ours
+        // since they overwrite IVT slots. Without these defaults
+        // an IRQ would dispatch to IVT[v]=0:0000 and send CPU into
+        // unmapped low-memory garbage.
+        InstallVector(0x08, "irq0_timer");
+        InstallVector(0x09, "irq1_keyboard");
         InstallVector(0x10, "video");
         InstallVector(0x13, "disk");
         InstallVector(0x16, "keyboard");
