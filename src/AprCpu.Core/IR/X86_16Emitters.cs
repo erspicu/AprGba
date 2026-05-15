@@ -5050,7 +5050,115 @@ internal sealed class X86FpuNoopEmitter : IMicroOpEmitter
 internal sealed class X86FpuD8DispatchEmitter : IMicroOpEmitter
 {
     public string OpName => "x86_fpu_d8_dispatch";
-    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.4 */ }
+
+    // Phase 29.4 — f32 / ST(i) arithmetic family. Each /reg sub-opcode is
+    // ST(0) := ST(0) <op> operand, where operand is m32fp (mod≠11) or
+    // ST(rm) (mod=11).
+    //   /0 FADD   /1 FMUL   /2 FCOM   /3 FCOMP
+    //   /4 FSUB   /5 FSUBR  /6 FDIV   /7 FDIVR
+    // FCOM / FCOMP are compare ops — they set FPU_SW condition codes
+    // C3/C2/C0 but don't write ST(0). Phase 29.5 will implement them; this
+    // sprint covers the 6 writeback arithmetic ops.
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var f64 = LLVMTypeRef.Double;
+        var mod = ctx.Resolve("modrm_mod");
+        var reg = ctx.Resolve("modrm_reg");
+        var rm  = ctx.Resolve("modrm_rm");
+
+        var isMod3 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            mod, LLVMValueRef.CreateConstInt(i32, 3, false), "d8_isMod3");
+        var memBB = ctx.Function.AppendBasicBlock("d8_mem");
+        var regBB = ctx.Function.AppendBasicBlock("d8_reg");
+        var afterOperandBB = ctx.Function.AppendBasicBlock("d8_after_operand");
+        ctx.Builder.BuildCondBr(isMod3, regBB, memBB);
+
+        // Memory form: operand = f32 from EA.
+        ctx.Builder.PositionAtEnd(memBB);
+        var memOperand = X86FpuHelpers.LoadMemF32AsF64(ctx,
+            ctx.Resolve("ea_base"), ctx.Resolve("ea_off"), "d8_memOp");
+        var memBlock = ctx.Builder.InsertBlock;
+        ctx.Builder.BuildBr(afterOperandBB);
+
+        // Register form: operand = ST(rm).
+        ctx.Builder.PositionAtEnd(regBB);
+        var regOperand = X86FpuHelpers.LoadLogicalSt(ctx, rm, "d8_regOp");
+        var regBlock = ctx.Builder.InsertBlock;
+        ctx.Builder.BuildBr(afterOperandBB);
+
+        // Merge operand via phi.
+        ctx.Builder.PositionAtEnd(afterOperandBB);
+        var operand = ctx.Builder.BuildPhi(f64, "d8_operand");
+        operand.AddIncoming(new[] { memOperand, regOperand },
+            new[] { memBlock, regBlock }, 2);
+
+        // Load ST(0).
+        var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+            LLVMValueRef.CreateConstInt(i32, 0, false), "d8_st0");
+
+        // Dispatch on /reg.
+        var endBB = ctx.Function.AppendBasicBlock("d8_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("d8_default");
+        var arms = new LLVMBasicBlockRef[8];
+        for (int r = 0; r < 8; r++) arms[r] = ctx.Function.AppendBasicBlock($"d8_op_{r}");
+        var sw = ctx.Builder.BuildSwitch(reg, defaultBB, 8);
+        for (int r = 0; r < 8; r++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)r, false), arms[r]);
+
+        // /0 FADD: ST(0) = ST(0) + operand
+        ctx.Builder.PositionAtEnd(arms[0]);
+        var fadd = ctx.Builder.BuildFAdd(st0, operand, "d8_fadd");
+        X86FpuHelpers.StoreLogicalSt(ctx,
+            LLVMValueRef.CreateConstInt(i32, 0, false), fadd, "d8_storeAdd");
+        ctx.Builder.BuildBr(endBB);
+
+        // /1 FMUL: ST(0) = ST(0) * operand
+        ctx.Builder.PositionAtEnd(arms[1]);
+        var fmul = ctx.Builder.BuildFMul(st0, operand, "d8_fmul");
+        X86FpuHelpers.StoreLogicalSt(ctx,
+            LLVMValueRef.CreateConstInt(i32, 0, false), fmul, "d8_storeMul");
+        ctx.Builder.BuildBr(endBB);
+
+        // /2 FCOM / /3 FCOMP — Phase 29.5; no-op for now.
+        ctx.Builder.PositionAtEnd(arms[2]);
+        ctx.Builder.BuildBr(endBB);
+        ctx.Builder.PositionAtEnd(arms[3]);
+        ctx.Builder.BuildBr(endBB);
+
+        // /4 FSUB: ST(0) = ST(0) - operand
+        ctx.Builder.PositionAtEnd(arms[4]);
+        var fsub = ctx.Builder.BuildFSub(st0, operand, "d8_fsub");
+        X86FpuHelpers.StoreLogicalSt(ctx,
+            LLVMValueRef.CreateConstInt(i32, 0, false), fsub, "d8_storeSub");
+        ctx.Builder.BuildBr(endBB);
+
+        // /5 FSUBR: ST(0) = operand - ST(0)   (note the swapped operands)
+        ctx.Builder.PositionAtEnd(arms[5]);
+        var fsubr = ctx.Builder.BuildFSub(operand, st0, "d8_fsubr");
+        X86FpuHelpers.StoreLogicalSt(ctx,
+            LLVMValueRef.CreateConstInt(i32, 0, false), fsubr, "d8_storeSubR");
+        ctx.Builder.BuildBr(endBB);
+
+        // /6 FDIV: ST(0) = ST(0) / operand
+        ctx.Builder.PositionAtEnd(arms[6]);
+        var fdiv = ctx.Builder.BuildFDiv(st0, operand, "d8_fdiv");
+        X86FpuHelpers.StoreLogicalSt(ctx,
+            LLVMValueRef.CreateConstInt(i32, 0, false), fdiv, "d8_storeDiv");
+        ctx.Builder.BuildBr(endBB);
+
+        // /7 FDIVR: ST(0) = operand / ST(0)
+        ctx.Builder.PositionAtEnd(arms[7]);
+        var fdivr = ctx.Builder.BuildFDiv(operand, st0, "d8_fdivr");
+        X86FpuHelpers.StoreLogicalSt(ctx,
+            LLVMValueRef.CreateConstInt(i32, 0, false), fdivr, "d8_storeDivR");
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(defaultBB);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+    }
 }
 // Phase 29.3c — FPU stack helpers. Cover the canonical 8087 push/pop
 // patterns so individual D9/DB/DD opcodes don't each reinvent the stack-
@@ -5205,6 +5313,83 @@ internal static class X86FpuHelpers
     {
         var i32 = LLVMTypeRef.Int32;
         return ctx.Builder.BuildLoad2(i32, ctx.GepStatusRegister("FPU_TOP"), label);
+    }
+
+    /// <summary>
+    /// Phase 29.4 — read logical ST(i) as f64. Computes physical slot
+    /// (TOP + logicalI) & 7 then loads the i64 storage and bitcasts. Use
+    /// for arithmetic operand reads (FADD ST(0), ST(i) etc.).
+    /// </summary>
+    public static LLVMValueRef LoadLogicalSt(EmitContext ctx, LLVMValueRef logicalI, string label)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var i64 = LLVMTypeRef.Int64;
+        var f64 = LLVMTypeRef.Double;
+        var top = LoadTop(ctx, $"{label}_top");
+        var physI = ctx.Builder.BuildAnd(
+            ctx.Builder.BuildAdd(top, logicalI, $"{label}_sum"),
+            LLVMValueRef.CreateConstInt(i32, 7, false), $"{label}_phys");
+        var slotPtr = GepPhysicalSt(ctx, physI, $"{label}_slot");
+        var valI64 = ctx.Builder.BuildLoad2(i64, slotPtr, $"{label}_i64");
+        return ctx.Builder.BuildBitCast(valI64, f64, $"{label}_f64");
+    }
+
+    /// <summary>
+    /// Phase 29.4 — write logical ST(i) from f64. Used by arithmetic
+    /// writeback (`ST(0) := result`). Tag is set to Valid (00) since
+    /// arithmetic results are always defined (NaN/Inf classification
+    /// for 'Special' tag is deferred until Phase 29.5+).
+    /// </summary>
+    public static void StoreLogicalSt(EmitContext ctx, LLVMValueRef logicalI, LLVMValueRef valF64, string label)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var i64 = LLVMTypeRef.Int64;
+        var i16 = LLVMTypeRef.Int16;
+        var top = LoadTop(ctx, $"{label}_top");
+        var physI = ctx.Builder.BuildAnd(
+            ctx.Builder.BuildAdd(top, logicalI, $"{label}_sum"),
+            LLVMValueRef.CreateConstInt(i32, 7, false), $"{label}_phys");
+        var slotPtr = GepPhysicalSt(ctx, physI, $"{label}_slot");
+        var asI64 = ctx.Builder.BuildBitCast(valF64, i64, $"{label}_i64");
+        ctx.Builder.BuildStore(asI64, slotPtr);
+        SetTag(ctx, physI, LLVMValueRef.CreateConstInt(i16, 0, false), $"{label}_validTag");
+    }
+
+    /// <summary>
+    /// Phase 29.4 — read a 4-byte m32fp from EA, assemble i32, bitcast
+    /// f32, FPExt to f64. Common pattern shared by FLD m32fp and the
+    /// memory-form arithmetic ops (FADD m32fp, FMUL m32fp, etc.).
+    /// </summary>
+    public static LLVMValueRef LoadMemF32AsF64(EmitContext ctx,
+        LLVMValueRef eaBase, LLVMValueRef eaOff, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var f32 = LLVMTypeRef.Float;
+        var f64 = LLVMTypeRef.Double;
+        var b0 = X86_16Emitters.SegmentedRead8FromBase(ctx, eaBase, eaOff, $"{label}_b0");
+        var b1 = X86_16Emitters.SegmentedRead8FromBase(ctx, eaBase,
+            ctx.Builder.BuildAdd(eaOff, LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_o1"),
+            $"{label}_b1");
+        var b2 = X86_16Emitters.SegmentedRead8FromBase(ctx, eaBase,
+            ctx.Builder.BuildAdd(eaOff, LLVMValueRef.CreateConstInt(i16, 2, false), $"{label}_o2"),
+            $"{label}_b2");
+        var b3 = X86_16Emitters.SegmentedRead8FromBase(ctx, eaBase,
+            ctx.Builder.BuildAdd(eaOff, LLVMValueRef.CreateConstInt(i16, 3, false), $"{label}_o3"),
+            $"{label}_b3");
+        var z0 = ctx.Builder.BuildZExt(b0, i32, $"{label}_z0");
+        var z1 = ctx.Builder.BuildShl(ctx.Builder.BuildZExt(b1, i32, $"{label}_z1"),
+            LLVMValueRef.CreateConstInt(i32, 8, false), $"{label}_s1");
+        var z2 = ctx.Builder.BuildShl(ctx.Builder.BuildZExt(b2, i32, $"{label}_z2"),
+            LLVMValueRef.CreateConstInt(i32, 16, false), $"{label}_s2");
+        var z3 = ctx.Builder.BuildShl(ctx.Builder.BuildZExt(b3, i32, $"{label}_z3"),
+            LLVMValueRef.CreateConstInt(i32, 24, false), $"{label}_s3");
+        var assembled = ctx.Builder.BuildOr(
+            ctx.Builder.BuildOr(z0, z1, $"{label}_or01"),
+            ctx.Builder.BuildOr(z2, z3, $"{label}_or23"),
+            $"{label}_i32");
+        var asF32 = ctx.Builder.BuildBitCast(assembled, f32, $"{label}_f32");
+        return ctx.Builder.BuildFPExt(asF32, f64, $"{label}_f64");
     }
 
     /// <summary>
