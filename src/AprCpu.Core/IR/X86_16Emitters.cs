@@ -5398,6 +5398,27 @@ internal static class X86FpuHelpers
     }
 
     /// <summary>
+    /// Phase 29.8 — call an LLVM unary f64→f64 intrinsic by name
+    /// (e.g. <c>llvm.fabs.f64</c>, <c>llvm.sqrt.f64</c>, <c>llvm.rint.f64</c>).
+    /// The intrinsic is declared lazily on the module the first time
+    /// we see it; subsequent calls reuse the declaration. Used by
+    /// FABS / FSQRT / FRNDINT / future FCHS-alternative paths.
+    /// </summary>
+    public static LLVMValueRef BuildIntrinsicCallF64(EmitContext ctx, string name, LLVMValueRef arg, string label)
+    {
+        var f64 = LLVMTypeRef.Double;
+        var module = ctx.Function.GlobalParent;
+        var fn = module.GetNamedFunction(name);
+        if (fn.Handle == IntPtr.Zero)
+        {
+            var fnType = LLVMTypeRef.CreateFunction(f64, new[] { f64 }, false);
+            fn = module.AddFunction(name, fnType);
+        }
+        var fnType2 = LLVMTypeRef.CreateFunction(f64, new[] { f64 }, false);
+        return ctx.Builder.BuildCall2(fnType2, fn, new[] { arg }, label);
+    }
+
+    /// <summary>
     /// Phase 29.5 — FPU compare. Writes the C0 (bit 8), C1 (bit 9, cleared
     /// per Intel SDM rule for non-stack-overflow compares), C2 (bit 10),
     /// and C3 (bit 14) condition codes into FPU_SW. Mapping per Intel SDM:
@@ -5631,9 +5652,22 @@ internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
         }
         ctx.Builder.BuildBr(endBB);
 
-        // Constants + FLDZ — switch on combined for the 7 values 0x28..0x2E.
+        // Other register-form D9 ops — single big switch on `combined`.
+        // Covers: FNOP (0x10), unary ST(0) ops FCHS/FABS/FTST (0x20/21/24),
+        // 7 hardware constants FLD1/FLDL2T/FLDL2E/FLDPI/FLDLG2/FLDLN2/FLDZ
+        // (0x28-0x2E), FSQRT (0x3A), FRNDINT (0x3C), and the transcendental
+        // family F0-F8 (deferred to 29.7). FSIN/FCOS/FSINCOS (0x3E/3F/3B)
+        // are 387+ only and stay no-op for 8087-tier emulation.
         ctx.Builder.PositionAtEnd(afterFxchBB);
-        var constDefault = ctx.Function.AppendBasicBlock("d9_const_default");
+        var defaultBB = ctx.Function.AppendBasicBlock("d9_reg_default");
+
+        // Pre-allocate basic blocks per opcode.
+        var bbFnop    = ctx.Function.AppendBasicBlock("fnop");
+        var bbFchs    = ctx.Function.AppendBasicBlock("fchs");
+        var bbFabs    = ctx.Function.AppendBasicBlock("fabs");
+        var bbFtst    = ctx.Function.AppendBasicBlock("ftst");
+        var bbFsqrt   = ctx.Function.AppendBasicBlock("fsqrt");
+        var bbFrndint = ctx.Function.AppendBasicBlock("frndint");
         var constArms = new (int code, LLVMBasicBlockRef bb, double val, int tag)[]
         {
             (0x28, ctx.Function.AppendBasicBlock("fld1"),    1.0,     0),
@@ -5642,11 +5676,85 @@ internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
             (0x2B, ctx.Function.AppendBasicBlock("fldpi"),   Pi,      0),
             (0x2C, ctx.Function.AppendBasicBlock("fldlg2"),  Log10_2, 0),
             (0x2D, ctx.Function.AppendBasicBlock("fldln2"),  Ln_2,    0),
-            (0x2E, ctx.Function.AppendBasicBlock("fldz"),    0.0,     1),  // tag=Zero
+            (0x2E, ctx.Function.AppendBasicBlock("fldz"),    0.0,     1),
         };
-        var constSw = ctx.Builder.BuildSwitch(combined, constDefault, (uint)constArms.Length);
+
+        var sw = ctx.Builder.BuildSwitch(combined, defaultBB, (uint)(6 + constArms.Length));
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x10, false), bbFnop);
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x20, false), bbFchs);
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x21, false), bbFabs);
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x24, false), bbFtst);
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x3A, false), bbFsqrt);
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x3C, false), bbFrndint);
         foreach (var arm in constArms)
-            constSw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)arm.code, false), arm.bb);
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)arm.code, false), arm.bb);
+
+        // D9 D0 = FNOP — true no-op (intentional).
+        ctx.Builder.PositionAtEnd(bbFnop);
+        ctx.Builder.BuildBr(endBB);
+
+        // D9 E0 = FCHS — ST(0) = -ST(0). Uses LLVM `fneg` which flips
+        // the sign bit (also handles NaN sign-bit toggle, matching 8087).
+        ctx.Builder.PositionAtEnd(bbFchs);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "fchs_st0");
+            var neg = ctx.Builder.BuildFNeg(st0, "fchs_neg");
+            X86FpuHelpers.StoreLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), neg, "fchs_store");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // D9 E1 = FABS — ST(0) = |ST(0)|. Use LLVM `llvm.fabs.f64`
+        // intrinsic; clears the sign bit unconditionally.
+        ctx.Builder.PositionAtEnd(bbFabs);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "fabs_st0");
+            var absVal = X86FpuHelpers.BuildIntrinsicCallF64(ctx, "llvm.fabs.f64", st0, "fabs_v");
+            X86FpuHelpers.StoreLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), absVal, "fabs_store");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // D9 E4 = FTST — compare ST(0) with 0.0; sets C0/C2/C3 in FPU_SW
+        // exactly like FCOM but with operand=0.0.
+        ctx.Builder.PositionAtEnd(bbFtst);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "ftst_st0");
+            var zero = LLVMValueRef.CreateConstReal(f64, 0.0);
+            X86FpuHelpers.Compare(ctx, st0, zero, "ftst");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // D9 FA = FSQRT — ST(0) = sqrt(ST(0)). LLVM `llvm.sqrt.f64`.
+        ctx.Builder.PositionAtEnd(bbFsqrt);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "fsqrt_st0");
+            var sqrtVal = X86FpuHelpers.BuildIntrinsicCallF64(ctx, "llvm.sqrt.f64", st0, "fsqrt_v");
+            X86FpuHelpers.StoreLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), sqrtVal, "fsqrt_store");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // D9 FC = FRNDINT — round ST(0) to integer per FPU_CW rounding mode.
+        // Default RC=00 = round-to-nearest-even. LLVM `llvm.rint.f64`
+        // implements exactly that (current-rounding-mode round); we use it
+        // unconditionally since FPU_CW.RC isn't yet honored by the JIT
+        // (and 99% of DOS code leaves RC at the FNINIT default anyway).
+        ctx.Builder.PositionAtEnd(bbFrndint);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "frndint_st0");
+            var rinted = X86FpuHelpers.BuildIntrinsicCallF64(ctx, "llvm.rint.f64", st0, "frndint_v");
+            X86FpuHelpers.StoreLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), rinted, "frndint_store");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // Constant pushes (D9 E8..EE).
         foreach (var arm in constArms)
         {
             ctx.Builder.PositionAtEnd(arm.bb);
@@ -5656,7 +5764,8 @@ internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
                 $"const_{arm.code:x2}");
             ctx.Builder.BuildBr(endBB);
         }
-        ctx.Builder.PositionAtEnd(constDefault);
+
+        ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(endBB);
@@ -5734,7 +5843,46 @@ internal sealed class X86FpuDCDispatchEmitter : IMicroOpEmitter
 internal sealed class X86FpuDDDispatchEmitter : IMicroOpEmitter
 {
     public string OpName => "x86_fpu_dd_dispatch";
-    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.3 — FLD/FST/FSTP m64fp + FFREE lands here */ }
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // Phase 29.8 — only FFREE ST(i) (mod=11 reg=000 rm=0..7,
+        // combined = 0x00..0x07). FFREE marks ST(i)'s tag as Empty (11)
+        // but does NOT change TOP or the data slot — programs use it to
+        // tell the FPU a slot's value is no longer needed (frees the slot
+        // without going through pop), letting subsequent FLD reuse it
+        // without raising stack-overflow.
+        // Other DD sub-opcodes (FLD/FST/FSTP m64fp + FRSTOR + FNSAVE +
+        // FUCOM/FUCOMP) stay no-op until 29.3e / 29.9.
+        var i32 = LLVMTypeRef.Int32;
+        var i16 = LLVMTypeRef.Int16;
+        var mod = ctx.Resolve("modrm_mod");
+        var reg = ctx.Resolve("modrm_reg");
+        var rm  = ctx.Resolve("modrm_rm");
+
+        var isMod3 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            mod, LLVMValueRef.CreateConstInt(i32, 3, false), "dd_isMod3");
+        var isRegZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            reg, LLVMValueRef.CreateConstInt(i32, 0, false), "dd_isRegZero");
+        var isFfree = ctx.Builder.BuildAnd(isMod3, isRegZero, "dd_isFfree");
+
+        var ffreeBB = ctx.Function.AppendBasicBlock("ffree");
+        var endBB   = ctx.Function.AppendBasicBlock("dd_end");
+        ctx.Builder.BuildCondBr(isFfree, ffreeBB, endBB);
+
+        ctx.Builder.PositionAtEnd(ffreeBB);
+        {
+            // FFREE ST(i): physI = (TOP + rm) & 7; set tag of physI to Empty.
+            var top = X86FpuHelpers.LoadTop(ctx, "ffree_top");
+            var sumIdx = ctx.Builder.BuildAdd(top, rm, "ffree_sum");
+            var physI = ctx.Builder.BuildAnd(sumIdx,
+                LLVMValueRef.CreateConstInt(i32, 7, false), "ffree_physI");
+            X86FpuHelpers.SetTag(ctx, physI,
+                LLVMValueRef.CreateConstInt(i16, 3, false), "ffree_emptyTag");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+    }
 }
 internal sealed class X86FpuDEDispatchEmitter : IMicroOpEmitter
 {
