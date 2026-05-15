@@ -85,14 +85,21 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
     /// </summary>
     public string Variant { get; }
 
-    public X86JsonCpu(X86Memory memory, bool enableBlockJit = false, string variant = "i8086")
+    public X86JsonCpu(X86Memory memory, bool enableBlockJit = false, string variant = "i8086",
+        IReadOnlyList<string>? extensionPaths = null)
     {
         _mem = memory ?? throw new ArgumentNullException(nameof(memory));
         _blockJitEnabled = enableBlockJit;
         Variant = variant;
 
         var specPath = LocateSpec(variant);
-        var compileResult = SpecCompiler.Compile(specPath);
+        // N29.1 — when the consumer (AprPc.Cli) loaded a machine spec
+        // declaring extensions (e.g. x87 8087), pass them through so the
+        // merged compile result includes their opcode groups. Empty /
+        // null behaves like a bare CPU socket — same path as before 29.1.
+        var compileResult = extensionPaths is null || extensionPaths.Count == 0
+            ? SpecCompiler.Compile(specPath)
+            : SpecCompiler.Compile(specPath, extensionPaths);
         if (compileResult.Diagnostics.Count != 0)
         {
             var bad = new List<string>();
@@ -107,7 +114,9 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         }
         _compileResult = compileResult;
 
-        _spec = SpecLoader.LoadCpuSpec(specPath);
+        _spec = extensionPaths is null || extensionPaths.Count == 0
+            ? SpecLoader.LoadCpuSpec(specPath)
+            : SpecLoader.LoadCpuSpecWithExtensions(specPath, extensionPaths);
         if (!compileResult.DecoderTables.TryGetValue("Main", out var mainDecoder))
         {
             throw new InvalidOperationException(

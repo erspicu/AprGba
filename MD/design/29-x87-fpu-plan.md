@@ -163,11 +163,11 @@ because it expects an INT 75h on DivZero, add it then. For now: dead weight.
 
 ---
 
-## Phase 29.x sprint plan (deferred)
+## Phase 29.x sprint plan
 
 | Sprint | Scope | Notes |
 |---|---|---|
-| 29.1 | Spec loader extensions support | Read `"extensions"` array, merge JSON ASTs |
+| 29.1 | Spec loader extensions support — ✅ **DONE 2026-05-15** | `MachineSpec.Extensions` + `SpecLoader.LoadCpuSpecWithExtensions()` + `SpecCompiler.Compile(path, extensions)` + `X86JsonCpu(extensionPaths:)`. `spec/coprocessors/x87/i8087/cpu.json` + `groups/fpu-esc.json` created; FpuEscape entry **moved out** of `spec/cpu/x86-16/i8086/groups/misc.json` (proves merge end-to-end). FreeDOS regression intact (2838 HLE INT calls); real BIOS POST advanced F000:E706 → F000:F433. |
 | 29.2 | FPU register file in state struct | f64[8] + tags + top + cw + sw |
 | 29.3 | Data movement | FLD / FST / FSTP / FXCH / FCMOV (mem+reg forms) |
 | 29.4 | Arithmetic | FADD / FSUB / FMUL / FDIV (+R variants, +P variants) |

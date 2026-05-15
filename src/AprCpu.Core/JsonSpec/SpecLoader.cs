@@ -60,6 +60,123 @@ public static class SpecLoader
     /// </summary>
     public const int MaxInheritanceDepth = 4;
 
+    /// <summary>
+    /// N29.1 — load a CPU spec PLUS one or more coprocessor / ISA-extension
+    /// spec files, merging the extensions' instruction groups (and, in
+    /// Phase 29.2+, register additions) into the base CPU's instruction
+    /// sets. Returns a single unified <see cref="LoadedSpec"/> that the
+    /// SpecCompiler can feed into a single LLVM module — matching the
+    /// QEMU TCG / Bochs / 86Box approach (separate JSON files, unified
+    /// runtime data model). See <c>MD/design/29-x87-fpu-plan.md</c>.
+    ///
+    /// Extension file shape (minimal Phase 29.1 schema):
+    /// <code>
+    /// {
+    ///   "name": "i8087",
+    ///   "extends_cpu": "Intel8086",
+    ///   "instruction_set_additions": {
+    ///     "Main": { "encoding_groups": [ { "$include": "groups/fpu-esc.json" }, ... ] }
+    ///   }
+    /// }
+    /// </code>
+    /// Each extension's encoding groups are PREPENDED to the matching
+    /// base instruction set's <c>EncodingGroups[]</c> so DecoderTable's
+    /// mask-match priority sees them BEFORE base patterns (same convention
+    /// as 25.1 inheritance additions).
+    ///
+    /// Empty / null <paramref name="extensionPaths"/> behaves identically
+    /// to <see cref="LoadCpuSpec(string)"/>.
+    /// </summary>
+    public static LoadedSpec LoadCpuSpecWithExtensions(string cpuJsonPath, IReadOnlyList<string>? extensionPaths)
+    {
+        var loaded = LoadCpuSpec(cpuJsonPath);
+        if (extensionPaths is null || extensionPaths.Count == 0)
+            return loaded;
+
+        var mergedSets = new Dictionary<string, InstructionSetSpec>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (n, s) in loaded.InstructionSets) mergedSets[n] = s;
+
+        foreach (var extPath in extensionPaths)
+        {
+            var fullExtPath = Path.GetFullPath(extPath);
+            if (!File.Exists(fullExtPath))
+                throw new SpecValidationException(
+                    $"Extension spec file not found: {fullExtPath}",
+                    fullExtPath);
+
+            using var extDoc = LoadAndResolveDocument(fullExtPath);
+            var extRoot = extDoc.RootElement;
+
+            // Sanity check: extension's extends_cpu (if declared) must
+            // match the loaded CPU's architecture id. Catches misconfigs
+            // like attaching an x87 extension to an ARM7TDMI.
+            if (extRoot.TryGetProperty("extends_cpu", out var ecEl)
+                && ecEl.ValueKind == JsonValueKind.String)
+            {
+                var ec = ecEl.GetString();
+                if (!string.IsNullOrEmpty(ec)
+                    && !string.Equals(ec, loaded.Cpu.Architecture.Id, StringComparison.Ordinal))
+                {
+                    throw new SpecValidationException(
+                        $"Extension '{fullExtPath}' declares extends_cpu='{ec}' but " +
+                        $"target CPU is '{loaded.Cpu.Architecture.Id}'. " +
+                        $"Extensions can only attach to their declared base CPU.",
+                        fullExtPath, "$.extends_cpu");
+                }
+            }
+
+            var extName = extRoot.TryGetProperty("name", out var nEl) && nEl.ValueKind == JsonValueKind.String
+                ? nEl.GetString() ?? "<unnamed>" : "<unnamed>";
+
+            if (!extRoot.TryGetProperty("instruction_set_additions", out var addEl))
+                continue;  // Pure register-only extensions (Phase 29.2+) would land here.
+            if (addEl.ValueKind != JsonValueKind.Object)
+                throw new SpecValidationException(
+                    "'instruction_set_additions' must be an object keyed by instruction-set name.",
+                    fullExtPath, "$.instruction_set_additions");
+
+            foreach (var setEntry in addEl.EnumerateObject())
+            {
+                var setName = setEntry.Name;
+                if (!mergedSets.TryGetValue(setName, out var baseSet))
+                    throw new SpecValidationException(
+                        $"Extension '{extName}' targets instruction set '{setName}' which is not present in base CPU '{loaded.Cpu.Architecture.Id}'.",
+                        fullExtPath, $"$.instruction_set_additions.{setName}");
+
+                if (!setEntry.Value.TryGetProperty("encoding_groups", out var groupsEl)
+                    || groupsEl.ValueKind != JsonValueKind.Array)
+                    throw new SpecValidationException(
+                        $"instruction_set_additions['{setName}'] must contain an 'encoding_groups' array.",
+                        fullExtPath, $"$.instruction_set_additions.{setName}.encoding_groups");
+
+                var addedGroups = new List<EncodingGroup>();
+                int groupIdx = 0;
+                foreach (var gEl in groupsEl.EnumerateArray())
+                {
+                    var parsed = ParseEncodingGroup(gEl, baseSet.WidthBits, fullExtPath,
+                        $"$.instruction_set_additions.{setName}.encoding_groups[{groupIdx}]");
+                    // Tag each instruction with OriginCpu = extension name so
+                    // diagnostics / dumps can trace provenance.
+                    var taggedFormats = parsed.Formats.Select(f =>
+                        f with { Instructions = f.Instructions.Select(i =>
+                            i with { OriginCpu = i.OriginCpu ?? extName }).ToList() }).ToList();
+                    addedGroups.Add(parsed with { Formats = taggedFormats });
+                    groupIdx++;
+                }
+
+                // Prepend additions so DecoderTable sees more-specific
+                // extension masks BEFORE base patterns (matches 25.1
+                // inheritance addition ordering).
+                var newGroups = new List<EncodingGroup>(addedGroups.Count + baseSet.EncodingGroups.Count);
+                newGroups.AddRange(addedGroups);
+                newGroups.AddRange(baseSet.EncodingGroups);
+                mergedSets[setName] = baseSet with { EncodingGroups = newGroups };
+            }
+        }
+
+        return loaded with { InstructionSets = mergedSets };
+    }
+
     private static LoadedSpec LoadCpuSpecInternal(string cpuJsonPath, HashSet<string> inProgress, int depth)
     {
         var fullPath = Path.GetFullPath(cpuJsonPath);

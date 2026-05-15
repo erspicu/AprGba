@@ -4,6 +4,10 @@
     "name": "ibm-pc-xt",
     "cpu": "Intel8086",
     "comment": "Phase 28.0 — skeleton. IBM PC / PC-XT class machine: 8086 / 8088 CPU + 1 MB physical address space + 640 KB conventional + CGA text framebuffer @ B800:0000 + ROM BIOS area @ F000:0000-F000:FFFF. unmapped_behavior=zero matches typical XT bus (no last-value latch on the bus). Detailed handler wiring lands in subsequent sub-phases (28.1+); this stub only declares the address ranges.",
+    "extensions": [
+        "../coprocessors/x87/i8087/cpu.json"
+    ],
+    "comment_extensions": "Phase 29.1 — coprocessor extension spec(s) merged into the base CPU spec at load time (see MD/design/29-x87-fpu-plan.md). Paths are resolved relative to this machine spec file's directory. The 8087 (Intel's numeric coprocessor) was socketed alongside the 8086/8088 in real PC/XT machines; declaring it here mirrors that physical pairing — a hypothetical 'pc-no-fpu' machine variant would simply omit the array and 0xD8-0xDF would #UD as on a real 8086 without 8087.",
     "unmapped_behavior": "zero",
     "memory_regions": [
         {

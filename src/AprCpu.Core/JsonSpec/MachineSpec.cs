@@ -23,7 +23,16 @@ public sealed record MachineSpec(
     // N4.1 — schema v2 fields. Optional; legacy v1 specs that omit these
     // load with sensible defaults.
     string SpecVersion = "1.0",
-    UnmappedBehavior UnmappedBehavior = UnmappedBehavior.Zero);
+    UnmappedBehavior UnmappedBehavior = UnmappedBehavior.Zero,
+    // N29.1 — coprocessor / ISA-extension spec paths, resolved relative
+    // to this machine spec file's directory. Loaded by
+    // SpecLoader.LoadCpuSpecWithExtensions() which merges each
+    // extension's instruction groups and registers into the base CPU
+    // spec at compile time. See MD/design/29-x87-fpu-plan.md for the
+    // architectural rationale (matches QEMU TCG / Bochs / 86Box: files
+    // separate, runtime data model unified). Empty / null means "no
+    // extensions" — equivalent to a bare CPU socket.
+    IReadOnlyList<string>? Extensions = null);
 
 /// <summary>
 /// N4.1 — machine-level policy for accesses that fall in gaps between
@@ -139,7 +148,25 @@ public static class MachineSpecLoader
             };
         }
 
-        return new MachineSpec(name, cpuRef, regions, vectors, specVersion, unmappedBehavior);
+        // N29.1 — extensions array (optional). Paths are relative to the
+        // machine spec file's directory; SpecLoader resolves them when
+        // building the merged LoadedSpec.
+        List<string>? extensions = null;
+        if (root.TryGetProperty("extensions", out var exEl))
+        {
+            if (exEl.ValueKind != JsonValueKind.Array)
+                throw new InvalidDataException("'extensions' must be a string array of paths");
+            extensions = new List<string>();
+            foreach (var p in exEl.EnumerateArray())
+            {
+                if (p.ValueKind != JsonValueKind.String)
+                    throw new InvalidDataException("'extensions[]' entries must be strings (relative paths to extension spec files)");
+                var s = p.GetString();
+                if (!string.IsNullOrWhiteSpace(s)) extensions.Add(s);
+            }
+        }
+
+        return new MachineSpec(name, cpuRef, regions, vectors, specVersion, unmappedBehavior, extensions);
     }
 
     private static MemoryRegion ParseMemoryRegion(JsonElement el)

@@ -35,6 +35,21 @@ public sealed unsafe class SpecCompiler
         return Compile(loaded);
     }
 
+    /// <summary>
+    /// N29.1 — compile a CPU spec PLUS coprocessor / ISA extensions
+    /// declared at the machine level. Wraps
+    /// <see cref="SpecLoader.LoadCpuSpecWithExtensions"/>; produces the
+    /// same single-module compile result as the non-extension overload,
+    /// just with the merged instruction sets baked in. Use this when a
+    /// <see cref="JsonSpec.MachineSpec"/> declares an "extensions" array;
+    /// otherwise the simpler single-path overload is fine.
+    /// </summary>
+    public static CompileResult Compile(string cpuJsonPath, IReadOnlyList<string>? extensionPaths)
+    {
+        var loaded = SpecLoader.LoadCpuSpecWithExtensions(cpuJsonPath, extensionPaths);
+        return Compile(loaded);
+    }
+
     public static CompileResult Compile(LoadedSpec loaded)
     {
         var moduleName = $"AprCpu_{loaded.Cpu.Architecture.Id}";

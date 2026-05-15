@@ -1,0 +1,16 @@
+{
+    "$schema": "../../../_extension-schema.json",
+    "spec_version": "1.0",
+    "name": "i8087",
+    "extends_cpu": "Intel8086",
+    "comment": "Intel 8087 numeric coprocessor (1980). Phase 29.1 — minimal stub providing only the 0xD8-0xDF ESC opcode no-op handler that real PC/XT BIOS POST FPU detection needs. The full FPU register file (ST0-ST7, control word, status word, tag word, TOP), arithmetic opcodes (FADD/FSUB/FMUL/FDIV), loads/stores (FLD/FST/FSTP), compares (FCOM/FNSTSW), transcendentals (FPTAN/FPATAN/F2XM1/FYL2X), and control ops (FNINIT/FNCLEX/FLDCW/WAIT) land in Phase 29.2+ per MD/design/29-x87-fpu-plan.md. Loaded at machine level via spec/machines/<name>.json's 'extensions' array; the SpecLoader merges these groups into the base CPU's instruction sets at compile time so the JIT pipeline sees a single unified CPU model.",
+    "instruction_set_additions": {
+        "Main": {
+            "encoding_groups": [
+                {
+                    "$include": "groups/fpu-esc.json"
+                }
+            ]
+        }
+    }
+}

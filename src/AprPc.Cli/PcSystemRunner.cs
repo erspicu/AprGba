@@ -110,12 +110,28 @@ public sealed class PcSystemRunner : IDisposable
         // Phase 28.1 — construct the real PC bus + CPU.
         // BiosMode / BiosPath plumb through from PcOptions (--bios-mode,
         // --bios) so the BIOS reset-vector stub is configurable.
-        var spec = MachineSpecLoader.LoadFromFile(PcMemoryBus.LocateMachineSpec());
+        var machineSpecPath = PcMemoryBus.LocateMachineSpec();
+        var spec = MachineSpecLoader.LoadFromFile(machineSpecPath);
         _bus = new PcMemoryBus(spec, biosMode: _options.BiosMode, biosImagePath: _options.BiosPath);
         _bus.Reset();
+
+        // Phase 29.1 — resolve machine-declared coprocessor / ISA extension
+        // paths (e.g. spec/coprocessors/x87/i8087/cpu.json) against the
+        // machine spec file's directory. Empty list / null means "no
+        // extensions" — same path as pre-29.1.
+        List<string>? resolvedExtensions = null;
+        if (spec.Extensions is { Count: > 0 } exts)
+        {
+            var machineDir = Path.GetDirectoryName(Path.GetFullPath(machineSpecPath))!;
+            resolvedExtensions = new List<string>(exts.Count);
+            foreach (var rel in exts)
+                resolvedExtensions.Add(Path.GetFullPath(Path.Combine(machineDir, rel)));
+        }
+
         _cpu = new X86JsonCpu(_bus.Memory,
             enableBlockJit: _options.Backend == "json-block",
-            variant: _options.Cpu);
+            variant: _options.Cpu,
+            extensionPaths: resolvedExtensions);
         _cpu.Reset();
         _cpu.SetEntryPoint(0xFFFF, 0x0000);   // 8086 reset vector
 

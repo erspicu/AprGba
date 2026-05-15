@@ -1,0 +1,31 @@
+{
+    "name": "FpuEscape",
+    "comment": "Intel 8087 ESC opcodes (0xD8-0xDF) — 8 opcode bytes each followed by a ModR/M-shaped second byte that the FPU consumes. Phase 28.IO no-op stub (single FpuEscape format mask=0xF8 match=0xD8): consume the ModR/M byte + any displacement and advance IP, do nothing else. This is enough for real PC/XT BIOS POST FPU detection — BIOS runs FNINIT/FSTCW/CMP to probe for 8087 presence; with no actual FPU side-effect the BIOS reads back its pre-cleared scratch byte, the compare fails, and the equipment-flag FPU bit is cleared (correct semantics for an 8086 without 8087 socketed). Real arithmetic, transcendentals, load/store land in Phase 29.2+.",
+    "formats": [
+        {
+            "name": "FpuEscape",
+            "comment": "0xD8-0xDF — 8087 FPU escape prefix. Phase 28.IO no-op stub: consume the ModR/M byte (and any disp it implies via has_modrm=true at the decoder level) and advance IP, but do nothing else. This unblocks real BIOS POST which probes for FPU presence via FNINIT/FLDCW. Without FPU emulation the BIOS detection will see 'no FPU' and skip FPU-related branches, which is correct behavior for an 8086-class machine without an 8087.",
+            "fields": {},
+            "mask": "0xF8",
+            "match": "0xD8",
+            "has_modrm": true,
+            "instructions": [
+                {
+                    "mnemonic": "FPU",
+                    "since": "Intel8086",
+                    "writes_pc": "never",
+                    "manual_ref": "Intel SDM Vol.2 §FPU",
+                    "cycles": {
+                        "form": "2"
+                    },
+                    "steps": [
+                        {
+                            "op": "x86_fpu_noop"
+                        }
+                    ],
+                    "id": "FPU_noop_D8_DF"
+                }
+            ]
+        }
+    ]
+}
