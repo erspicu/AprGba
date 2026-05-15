@@ -5611,10 +5611,31 @@ internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
         }
         ctx.Builder.BuildBr(endBB);
 
-        // /1 /2 /4 /5 /6 /7 — no-op for Phase 29.3d.
+        // /5 FLDCW m16 — read 16-bit word from EA into FPU_CW.
+        ctx.Builder.PositionAtEnd(memArms[5]);
+        {
+            var cwVal = X86_16Emitters.SegmentedRead16FromBase(ctx, eaBase, eaOff, "fldcw_v");
+            ctx.Builder.BuildStore(cwVal, ctx.GepStatusRegister("FPU_CW"));
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // /7 FSTCW m16 — write FPU_CW (16-bit) to EA. Real BIOS POST FPU
+        // detection (FNINIT + FSTCW + read-back) now sees the full
+        // power-on control word (0x037F) instead of unchanged scratch.
+        ctx.Builder.PositionAtEnd(memArms[7]);
+        {
+            var cwVal = ctx.Builder.BuildLoad2(i16,
+                ctx.GepStatusRegister("FPU_CW"), "fstcw_v");
+            X86_16Emitters.SegmentedWrite16FromBase(ctx, eaBase, eaOff, cwVal, "fstcw_w");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // /1 /2 /4 /6 — no-op for Phase 29.9. /4 FLDENV and /6 FSTENV/
+        // FNSTENV (save/restore 14- or 28-byte FPU environment block) are
+        // complex and rarely needed by DOS code; defer to a future sprint.
         for (int r = 0; r < 8; r++)
         {
-            if (r == 0 || r == 3) continue;  // handled above
+            if (r == 0 || r == 3 || r == 5 || r == 7) continue;
             ctx.Builder.PositionAtEnd(memArms[r]);
             ctx.Builder.BuildBr(endBB);
         }
@@ -5799,13 +5820,26 @@ internal sealed class X86FpuDBDispatchEmitter : IMicroOpEmitter
         var regSh = ctx.Builder.BuildShl(reg,
             LLVMValueRef.CreateConstInt(i32, 3, false), "db_regSh");
         var combined = ctx.Builder.BuildOr(regSh, rm, "db_combined");
-        var isE3Sub = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
-            combined, LLVMValueRef.CreateConstInt(i32, 0x23, false), "db_isE3sub");
-        var isFninit = ctx.Builder.BuildAnd(isMod3, isE3Sub, "db_isFninit");
 
-        var fninitBB = ctx.Function.AppendBasicBlock("fninit");
-        var endBB    = ctx.Function.AppendBasicBlock("db_end");
-        ctx.Builder.BuildCondBr(isFninit, fninitBB, endBB);
+        // Two reg-form opcodes wired in 29.3b/29.9:
+        //   DB E2 = FNCLEX (mod=11 reg=100 rm=010 = combined 0x22)
+        //   DB E3 = FNINIT (mod=11 reg=100 rm=011 = combined 0x23)
+        // Use a switch on `combined` (gated by mod==11) so future DB
+        // reg-form opcodes (FNSETPM E4 = 0x24, FSETPM E5 = 0x25) can be
+        // added cleanly. Other DB sub-opcodes (FILD/FIST/FISTP m32int +
+        // FLD/FSTP m80fp) stay no-op until 29.3e / 29.10.
+        var endBB = ctx.Function.AppendBasicBlock("db_end");
+        var defaultBB = ctx.Function.AppendBasicBlock("db_default");
+        var fninitBB  = ctx.Function.AppendBasicBlock("fninit");
+        var fnclexBB  = ctx.Function.AppendBasicBlock("fnclex");
+
+        var dispatchBB = ctx.Function.AppendBasicBlock("db_dispatch");
+        ctx.Builder.BuildCondBr(isMod3, dispatchBB, endBB);
+
+        ctx.Builder.PositionAtEnd(dispatchBB);
+        var sw = ctx.Builder.BuildSwitch(combined, defaultBB, 2);
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x22, false), fnclexBB);
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x23, false), fninitBB);
 
         // FNINIT body: reset FPU state to power-on defaults.
         //   FPU_CW   = 0x037F   (all 6 exceptions masked, PC=11 → 64-bit
@@ -5830,6 +5864,24 @@ internal sealed class X86FpuDBDispatchEmitter : IMicroOpEmitter
         ctx.Builder.BuildStore(
             LLVMValueRef.CreateConstInt(i32, 0, false),
             ctx.GepStatusRegister("FPU_TOP"));
+        ctx.Builder.BuildBr(endBB);
+
+        // FNCLEX body — clear exception flags + B (busy) in FPU_SW,
+        // preserve condition codes (C0-C3) and TOP_SW.
+        //   IE/DE/ZE/OE/UE/PE  = bits 0-5
+        //   SF                 = bit 6 (stack fault)
+        //   ES                 = bit 7 (exception summary)
+        //   B                  = bit 15 (busy)
+        // Mask = ~0x80FF = 0x7F00 (preserves bits 8-14).
+        ctx.Builder.PositionAtEnd(fnclexBB);
+        var swPtr = ctx.GepStatusRegister("FPU_SW");
+        var oldSw = ctx.Builder.BuildLoad2(i16, swPtr, "fnclex_oldSw");
+        var newSw = ctx.Builder.BuildAnd(oldSw,
+            LLVMValueRef.CreateConstInt(i16, 0x7F00, false), "fnclex_newSw");
+        ctx.Builder.BuildStore(newSw, swPtr);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(defaultBB);
         ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(endBB);
