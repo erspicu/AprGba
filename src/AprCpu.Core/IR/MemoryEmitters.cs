@@ -105,6 +105,25 @@ public static class MemoryEmitters
         public const string PortRead16  = "port_read_16";
         public const string PortWrite8  = "port_write_8";
         public const string PortWrite16 = "port_write_16";
+
+        // Phase 29.7 — FPU transcendental externs. Per the Gemini design
+        // guidance (MD/design/29-x87-fpu-plan.md §4): LLVM intrinsics for
+        // transcendentals are target-dependent and unreliable for f80 on
+        // non-x86 hosts, so we route through C# Math.* via host-bound
+        // extern function pointers. Bound by X86JsonCpu's ctor when the
+        // i8087 extension is loaded; other CPUs leave them unbound and
+        // the IR slots are simply never called.
+        //
+        // 8087/287 transcendental opcodes that map to these:
+        //   D9 F0 F2XM1   ← FpuExp2M1(ST(0))   = 2^ST(0) - 1
+        //   D9 F1 FYL2X   ← FpuLog2(ST(0)) * ST(1), then pop
+        //   D9 F2 FPTAN   ← FpuTan(ST(0)), then push 1.0
+        //   D9 F3 FPATAN  ← FpuAtan2(ST(1), ST(0)), then pop
+        // FSIN/FCOS/FSINCOS are 387+ and not provided here.
+        public const string FpuTan     = "fpu_tan";       // f64 -> f64
+        public const string FpuAtan2   = "fpu_atan2";     // (f64, f64) -> f64
+        public const string FpuLog2    = "fpu_log2";      // f64 -> f64
+        public const string FpuExp2M1  = "fpu_exp2m1";    // f64 -> f64  (2^x - 1)
     }
 
     // ---------------- Public byte-level helpers (used by StackOps etc) ----------------
@@ -227,6 +246,27 @@ public static class MemoryEmitters
         var slot = module.AddGlobal(ptrType, name);
         slot.Linkage = LLVMLinkage.LLVMExternalLinkage;
         return (slot, fnType, ptrType);
+    }
+
+    // Phase 29.7 — FPU transcendental call helpers. Each loads the
+    // host-bound function pointer slot, then BuildCall2 with f64 args.
+
+    public static LLVMValueRef CallFpuUnary(EmitContext ctx, string externName, LLVMValueRef argF64, string outLabel)
+    {
+        var f64 = LLVMTypeRef.Double;
+        var (slot, fnType, ptrType) = GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, externName, f64, f64);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, $"{outLabel}_fn");
+        return ctx.Builder.BuildCall2(fnType, fn, new[] { argF64 }, outLabel);
+    }
+
+    public static LLVMValueRef CallFpuBinary(EmitContext ctx, string externName, LLVMValueRef arg0F64, LLVMValueRef arg1F64, string outLabel)
+    {
+        var f64 = LLVMTypeRef.Double;
+        var (slot, fnType, ptrType) = GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, externName, f64, f64, f64);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, $"{outLabel}_fn");
+        return ctx.Builder.BuildCall2(fnType, fn, new[] { arg0F64, arg1F64 }, outLabel);
     }
 }
 

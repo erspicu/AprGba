@@ -145,6 +145,18 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         _rt.BindExtern(MemoryEmitters.ExternFunctionNames.PortWrite16,
             (IntPtr)(delegate* unmanaged[Cdecl]<ushort, ushort, void>)&PortWrite16);
 
+        // Phase 29.7 — FPU transcendentals via C# Math.* externs. Bound
+        // unconditionally; if no FPU extension is loaded the slot exists
+        // but is never called (no D9 F0-F3 in the spec).
+        _rt.BindExtern(MemoryEmitters.ExternFunctionNames.FpuTan,
+            (IntPtr)(delegate* unmanaged[Cdecl]<double, double>)&FpuTan);
+        _rt.BindExtern(MemoryEmitters.ExternFunctionNames.FpuAtan2,
+            (IntPtr)(delegate* unmanaged[Cdecl]<double, double, double>)&FpuAtan2);
+        _rt.BindExtern(MemoryEmitters.ExternFunctionNames.FpuLog2,
+            (IntPtr)(delegate* unmanaged[Cdecl]<double, double>)&FpuLog2);
+        _rt.BindExtern(MemoryEmitters.ExternFunctionNames.FpuExp2M1,
+            (IntPtr)(delegate* unmanaged[Cdecl]<double, double>)&FpuExp2M1);
+
         _rt.Compile();
 
         // GPR offsets in ModR/M order (cpu.json declares them so).
@@ -785,4 +797,19 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static void PortWrite16(ushort port, ushort value)
         => PortWrite16Handler?.Invoke(port, value);
+
+    // Phase 29.7 — FPU transcendental shims. Route to C# System.Math.*.
+    // Bound by ctor unconditionally so the IR slots resolve even on Tom
+    // Harte runs (which never call them).
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static double FpuTan(double x) => Math.Tan(x);
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static double FpuAtan2(double y, double x) => Math.Atan2(y, x);
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static double FpuLog2(double x) => Math.Log2(x);
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static double FpuExp2M1(double x) => Math.Pow(2.0, x) - 1.0;
 }

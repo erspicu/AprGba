@@ -5361,6 +5361,24 @@ internal static class X86FpuHelpers
     }
 
     /// <summary>
+    /// Phase 29.7 — adjust FPU_TOP by a constant delta (-1 for FDECSTP,
+    /// +1 for FINCSTP). Does NOT touch data slots or tags — programs
+    /// use this to "make room" or "release" slots without going through
+    /// Push/Pop semantics.
+    /// </summary>
+    public static void AdjustTop(EmitContext ctx, int delta, string label)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var topPtr = ctx.GepStatusRegister("FPU_TOP");
+        var oldTop = ctx.Builder.BuildLoad2(i32, topPtr, $"{label}_old");
+        var adjusted = ctx.Builder.BuildAdd(oldTop,
+            LLVMValueRef.CreateConstInt(i32, (ulong)(long)delta, true), $"{label}_adj");
+        var newTop = ctx.Builder.BuildAnd(adjusted,
+            LLVMValueRef.CreateConstInt(i32, 7, false), $"{label}_new");
+        ctx.Builder.BuildStore(newTop, topPtr);
+    }
+
+    /// <summary>
     /// Phase 29.4 — read a 4-byte m32fp from EA, assemble i32, bitcast
     /// f32, FPExt to f64. Common pattern shared by FLD m32fp and the
     /// memory-form arithmetic ops (FADD m32fp, FMUL m32fp, etc.).
@@ -5689,6 +5707,13 @@ internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
         var bbFtst    = ctx.Function.AppendBasicBlock("ftst");
         var bbFsqrt   = ctx.Function.AppendBasicBlock("fsqrt");
         var bbFrndint = ctx.Function.AppendBasicBlock("frndint");
+        // Phase 29.7 transcendentals + stack-twiddle.
+        var bbF2xm1   = ctx.Function.AppendBasicBlock("f2xm1");
+        var bbFyl2x   = ctx.Function.AppendBasicBlock("fyl2x");
+        var bbFptan   = ctx.Function.AppendBasicBlock("fptan");
+        var bbFpatan  = ctx.Function.AppendBasicBlock("fpatan");
+        var bbFdecstp = ctx.Function.AppendBasicBlock("fdecstp");
+        var bbFincstp = ctx.Function.AppendBasicBlock("fincstp");
         var constArms = new (int code, LLVMBasicBlockRef bb, double val, int tag)[]
         {
             (0x28, ctx.Function.AppendBasicBlock("fld1"),    1.0,     0),
@@ -5700,11 +5725,17 @@ internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
             (0x2E, ctx.Function.AppendBasicBlock("fldz"),    0.0,     1),
         };
 
-        var sw = ctx.Builder.BuildSwitch(combined, defaultBB, (uint)(6 + constArms.Length));
+        var sw = ctx.Builder.BuildSwitch(combined, defaultBB, (uint)(12 + constArms.Length));
         sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x10, false), bbFnop);
         sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x20, false), bbFchs);
         sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x21, false), bbFabs);
         sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x24, false), bbFtst);
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x30, false), bbF2xm1);    // D9 F0
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x31, false), bbFyl2x);    // D9 F1
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x32, false), bbFptan);    // D9 F2
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x33, false), bbFpatan);   // D9 F3
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x36, false), bbFdecstp);  // D9 F6
+        sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x37, false), bbFincstp);  // D9 F7
         sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x3A, false), bbFsqrt);
         sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x3C, false), bbFrndint);
         foreach (var arm in constArms)
@@ -5773,6 +5804,85 @@ internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
             X86FpuHelpers.StoreLogicalSt(ctx,
                 LLVMValueRef.CreateConstInt(i32, 0, false), rinted, "frndint_store");
         }
+        ctx.Builder.BuildBr(endBB);
+
+        // Phase 29.7 transcendentals — route through C# Math.* externs
+        // via MemoryEmitters.CallFpuUnary/CallFpuBinary. f64 internal
+        // precision means we lose 8087's f80 last-3-bits but matches
+        // glibc / Win32 CRT FP results.
+
+        // D9 F0 = F2XM1: ST(0) = 2^ST(0) - 1
+        ctx.Builder.PositionAtEnd(bbF2xm1);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "f2xm1_st0");
+            var result = MemoryEmitters.CallFpuUnary(ctx,
+                MemoryEmitters.ExternFunctionNames.FpuExp2M1, st0, "f2xm1_v");
+            X86FpuHelpers.StoreLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), result, "f2xm1_store");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // D9 F1 = FYL2X: ST(1) = ST(1) * log2(ST(0)), then pop.
+        ctx.Builder.PositionAtEnd(bbFyl2x);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "fyl2x_st0");
+            var st1 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 1, false), "fyl2x_st1");
+            var log2_st0 = MemoryEmitters.CallFpuUnary(ctx,
+                MemoryEmitters.ExternFunctionNames.FpuLog2, st0, "fyl2x_log");
+            var result = ctx.Builder.BuildFMul(st1, log2_st0, "fyl2x_mul");
+            X86FpuHelpers.StoreLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 1, false), result, "fyl2x_store");
+            X86FpuHelpers.Pop(ctx, "fyl2x_pop");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // D9 F2 = FPTAN: ST(0) = tan(ST(0)); then push 1.0 (so ratio
+        // is exposed as ST(0) over ST(1) for back-compat with the
+        // 8087 fdivision convention).
+        ctx.Builder.PositionAtEnd(bbFptan);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "fptan_st0");
+            var tanVal = MemoryEmitters.CallFpuUnary(ctx,
+                MemoryEmitters.ExternFunctionNames.FpuTan, st0, "fptan_v");
+            X86FpuHelpers.StoreLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), tanVal, "fptan_store");
+            // Push 1.0 with tag = 0 (Valid).
+            X86FpuHelpers.Push(ctx,
+                LLVMValueRef.CreateConstReal(f64, 1.0),
+                LLVMValueRef.CreateConstInt(i16, 0, false), "fptan_pushone");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // D9 F3 = FPATAN: ST(1) = atan2(ST(1), ST(0)), then pop.
+        // Per Intel manual the operand order is atan(ST(1)/ST(0)) but
+        // atan2(y, x) gives the same value with correct quadrant
+        // handling for negative x — closer to what guest code expects.
+        ctx.Builder.PositionAtEnd(bbFpatan);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "fpatan_st0");
+            var st1 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 1, false), "fpatan_st1");
+            var result = MemoryEmitters.CallFpuBinary(ctx,
+                MemoryEmitters.ExternFunctionNames.FpuAtan2, st1, st0, "fpatan_v");
+            X86FpuHelpers.StoreLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 1, false), result, "fpatan_store");
+            X86FpuHelpers.Pop(ctx, "fpatan_pop");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // D9 F6 = FDECSTP: TOP := (TOP - 1) & 7 (no data / tag change).
+        ctx.Builder.PositionAtEnd(bbFdecstp);
+        X86FpuHelpers.AdjustTop(ctx, -1, "fdecstp");
+        ctx.Builder.BuildBr(endBB);
+
+        // D9 F7 = FINCSTP: TOP := (TOP + 1) & 7 (no data / tag change).
+        ctx.Builder.PositionAtEnd(bbFincstp);
+        X86FpuHelpers.AdjustTop(ctx, +1, "fincstp");
         ctx.Builder.BuildBr(endBB);
 
         // Constant pushes (D9 E8..EE).
