@@ -1,0 +1,103 @@
+{
+    "$schema": "_schema.json",
+    "spec_version": "2.0",
+    "name": "ibm-pc-xt",
+    "cpu": "Intel8086",
+    "comment": "Phase 28.0 — skeleton. IBM PC / PC-XT class machine: 8086 / 8088 CPU + 1 MB physical address space + 640 KB conventional + CGA text framebuffer @ B800:0000 + ROM BIOS area @ F000:0000-F000:FFFF. unmapped_behavior=zero matches typical XT bus (no last-value latch on the bus). Detailed handler wiring lands in subsequent sub-phases (28.1+); this stub only declares the address ranges.",
+    "unmapped_behavior": "zero",
+    "memory_regions": [
+        {
+            "name": "ivt",
+            "addr_start": "0x00000000",
+            "addr_end_exclusive": "0x00000400",
+            "type": "ram",
+            "handler": "ivt",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8, 16],
+            "comment": "Interrupt Vector Table — 256 entries * 4 bytes each (segment:offset)."
+        },
+        {
+            "name": "bios_data_area",
+            "addr_start": "0x00000400",
+            "addr_end_exclusive": "0x00000500",
+            "type": "ram",
+            "handler": "bda",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8, 16],
+            "comment": "BIOS Data Area — equipment word @ 0x410, kbd buffer @ 0x41E, etc."
+        },
+        {
+            "name": "conventional",
+            "addr_start": "0x00000500",
+            "addr_end_exclusive": "0x000A0000",
+            "type": "ram",
+            "handler": "ram",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8, 16],
+            "comment": "DOS conventional memory — DOS kernel / TSRs / user programs live here."
+        },
+        {
+            "name": "vga_graphics",
+            "addr_start": "0x000A0000",
+            "addr_end_exclusive": "0x000B0000",
+            "type": "mmio",
+            "handler": "vga_unmapped",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8, 16],
+            "comment": "EGA/VGA graphics framebuffer — Phase 28 out-of-scope; declared so writes don't fault."
+        },
+        {
+            "name": "mda_text",
+            "addr_start": "0x000B0000",
+            "addr_end_exclusive": "0x000B8000",
+            "type": "mmio",
+            "handler": "mda_unmapped",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8, 16],
+            "comment": "MDA monochrome text — out-of-scope."
+        },
+        {
+            "name": "cga_text",
+            "addr_start": "0x000B8000",
+            "addr_end_exclusive": "0x000C0000",
+            "type": "mmio",
+            "handler": "cga",
+            "readable": true,
+            "writable": true,
+            "allowed_widths": [8, 16],
+            "comment": "CGA text-mode framebuffer (80x25 char/attr pairs, 4 KB used)."
+        },
+        {
+            "name": "rom_extensions",
+            "addr_start": "0x000C0000",
+            "addr_end_exclusive": "0x000F0000",
+            "type": "rom",
+            "handler": "rom_ext",
+            "readable": true,
+            "writable": false,
+            "allowed_widths": [8, 16],
+            "comment": "Option ROM area (VGA BIOS, etc.) — empty in our minimal config."
+        },
+        {
+            "name": "bios_rom",
+            "addr_start": "0x000F0000",
+            "addr_end_exclusive": "0x00100000",
+            "type": "rom",
+            "handler": "bios",
+            "readable": true,
+            "writable": false,
+            "allowed_widths": [8, 16],
+            "comment": "ROM BIOS area. With --bios=PATH this is loaded from disk; with HLE mode this holds a tiny stub of IRET opcodes that the HLE BIOS attaches to."
+        }
+    ],
+    "interrupt_vectors": {
+        "reset_cs": "0xFFFF",
+        "reset_ip": "0x0000",
+        "comment": "8086 RESET vector: CS=FFFF, IP=0000 -> physical 0xFFFF0. BIOS ROM placed at F000:0000-F000:FFFF, with a near jmp at FFFF:0000 to F000:E05B (XT-class cold-start entry)."
+    }
+}

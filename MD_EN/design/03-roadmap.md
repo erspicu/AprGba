@@ -1345,7 +1345,7 @@ what is being added is IO controllers + HLE BIOS + WinForms UI window.
 | Series | Content | Status |
 |---|---|---|
 | Pre-work checklist | FreeDOS image / NASM / Tom Harte regression / T2 baseline | ✅ 4/4 (2026-05-11) |
-| 28.0 | AprPc.Cli scaffolding + WinForms UI shell + emulator-thread plumbing | ⏳ |
+| 28.0 | AprPc.Cli scaffolding + WinForms UI shell + emulator-thread plumbing | ✅ |
 | 28.1 | Memory map + IVT + reset vector + BIOS Data Area | ⏳ |
 | 28.2 | HLE BIOS + INT 10h + 60 Hz framebuffer blt | ⏳ |
 | 28.3 | INT 16h + 8042 keyboard + IRQ 1 + WinForms input | ⏳ |
