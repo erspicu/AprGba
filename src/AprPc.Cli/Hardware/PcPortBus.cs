@@ -26,6 +26,8 @@ public sealed class PcPortBus
     private readonly bool _traceIo;
     private readonly Pic8259 _pic;
     private readonly PcPit _pit;
+    private readonly Fdc8272? _fdc;     // Phase 30 — optional, only present in --bios=PATH path
+    private readonly Dma8237? _dma;     // Phase 30 — paired with _fdc
 
     // 8042 keyboard state — for now just port 60h / 64h shape;
     // PcKeyboard already maintains the BDA buffer.
@@ -47,10 +49,13 @@ public sealed class PcPortBus
     // a checkpoint indicator). We just store it.
     private byte _port80;
 
-    public PcPortBus(Pic8259 pic, PcPit pit, bool traceIo = false)
+    public PcPortBus(Pic8259 pic, PcPit pit, bool traceIo = false,
+        Fdc8272? fdc = null, Dma8237? dma = null)
     {
         _pic     = pic ?? throw new ArgumentNullException(nameof(pic));
         _pit     = pit ?? throw new ArgumentNullException(nameof(pit));
+        _fdc     = fdc;
+        _dma     = dma;
         _traceIo = traceIo;
         // CMOS default: a few legitimate-looking bytes so BIOS POST
         // doesn't fail equipment / mem-size checks.
@@ -92,6 +97,20 @@ public sealed class PcPortBus
 
             // CMOS data
             0x71 => _cmos[_cmosIndex & 0x3F],
+
+            // Phase 30 — 8272 FDC at 0x3F0-0x3F7.
+            //   0x3F2 DOR (read-back of last write)
+            //   0x3F4 MSR (read only)
+            //   0x3F5 FIFO data (read = result phase byte)
+            0x3F2 when _fdc is not null => _fdc.ReadDor(),
+            0x3F4 when _fdc is not null => _fdc.ReadMsr(),
+            0x3F5 when _fdc is not null => _fdc.ReadFifo(),
+
+            // Phase 30 — 8237 DMA at 0x00-0x0F + 0x81-0x8F.
+            0x04 when _dma is not null => _dma.Read8(0x04),
+            0x05 when _dma is not null => _dma.Read8(0x05),
+            0x08 when _dma is not null => _dma.Read8(0x08),
+            0x81 when _dma is not null => _dma.Ch2Page,
 
             // MDA / CGA video status registers (0x3BA / 0x3DA).
             // Real silicon: bit 0 = horizontal retrace (cycles every
@@ -206,7 +225,23 @@ public sealed class PcPortBus
                 _cmos[_cmosIndex & 0x3F] = value;
                 break;
 
-            // Default — silently ignore (DMA, slave PIC, MPU-401, etc.).
+            // Phase 30 — 8272 FDC writes.
+            case 0x3F2 when _fdc is not null: _fdc.WriteDor(value);   break;
+            case 0x3F5 when _fdc is not null: _fdc.WriteFifo(value);  break;
+            case 0x3F7:                                                break;  // FDC CCR (data rate); ignore
+
+            // Phase 30 — 8237 DMA writes (channel 2 only + flip-flop).
+            case 0x04 when _dma is not null:
+            case 0x05 when _dma is not null:
+            case 0x0A when _dma is not null:
+            case 0x0B when _dma is not null:
+            case 0x0C when _dma is not null:
+            case 0x0D when _dma is not null:
+            case 0x81 when _dma is not null:
+                _dma.Write8(port, value);
+                break;
+
+            // Default — silently ignore (slave PIC, MPU-401, etc.).
             default:
                 break;
         }

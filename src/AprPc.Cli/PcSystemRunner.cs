@@ -68,6 +68,8 @@ public sealed class PcSystemRunner : IDisposable
     private PcPit? _pit;
     private Pic8259? _pic;
     private PcPortBus? _ports;
+    private Fdc8272? _fdc;       // Phase 30 — only constructed in real-BIOS mode
+    private Dma8237? _dma;       // Phase 30 — paired with _fdc
     public PcMemoryBus? Bus      => _bus;
     public X86JsonCpu?  Cpu      => _cpu;
     public HleBios?     Bios     => _bios;
@@ -148,12 +150,24 @@ public sealed class PcSystemRunner : IDisposable
         _pit = new PcPit(_bus, _pic);
         _pit.Reset();
 
+        // Phase 30 — when running with a real BIOS image, construct FDC
+        // + DMA controllers so the BIOS POST's INT 19h can actually do
+        // disk I/O. HLE mode skips these (HLE INT 13h talks to
+        // DiskImage directly without the FDC/DMA layer).
+        if (_options.BiosPath is not null)
+        {
+            _dma = new Dma8237();
+            _dma.Reset();
+            _fdc = new Fdc8272(_dma, _pic, _bus.Memory, trace: _options.TraceIo);
+            _fdc.Reset();
+        }
+
         // Phase 28.IO — port dispatch bus. Wires PIC / PIT / 8042 /
         // CMOS / speaker / NMI ports to host handlers. Hook the
         // X86JsonCpu delegate handlers (declared in AprX86.Cli, the
         // CPU project; we install them here from AprPc.Cli to keep
         // the cross-project reference one-directional).
-        _ports = new PcPortBus(_pic, _pit, traceIo: _options.TraceIo);
+        _ports = new PcPortBus(_pic, _pit, traceIo: _options.TraceIo, fdc: _fdc, dma: _dma);
         PcPortBus.Active = _ports;
         X86JsonCpu.PortRead8Handler   = _ports.Read8;
         X86JsonCpu.PortRead16Handler  = _ports.Read16;
@@ -202,6 +216,9 @@ public sealed class PcSystemRunner : IDisposable
         if (_bios is null)
             throw new InvalidOperationException("MountDisk must be called after Start()");
         _bios.AttachDisk(drive, img);
+        // Phase 30 — also wire to the FDC if running in real-BIOS mode.
+        // Real BIOS POST reads disk via FDC ports, not HLE INT 13h.
+        _fdc?.AttachDrive(drive, img);
     }
 
     /// <summary>Request pause; emulator thread parks at next safe boundary.</summary>
