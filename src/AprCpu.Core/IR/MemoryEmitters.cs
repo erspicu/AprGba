@@ -94,6 +94,17 @@ public static class MemoryEmitters
         // BlockCache.NotifyMemoryWrite which scans cached blocks and
         // invalidates any whose precise per-instr coverage covers addr.
         public const string Lr35902SmcNotifyWrite = "lr35902_smc_notify_write";
+
+        // Phase 28.IO — Port I/O externs for x86. Bound by the PC harness
+        // (PcSystemRunner) to a dispatch table that routes by port number
+        // (PIC at 0x20/0x21, PIT at 0x40-0x43, 8042 at 0x60/0x64, etc.).
+        // Other backends (NES / GBA / GB) don't use these and leave them
+        // unbound; the IR slots are no-ops by virtue of never being called
+        // because those CPUs don't have IN/OUT instructions.
+        public const string PortRead8   = "port_read_8";
+        public const string PortRead16  = "port_read_16";
+        public const string PortWrite8  = "port_write_8";
+        public const string PortWrite16 = "port_write_16";
     }
 
     // ---------------- Public byte-level helpers (used by StackOps etc) ----------------
@@ -130,6 +141,44 @@ public static class MemoryEmitters
             LLVMTypeRef.Int8, LLVMTypeRef.Int32, LLVMTypeRef.Int8);
         var fn = ctx.Builder.BuildLoad2(ptrType, slot, "w8s_fn");
         return ctx.Builder.BuildCall2(fnType, fn, new[] { addrI32, valueI8 }, outLabel);
+    }
+
+    /// <summary>Phase 28.IO — IN AL/AX, port: read a byte from a host-side port handler.</summary>
+    public static LLVMValueRef CallPortRead8(EmitContext ctx, LLVMValueRef portI16, string outLabel)
+    {
+        var (slot, fnType, ptrType) = GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, ExternFunctionNames.PortRead8, LLVMTypeRef.Int8, LLVMTypeRef.Int16);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, $"{outLabel}_fn");
+        return ctx.Builder.BuildCall2(fnType, fn, new[] { portI16 }, outLabel);
+    }
+
+    /// <summary>Phase 28.IO — IN AX, port: read a word.</summary>
+    public static LLVMValueRef CallPortRead16(EmitContext ctx, LLVMValueRef portI16, string outLabel)
+    {
+        var (slot, fnType, ptrType) = GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, ExternFunctionNames.PortRead16, LLVMTypeRef.Int16, LLVMTypeRef.Int16);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, $"{outLabel}_fn");
+        return ctx.Builder.BuildCall2(fnType, fn, new[] { portI16 }, outLabel);
+    }
+
+    /// <summary>Phase 28.IO — OUT port, AL: write a byte to a host-side port handler.</summary>
+    public static void CallPortWrite8(EmitContext ctx, LLVMValueRef portI16, LLVMValueRef valueI8)
+    {
+        var (slot, fnType, ptrType) = GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, ExternFunctionNames.PortWrite8,
+            ctx.Module.Context.VoidType, LLVMTypeRef.Int16, LLVMTypeRef.Int8);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, "pw8_fn");
+        ctx.Builder.BuildCall2(fnType, fn, new[] { portI16, valueI8 }, "");
+    }
+
+    /// <summary>Phase 28.IO — OUT port, AX: write a word.</summary>
+    public static void CallPortWrite16(EmitContext ctx, LLVMValueRef portI16, LLVMValueRef valueI16)
+    {
+        var (slot, fnType, ptrType) = GetOrDeclareMemoryFunctionPointer(
+            ctx.Module, ExternFunctionNames.PortWrite16,
+            ctx.Module.Context.VoidType, LLVMTypeRef.Int16, LLVMTypeRef.Int16);
+        var fn = ctx.Builder.BuildLoad2(ptrType, slot, "pw16_fn");
+        ctx.Builder.BuildCall2(fnType, fn, new[] { portI16, valueI16 }, "");
     }
 
     /// <summary>

@@ -216,6 +216,25 @@
       ]
     },
     {
+      "name": "FpuEscape",
+      "comment": "0xD8-0xDF — 8087 FPU escape prefix. Phase 28.IO no-op stub: consume the ModR/M byte (and any disp it implies via has_modrm=true at the decoder level) and advance IP, but do nothing else. This unblocks real BIOS POST which probes for FPU presence via FNINIT/FLDCW. Without FPU emulation the BIOS detection will see 'no FPU' and skip FPU-related branches, which is correct behavior for an 8086-class machine without an 8087.",
+      "fields": {},
+      "mask": "0xF8",
+      "match": "0xD8",
+      "has_modrm": true,
+      "instructions": [
+        {
+          "mnemonic": "FPU",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §FPU",
+          "cycles": { "form": "2" },
+          "steps": [ { "op": "x86_fpu_noop" } ],
+          "id": "FPU_noop_D8_DF"
+        }
+      ]
+    },
+    {
       "name": "InAlImm8",
       "fields": {},
       "mask": "0xFF",

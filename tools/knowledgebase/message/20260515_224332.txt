@@ -1,0 +1,163 @@
+Timestamp: 2026-05-15T22:43:32
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Follow-up to the previous discussion about adding x87 FPU support to our JSON-driven CPU emulation framework (AprCpu / AprGba). You gave thorough advice on register representation, opcode encoding, transcendentals, status word, and exception model. New architectural question:
+
+**Should the FPU be a separate JSON spec file (e.g., `spec/fpu/i8087/cpu.json`) that is "attached to" the CPU spec, or should it be merged directly into the CPU JSON spec (e.g., adding new `groups/fpu.json` and FPU registers inside `spec/cpu/x86-16/i8086/cpu.json`)?**
+
+Historical context that argues for "separate":
+- The 8087 was a physically separate co-processor chip, connected via the local bus, with WAIT/TEST handshake.
+- Same FPU model (8087) could be paired with 8086/8088/80186/80188.
+- 80287 paired with 80286; 80387 paired with 80386; only from 486DX onwards was FPU integrated on-die.
+- ARM cores also had separate FPU/VFP/NEON conceptually (often described as "co-processors" in ARM ARM, e.g. CP10/CP11).
+- A future framework user might want to swap "no-fpu" / "8087" / "287" / "387" / "Weitek-1167" profiles against the same CPU.
+
+Arguments for "integrated":
+- ModR/M decoding shares the same ESC+ModR/M path; routing to a separate emitter table adds complexity.
+- LLVM IR generation must produce a single module; the FPU emitter still has to lower into the same module as the CPU emitters.
+- FPU instructions like FNSTSW AX directly touch CPU registers (AX); the boundary is leaky.
+- The control word, status word, register file are intimately tied to the CPU's instruction pipeline.
+- Maintenance simpler when one spec covers one machine variant.
+
+Our current spec layout:
+```
+spec/
+  cpu/
+    arm/
+      arm7tdmi/cpu.json + groups/
+    x86-16/
+      i8086/cpu.json + groups/  (this is where FPU stub currently sits in misc.json)
+      i80286/cpu.json + groups/
+  machines/
+    ibm-pc-xt.json
+    gba.json
+```
+
+Concrete design decisions we need from you:
+
+1. **JSON file layout**: If separate, where would you put it? `spec/fpu/i8087/cpu.json`? `spec/coprocessors/i8087.json`? Or `spec/cpu/x86-16/i8086/coprocessors/i8087.json` (nested under the CPU that hosts it)?
+
+2. **Spec loader integration**: How would `cpu.json` declare its attached FPU? Something like `"coprocessors": ["i8087"]` in the CPU JSON, with the loader resolving and merging the FPU spec into the same JIT pipeline? Or a separate `"machine.json"` that lists both?
+
+3. **Register sharing**: FNSTSW AX must write the FPU status word into the CPU's AX register. If FPU is in a separate spec file, how does its emitter "see" the CPU register file? Do we share a unified `state` struct across both, or use externs (e.g., `cpu_write_ax(value)` from FPU emitter)?
+
+4. **Opcode dispatch**: The CPU decoder identifies bytes D8-DF as ESC and currently calls into the CPU's emitter table. If FPU is separate, does the CPU spec say `"on_byte_D8_DF": defer_to_coprocessor` and the framework routes to the FPU's emitter table?
+
+5. **Real-world precedent**: Have you seen any open-source emulator framework (QEMU TCG, Bochs, 86Box, Unicorn, etc.) cleanly separate FPU vs CPU in their data model? Or do they all integrate?
+
+6. **Your honest recommendation**: For a research/academic framework that values cleanliness of the spec format AND wants to ship a working 8087 in reasonable time, would you go separate or integrated? Give one clear vote and reasoning.
+
+Please be concrete and pragmatic. We are not aiming for a one-size-fits-all "framework for all coprocessors" abstraction — we want the right call for x87 specifically, on a JSON-driven, LLVM-JIT emulator that already has clean CPU specs working end-to-end.
+
+========================================================================
+RESPONSE
+========================================================================
+Here is a concrete, pragmatic breakdown of how to handle the x87 FPU in your JSON-driven LLVM-JIT framework. 
+
+### 6. My Honest Recommendation (Starting here, as it dictates the rest)
+**Vote: Integrated Data Model via Compile-Time JSON Composition (Mix-in).**
+
+Do not separate the FPU and CPU at the runtime or LLVM JIT level. The leaky boundaries (`FNSTSW AX`, shared ModR/M byte, FWAIT synchronizing CPU instruction pointers, exception routing) will make a decoupled runtime interface an absolute nightmare to maintain and optimize. 
+
+Instead, **separate the JSON files for modularity, but merge them in the spec loader**. Treat the 8087 as a "Mix-in" or "Extension" to the CPU. When the emulator boots, your Python/C++ JSON compiler reads the CPU spec, reads the FPU spec, **flattens them into a single unified AST / State Struct**, and generates a single LLVM module. 
+
+This gives you the historical accuracy/swappability of separate components, but the performance and simplicity of a unified core.
+
+Here is how to answer your specific design decisions based on this approach:
+
+---
+
+### 1. JSON File Layout
+Because the 8087 was paired with multiple CPUs (8086, 8088, 80186), it should live outside the specific `i8086` directory, but inside the broader architecture family. 
+
+I recommend creating a generic `extensions/` or `coprocessors/` directory:
+```text
+spec/
+  cpu/
+    x86-16/
+      i8086/cpu.json
+      i80286/cpu.json
+  coprocessors/
+    x87/
+      i8087.json      (Registers, state, opcodes for 8087)
+      i80287.json     (Overrides for 287 exception handling)
+  machines/
+    ibm-pc-xt.json
+```
+This isolates the FPU definitions but keeps them available to any base CPU that supports the local bus interface.
+
+---
+
+### 2. Spec Loader Integration
+Do not hardcode the 8087 into `i8086/cpu.json`. Instead, assemble the silicon at the **Machine** level, just like physical hardware.
+
+In `spec/machines/ibm-pc-xt.json`:
+```json
+{
+  "name": "IBM PC/XT",
+  "components": {
+    "main_cpu": {
+      "spec": "cpu/x86-16/i8086/cpu.json",
+      "extensions": ["coprocessors/x87/i8087.json"]
+    }
+  }
+}
+```
+**How it works:** Your framework loader reads the machine config. It loads `cpu.json`, then loads `i8087.json`. It appends the FPU registers (`ST0`-`ST7`, Control Word, etc.) to the base CPU's register array. It appends the FPU opcode definitions to the CPU's decode tree. By the time the LLVM emitter starts JITting, it is looking at **one single CPU model** that happens to have D8-DF defined and 8 new 80-bit registers.
+
+---
+
+### 3. Register Sharing (`FNSTSW AX`)
+Because you are merging the specs at load time, the state struct passed to the LLVM compiled code is unified:
+```c
+// Emitted by your JSON framework
+struct CPUState {
+    // ... base x86 regs (AX, BX, CX, DX)
+    // ... FPU regs appended by the loader (ST0..ST7, CW, SW)
+};
+```
+Because the LLVM JIT sees one unified state, the FPU JSON can simply reference CPU registers natively. 
+Inside `i8087.json`:
+```json
+{
+  "mnemonic": "FNSTSW AX",
+  "opcode": "DF E0",
+  "behavior": [
+    { "assign": { "target": "AX", "value": "FPU_SW" } }
+  ]
+}
+```
+The loader resolves `"AX"` against the newly merged global register namespace. No external callbacks (`cpu_write_ax`), no pointers across module boundaries. It compiles down to a single LLVM store instruction into the struct.
+
+---
+
+### 4. Opcode Dispatch (ESC D8-DF)
+Do not build a "defer to coprocessor" routing mechanism in your decoder. It adds an unnecessary branch/call overhead to the JIT's fetch-decode loop.
+
+Since the x87 shares the CPU's ModR/M byte, the FPU instructions should be injected directly into the CPU's decode tree at compile time. 
+*   `i8086/cpu.json` leaves D8-DF undefined (or defines them as throwing `#UD` / `INT 6`).
+*   `i8087.json` defines operations mapped to D8-DF.
+*   When merged, the FPU's ModR/M instructions naturally ride on the exact same ModR/M extraction logic the base CPU uses. 
+
+If a user configures a machine *without* the `"extensions": ["i8087.json"]` array, D8-DF remain unmapped, naturally falling back to the CPU's default `#UD` (or in the 8086's case, acting as NOPs or passing garbage to the bus).
+
+---
+
+### 5. Real-World Precedent
+Every major, high-performance emulator integrates the FPU tightly into the CPU data model:
+
+*   **QEMU (TCG)**: Conceptually separates FPU helpers in C files (`target/i386/tcg/fpu_helper.c`), but the data model is strictly integrated. FPU registers live directly inside `CPUX86State` (`env->fpregs`). The decoder for x87 (`target/i386/tcg/emit.c.inc`) is compiled directly into the main x86 translate loop. There is no runtime "coprocessor routing" interface. ARM VFP/NEON is handled exactly the same way (registers live inside `CPUARMState`).
+*   **Bochs**: Defines FPU state directly inside the monolithic `bx_cpu_c` class. FPU instructions are part of the massive unified decode table.
+*   **86Box**: Same. FPU state is bolted onto the main CPU state variables.
+*   **Unicorn**: Inherits QEMU's model. One massive unified state struct.
+
+They all do this because the "leaky boundaries" of x86/x87 (and ARM/VFP) make true runtime separation detrimental to performance (due to state-pointer indirection) and highly complex (due to shared instruction decoding and exceptions).
+
+---
+
+### Summary
+Keep your JSON specs highly modular so you can pair an 8087 with an 8086 or an 80186. But **do the merging at the framework generation step**, not at JIT runtime. 
+
+If your framework merges `i8087.json` into `cpu.json` in memory before generating the LLVM IR, you completely bypass the headaches of cross-module LLVM linkage, runtime coprocessor handshakes, and register-boundary translation.

@@ -96,7 +96,25 @@ internal static class HeadlessRunner
             if (runner.Cpu is { Halted: true }) break;
             if (DateTime.UtcNow >= deadline)
             {
+                // Phase 28.IO — still snapshot a screenshot before
+                // bailing out, so timeout-bound regression captures
+                // are usable (FreeDOS interactive boot routinely
+                // overshoots the wall-clock budget but the framebuffer
+                // is steady well before that point).
                 Console.Error.WriteLine($"apr-pc: headless timeout ({deadlineSeconds}s)");
+                if (opts.ScreenshotPath is { } ssTimeoutPath && runner.Bus is { } busTimeout)
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(ssTimeoutPath)) ?? ".");
+                        X86CgaRenderer.Render(busTimeout.Memory.Ram, ssTimeoutPath);
+                        Console.WriteLine($"  screenshot: {ssTimeoutPath} ({X86CgaRenderer.ImgW}×{X86CgaRenderer.ImgH} PNG, captured at timeout)");
+                    }
+                    catch (FileNotFoundException ex)
+                    {
+                        Console.Error.WriteLine($"  screenshot: skipped — {ex.Message}");
+                    }
+                }
                 runner.Stop();
                 return 4;
             }

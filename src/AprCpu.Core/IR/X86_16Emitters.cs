@@ -179,6 +179,7 @@ public static class X86_16Emitters
         reg.Register(new X86InDxEmitter());
         reg.Register(new X86OutImm8Emitter());
         reg.Register(new X86OutDxEmitter());
+        reg.Register(new X86FpuNoopEmitter());
 
         // 24.6.7d2 — interrupt machinery (INT/INT3/INTO/IRET).
         reg.Register(new X86IntImm8Emitter());
@@ -4931,25 +4932,32 @@ internal sealed class X86LahfEmitter : IMicroOpEmitter
 // happens via FetchImm8.
 // ============================================================================
 
+// Phase 28.IO — IN/OUT now route through the port_read_8/16 +
+// port_write_8/16 externs bound by the host (PcSystemRunner) to a
+// PcPortBus dispatch table. CPUs whose backend doesn't bind these
+// externs will hit an unbound function pointer call; this is OK
+// since only the PC harness exercises the IN/OUT instructions in
+// practice (other consumers like the .com test suite don't use
+// port I/O).
+
 internal sealed class X86InImm8Emitter : IMicroOpEmitter
 {
     public string OpName => "x86_in_imm8";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
         var width = step.Raw.GetProperty("width").GetInt32();
-        // Consume the port byte (advances IP).
-        X86_16Emitters.FetchImm8(ctx, "in_port");
+        var i16   = LLVMTypeRef.Int16;
+        var port8 = X86_16Emitters.FetchImm8(ctx, "in_port");
+        var portI16 = ctx.Builder.BuildZExt(port8, i16, "in_portz");
         if (width == 8)
         {
-            var i8 = LLVMTypeRef.Int8;
-            X86_16Emitters.WriteGpr8(ctx, 0,
-                LLVMValueRef.CreateConstInt(i8, 0xFF, false));
+            var v = MemoryEmitters.CallPortRead8(ctx, portI16, "in_v8");
+            X86_16Emitters.WriteGpr8(ctx, 0, v);
         }
         else
         {
-            var i16 = LLVMTypeRef.Int16;
-            X86_16Emitters.WriteGpr16(ctx, 0,
-                LLVMValueRef.CreateConstInt(i16, 0xFFFF, false));
+            var v = MemoryEmitters.CallPortRead16(ctx, portI16, "in_v16");
+            X86_16Emitters.WriteGpr16(ctx, 0, v);
         }
     }
 }
@@ -4960,17 +4968,18 @@ internal sealed class X86InDxEmitter : IMicroOpEmitter
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
         var width = step.Raw.GetProperty("width").GetInt32();
+        var i16   = LLVMTypeRef.Int16;
+        var dxPtr = ctx.GepGpr(2);   // DX is GPR index 2 in ModR/M order
+        var portI16 = ctx.Builder.BuildLoad2(i16, dxPtr, "in_port_dx");
         if (width == 8)
         {
-            var i8 = LLVMTypeRef.Int8;
-            X86_16Emitters.WriteGpr8(ctx, 0,
-                LLVMValueRef.CreateConstInt(i8, 0xFF, false));
+            var v = MemoryEmitters.CallPortRead8(ctx, portI16, "indx_v8");
+            X86_16Emitters.WriteGpr8(ctx, 0, v);
         }
         else
         {
-            var i16 = LLVMTypeRef.Int16;
-            X86_16Emitters.WriteGpr16(ctx, 0,
-                LLVMValueRef.CreateConstInt(i16, 0xFFFF, false));
+            var v = MemoryEmitters.CallPortRead16(ctx, portI16, "indx_v16");
+            X86_16Emitters.WriteGpr16(ctx, 0, v);
         }
     }
 }
@@ -4980,9 +4989,41 @@ internal sealed class X86OutImm8Emitter : IMicroOpEmitter
     public string OpName => "x86_out_imm8";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        // Consume the port byte (advances IP). Width param is informational
-        // for now since we discard the value.
-        X86_16Emitters.FetchImm8(ctx, "out_port");
+        var width = step.Raw.GetProperty("width").GetInt32();
+        var i8    = LLVMTypeRef.Int8;
+        var i16   = LLVMTypeRef.Int16;
+        var port8 = X86_16Emitters.FetchImm8(ctx, "out_port");
+        var portI16 = ctx.Builder.BuildZExt(port8, i16, "out_portz");
+        if (width == 8)
+        {
+            var alPtr = ctx.GepGpr(0);
+            // GPR slot is 16 bits; low byte is AL. Reuse ReadGpr8.
+            var v = X86_16Emitters.ReadGpr8(ctx, 0, "out_al");
+            MemoryEmitters.CallPortWrite8(ctx, portI16, v);
+        }
+        else
+        {
+            var axPtr = ctx.GepGpr(0);
+            var v = ctx.Builder.BuildLoad2(i16, axPtr, "out_v16");
+            MemoryEmitters.CallPortWrite16(ctx, portI16, v);
+        }
+    }
+}
+
+/// <summary>
+/// Phase 28.IO — 0xD8-0xDF FPU escape stub. The ModR/M byte (and any
+/// disp the addressing mode implies) is decoded by the instruction
+/// framework's ModR/M machinery; this emitter does nothing — IP has
+/// already been advanced past the full instruction by the decoder.
+/// </summary>
+internal sealed class X86FpuNoopEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fpu_noop";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // Intentional no-op. FPU instructions on a real 8086 without
+        // an 8087 would trap to INT 7 (#NM) only on AT-class machines;
+        // 8086/8088 silently ignore. We mirror that behavior.
     }
 }
 
@@ -4991,7 +5032,21 @@ internal sealed class X86OutDxEmitter : IMicroOpEmitter
     public string OpName => "x86_out_dx";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        // No-op — port DX, value AL/AX both ignored.
+        var width = step.Raw.GetProperty("width").GetInt32();
+        var i16   = LLVMTypeRef.Int16;
+        var dxPtr = ctx.GepGpr(2);
+        var portI16 = ctx.Builder.BuildLoad2(i16, dxPtr, "outdx_port");
+        if (width == 8)
+        {
+            var v = X86_16Emitters.ReadGpr8(ctx, 0, "out_al");
+            MemoryEmitters.CallPortWrite8(ctx, portI16, v);
+        }
+        else
+        {
+            var axPtr = ctx.GepGpr(0);
+            var v = ctx.Builder.BuildLoad2(i16, axPtr, "outdx_v16");
+            MemoryEmitters.CallPortWrite16(ctx, portI16, v);
+        }
     }
 }
 

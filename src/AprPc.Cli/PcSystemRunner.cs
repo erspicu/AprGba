@@ -67,12 +67,14 @@ public sealed class PcSystemRunner : IDisposable
     private PcKeyboard? _kbd;
     private PcPit? _pit;
     private Pic8259? _pic;
+    private PcPortBus? _ports;
     public PcMemoryBus? Bus      => _bus;
     public X86JsonCpu?  Cpu      => _cpu;
     public HleBios?     Bios     => _bios;
     public PcKeyboard?  Keyboard => _kbd;
     public PcPit?       Pit      => _pit;
     public Pic8259?     Pic      => _pic;
+    public PcPortBus?   Ports    => _ports;
 
     // Phase 28.2 will fill this in from the CGA framebuffer slice
     // (4 KB at 0xB8000-0xB8FFF). For 28.0 the runner just zero-fills it
@@ -129,6 +131,18 @@ public sealed class PcSystemRunner : IDisposable
         // Phase 28.4 — PIT 8253 (used by HLE INT 1Ah).
         _pit = new PcPit(_bus, _pic);
         _pit.Reset();
+
+        // Phase 28.IO — port dispatch bus. Wires PIC / PIT / 8042 /
+        // CMOS / speaker / NMI ports to host handlers. Hook the
+        // X86JsonCpu delegate handlers (declared in AprX86.Cli, the
+        // CPU project; we install them here from AprPc.Cli to keep
+        // the cross-project reference one-directional).
+        _ports = new PcPortBus(_pic, _pit, traceIo: _options.TraceIo);
+        PcPortBus.Active = _ports;
+        X86JsonCpu.PortRead8Handler   = _ports.Read8;
+        X86JsonCpu.PortRead16Handler  = _ports.Read16;
+        X86JsonCpu.PortWrite8Handler  = _ports.Write8;
+        X86JsonCpu.PortWrite16Handler = _ports.Write16;
 
         // Phase 28.2 — install HLE BIOS INT handlers + IVT entries.
         _bios = new HleBios(_cpu, _bus, _kbd, _pit, traceInt: _options.TraceInt);

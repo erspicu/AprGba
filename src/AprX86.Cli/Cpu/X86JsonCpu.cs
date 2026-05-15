@@ -126,6 +126,15 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
             (IntPtr)(delegate* unmanaged[Cdecl]<uint, byte>)&MemRead8);
         _rt.BindExtern(MemoryEmitters.ExternFunctionNames.Write8,
             (IntPtr)(delegate* unmanaged[Cdecl]<uint, byte, void>)&MemWrite8);
+        // Phase 28.IO — port I/O dispatch (delegates to AprPc.Cli.Hardware.PcPortBus.Active).
+        _rt.BindExtern(MemoryEmitters.ExternFunctionNames.PortRead8,
+            (IntPtr)(delegate* unmanaged[Cdecl]<ushort, byte>)&PortRead8);
+        _rt.BindExtern(MemoryEmitters.ExternFunctionNames.PortRead16,
+            (IntPtr)(delegate* unmanaged[Cdecl]<ushort, ushort>)&PortRead16);
+        _rt.BindExtern(MemoryEmitters.ExternFunctionNames.PortWrite8,
+            (IntPtr)(delegate* unmanaged[Cdecl]<ushort, byte, void>)&PortWrite8);
+        _rt.BindExtern(MemoryEmitters.ExternFunctionNames.PortWrite16,
+            (IntPtr)(delegate* unmanaged[Cdecl]<ushort, ushort, void>)&PortWrite16);
 
         _rt.Compile();
 
@@ -697,4 +706,30 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         if (_activeMem is null) return;
         _activeMem.WriteByte((int)(addr & 0xFFFFF), value);
     }
+
+    // Phase 28.IO — port I/O extern shims. Forward to delegate handlers
+    // that downstream harnesses (AprPc.Cli) install at startup. Tom
+    // Harte SST runners + plain .com test invocations leave the handlers
+    // null and get open-bus reads / no-op writes (matches the pre-28.IO
+    // behavior).
+    public static Func<ushort, byte>?     PortRead8Handler;
+    public static Func<ushort, ushort>?   PortRead16Handler;
+    public static Action<ushort, byte>?   PortWrite8Handler;
+    public static Action<ushort, ushort>? PortWrite16Handler;
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static byte PortRead8(ushort port)
+        => PortRead8Handler?.Invoke(port) ?? (byte)0xFF;
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static ushort PortRead16(ushort port)
+        => PortRead16Handler?.Invoke(port) ?? (ushort)0xFFFF;
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void PortWrite8(ushort port, byte value)
+        => PortWrite8Handler?.Invoke(port, value);
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    private static void PortWrite16(ushort port, ushort value)
+        => PortWrite16Handler?.Invoke(port, value);
 }

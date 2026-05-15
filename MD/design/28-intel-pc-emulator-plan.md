@@ -10,6 +10,35 @@
 > pump (mechanical, not framework). 28.10 (mouse) and 28.11 (sound)
 > were optional in the original plan.
 >
+> **Follow-up Phase 28.IO** (2026-05-15, same day): Real PC/XT BIOS POST
+> needs functional port I/O to boot, not the no-op IN/OUT stubs we had.
+> Added `PortRead8/16` + `PortWrite8/16` externs through the LLVM IR
+> pipeline (`MemoryEmitters.CallPortRead8` etc.) and wired all four
+> `X86In*Emitter` / `X86Out*Emitter` classes to use them. New
+> `PcPortBus` dispatch table covers PIC 0x20/0x21, PIT 0x40-0x43,
+> 8042 0x60/0x64, speaker gate 0x61, CMOS 0x70/0x71, POST 0x80,
+> NMI mask 0xA0; unknown ports return 0xFF (open bus) on read and
+> ignore writes. **FPU detection stub** (`x86_fpu_noop` covering
+> 0xD8-0xDF) lets the BIOS pass its FNINIT/FSTCW probe — FSTCW writes
+> nothing, BIOS reads back the cleared scratch byte, CMP fails, BIOS
+> sets "no FPU" equipment flag (correct semantics for an 8086 without
+> 8087). Result: real pcxtbios.bin POST now exercises ~100 distinct
+> I/O ports (DMA controller, MDA/CGA CRTC programming, PIC IMR setup)
+> and gets all the way to E706 before stalling on joystick port 0x201
+> read loop — full POST completion deferred to future work. FreeDOS
+> regression: HLE path still booted (2839 HLE INT calls, kernel.sys +
+> COMMAND.COM + AUTOEXEC.BAT all firing).
+>
+> **Phase 29 design captured** (also 2026-05-15): full x87 FPU plan
+> consulted with Gemini knowledgebase, saved to
+> `MD/design/29-x87-fpu-plan.md`. Decision: separate JSON spec
+> (`spec/coprocessors/x87/i8087.json`) merged into the CPU spec at
+> load time via a machine-level `"extensions"` array. Internal
+> registers as f64 (not x86_fp80) for ARM64 portability;
+> transcendentals via C# Math.* externs; masked exceptions only
+> (skip #MF delivery). Phase 28.IO's no-op FPU stub is the seed that
+> Phase 29 will replace.
+>
 > **Original status** (2026-05-11): 📋 **PLANNED**. Sub-project / 延伸 phase。
 > 目的：用既有的 AprX86 (i8086 / i80186 / i80286) 把一台**最小可運行
 > 的 IBM PC compatible** 拼出來，能 boot DOS / FreeDOS 到 prompt、可以

@@ -1,0 +1,108 @@
+Timestamp: 2026-05-15T22:36:16
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+We are building a JSON-driven CPU emulation framework (project: AprGba, code name: AprCpu) that compiles JSON CPU specifications into LLVM IR and JITs them via LLVMSharp. Our spec format currently covers ARMv4/v5T (ARM7TDMI), Intel 8086/8088/80186/80188/80286 real + protected mode, and the toolchain works end-to-end (FreeDOS 1.3 boots on i8086).
+
+Spec shape today (simplified):
+- `cpu.json` declares registers, status flags, addressing modes
+- `groups/*.json` declares opcode entries: `{mask, match, name, has_modrm, op: "x86_mov_rm_r"}` etc.
+- Each `op` string maps to a C# IMicroOpEmitter that emits LLVM IR for one instruction
+- LLVM IR uses i16/i32 for integer state; memory access goes through externs (memory_read_8/16, port_read_8/16)
+- ModR/M decoder is implemented in the runtime (C#) and feeds operand info into the emitters
+
+We just stubbed 0xD8-0xDF (FPU escape opcodes) as no-ops to unblock real PC/XT BIOS POST. Now we want to design proper FPU (8087/80287) support inside the JSON framework, not as a hard-coded special case.
+
+Question: What is the best way to integrate stack-based x87 FPU into a JSON-driven, LLVM-JIT'd CPU framework? Specifically:
+
+1. **Register file representation**: x87 has 8 stack registers (ST(0)-ST(7)) plus a top-of-stack pointer in the status word, plus C0-C3 condition flags, plus control word (rounding/precision/exception mask). The JSON `registers` block is currently a flat list of named uint16/uint32 slots. How should we extend it? Should ST(i) be modeled as a rotating window over a flat 8-slot array, with TOP-relative indexing handled in the emitter? Or as a separate "fpu_stack" register kind?
+
+2. **80-bit extended precision**: LLVM has `x86_fp80` as a first-class type. Should the JSON spec declare an `f80` operand kind that lowers to `x86_fp80` in IR, or should we stay in `double` (f64) and accept the precision loss? For an 8087/80287 emulator, what's the practical impact?
+
+3. **Opcode encoding**: x87 instructions use ESC + ModR/M format. The ModR/M's `mod` field distinguishes memory-form (mod ≠ 3) from register-form (mod = 3). Memory form references m32fp/m64fp/m80fp/m16int/m32int/m64int based on the ESC opcode (D8/D9/DA/DB/DC/DD/DE/DF). Register form references ST(i). Should the JSON spec encode this as one entry per (ESC, mod-class, reg-bits) — potentially 200+ entries — or use a smaller table with helper fields like `fpu_mem_size: "m32fp"`?
+
+4. **Transcendentals**: x87 includes FSIN/FCOS/FPTAN/FYL2X/F2XM1/etc. LLVM has intrinsics (`llvm.sin.f80`, `llvm.cos.f80`) but they're not directly available for fp80 on all targets. What's the recommended approach — call out to libc (sinl, cosl) via extern, or emit explicit polynomial expansions?
+
+5. **Status word + condition codes**: FCOM/FUCOM/FCOMI set C0/C1/C2/C3 which JNZ/JC etc. then read via FNSTSW+SAHF. Should the emitter generate explicit status-word updates after every FPU compare, or only when downstream consumers are detected?
+
+6. **Pending exception model**: 8087/80287 raises FPU exceptions through #MF (interrupt 16h on 8086, vector 0x10 actually mapped to IRQ via INT). For a real-mode 8086 emulator booting DOS programs, can we get away with masking all exceptions (default state matches real silicon) and not implementing the actual #MF delivery? Or do popular DOS programs (Turbo Pascal, AutoCAD, Microsoft compilers) rely on it?
+
+Please prioritize practical advice — what would you do to ship a "good enough for FreeDOS/Turbo C/Win 3.x real-mode" 8087 in this framework, balancing correctness vs JSON-spec design cleanliness?
+
+========================================================================
+RESPONSE
+========================================================================
+This is a fascinating project. Building a clean, JSON-driven JIT for x86 is a delicate balancing act between declarative elegance and the brutal realities of the x86 architecture.
+
+For a target of "good enough for FreeDOS, Turbo C, and Win 3.x real-mode," your guiding principle should be **pragmatism over cycle/bit-perfect accuracy**. You want IEEE-754 semantics to do the heavy lifting, and you want to keep LLVM IR generation simple.
+
+Here is the practical roadmap for integrating the x87 FPU into your AprCpu framework.
+
+### 1. Register File Representation (The Stack)
+**Recommendation:** Declare a flat array and a TOP index in JSON; handle the "rotating window" logic in the C# emitter layer.
+
+In your `cpu.json`, do not invent a new complex data structure. Just declare the underlying hardware state:
+*   `fpu_regs`: flat array of 8 floating-point slots.
+*   `fpu_tags`: flat array of 8 bytes (or a single 16-bit word) to track Empty/Valid/Zero/NaN states.
+*   `fpu_top`: 32-bit int (only using values 0-7).
+*   `fpu_cw`, `fpu_sw`: 16-bit ints for Control Word and Status Word.
+
+**Why?** LLVM IR is SSA (Static Single Assignment). Emitting modular arithmetic `(TOP + i) % 8` directly into LLVM IR for every single FPU operand read/write will bloat your JIT output and slow down compilation.
+Instead, your C# `IMicroOpEmitter` should read `fpu_top` at JIT-time (if it's known statically in a basic block) or emit IR to calculate the absolute index *once* per FPU instruction, then use `getelementptr` (GEP) to access the flat `fpu_regs` array. 
+
+### 2. 80-bit Extended Precision (`x86_fp80` vs `f64`)
+**Recommendation:** Use standard `double` (`f64`) for the internal registers. Accept the precision loss.
+
+*   **The Cross-Platform Reality:** If you ever want AprCpu to run on ARM64 (Apple Silicon, Windows on ARM), `x86_fp80` will be an absolute nightmare. LLVM on ARM handles `fp80` poorly (often falling back to slow software emulation or just failing). Standard `double` (`f64`) runs cleanly and natively everywhere.
+*   **The Practical Impact:** 99.9% of DOS/Win16 software uses 32-bit `float` or 64-bit `double` memory formats anyway. They rely on the 80-bit internal precision just to prevent intermediate rounding errors. Standard 64-bit IEEE-754 is perfectly adequate for games, Turbo C/Pascal applications, and AutoCAD.
+*   **The Catch - Memory Loading:** While your *internal* registers should be `f64`, x87 instructions like `FLD m80fp` and `FSTP m80fp` read/write 10 bytes to memory. You will need to write C# extern functions (e.g., `fpu_load_m80(addr)` and `fpu_store_m80(addr, val)`) that manually pack/unpack the 10-byte x86 float format into a standard `double` (f64), throwing away the extra precision on load, and padding with zeros/calculating the correct exponent bias on store.
+
+### 3. Opcode Encoding (ESC + ModR/M)
+**Recommendation:** Use a smaller JSON table with helper fields, pivoting on the ModR/M `mod` and `reg` fields.
+
+Do not explode this into 200+ entries. x87 encoding is surprisingly logical:
+*   The ESC byte (D8-DF) combined with the `reg` field (bits 3-5 of ModR/M) determines the operation (ADD, MUL, COM, etc.).
+*   The `mod` field (bits 6-7) determines the source: `mod == 3` means ST(i), `mod != 3` means memory.
+*   The ESC byte determines the memory size (D8 = 32fp, DC = 64fp, etc.).
+
+Your JSON `groups/fpu.json` should look like this:
+```json
+{
+  "mask": "0xFF", "match": "0xD8", "reg_match": 0, "has_modrm": true,
+  "op": "fpu_add", "mem_size": "f32", "st_op": true
+}
+```
+Let your runtime ModR/M decoder evaluate `mod`. When it calls the `fpu_add` emitter, it passes an `Operand` object. The C# emitter simply checks:
+*   Is it memory? Emit a call to `memory_read_f32`, extend to `f64`, emit LLVM `fadd`.
+*   Is it a register? Emit a GEP to read ST(i), emit LLVM `fadd`.
+
+### 4. Transcendentals (FSIN, FCOS, etc.)
+**Recommendation:** Call out to C# `Math.Sin`/`Math.Cos` via externs. Do **not** use LLVM intrinsics or polynomial expansions.
+
+*   **Historical Note:** The 8087 and 80287 **did not have** `FSIN`, `FCOS`, or `FSINCOS`! Those were introduced in the 80387. The 8087 only had `FPTAN` (tangent) and `FPATAN` (arctangent). If you are strictly emulating an 8087/80287, you only need to implement the tangent functions, `F2XM1`, `FYL2X`, etc. Guest software calculates Sin/Cos using tangent math.
+*   **Implementation:** Do not try to inline these in LLVM. Emit a call to a C# extern function. The overhead of the transition is negligible because transcendentals take hundreds of cycles on real hardware anyway. 
+*   **Intrinsic danger:** LLVM's `llvm.sin.*` intrinsics are notoriously target-dependent and might refuse to lower properly on non-x86 hosts if you force fp80. A simple `extern double fpu_tan(double x)` linked to C#'s `Math.Tan` is bulletproof.
+
+### 5. Status Word + Condition Codes (C0-C3)
+**Recommendation:** Emit explicit Status Word updates immediately after the compare. Ignore lazy evaluation for the FPU.
+
+Lazy flag evaluation is critical for the integer ALU because `ADD`, `SUB`, and `CMP` happen millions of times a second, and the flags are frequently ignored. 
+FPU compares (`FCOM`, `FTST`) are relatively rare. When a DOS program executes an `FCOM`, it is almost guaranteed to immediately follow it with `FNSTSW AX` and `SAHF`. 
+Just do the standard LLVM `fcmp` (yielding `i1` values for eq/gt/lt), bitshift them into the correct C0/C2/C3 positions (bits 8, 10, 14 of the Status Word), and write directly to the `fpu_sw` register. Keep it simple.
+
+### 6. Pending Exception Model (#MF)
+**Recommendation:** Mask all exceptions and completely ignore #MF delivery for now. Let standard IEEE-754 semantics handle NaNs and Infinities.
+
+*   When an 8087 is initialized via `FINIT`, all exceptions (DivZero, Overflow, Invalid Op, etc.) are masked.
+*   In this state, dividing by zero simply puts a standard IEEE Infinity into the register.
+*   99% of DOS/Win16 software executes `FINIT`, leaves the exceptions masked, and does not install an INT 10h/16h/75h handler for FPU exceptions. They check for NaNs manually (if they check at all).
+*   Just hardcode your FPU Control Word to ignore attempts by the guest to unmask exceptions. Rely on LLVM's default floating-point behavior (which matches standard masked IEEE-754 perfectly). If you ever encounter a specific piece of software (like a highly specific protected-mode DOS extender) that crashes because it expects an actual interrupt on DivZero, you can add it later. For now, it is dead weight.
+
+### Summary Checklist for Implementation:
+1.  **Registers:** Flat `f64` array of 8 + `u32` TOP + `u16` SW + `u16` CW + `u16` TW.
+2.  **IR Type:** Standard LLVM `double` (`f64`).
+3.  **JSON:** Pivot FPU ops on ESC byte + ModR/M `reg` field. Handle Memory vs Register branching inside the emitter.
+4.  **Math:** Route complex math (Square Root, Tangent, Logs) to C# `Math` library via externs.
+5.  **Flags:** Immediate update of SW on `FCOM`. No lazy flags.
+6.  **Exceptions:** Mask them all. Produce Infinities/NaNs normally. Ignore FPU interrupts.

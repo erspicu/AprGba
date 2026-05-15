@@ -261,6 +261,19 @@ public static class X86_16InstructionLengths
             // ---------- AAM/AAD imm8 ----------
             case 0xD4: case 0xD5:                          return (false, 1);
 
+            // ---------- FPU escape opcodes (Phase 28.IO no-op stub) ----------
+            // 0xD8-0xDF are the 8087 FPU escape prefixes (ESC). On a real
+            // 8086 without an 8087, the first opcode byte is consumed and
+            // the second byte (ModR/M) selects the FPU sub-op. Without
+            // FPU emulation we treat the whole 2-byte sequence as a
+            // no-op (length includes ModR/M-style addressing modes that
+            // the BlockDetector decodes via the (true,0) signal — the
+            // ModR/M decoder will skip any disp8/disp16 byte counts
+            // automatically). Lets BIOS POST advance past FPU detection
+            // instead of hanging on an unknown opcode.
+            case 0xD8: case 0xD9: case 0xDA: case 0xDB:
+            case 0xDC: case 0xDD: case 0xDE: case 0xDF:    return (true, 0);
+
             // ---------- LOOP family / JCXZ ----------
             case 0xE0: case 0xE1: case 0xE2: case 0xE3:    return (false, 1);
 
