@@ -1,0 +1,192 @@
+Timestamp: 2026-05-16T01:18:40
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+We are emulating a PC/XT with real pcxtbios.bin BIOS + FreeDOS 1.3 1.44MB floppy. Phase 30 just shipped 8272A FDC + 8237 DMA channel 2 (per your earlier consultation). Now stuck at FreeDOS boot sector FAT walker.
+
+## Current state: what works
+
+BIOS POST completes correctly. INT 19h via real ROM:
+- FDC READ DATA C=0 H=0 R=1 -> LBA=0 -> phys 0x07C00 -> boot sector loaded
+- Bytes verified: EB 3C 90 46 52 44 4F 53 35 2E 31 00 02 01 01 00 = JMP/NOP + FRDOS5.1 OEM signature + bytes-per-sector=512 + sec/cluster=1 etc.
+- CPU jumps to 0:7C00 -> FreeDOS boot sector executes
+- Boot sector self-relocates to segment 0x1FE0 (1FE0:7C00 linear 0x27C00)
+
+## Then boot sector issues 23 more INT 13h calls
+
+All go through real BIOS -> real FDC -> real DMA correctly. Pattern:
+
+[FDC] READ drive=0 C=0 H=0 R=1  N=2 EOT=8 -> LBA=0  bytes=512 -> phys=0x07C00  (boot sector, by BIOS INT 19h)
+[FDC] READ drive=0 C=0 H=1 R=2  N=2 EOT=8 -> LBA=19 bytes=512 -> phys=0x0A360  (root dir sector 1)
+[FDC] READ drive=0 C=0 H=1 R=3  N=2 EOT=8 -> LBA=20 bytes=512 -> phys=0x0A360
+... (12 more root dir reads, ALL to 0x0A360)
+[FDC] READ drive=0 C=0 H=1 R=15 N=2 EOT=8 -> LBA=32 bytes=512 -> phys=0x0A360
+[FDC] READ drive=0 C=0 H=0 R=2  N=2 EOT=8 -> LBA=1  bytes=512 -> phys=0x0A360  (FAT1 sector 1)
+[FDC] READ drive=0 C=0 H=0 R=3  N=2 EOT=8 -> LBA=2  bytes=512 -> phys=0x0A360
+... (7 more FAT1 reads, all to 0x0A360)
+[FDC] READ drive=0 C=0 H=0 R=10 N=2 EOT=8 -> LBA=9  bytes=512 -> phys=0x0A360  (FAT1 last sector)
+(NO MORE READS - boot sector enters infinite loop)
+
+**Key observation**: every read after the boot sector load targets the SAME phys address 0x0A360. The BIOS explicitly programs DMA base to 0xA360 between every read (OUT 0x004, 0x60 / OUT 0x004, 0xA3). The DMA count is always 0x01FF (= 512 bytes = single sector).
+
+So each new sector OVERWRITES the same buffer. Only the LAST sector read stays in memory at 0xA360.
+
+First-16-bytes verification of each read confirms correct disk data (e.g. root dir first 16 bytes start with 46 44 31 33 2D 42 4F 4F 54 20 20 08 = "FD13-BOOT" volume label entry with attr 0x08).
+
+## Then boot sector is stuck at this code
+
+CPU stuck at 1FE0:7D04, AX=0, CX=0x0004, DX=0, SP=7BA0, BP=7C00:
+
+1FE0:7CFE-7D03:  C6 01 F6  01 C6 D1 EE     ; some setup before walker
+1FE0:7D04:  AD          LODSW            ; load WORD from [DS:SI]
+1FE0:7D05:  73 04       JAE +4           ; if CF=0, skip MOV+SHR
+1FE0:7D07:  B1 04       MOV CL, 4
+1FE0:7D09:  D3 E8       SHR AX, CL       ; shift right 4 (for FAT12 odd-cluster decoding)
+1FE0:7D0B:  80 E4 0F    AND AH, 0F       ; mask top 4 bits
+1FE0:7D0E:  3D F8 0F    CMP AX, 0FF8h    ; check end-of-chain
+1FE0:7D11:  72 E8       JC -24           ; jump back -24 bytes if AX < 0xFF8
+
+This is FAT12 cluster-chain walker. With AX coming back as 0 (zero data at SI pointer), AND AH,0F -> 0, CMP 0FF8 -> less than, JC takes the branch -> infinite loop.
+
+Walker has 4 in CX, 0 in BP=7C00 (suggests we are inside boot sector at offset 0x10D). DS=0x0060 (BIOS data area-ish).
+
+## My FDC ReadData code (the suspicious bit)
+
+```csharp
+private void ExecReadData(byte opcode)
+{
+    byte hds_ds = _cmdBuf[1];
+    byte drive  = (byte)(hds_ds & 3);
+    byte hds    = (byte)((hds_ds >> 2) & 1);
+    byte c   = _cmdBuf[2];
+    byte h   = _cmdBuf[3];
+    byte r   = _cmdBuf[4];
+    byte n   = _cmdBuf[5];
+    byte eot = _cmdBuf[6];
+
+    int sectorSize = 128 << Math.Min(n, (byte)4);
+    var disk = _drives[drive];
+
+    // DMA-burst transfer.
+    int physAddr = _dma.Channel2PhysicalAddress;  // = (page << 16) | base
+    int dmaBytes = _dma.Channel2TransferBytes;    // = count + 1
+
+    int sectorsPerTrack = disk.Sectors;     // 18
+    int headsPerCyl     = disk.Heads;        // 2
+    int lba = ((c * headsPerCyl) + h) * sectorsPerTrack + (r - 1);
+
+    int readBytes = Math.Min(dmaBytes, (disk.TotalSectors - lba) * 512);
+    if (readBytes > 0)
+    {
+        int firstSec   = lba;
+        int totalSecs  = (readBytes + 511) / 512;
+        var buf = new byte[totalSecs * 512];
+        disk.ReadSectors(firstSec, totalSecs, buf);
+        for (int i = 0; i < readBytes; i++)
+            _mem.Ram[physAddr + i] = buf[i];
+        _dma.OnChannel2BurstComplete(readBytes);
+    }
+    // ... result bytes ST0..N + IRQ 6
+}
+```
+
+DMA programming captured in trace (consistent across all 23 reads after boot sector):
+
+OUT 0x00C, 0x02       ; clear flip-flop
+OUT 0x00B, 0x46       ; mode: ch2, write-to-memory, single transfer
+OUT 0x004, 0x60       ; base lo
+OUT 0x004, 0xA3       ; base hi  -> Ch2Base = 0xA360
+OUT 0x081, 0x00       ; page = 0 -> physical = 0x0A360
+OUT 0x005, 0xFF       ; count lo
+OUT 0x005, 0x01       ; count hi -> count = 0x01FF (= 512 bytes)
+OUT 0x00A, 0x02       ; unmask ch2
+OUT 0x3F2, 0x1C       ; DOR: motor on + DMAEN + drive 0
+(FDC commands: RECAL/SEEK/SENSE INT before each READ DATA)
+OUT 0x3F5, 0xE6       ; READ DATA (MT+MFM+opcode 6)
+OUT 0x3F5, 0x00       ; HDS/DS
+OUT 0x3F5, c          ; cyl
+OUT 0x3F5, h          ; head
+OUT 0x3F5, r          ; sector
+OUT 0x3F5, 0x02       ; N=2 (512 bytes)
+OUT 0x3F5, 0x08       ; EOT=8
+OUT 0x3F5, 0x2A       ; GPL
+OUT 0x3F5, 0xFF       ; DTL
+
+## Questions
+
+**Q1**: Is the BIOS supposed to update DMA base address between sectors so multi-sector reads land at consecutive memory regions? Or is the BIOS deliberately using 0xA360 as a single-sector scratch buffer, and the boot sector is expected to memcpy data out of 0xA360 to its real destination before issuing next INT 13h?
+
+The trace clearly shows the BIOS resetting DMA base to 0xA360 every time. EOT=8 + DMA count = 512 means READ DATA stops after 1 sector even though EOT could span more. Single-sector transfers per FDC command. Is this normal pcxtbios.bin behavior?
+
+**Q2**: If single-sector reads with single buffer is correct, then the FreeDOS boot sector MUST be copying data out of 0xA360 between INT 13h calls. Why would it then call the FAT walker with SI pointing at 0xA360 (or wherever)? Where does the walker actually look — at the most recent FAT sector, or at a re-assembled FAT in memory?
+
+I have not yet decoded the FreeDOS 1.3 boot sector to verify. Do you know the FreeDOS 1.3 boot sector load strategy? Specifically: when boot sector reads root dir + FAT sectors, where does it COPY the data to after each INT 13h call? Is there a known FreeDOS boot sector source I can reference?
+
+**Q3**: My DMA controller mode register write is filtered to only honor channel-2 mode programming:
+
+  case 0x0B: Ch2Mode = (value & 0x03) == 0x02 ? value : Ch2Mode;
+
+Is this correct? Mode register write format: bits 0-1 = channel select, bits 2-7 = mode for that channel. Other channels (0/1/3) would write here too with their own channel bits in 0-1. My filter ignores writes for other channels but might miss a write to ch2 that has a non-channel-2 value in bits 0-1 (unlikely but possible). Could this cause subtle issues?
+
+**Q4**: My mask register handling:
+
+  case 0x0A: MaskReg = value; break;
+
+saves the raw value. But port 0x0A is "set/clear single mask bit" — the proper interpretation is bits 0-1 = channel index, bit 2 = mask/unmask. Writing 0x02 means "channel 2, mask bit = 0 -> ENABLE/UNMASK". My code just stores the raw value but does not update per-channel mask state. Does this matter for the FDC boot path?
+
+**Q5**: ST0 / IRQ pacing — my READ DATA completion asserts IRQ 6 via Pic8259.AssertIrq(6) before transitioning to Result phase. BIOS then reads result bytes from 0x3F5. In my code, IRQ stays asserted until BIOS reads the first result byte:
+
+  if (_resPos == 1 && _interruptPending)
+  {
+      _pic.AssertIrq(6);  // tried to re-arm, but already low?
+      _interruptPending = false;
+  }
+
+Looking at this again, I think this is buggy — calling AssertIrq(6) re-asserts the line. Should I be doing AcknowledgeIrq / DeAssert?
+
+Specifically question: what is the canonical IRQ deassert path for an 8259-driven FDC after BIOS reads result phase? My PIC has AssertIrq but no explicit DeAssert.
+
+Please review and identify the most likely root cause of the FAT walker infinite loop. Should I:
+(a) Implement true multi-sector READ DATA (transfer N*512 bytes per FDC command)?
+(b) Track per-channel DMA mask state properly?
+(c) Fix IRQ de-assert path?
+(d) Debug at the boot sector level — what is it really doing between reads?
+(e) Something else?
+
+========================================================================
+RESPONSE
+========================================================================
+Based on your detailed trace and emulator behavior, your FDC and DMA emulation are actually functioning beautifully for the disk read phase. The disk data is exactly where the boot sector requested it. The infinite loop is caused by a disconnect between where the data is loaded and where the CPU is looking during the FAT walk, almost certainly due to a CPU emulation bug involving segment registers.
+
+Here are the answers to your questions and the root cause analysis:
+
+### Q1: Is the BIOS using 0xA360 as a single-sector scratch buffer?
+**Yes.** `0xA360` is not a random BIOS buffer; it translates perfectly to `07C0:2760`. The FreeDOS boot sector explicitly uses an address relative to its load segment as a safe 512-byte scratchpad to avoid crossing 64KB DMA boundaries. 
+Instead of loading the entire 9-sector FAT into memory at once, FreeDOS loads **one sector at a time** into this scratch buffer. When walking the cluster chain, it calculates which FAT sector it needs, reads it into `0xA360`, extracts the next cluster, and repeats. The 23 INT 13h calls to `0xA360` are 100% intentional and correct.
+
+### Q2: Where does the walker look?
+The walker is supposed to look at the FAT sector currently residing in the scratch buffer (`0xA360`). 
+However, your trace shows the walker executing `LODSW` with `DS=0x0060`. Linear address `0060:SI` points to `0x00600`, which contains zeroes. Because it reads `0x0000`, the `CMP AX, 0FF8h` evaluates to less-than, jumping back to the top of the walker loop for cluster 0 over and over.
+
+**Why is it looking at DS=0x0060?**
+`0x0060` is the standard DOS segment where `KERNEL.SYS` (the actual file data) is destined to be loaded. The boot sector sets `ES=0060` or `DS=0060` to prepare for file loading. But to read the FAT scratch buffer, it must point to the `07C0` or `1FE0` segment.
+This reveals your root cause. One of three CPU emulation bugs is occurring:
+1. **Ignored Segment Override:** The `LODSW` (or the instruction fetching the FAT offset) might have a segment override prefix (e.g., `CS: LODSW` or `2E AD`). If your CPU emulator ignores segment prefixes on string instructions, it will mistakenly default to `DS` (`0060`), fetching zeroes instead of the FAT data.
+2. **Broken Segment Register Load:** The boot sector might have executed a `PUSH CS` followed by `POP DS` (or `MOV DS, ...`) just before the walker to point `DS` back to the scratch buffer. If your emulator's `POP DS` is broken, `DS` stays stuck at `0060`.
+3. **Register clobbering:** Some older BIOSes clobber `CX` or `DX` during INT 13h. If your FDC/BIOS emulation clobbers a register that FreeDOS assumed was preserved across the interrupt, the subsequent setup for the FAT walk goes off the rails.
+
+### Q3 & Q4: DMA Mode and Mask handling
+Your Mode filter is fine. For the Mask register (Port 0x0A), writing `0x02` means `Bit 2 = 0` (Enable) for `Channel 2`. Your emulator currently ignores the mask and writes the burst to RAM immediately. While this isn't strictly cycle-accurate hardware emulation (a real 8237 won't honor DRQ if the mask is set), it effectively bypasses the mask and delivers the data to RAM correctly. It is not the cause of the boot failure, but you should eventually honor `MaskReg` to prevent rogue DMA transfers.
+
+### Q5: ST0 / IRQ pacing and De-assert
+Yes, you should de-assert IRQ 6. Re-asserting it while `_interruptPending` is true is dangerous because edge-triggered ISA interrupts rely on a Low-to-High transition. 
+**Canonical path:** The FDC should assert IRQ 6 when the Result phase begins. The moment the BIOS reads the *first* byte from the FDC Data Register (`0x3F5`) during the Result phase, the FDC should clear its internal interrupt state and de-assert IRQ 6. 
+
+### Next Debugging Steps (The Fix)
+You do not need to implement multi-sector FDC reads—single sectors are exactly what FreeDOS requested. 
+
+Focus entirely on your CPU core. Trace the instructions executing strictly **between** the final INT 13h return and the `LODSW` at `1FE0:7D04`. 
+- Look for a `2E` (CS) or `26` (ES) prefix right before the `AD` (LODSW) or any memory reads calculating the FAT offset.
+- Look for any `POP DS` or `MOV DS, sreg` that failed to update the `DS` register.
+- Once the CPU points to the correct segment (`07C0` or `1FE0` instead of `0060`), it will read the valid FAT data at `0xA360`, successfully decode the cluster, and begin issuing FDC reads to pull `KERNEL.SYS` into `0x00600`.

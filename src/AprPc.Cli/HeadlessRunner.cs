@@ -138,11 +138,30 @@ internal static class HeadlessRunner
             if (runner.Bus is { } b)
             {
                 int linear = ((state.CS << 4) + state.IP) & 0xFFFFF;
-                int from = Math.Max(0, linear - 8);
+                int from = Math.Max(0, linear - 32);
                 Console.Write($"    bytes @ phys 0x{from:X5}: ");
-                for (int i = from; i < from + 24 && i < 0x100000; i++)
+                for (int i = from; i < from + 64 && i < 0x100000; i++)
                     Console.Write($"{b.ReadByte(i):X2}{(i == linear ? "*" : " ")}");
                 Console.WriteLine();
+
+                // Phase 30 forensics — compare original boot sector at
+                // 0x07C00 vs relocated copy at 0x27A00 (1FE0:7C00).
+                Console.WriteLine($"    orig boot first 32 bytes (0x07C00):");
+                Console.WriteLine($"      {string.Join(" ", Enumerable.Range(0, 32).Select(i => b.ReadByte(0x07C00 + i).ToString("X2")))}");
+                Console.WriteLine($"    copy boot first 32 bytes (0x27A00):");
+                Console.WriteLine($"      {string.Join(" ", Enumerable.Range(0, 32).Select(i => b.ReadByte(0x27A00 + i).ToString("X2")))}");
+                // Diff count over full 512 bytes
+                int diffs = 0;
+                int firstDiffOff = -1;
+                for (int off = 0; off < 512; off++)
+                {
+                    if (b.ReadByte(0x07C00 + off) != b.ReadByte(0x27A00 + off))
+                    {
+                        diffs++;
+                        if (firstDiffOff < 0) firstDiffOff = off;
+                    }
+                }
+                Console.WriteLine($"    orig vs copy diff: {diffs} bytes differ (first at offset 0x{firstDiffOff:X3})");
             }
         }
         if (runner.Pit is { } pit)

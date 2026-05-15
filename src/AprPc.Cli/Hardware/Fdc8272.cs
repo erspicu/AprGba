@@ -102,11 +102,17 @@ public sealed class Fdc8272
     {
         if (_phase != Phase.Result || _resPos >= _resLen) return 0xFF;
         byte b = _resBuf[_resPos++];
-        // De-assert IRQ as soon as host starts reading result bytes
-        // for commands that asserted IRQ (READ DATA / READ ID).
+        // Phase 30-supp (per Gemini Q5) — when BIOS starts reading the
+        // result phase, the FDC drops its IRQ 6 line. Pic8259's
+        // edge-triggered pending bit was already cleared by
+        // DequeueNextVector when the original ISR fired, so there's
+        // nothing to deassert here — just mark our local pending
+        // flag clean so future SENSE INTERRUPT doesn't think there's
+        // still an interrupt to report. (The previous code's spurious
+        // AssertIrq(6) re-fired the line, causing a second ISR call
+        // during result-phase processing.)
         if (_resPos == 1 && _interruptPending)
         {
-            _pic.AssertIrq(6);  // re-arm cleanly — no-op if already low
             _interruptPending = false;
         }
         if (_resPos >= _resLen)

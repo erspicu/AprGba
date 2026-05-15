@@ -139,7 +139,60 @@ boot sector starts `EB 3C 90 46 52 44 4F 53` (= "FRDOS5.1" OEM
 signature), root dir first entry shows `46 44 31 33 2D 42 4F 4F 54
 20 20 08` (= volume label "FD13-BOOT" with attribute 0x08).
 
-### 30.6 — known stuck point: FAT walker infinite loop
+### 30.6 — Gemini consultation refined the root cause (2026-05-16)
+
+Asked Gemini to analyze the FAT walker stuck symptom; full log
+`tools/knowledgebase/message/20260516_011840.txt`. Key findings:
+
+**Q1 — DMA at 0x0A360 is correct** (= `07C0:2760`). Single-sector
+single-buffer is FreeDOS boot sector's intended pattern: read one
+sector to scratch, process, read next, repeat. **NOT** a multi-sector
+issue — no need to implement multi-sector READ DATA.
+
+**Q5 — IRQ pacing was buggy.** Original code called `AssertIrq(6)`
+when host read first result byte; this re-asserts edge-triggered
+line and causes spurious second ISR. Fix: just clear local
+`_interruptPending` flag, the IRQ already fired once (via
+`DequeueNextVector` clearing pending bit). Shipped this fix in the
+same supplemental commit.
+
+**Root cause** (per Gemini analysis + memory forensics): DS=0x0060
+at the FAT walker means the CPU is reading FAT scratch buffer from
+the wrong segment. But deeper inspection via expanded boot-sector
+forensics in HeadlessRunner shows: **boot sector self-relocation
+copied only the SECOND HALF (bytes 0xFE-0x1FF = 258 bytes) to
+`1FE0:7C00`**. The first 254 bytes of the relocated copy are all
+zero. Diagnostic:
+
+```
+orig @ 0x07C00 [0..31]: EB 3C 90 46 52 44 4F 53 35 2E 31 00 02 01 01 00 ...
+copy @ 0x27A00 [0..31]: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ...
+orig vs copy diff: 224 bytes differ (first at offset 0x000)
+```
+
+Translating: the boot sector's `REP MOVSW` (or equivalent
+relocation routine) only transferred 256 bytes starting from offset
+0xFE, not the full 512 bytes from offset 0x00.
+
+Most likely cause is a **CPU emulation bug** in one of:
+- `REP MOVSW` (rep-prefix interaction with string-op + segment override)
+- INT 13h register save/restore (real pcxtbios.bin clobbers CX / SI
+  / DI; boot sector may rely on PUSHA/POPA which has its own quirks)
+- Direction Flag (DF) handling around STOSW/MOVSW
+
+Next debugging step: enable `--trace-cpu` for a narrow window
+around the relocation routine, identify the exact instruction that
+sets up the copy, and compare expected vs actual register/flag
+state. Defer to Phase 30.6b.
+
+### 30.6a — IRQ pacing fix shipped
+
+`X86FpuHelpers` (sorry, `Fdc8272.ReadFifo`) no longer re-asserts
+IRQ 6 when host begins reading result bytes. The original
+`AssertIrq(6)` call was meant to "deassert" but actually fired the
+edge again. Removed.
+
+### 30.6 — original stuck point description (kept for context)
 
 After reading all 14 root dir sectors (LBA 19-32) + 9 FAT1 sectors
 (LBA 1-9) via single-sector READ DATA commands (DMA count = 511,
