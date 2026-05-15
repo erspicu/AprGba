@@ -83,10 +83,12 @@ internal static class HeadlessRunner
         // if the ROM never HLTs.
         long limit = opts.MaxCycles ?? 1_000_000;
         long startCount = runner.InstructionsExecuted;
-        // Phase 28.8b — FreeDOS boot takes much longer than 30 s on
-        // our HLE path. Scale deadline by max-cycles so larger limits
-        // don't trip the timeout prematurely; minimum 30 s.
-        int deadlineSeconds = Math.Max(30, (int)Math.Min(int.MaxValue, limit / 200_000));
+        // Phase 28.8b/d — FreeDOS boot is slow on our HLE path. Default
+        // scales by max-cycles (200ms per 1M cycles, minimum 30s).
+        // --headless-timeout=N overrides explicitly for very large
+        // runs (FreeDOS interactive boot can take several minutes).
+        int deadlineSeconds = opts.HeadlessTimeout
+            ?? Math.Max(30, (int)Math.Min(int.MaxValue, limit / 200_000));
         var deadline = DateTime.UtcNow.AddSeconds(deadlineSeconds);
 
         while (runner.InstructionsExecuted - startCount < limit)

@@ -35,6 +35,7 @@ public sealed class PcOptions
     public long?   MaxCycles    { get; set; }
     public long?   Frames       { get; set; }
     public string? KeysScript   { get; set; }
+    public int?    HeadlessTimeout { get; set; }
 
     // Debug.
     public bool    TraceInt     { get; set; }
@@ -80,6 +81,7 @@ public sealed class PcOptions
             else if (arg.StartsWith("--max-cycles="))  o.MaxCycles = long.Parse(arg["--max-cycles=".Length..]);
             else if (arg.StartsWith("--frames="))      o.Frames = long.Parse(arg["--frames=".Length..]);
             else if (arg.StartsWith("--keys="))        o.KeysScript = arg["--keys=".Length..];
+            else if (arg.StartsWith("--headless-timeout=")) o.HeadlessTimeout = int.Parse(arg["--headless-timeout=".Length..]);
             else throw new ArgumentException($"unknown argument: {arg}");
         }
 
