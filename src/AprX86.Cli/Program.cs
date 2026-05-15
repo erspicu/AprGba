@@ -30,6 +30,8 @@ long maxCycles = 5_000_000L;
 string backend = "legacy";
 string variant = "i8086";
 bool verbose = false;
+bool fpu8087 = false;
+bool dumpFpuState = false;
 
 foreach (var arg in args)
 {
@@ -45,6 +47,12 @@ foreach (var arg in args)
     else if (arg.StartsWith("--backend="))           backend  = arg.Substring("--backend=".Length);
     else if (arg.StartsWith("--variant="))           variant  = arg.Substring("--variant=".Length);
     else if (arg == "--verbose" || arg == "-v")      verbose = true;
+    // Phase 29.3b — opt in to the i8087 coprocessor extension so test
+    // ROMs can exercise FPU opcodes (FNINIT etc.) under apr-x86 standalone.
+    // Default is off: apr-x86 stays a pure-i8086 harness for Tom Harte
+    // SST runs, matching pre-29.x behavior.
+    else if (arg == "--enable-i8087" || arg == "--enable-fpu") fpu8087 = true;
+    else if (arg == "--dump-fpu-state")               dumpFpuState = true;
     else { Console.Error.WriteLine($"unknown arg: {arg}"); PrintUsage(); return 2; }
 }
 
@@ -120,11 +128,32 @@ if (backend == "legacy" && variant != "i8086" && variant != "i8088")
     return 6;
 }
 
+// Phase 29.3b — resolve i8087 extension path when opted in. We walk up
+// from the binary's BaseDirectory the same way LocateSpec() does so the
+// test harness can run from any cwd.
+List<string>? fpuExtPaths = null;
+if (fpu8087)
+{
+    string? probe = null;
+    for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
+    {
+        var p = Path.Combine(d.FullName, "spec", "coprocessors", "x87", "i8087", "cpu.json");
+        if (File.Exists(p)) { probe = p; break; }
+    }
+    probe ??= Path.Combine(Environment.CurrentDirectory, "spec", "coprocessors", "x87", "i8087", "cpu.json");
+    if (!File.Exists(probe))
+    {
+        Console.Error.WriteLine($"error: --enable-i8087 requested but spec not found at {probe}");
+        return 8;
+    }
+    fpuExtPaths = new List<string> { probe };
+}
+
 IX86CpuBackend cpu = backend switch
 {
     "legacy"     => new X86LegacyCpu(mem),
-    "json"       => new X86JsonCpu(mem, enableBlockJit: false, variant: variant),
-    "json-block" => new X86JsonCpu(mem, enableBlockJit: true,  variant: variant),
+    "json"       => new X86JsonCpu(mem, enableBlockJit: false, variant: variant, extensionPaths: fpuExtPaths),
+    "json-block" => new X86JsonCpu(mem, enableBlockJit: true,  variant: variant, extensionPaths: fpuExtPaths),
     _            => throw new NotSupportedException($"backend '{backend}' not supported. Valid: legacy / json / json-block."),
 };
 cpu.Reset();
@@ -176,6 +205,23 @@ Console.WriteLine($"  final state:");
     if (s.ExcPending != 0)
     {
         Console.WriteLine($"    EXC pending=1 vector=0x{s.ExcVector:X2} error=0x{s.ExcError:X4}");
+    }
+
+    // Phase 29.3b — FPU state dump. Only emitted when --dump-fpu-state was
+    // passed (otherwise legacy / non-FPU runs stay terse). Requires the
+    // i8087 extension to be loaded; without it the accessors return null
+    // and we print "(spec has no FPU slots)".
+    if (dumpFpuState && cpu is X86JsonCpu jcpu)
+    {
+        Console.WriteLine($"  fpu state:");
+        var top = jcpu.TryReadFpuTop();
+        if (top is null) { Console.WriteLine($"    (spec has no FPU slots — pass --enable-i8087)"); }
+        else
+        {
+            Console.WriteLine($"    TOP={top:X2} CW={jcpu.TryReadFpuCw():X4} SW={jcpu.TryReadFpuSw():X4} TAGS={jcpu.TryReadFpuTags():X4}");
+            for (int i = 0; i < 8; i++)
+                Console.WriteLine($"    ST{i}={jcpu.TryReadFpuPhysicalSt(i):G17}");
+        }
     }
 }
 Console.WriteLine($"  halted: {cpu.Halted}");

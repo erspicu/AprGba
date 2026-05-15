@@ -323,6 +323,50 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         catch (InvalidOperationException) { return -1; }
     }
 
+    // Phase 29.3b — FPU state accessors. Return null when the loaded spec
+    // doesn't declare the FPU register file (no i8087 extension on the
+    // machine spec). Use these for unit-test verification of FPU semantics
+    // and for `apr-pc --verbose` / debug dumps. The 8 ST(i) slots store
+    // f64-as-i64; bitcast to double for human reading.
+    public uint? TryReadFpuTop()
+    {
+        var off = TryStatusOffset("FPU_TOP");
+        if (off < 0) return null;
+        return BinaryPrimitives.ReadUInt32LittleEndian(_state.AsSpan(off, 4));
+    }
+    public ushort? TryReadFpuCw()
+    {
+        var off = TryStatusOffset("FPU_CW");
+        if (off < 0) return null;
+        return BinaryPrimitives.ReadUInt16LittleEndian(_state.AsSpan(off, 2));
+    }
+    public ushort? TryReadFpuSw()
+    {
+        var off = TryStatusOffset("FPU_SW");
+        if (off < 0) return null;
+        return BinaryPrimitives.ReadUInt16LittleEndian(_state.AsSpan(off, 2));
+    }
+    public ushort? TryReadFpuTags()
+    {
+        var off = TryStatusOffset("FPU_TAGS");
+        if (off < 0) return null;
+        return BinaryPrimitives.ReadUInt16LittleEndian(_state.AsSpan(off, 2));
+    }
+    /// <summary>
+    /// Read the physical-slot ST(i) (0-7) as a double. Returns null when
+    /// the spec doesn't declare the slot. Note: this reads the PHYSICAL
+    /// slot index, not the logical ST(i) — callers that want logical
+    /// ST(0) should do `TryReadFpuPhysicalSt(TryReadFpuTop() ?? 0)`.
+    /// </summary>
+    public double? TryReadFpuPhysicalSt(int physicalIndex)
+    {
+        if ((uint)physicalIndex >= 8) return null;
+        var off = TryStatusOffset($"FPU_ST{physicalIndex}");
+        if (off < 0) return null;
+        var i64 = BinaryPrimitives.ReadInt64LittleEndian(_state.AsSpan(off, 8));
+        return BitConverter.Int64BitsToDouble(i64);
+    }
+
     public X86State State
     {
         get

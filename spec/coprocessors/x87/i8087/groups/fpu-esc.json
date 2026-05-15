@@ -16,7 +16,7 @@
                     "writes_pc": "never",
                     "manual_ref": "Intel SDM Vol.2 §FPU D8",
                     "cycles": { "form": "2" },
-                    "steps": [ { "op": "x86_fpu_d8_dispatch" } ],
+                    "steps": [ { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" }, { "op": "x86_fpu_d8_dispatch" } ],
                     "id": "FPU_D8_dispatch"
                 }
             ]
@@ -35,7 +35,7 @@
                     "writes_pc": "never",
                     "manual_ref": "Intel SDM Vol.2 §FPU D9",
                     "cycles": { "form": "2" },
-                    "steps": [ { "op": "x86_fpu_d9_dispatch" } ],
+                    "steps": [ { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" }, { "op": "x86_fpu_d9_dispatch" } ],
                     "id": "FPU_D9_dispatch"
                 }
             ]
@@ -54,7 +54,7 @@
                     "writes_pc": "never",
                     "manual_ref": "Intel SDM Vol.2 §FPU DA",
                     "cycles": { "form": "2" },
-                    "steps": [ { "op": "x86_fpu_da_dispatch" } ],
+                    "steps": [ { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" }, { "op": "x86_fpu_da_dispatch" } ],
                     "id": "FPU_DA_dispatch"
                 }
             ]
@@ -73,7 +73,7 @@
                     "writes_pc": "never",
                     "manual_ref": "Intel SDM Vol.2 §FPU DB",
                     "cycles": { "form": "2" },
-                    "steps": [ { "op": "x86_fpu_db_dispatch" } ],
+                    "steps": [ { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" }, { "op": "x86_fpu_db_dispatch" } ],
                     "id": "FPU_DB_dispatch"
                 }
             ]
@@ -92,7 +92,7 @@
                     "writes_pc": "never",
                     "manual_ref": "Intel SDM Vol.2 §FPU DC",
                     "cycles": { "form": "2" },
-                    "steps": [ { "op": "x86_fpu_dc_dispatch" } ],
+                    "steps": [ { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" }, { "op": "x86_fpu_dc_dispatch" } ],
                     "id": "FPU_DC_dispatch"
                 }
             ]
@@ -111,7 +111,7 @@
                     "writes_pc": "never",
                     "manual_ref": "Intel SDM Vol.2 §FPU DD",
                     "cycles": { "form": "2" },
-                    "steps": [ { "op": "x86_fpu_dd_dispatch" } ],
+                    "steps": [ { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" }, { "op": "x86_fpu_dd_dispatch" } ],
                     "id": "FPU_DD_dispatch"
                 }
             ]
@@ -130,7 +130,7 @@
                     "writes_pc": "never",
                     "manual_ref": "Intel SDM Vol.2 §FPU DE",
                     "cycles": { "form": "2" },
-                    "steps": [ { "op": "x86_fpu_de_dispatch" } ],
+                    "steps": [ { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" }, { "op": "x86_fpu_de_dispatch" } ],
                     "id": "FPU_DE_dispatch"
                 }
             ]
@@ -149,7 +149,7 @@
                     "writes_pc": "never",
                     "manual_ref": "Intel SDM Vol.2 §FPU DF",
                     "cycles": { "form": "2" },
-                    "steps": [ { "op": "x86_fpu_df_dispatch" } ],
+                    "steps": [ { "op": "x86_fetch_modrm" }, { "op": "x86_modrm_compute_ea" }, { "op": "x86_fpu_df_dispatch" } ],
                     "id": "FPU_DF_dispatch"
                 }
             ]

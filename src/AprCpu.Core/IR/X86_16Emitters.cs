@@ -5065,7 +5065,61 @@ internal sealed class X86FpuDADispatchEmitter : IMicroOpEmitter
 internal sealed class X86FpuDBDispatchEmitter : IMicroOpEmitter
 {
     public string OpName => "x86_fpu_db_dispatch";
-    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.3 — FILD/FIST/FISTP m32int + FNINIT (E3) + FLD/FSTP m80fp lands here */ }
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // Phase 29.3b — only FNINIT (DB E3) is implemented. Other DB
+        // sub-opcodes (FILD/FIST/FISTP m32int + FLD/FSTP m80fp + FNCLEX +
+        // FNSETPM) stay no-op until 29.3d / 29.9.
+        //
+        // FNINIT second byte E3 = mod=11 reg=100 rm=011. We dispatch on the
+        // full (mod, reg, rm) tuple — combined = (mod << 6) | (reg << 3) | rm
+        // would equal 0xE3 exactly. Using `mod == 3 && (reg << 3 | rm) == 0x23`
+        // is equivalent and avoids reconstructing the mod field.
+        var i32 = LLVMTypeRef.Int32;
+        var mod = ctx.Resolve("modrm_mod");
+        var reg = ctx.Resolve("modrm_reg");
+        var rm  = ctx.Resolve("modrm_rm");
+
+        var isMod3 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            mod, LLVMValueRef.CreateConstInt(i32, 3, false), "db_isMod3");
+        var regSh = ctx.Builder.BuildShl(reg,
+            LLVMValueRef.CreateConstInt(i32, 3, false), "db_regSh");
+        var combined = ctx.Builder.BuildOr(regSh, rm, "db_combined");
+        var isE3Sub = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            combined, LLVMValueRef.CreateConstInt(i32, 0x23, false), "db_isE3sub");
+        var isFninit = ctx.Builder.BuildAnd(isMod3, isE3Sub, "db_isFninit");
+
+        var fninitBB = ctx.Function.AppendBasicBlock("fninit");
+        var endBB    = ctx.Function.AppendBasicBlock("db_end");
+        ctx.Builder.BuildCondBr(isFninit, fninitBB, endBB);
+
+        // FNINIT body: reset FPU state to power-on defaults.
+        //   FPU_CW   = 0x037F   (all 6 exceptions masked, PC=11 → 64-bit
+        //                        precision, RC=00 → round-to-nearest, IC=0)
+        //   FPU_SW   = 0x0000   (no condition codes, no pending exceptions,
+        //                        TOP_SW=0, not busy)
+        //   FPU_TAGS = 0xFFFF   (all 8 ST slots tagged 11 = Empty)
+        //   FPU_TOP  = 0
+        // Real 8087 also clears FPU_IP / FPU_OP and the last-instruction
+        // opcode register; we don't model those, so they're not touched.
+        ctx.Builder.PositionAtEnd(fninitBB);
+        var i16 = LLVMTypeRef.Int16;
+        ctx.Builder.BuildStore(
+            LLVMValueRef.CreateConstInt(i16, 0x037F, false),
+            ctx.GepStatusRegister("FPU_CW"));
+        ctx.Builder.BuildStore(
+            LLVMValueRef.CreateConstInt(i16, 0x0000, false),
+            ctx.GepStatusRegister("FPU_SW"));
+        ctx.Builder.BuildStore(
+            LLVMValueRef.CreateConstInt(i16, 0xFFFF, false),
+            ctx.GepStatusRegister("FPU_TAGS"));
+        ctx.Builder.BuildStore(
+            LLVMValueRef.CreateConstInt(i32, 0, false),
+            ctx.GepStatusRegister("FPU_TOP"));
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+    }
 }
 internal sealed class X86FpuDCDispatchEmitter : IMicroOpEmitter
 {
