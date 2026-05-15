@@ -532,12 +532,21 @@ source 解掉的不需要 Gemini。Pattern A（不問）90% 的工作 OK；Patte
 
 開 phase 28.0 前先確認：
 
-- [ ] FreeDOS 1.3 floppy image 下載到 `BIOS/freedos-1.3-floppy.img`（不入 repo）
-- [ ] NASM 可用（已裝 `C:\Program Files\NASM\nasm.exe`）
-- [ ] 既有 `apr-x86 --variant=i8086` runs Tom Harte SST clean（regression baseline）
-- [ ] 既有 6 個 x86-16 demo screenshots SHA256 全綠（regression baseline）
+- [x] **FreeDOS 1.3 floppy image** 下載到 `BIOS/freedos-1.3-floppy.img`（不入 repo）
+      → 2026-05-11 從 ibiblio.org `FD13-FloppyEdition.zip` (20.7 MB) 取出
+      `144m/x86BOOT.img` (1,474,560 bytes)；SHA256
+      `3F7834EA4575BA05D106E4B8F59F886DA7BFB1979EE386BE2A2DEBA8DF518925`；
+      OEM 簽名 `FRDOS5.1`、boot magic `55 AA` ✓。
+- [x] **NASM 可用**（已裝 `C:\Program Files\NASM\nasm.exe`，版本 3.01）。
+- [x] **既有 `apr-x86 --variant=i8086` Tom Harte SST clean**（regression baseline）
+      → X86TomHarteTests subset 147/147 通過 (3m 55s)。額外
+      `apr-x86 --tomharte=OldProject/8088/v2/00.json.gz` 跑 ADD r/m8,r8
+      10000 case 全綠 (1.73s)。
+- [x] **既有 6 個 x86-16 demo screenshots SHA256 全綠**（regression baseline）
+      → T2 18 PNGs (6 demos × 3 backends) pixel-identical；
+      i8086 vs i80186 variant matrix 6 demos pixel-identical ✓。
 
-確認後動工，從 28.0 開始。
+**Checklist 全 ✅ 於 2026-05-11**。可動工從 28.0 開始。
 
 ---
 
