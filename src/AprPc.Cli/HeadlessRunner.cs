@@ -114,6 +114,16 @@ internal static class HeadlessRunner
         {
             Console.WriteLine($"    CS:IP={state.CS:X4}:{state.IP:X4} AX={state.A.X:X4} BX={state.B.X:X4} CX={state.C.X:X4} DX={state.D.X:X4}");
             Console.WriteLine($"    DS={state.DS:X4} ES={state.ES:X4} SS={state.SS:X4} SP={state.SP:X4} BP={state.BP:X4}");
+            // Phase 28.8c — dump bytes around final CS:IP for forensics.
+            if (runner.Bus is { } b)
+            {
+                int linear = ((state.CS << 4) + state.IP) & 0xFFFFF;
+                int from = Math.Max(0, linear - 8);
+                Console.Write($"    bytes @ phys 0x{from:X5}: ");
+                for (int i = from; i < from + 24 && i < 0x100000; i++)
+                    Console.Write($"{b.ReadByte(i):X2}{(i == linear ? "*" : " ")}");
+                Console.WriteLine();
+            }
         }
         if (runner.Pit is { } pit)
         {

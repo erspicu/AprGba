@@ -131,6 +131,8 @@ public static class X86_16Emitters
         reg.Register(new X86JmpRel8Emitter());
         reg.Register(new X86JmpRel16Emitter());
         reg.Register(new X86JmpFarDirectEmitter());
+        reg.Register(new X86CallFarDirectEmitter());
+        reg.Register(new X86RetfEmitter());
         reg.Register(new X86JccRel8Emitter());
         reg.Register(new X86JcxzRel8Emitter());
         reg.Register(new X86LoopEmitter());
@@ -4078,6 +4080,72 @@ internal sealed class X86JmpFarDirectEmitter : IMicroOpEmitter
         var i8  = LLVMTypeRef.Int8;
         var newIp = X86_16Emitters.FetchImm16(ctx, "jmpfar_ip");
         var newCs = X86_16Emitters.FetchImm16(ctx, "jmpfar_cs");
+
+        ctx.Builder.BuildStore(newIp, ctx.GepStatusRegister("IP"));
+        ctx.Builder.BuildStore(newCs, ctx.GepStatusRegister("CS"));
+
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
+    }
+}
+
+/// <summary>
+/// 28.8c — 0x9A CALL ptr16:16. Pushes CS + IP (of next instruction)
+/// to stack, then loads CS:IP from 4 immediate bytes. The "next IP"
+/// is the address AFTER consuming the 4 immediates, which FetchImm16
+/// already advances IP past. So after both fetches we read IP, push
+/// it + CS, then overwrite IP+CS with the new target.
+/// </summary>
+internal sealed class X86CallFarDirectEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_call_far_direct";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var newIp = X86_16Emitters.FetchImm16(ctx, "callfar_ip");
+        var newCs = X86_16Emitters.FetchImm16(ctx, "callfar_cs");
+
+        // Push CS + IP (return address) — IP currently points past the
+        // 4 immediates (next instruction).
+        var returnIp = ctx.Builder.BuildLoad2(i16, ctx.GepStatusRegister("IP"), "callfar_retIp");
+        var returnCs = ctx.Builder.BuildLoad2(i16, ctx.GepStatusRegister("CS"), "callfar_retCs");
+        X86StackHelpers.PushW16(ctx, returnCs, "callfar_pushCs");
+        X86StackHelpers.PushW16(ctx, returnIp, "callfar_pushIp");
+
+        ctx.Builder.BuildStore(newIp, ctx.GepStatusRegister("IP"));
+        ctx.Builder.BuildStore(newCs, ctx.GepStatusRegister("CS"));
+
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
+    }
+}
+
+/// <summary>
+/// 28.8c — 0xCB RETF / 0xCA RETF imm16. Pops IP then CS from stack.
+/// For the imm16 variant: after popping, SP += imm16 (cleans caller
+/// argument bytes). The pop_imm16 flag in the spec controls this.
+/// </summary>
+internal sealed class X86RetfEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_retf";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        bool popImm = step.Raw.GetProperty("pop_imm16").GetBoolean();
+
+        var newIp = X86StackHelpers.PopW16(ctx, "retf_ip");
+        var newCs = X86StackHelpers.PopW16(ctx, "retf_cs");
+
+        if (popImm)
+        {
+            var imm = X86_16Emitters.FetchImm16(ctx, "retf_imm");
+            var spPtr = ctx.GepGpr(4);   // SP is GPR index 4
+            var sp = ctx.Builder.BuildLoad2(i16, spPtr, "retf_sp");
+            var newSp = ctx.Builder.BuildAdd(sp, imm, "retf_newSp");
+            ctx.Builder.BuildStore(newSp, spPtr);
+        }
 
         ctx.Builder.BuildStore(newIp, ctx.GepStatusRegister("IP"));
         ctx.Builder.BuildStore(newCs, ctx.GepStatusRegister("CS"));

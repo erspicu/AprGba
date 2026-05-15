@@ -73,20 +73,24 @@ public sealed class HleBios
     /// </summary>
     public void Install()
     {
-        // Phase 28.8b — INT 8 (IRQ 0 PIT) + INT 9 (IRQ 1 keyboard).
-        // Default handlers are no-op (just IRET). Real BIOS would
-        // chain INT 8 → INT 1Ch user timer; user programs that
-        // install their own handler will see priority over ours
-        // since they overwrite IVT slots. Without these defaults
-        // an IRQ would dispatch to IVT[v]=0:0000 and send CPU into
-        // unmapped low-memory garbage.
-        InstallVector(0x08, "irq0_timer");
-        InstallVector(0x09, "irq1_keyboard");
-        InstallVector(0x10, "video");
-        InstallVector(0x13, "disk");
-        InstallVector(0x16, "keyboard");
-        InstallVector(0x19, "bootstrap");
-        InstallVector(0x1A, "time");
+        // Phase 28.8c — pre-install default IRET trap for ALL 256
+        // IVT slots. Real-mode INT to any unset vector would land at
+        // IVT[v]=0:0000 and send CPU walking through IVT bytes as
+        // code (FreeDOS hit this with stray INT 12h / 1Bh / etc.
+        // before reaching its own IVT writes). User code that
+        // installs its own handler overrides our F000:00xx entry
+        // since the user IVT write replaces our pointer. Specific
+        // vectors (0x10/0x13/0x16/0x19/0x1A) get real HLE bodies
+        // below; unhandled cases in Dispatch's switch fall to a
+        // no-op + SimulateIret.
+        for (int v = 0; v < 256; v++) InstallVector((byte)v, $"default_{v:X2}");
+        // Re-announce explicit handlers (the install call is a no-op
+        // since the slot was already written, but tracing improves).
+        if (_traceInt)
+        {
+            Console.Error.WriteLine($"  [HLE] handlers: INT 10h video / 13h disk / 16h keyboard / 19h bootstrap / 1Ah time");
+            Console.Error.WriteLine($"  [HLE] (other 251 vectors get a default no-op IRET trap)");
+        }
     }
 
     private void InstallVector(byte vector, string label)
@@ -96,7 +100,9 @@ public sealed class HleBios
         _bus.WriteWord16(slot,     vector);              // IP = vector (low byte populated, high byte = 0)
         _bus.WriteWord16(slot + 2, HleTrapSegment);      // CS = 0xF000
         _owned[vector] = true;
-        if (_traceInt)
+        // Trace only for explicitly-handled vectors (cuts log noise from
+        // the Phase 28.8c "install all 256 defaults" loop).
+        if (_traceInt && !label.StartsWith("default_"))
             Console.Error.WriteLine($"  [HLE] installed INT {vector:X2}h ({label}) -> {HleTrapSegment:X4}:{vector:X4}");
     }
 

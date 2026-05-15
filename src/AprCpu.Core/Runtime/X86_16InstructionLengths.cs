@@ -212,6 +212,9 @@ public static class X86_16InstructionLengths
             // ---------- CBW/CWD ----------
             case 0x98: case 0x99:                          return (false, 0);
 
+            // ---------- CALL ptr16:16 (far direct) — Phase 28.8c ----------
+            case 0x9A:                                     return (false, 4);
+
             // ---------- PUSHF/POPF/SAHF/LAHF ----------
             case 0x9C: case 0x9D: case 0x9E: case 0x9F:    return (false, 0);
 
@@ -243,6 +246,10 @@ public static class X86_16InstructionLengths
             // ---------- MOV r/m, imm ----------
             case 0xC6:                                     return (true, 1);
             case 0xC7:                                     return (true, 2);
+
+            // ---------- RETF imm16 / RETF (Phase 28.8c) ----------
+            case 0xCA:                                     return (false, 2);
+            case 0xCB:                                     return (false, 0);
 
             // ---------- INT 3 / INT imm8 / INTO / IRET ----------
             case 0xCC: case 0xCE: case 0xCF:               return (false, 0);

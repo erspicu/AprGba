@@ -62,15 +62,63 @@
           "since": "Intel8086",
           "writes_pc": "always",
           "manual_ref": "Intel SDM Vol.2 §JMP",
-          "cycles": {
-            "form": "15"
-          },
-          "steps": [
-            {
-              "op": "x86_jmp_far_direct"
-            }
-          ],
+          "cycles": { "form": "15" },
+          "steps": [ { "op": "x86_jmp_far_direct" } ],
           "id": "JMP_ptr16_16"
+        }
+      ]
+    },
+    {
+      "name": "CallFarDirect",
+      "comment": "0x9A CALL ptr16:16 — direct far call. Pushes CS+IP of next instruction (4 bytes), then loads CS:IP from the 4 immediate bytes (IP_lo IP_hi CS_lo CS_hi). Added in Phase 28.8c for FreeDOS kernel.",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0x9A",
+      "instructions": [
+        {
+          "mnemonic": "CALL",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §CALL",
+          "cycles": { "form": "28" },
+          "steps": [ { "op": "x86_call_far_direct" } ],
+          "id": "CALL_ptr16_16"
+        }
+      ]
+    },
+    {
+      "name": "Retf",
+      "comment": "0xCB RETF — far return. Pops IP then CS from stack (4 bytes). Added in Phase 28.8c for FreeDOS kernel push-then-retf far jumps.",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xCB",
+      "instructions": [
+        {
+          "mnemonic": "RETF",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §RET",
+          "cycles": { "form": "26" },
+          "steps": [ { "op": "x86_retf", "pop_imm16": false } ],
+          "id": "RETF_no_imm"
+        }
+      ]
+    },
+    {
+      "name": "RetfImm16",
+      "comment": "0xCA RETF imm16 — far return with stack cleanup. Pops IP+CS (4 bytes), then SP += imm16. Phase 28.8c.",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xCA",
+      "instructions": [
+        {
+          "mnemonic": "RETF",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §RET",
+          "cycles": { "form": "25" },
+          "steps": [ { "op": "x86_retf", "pop_imm16": true } ],
+          "id": "RETF_imm16"
         }
       ]
     },
