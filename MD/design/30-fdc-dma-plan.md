@@ -139,6 +139,60 @@ boot sector starts `EB 3C 90 46 52 44 4F 53` (= "FRDOS5.1" OEM
 signature), root dir first entry shows `46 44 31 33 2D 42 4F 4F 54
 20 20 08` (= volume label "FD13-BOOT" with attribute 0x08).
 
+### 30.6b — Trace-cpu identified real root cause (2026-05-16)
+
+The 30.6 Gemini analysis said "boot sector self-relocation didn't
+complete". A deeper trace-cpu investigation (added `--trace-cpu-cs=`
+filter + memory write/read watch ranges) corrects the diagnosis:
+
+**Boot sector self-relocation (REP MOVSW) WORKS CORRECTLY.** Standalone
+REP MOVSW test (`test-roms/x86/30-rep-movsw-test.com`) confirms the
+emitter is bit-correct. The relocated bytes that "appeared zero" in
+earlier forensics were actually OVERWRITTEN later by the FAT walker's
+STOSW loop spinning on cluster 0.
+
+**The real cause is segment-register state mismatch around INT 13h.**
+Trace comparison between HLE and real-BIOS paths shows the FreeDOS
+boot sector's INT 13h call site at `1FE0:7D7B` (the JZ-skipped AH=41
+extensions check) sees DIFFERENT `ES` values across iterations:
+
+| Iteration | HLE ES | real-BIOS ES |
+|---|---|---|
+| 1 | 0x0060 | 0x0060 |
+| 2 | 0x0060 | 0x0060 |
+| 3 | **0x0080** | 0x0060 |
+| 4 | 0x00A0 | 0x0060 |
+| 5 | 0x00C0 | 0x0060 |
+| 6 | 0x00E0 | 0x0060 |
+
+**ES increments by 0x20 (= 512 bytes / 16 paragraphs) per iteration in
+HLE but stays pinned at 0x0060 in real-BIOS.** That increment is how
+FreeDOS allocates each sector to a fresh memory segment (0x60, 0x80,
+0xA0, ...) so the FAT walker (later setting `DS=[BP+0x5C]=0x0060`)
+can read the cluster chain across multiple loaded sectors.
+
+In real-BIOS path, ES never advances → all sectors are loaded to the
+same destination → only the LAST one is visible → walker reads bytes
+from the wrong sector → FAT entry 0 → infinite loop on cluster 0.
+
+**Likely culprits** (not yet narrowed further):
+1. Real BIOS INT 13h handler clobbers a register that the boot
+   sector relies on for its ES-increment math (e.g., AX, CX, or a
+   memory cell at BP-something).
+2. Our CPU's INT instruction or IRET pushes/pops wrong segment
+   register state.
+3. The boot sector's increment instruction itself is a string-op
+   variant that has a state-dependent bug we haven't hit before.
+
+**Next debugging step**: dump the instructions between successive
+INT 13h call sites in BOTH HLE and real-BIOS traces, diff them to
+find where the ES-increment diverges. Add `--watch-reg=ES` if
+needed (would log every write to ES).
+
+The CPU is `--backend=json` (per-instruction); no block-JIT caching
+to invalidate. The bug appears in fully-decoded per-instruction
+execution.
+
 ### 30.6 — Gemini consultation refined the root cause (2026-05-16)
 
 Asked Gemini to analyze the FAT walker stuck symptom; full log

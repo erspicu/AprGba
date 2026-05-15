@@ -761,15 +761,49 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
 
     // --- Extern shims (called from JIT'd IR) ------------------------------
 
+    // Phase 30 debug — read-watch (parallel to WriteWatch).
+    public static uint ReadWatchLo;
+    public static uint ReadWatchHi;
+    private static int _readWatchCount;
+
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static byte MemRead8(uint addr)
-        => _activeMem is not null ? _activeMem.ReadByte((int)(addr & 0xFFFFF)) : (byte)0xFF;
+    {
+        if (_activeMem is null) return 0xFF;
+        uint a = addr & 0xFFFFF;
+        byte v = _activeMem.ReadByte((int)a);
+        if (ReadWatchHi > ReadWatchLo && a >= ReadWatchLo && a < ReadWatchHi)
+        {
+            if (_readWatchCount < 600)
+            {
+                Console.Error.WriteLine($"  [RW] read  0x{a:X5} → 0x{v:X2}");
+                _readWatchCount++;
+            }
+        }
+        return v;
+    }
+
+    // Phase 30 debug — write-watch range. When non-zero, every CPU write
+    // landing in [_writeWatchLo, _writeWatchHi) gets logged to stderr.
+    public static uint WriteWatchLo;
+    public static uint WriteWatchHi;
+    private static int _writeWatchCount;
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static void MemWrite8(uint addr, byte value)
     {
         if (_activeMem is null) return;
-        _activeMem.WriteByte((int)(addr & 0xFFFFF), value);
+        uint a = addr & 0xFFFFF;
+        _activeMem.WriteByte((int)a, value);
+        if (WriteWatchHi > WriteWatchLo && a >= WriteWatchLo && a < WriteWatchHi)
+        {
+            // Cap log volume to keep output manageable.
+            if (_writeWatchCount < 600)
+            {
+                Console.Error.WriteLine($"  [WW] write 0x{a:X5} ← 0x{value:X2}");
+                _writeWatchCount++;
+            }
+        }
     }
 
     // Phase 28.IO — port I/O extern shims. Forward to delegate handlers

@@ -144,24 +144,33 @@ internal static class HeadlessRunner
                     Console.Write($"{b.ReadByte(i):X2}{(i == linear ? "*" : " ")}");
                 Console.WriteLine();
 
-                // Phase 30 forensics — compare original boot sector at
-                // 0x07C00 vs relocated copy at 0x27A00 (1FE0:7C00).
-                Console.WriteLine($"    orig boot first 32 bytes (0x07C00):");
-                Console.WriteLine($"      {string.Join(" ", Enumerable.Range(0, 32).Select(i => b.ReadByte(0x07C00 + i).ToString("X2")))}");
-                Console.WriteLine($"    copy boot first 32 bytes (0x27A00):");
-                Console.WriteLine($"      {string.Join(" ", Enumerable.Range(0, 32).Select(i => b.ReadByte(0x27A00 + i).ToString("X2")))}");
+                // Phase 30 forensics — boot sector at 0x07C00 vs copy at
+                // 0x27A00. Print 8 lines of 32 bytes (covering all 256 bytes
+                // = first half of boot sector) so we can see the orig→copy
+                // mismatch pattern row by row.
+                Console.WriteLine($"    orig boot 0x07C00..7CFF + copy 0x27A00..27AFF (per 32-byte row):");
+                for (int row = 0; row < 8; row++)
+                {
+                    int rowOff = row * 32;
+                    var origRow = string.Join(" ", Enumerable.Range(0, 32).Select(i => b.ReadByte(0x07C00 + rowOff + i).ToString("X2")));
+                    var copyRow = string.Join(" ", Enumerable.Range(0, 32).Select(i => b.ReadByte(0x27A00 + rowOff + i).ToString("X2")));
+                    Console.WriteLine($"      orig[+{rowOff:X3}]: {origRow}");
+                    Console.WriteLine($"      copy[+{rowOff:X3}]: {copyRow}");
+                }
                 // Diff count over full 512 bytes
                 int diffs = 0;
                 int firstDiffOff = -1;
+                int lastDiffOff = -1;
                 for (int off = 0; off < 512; off++)
                 {
                     if (b.ReadByte(0x07C00 + off) != b.ReadByte(0x27A00 + off))
                     {
                         diffs++;
                         if (firstDiffOff < 0) firstDiffOff = off;
+                        lastDiffOff = off;
                     }
                 }
-                Console.WriteLine($"    orig vs copy diff: {diffs} bytes differ (first at offset 0x{firstDiffOff:X3})");
+                Console.WriteLine($"    orig vs copy diff: {diffs} bytes differ (first at 0x{firstDiffOff:X3}, last at 0x{lastDiffOff:X3})");
             }
         }
         if (runner.Pit is { } pit)

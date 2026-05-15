@@ -54,6 +54,17 @@ public sealed class PcOptions
     public bool    TraceIrq     { get; set; }
     public bool    TraceCpu     { get; set; }
     public int?    TraceCpuMax  { get; set; }
+    // Phase 30 debug — only trace CPU steps when CS == one of these values
+    // (comma-separated hex list, e.g. --trace-cpu-cs=0000,1FE0). Without
+    // this filter, --trace-cpu floods with BIOS POST instructions.
+    public ushort[]? TraceCpuCs  { get; set; }
+    // Phase 30 debug — log every memory write landing in the given range.
+    // Format: --watch-mem=LO:HI (hex). Example: --watch-mem=27A00:27B00
+    // logs writes to the relocated boot sector area.
+    public uint WatchMemLo { get; set; }
+    public uint WatchMemHi { get; set; }
+    public uint ReadWatchLo { get; set; }
+    public uint ReadWatchHi { get; set; }
     public bool    Verbose      { get; set; }
 
     /// <summary>
@@ -77,6 +88,23 @@ public sealed class PcOptions
             else if (arg == "--trace-irq")   o.TraceIrq = true;
             else if (arg == "--trace-cpu")   o.TraceCpu = true;
             else if (arg.StartsWith("--trace-cpu-max=")) o.TraceCpuMax = int.Parse(arg["--trace-cpu-max=".Length..]);
+            else if (arg.StartsWith("--trace-cpu-cs="))
+            {
+                var list = arg["--trace-cpu-cs=".Length..].Split(',', StringSplitOptions.RemoveEmptyEntries);
+                o.TraceCpuCs = list.Select(s => Convert.ToUInt16(s, 16)).ToArray();
+            }
+            else if (arg.StartsWith("--watch-mem="))
+            {
+                var parts = arg["--watch-mem=".Length..].Split(':');
+                o.WatchMemLo = Convert.ToUInt32(parts[0], 16);
+                o.WatchMemHi = Convert.ToUInt32(parts[1], 16);
+            }
+            else if (arg.StartsWith("--watch-read="))
+            {
+                var parts = arg["--watch-read=".Length..].Split(':');
+                o.ReadWatchLo = Convert.ToUInt32(parts[0], 16);
+                o.ReadWatchHi = Convert.ToUInt32(parts[1], 16);
+            }
             else if (arg == "--verbose")     o.Verbose = true;
             // Value flags --key=value.
             else if (arg.StartsWith("--floppy-a="))   o.FloppyAPath = arg["--floppy-a=".Length..];

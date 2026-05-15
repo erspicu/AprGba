@@ -162,6 +162,18 @@ public sealed class PcSystemRunner : IDisposable
             _fdc.Reset();
         }
 
+        // Phase 30 debug — wire up the memory-write watch range.
+        if (_options.WatchMemHi > _options.WatchMemLo)
+        {
+            X86JsonCpu.WriteWatchLo = _options.WatchMemLo;
+            X86JsonCpu.WriteWatchHi = _options.WatchMemHi;
+        }
+        if (_options.ReadWatchHi > _options.ReadWatchLo)
+        {
+            X86JsonCpu.ReadWatchLo = _options.ReadWatchLo;
+            X86JsonCpu.ReadWatchHi = _options.ReadWatchHi;
+        }
+
         // Phase 28.IO — port dispatch bus. Wires PIC / PIT / 8042 /
         // CMOS / speaker / NMI ports to host handlers. Hook the
         // X86JsonCpu delegate handlers (declared in AprX86.Cli, the
@@ -314,19 +326,32 @@ public sealed class PcSystemRunner : IDisposable
                         Interlocked.Increment(ref _instructionsExecuted);
                         continue;
                     }
-                    // Phase 28.8b — optional CPU step trace.
+                    // Phase 28.8b / 30 debug — optional CPU step trace.
                     if (_options.TraceCpu &&
                         (_options.TraceCpuMax is null || _instructionsExecuted < _options.TraceCpuMax.Value))
                     {
                         var stForTrace = _cpu.State;
-                        Console.Error.WriteLine(
-                            $"  [CPU] step#{_instructionsExecuted,6} " +
-                            $"CS:IP={stForTrace.CS:X4}:{stForTrace.IP:X4} " +
-                            $"AX={stForTrace.A.X:X4} BX={stForTrace.B.X:X4} " +
-                            $"CX={stForTrace.C.X:X4} DX={stForTrace.D.X:X4} " +
-                            $"DS={stForTrace.DS:X4} SS={stForTrace.SS:X4} SP={stForTrace.SP:X4} " +
-                            $"FL={stForTrace.GetFlags():X4} " +
-                            $"op={_bus!.ReadByte(((stForTrace.CS << 4) + stForTrace.IP) & 0xFFFFF):X2}");
+                        bool csOk = _options.TraceCpuCs is null
+                            || _options.TraceCpuCs.Length == 0
+                            || Array.IndexOf(_options.TraceCpuCs, stForTrace.CS) >= 0;
+                        if (csOk)
+                        {
+                            // Print 4 bytes at IP for visual disasm hint.
+                            int lin = ((stForTrace.CS << 4) + stForTrace.IP) & 0xFFFFF;
+                            byte b0 = _bus!.ReadByte(lin);
+                            byte b1 = _bus.ReadByte((lin + 1) & 0xFFFFF);
+                            byte b2 = _bus.ReadByte((lin + 2) & 0xFFFFF);
+                            byte b3 = _bus.ReadByte((lin + 3) & 0xFFFFF);
+                            Console.Error.WriteLine(
+                                $"  [CPU] {_instructionsExecuted,7} " +
+                                $"{stForTrace.CS:X4}:{stForTrace.IP:X4} " +
+                                $"{b0:X2} {b1:X2} {b2:X2} {b3:X2}  " +
+                                $"AX={stForTrace.A.X:X4} BX={stForTrace.B.X:X4} " +
+                                $"CX={stForTrace.C.X:X4} DX={stForTrace.D.X:X4} " +
+                                $"SI={stForTrace.SI:X4} DI={stForTrace.DI:X4} " +
+                                $"DS={stForTrace.DS:X4} ES={stForTrace.ES:X4} SS={stForTrace.SS:X4} SP={stForTrace.SP:X4} " +
+                                $"FL={stForTrace.GetFlags():X4}");
+                        }
                     }
 
                     _cpu.Step();
