@@ -1351,7 +1351,7 @@ what is being added is IO controllers + HLE BIOS + WinForms UI window.
 | 28.3 | INT 16h + 8042 keyboard buffer (BDA-level HLE) + WinForms input + headless `--keys=` script | ✅ (IRQ 1 wiring deferred to 28.7) |
 | 28.4 | PIT 8253 + INT 1Ah + 18.2Hz wall-clock BDA tick | ✅ (IRQ 0 wiring deferred to 28.7) |
 | 28.5 | INT 13h floppy/HDD HLE + DiskImage + .img loader | ✅ |
-| 28.6 | INT 19h bootstrap (partial-LLE: real `CD 19` at FFFF:0000 + HLE handler) + self-written 1.44MB .img | ✅ |
+| 28.6 | INT 19h bootstrap (**full LLE** — real 37-byte 8086 bootstrap routine at F000:E05B; INT 13h underneath still HLE) + self-written 1.44MB .img | ✅ (LLE-path FreeDOS LOGO SHA256-identical to HLE-path) |
 | 28.7 | Pic8259 + edge-triggered IRQ delivery (PIT→IRQ0, kbd→IRQ1) + emulator-thread INT injection | ✅ |
 | 28.8 | FreeDOS 1.3 boot attempt | full boot screenshot | ✅ 28.8a-e — kernel + FreeCom + LOGO ✓ |
 | 28.9 | dir/type/cls/ver command screenshot matrix | 4 screenshots | ⏳ deferred — blocked on LOGO waiting for key |

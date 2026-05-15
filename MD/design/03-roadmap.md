@@ -1280,7 +1280,7 @@ HLE BIOS + UI window。Framework genericity claim 的最後一塊拼圖
 | **28.3** | INT 16h + 8042 keyboard buffer (BDA-level HLE) + WinForms KeyDown input pump + headless `--keys=` script | 28.3-echo.bin 讀 9 字 echo 印出 + ESC stop | ✅ (IRQ 1 wiring deferred to 28.7) |
 | **28.4** | PIT 8253 + INT 1Ah + 18.2 Hz wall-clock BDA tick | 28.4-tick-readback.bin: INT 1Ah AH=00 回 DX>0, PIT advanced 5 ticks at end ✓ | ✅ (IRQ 0 wiring deferred to 28.7) |
 | **28.5** | INT 13h floppy/HDD HLE + `DiskImage` class + `.img` loader (AH=00/01/02/03/04/08/15) | 28.5-int13-readback.bin 從 FreeDOS 1.3 floppy 讀 boot sector + 55 AA magic 對 ✓ | ✅ |
-| **28.6** | INT 19h bootstrap (partial-LLE: real `CD 19` from FFFF:0000 → HLE handler) + 自寫 boot sector demo (1.44 MB img with 55 AA magic) | 28.6-hello-boot.img 顯示 "AprPc bootstrap OK" | ✅ |
+| **28.6** | INT 19h bootstrap (**full LLE** — real 37-byte 8086 routine at F000:E05B; INT 13h underneath still HLE) + 自寫 boot sector demo (1.44 MB img) | 28.6-hello-boot.img 顯示 "AprPc bootstrap OK"；LLE-path FreeDOS LOGO SHA256 與 HLE-path 一致 ✓ | ✅ |
 | **28.7** | Pic8259 + edge-triggered IRQ delivery (PIT→IRQ0, kbd→IRQ1) + emulator-thread INT injection | 28.7-irq-pit.img: STI + 用戶安裝 INT 8 hook, 1 秒後 counter ≥ 3, "IRQ OK 3" 印出 ✓ | ✅ |
 | **28.8** | FreeDOS 1.3 boot attempt | 完整 boot 截圖 | ✅ 28.8a-e — kernel + FreeCom + LOGO ✓ |
 | **28.9** | dir/type/cls/ver 命令截圖 | 4 個截圖 | ⏳ deferred — 卡在 LOGO program blocking on key |

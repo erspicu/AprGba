@@ -492,6 +492,7 @@ result/pc/
 | 28.4  | PIT 8253 + INT 1Ah + wall-clock BDA tick | ✅ | `ee1098e` | 2026-05-11 |
 | 28.5  | INT 13h floppy/HDD HLE + DiskImage + .img loader | ✅ | `d5cceee` | 2026-05-11 |
 | 28.6  | INT 19h bootstrap (partial-LLE) + self-written boot sector | ✅ | `ebbcaab` | 2026-05-11 |
+| 28.6-LLE | Upgrade to full LLE bootstrap (real 37-byte 8086 routine at F000:E05B) — unblocked by 28.8a/c far-control-flow opcodes | ✅ | (this commit) | 2026-05-15 |
 | 28.7  | Pic8259 + IRQ delivery model (PIT IRQ 0 + keyboard IRQ 1) | ✅ | `8c8f2b6` | 2026-05-11 |
 | 28.8a | FreeDOS boot blocker #1 — add 0xEA (JMP ptr16:16) to i8086 spec | ✅ | `e71f15a` | 2026-05-15 |
 | 28.8b | FreeDOS boot blocker #2 — install HLE INT 8/9 defaults; IRQ 0 → IVT[8]=0:0 wandering | ✅ | `9012790` | 2026-05-15 |

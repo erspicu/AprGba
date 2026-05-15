@@ -102,33 +102,66 @@ public sealed class PcMemoryBus
     }
 
     /// <summary>
-    /// Place the BIOS ROM stub at the 8086 reset vector. Phase 28.6
-    /// uses a **partial LLE** approach:
-    /// <list type="bullet">
-    /// <item>FFFF:0000 (phys 0xFFFF0): two real-CPU 8086 instructions
-    /// — <c>INT 19h</c> (0xCD 0x19) followed by <c>HLT</c> (0xF4) as a
-    /// fallback. The CPU executes real bytes from BIOS ROM.</item>
-    /// <item>The INT 19h vector is HLE-trapped (HleBios.Int19): the
-    /// handler reads sector 0 of drive 0 via DiskImage and rewrites
-    /// CS:IP directly to 0000:7C00 (skipping the IRET pop) so the
-    /// CPU resumes execution from the loaded boot sector.</item>
+    /// Phase 28.6 (upgraded post-28.8c) — full LLE bootstrap. The
+    /// BIOS ROM area at F000:E05B contains a real 37-byte 8086
+    /// routine that does the standard PC boot:
+    /// <list type="number">
+    /// <item>Zero segment registers (DS = ES = SS = 0).</item>
+    /// <item>Set up an initial stack at SS:SP = 0:7C00.</item>
+    /// <item>INT 13h AH=02 read sector 0 of drive 0 into 0000:7C00.</item>
+    /// <item>Far JMP 0000:7C00 with DL = 00h.</item>
+    /// <item>HLT on read failure.</item>
     /// </list>
+    /// The reset vector at FFFF:0000 is a 5-byte far JMP to
+    /// F000:E05B (classic IBM PC cold-start entry point convention).
     ///
-    /// A purer LLE path — real 8086 code that does INT 13h read +
-    /// far JMP to 0:7C00 — needs the 0xEA (JMP ptr16:16) and 0xCB
-    /// (RETF) opcodes which are deferred in the i8086 spec
-    /// (see <c>spec/cpu/x86-16/i8086/groups/control-flow.json</c>
-    /// "Far CALL/JMP ... deferred"). Adding them is appropriate
-    /// future-Phase work; for 28.6 the partial-LLE HLE INT 19h
-    /// approach gets us a real reset-vector boot flow today.
+    /// This is **real LLE bootstrap**: the CPU executes actual 8086
+    /// instructions for every step of the boot flow. INT 13h
+    /// underneath is still HLE (HleBios), but the bootstrap
+    /// *orchestration* uses no host-side intercept.
+    ///
+    /// Until Phase 28.8c, this code couldn't run because 0xEA
+    /// (JMP ptr16:16) was missing from the i8086 spec (see the
+    /// "deferred" note in control-flow.json). Phase 28.8a/c
+    /// closed that gap (plus 0xCB RETF and 0x9A CALL ptr16:16),
+    /// so the LLE path is now usable as the default. The HLE INT
+    /// 19h handler is retained as a fallback for code that calls
+    /// INT 19h explicitly (warm reboot from DOS, etc.).
+    ///
+    /// Bytes assembled once from
+    /// <c>test-roms/x86/src/28.6-bios-bootstrap.asm</c>.
     /// </summary>
     private void InitializeBiosRomStub()
     {
-        // FFFF:0000: INT 19h (bootstrap), then HLT as fallback if
-        // INT 19h ever returns (it won't, the handler skips IRET).
-        WriteByte(0xFFFF0, 0xCD);   // INT
-        WriteByte(0xFFFF1, 0x19);   //   19h
-        WriteByte(0xFFFF2, 0xF4);   // HLT
+        // FFFF:0000 (phys 0xFFFF0): far JMP F000:E05B
+        //   EA ip_lo ip_hi cs_lo cs_hi  (5 bytes)
+        WriteByte(0xFFFF0, 0xEA);
+        WriteByte(0xFFFF1, 0x5B);   // IP low
+        WriteByte(0xFFFF2, 0xE0);   // IP high
+        WriteByte(0xFFFF3, 0x00);   // CS low
+        WriteByte(0xFFFF4, 0xF0);   // CS high
+
+        // F000:E05B (phys 0xFE05B): real 8086 bootstrap routine.
+        var bootstrap = new byte[]
+        {
+            0x31, 0xC0,                         // xor ax, ax
+            0x8E, 0xD8,                         // mov ds, ax
+            0x8E, 0xC0,                         // mov es, ax
+            0x8E, 0xD0,                         // mov ss, ax
+            0xBC, 0x00, 0x7C,                   // mov sp, 0x7C00
+            0xB8, 0x01, 0x02,                   // mov ax, 0x0201 (AH=02 AL=01)
+            0xB9, 0x01, 0x00,                   // mov cx, 0x0001 (cyl=0 sec=1)
+            0xBA, 0x00, 0x00,                   // mov dx, 0x0000 (drive=0 head=0)
+            0xBB, 0x00, 0x7C,                   // mov bx, 0x7C00
+            0xCD, 0x13,                         // int 0x13 (read sector via HLE)
+            0x72, 0x07,                         // jc +7 (to HLT fallback)
+            0xB2, 0x00,                         // mov dl, 0 (boot drive)
+            0xEA, 0x00, 0x7C, 0x00, 0x00,       // jmp far 0000:7C00
+            0xF4,                               // hlt (read-fail path)
+            0xEB, 0xFD,                         // jmp $-1 (catch HLT wake)
+        };
+        for (int i = 0; i < bootstrap.Length; i++)
+            WriteByte(0xFE05B + i, bootstrap[i]);
     }
 
     public byte ReadByte(int physAddr) => _mem.ReadByte(physAddr);
