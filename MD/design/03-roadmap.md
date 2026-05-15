@@ -1282,7 +1282,7 @@ HLE BIOS + UI window。Framework genericity claim 的最後一塊拼圖
 | **28.5** | INT 13h floppy/HDD HLE + `DiskImage` class + `.img` loader (AH=00/01/02/03/04/08/15) | 28.5-int13-readback.bin 從 FreeDOS 1.3 floppy 讀 boot sector + 55 AA magic 對 ✓ | ✅ |
 | **28.6** | INT 19h bootstrap (partial-LLE: real `CD 19` from FFFF:0000 → HLE handler) + 自寫 boot sector demo (1.44 MB img with 55 AA magic) | 28.6-hello-boot.img 顯示 "AprPc bootstrap OK" | ✅ |
 | **28.7** | Pic8259 + edge-triggered IRQ delivery (PIT→IRQ0, kbd→IRQ1) + emulator-thread INT injection | 28.7-irq-pit.img: STI + 用戶安裝 INT 8 hook, 1 秒後 counter ≥ 3, "IRQ OK 3" 印出 ✓ | ✅ |
-| **28.8** | FreeDOS 1.3 boot attempt（高度不確定）| `A:\>` prompt 截圖 | 🚧 28.8a-d ✅ → FreeDOS kernel 完整 3-line banner（kernel 2043 + WATCOMC + FAT32 + Copyright Pasquale Villani）；28.8e (COMMAND.COM load) 需 INT 21h DOS calls 多日工作 |
+| **28.8** | FreeDOS 1.3 boot attempt（高度不確定）| `A:\>` prompt 截圖 | ✅✅ 28.8a-e ✅ → **FreeDOS 完整 boot**：kernel banner + FreeCom 0.85a COMMAND.COM 載入 + AUTOEXEC.BAT 跑 + FreeDOS 大字 LOGO 印出。INT 21h DOS calls 全由 FreeDOS 自己 kernel 提供，HLE 不需要實作。剩 28.8f (interactive A:\\> prompt 接命令) |
 | **28.9** | Interactive `A:\>` + dir / type / cls / ver 基本 command | 4 個 command 各自截圖 | ⏳ |
 | **28.10** | INT 33h mouse HLE | optional | ⏳ |
 | **28.11** | PC speaker PCM → WAV 輸出 | optional | ⏳ |

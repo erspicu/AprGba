@@ -486,8 +486,9 @@ result/pc/
 | 28.8a | FreeDOS boot blocker #1 — add 0xEA (JMP ptr16:16) to i8086 spec | ✅ | `e71f15a` | 2026-05-15 |
 | 28.8b | FreeDOS boot blocker #2 — install HLE INT 8/9 defaults; IRQ 0 → IVT[8]=0:0 wandering | ✅ | `9012790` | 2026-05-15 |
 | 28.8c | FreeDOS blockers #3-4 — add 0xCB/0xCA RETF + 0x9A CALL far + pre-install all 256 IVT defaults | ✅ | `7d7bda3` | 2026-05-15 |
-| 28.8d | FreeDOS kernel full banner (3 lines + WATCOMC + FAT32 + Copyright) printed | ✅ | (this commit) | 2026-05-15 |
-| 28.8e | FreeDOS COMMAND.COM load → A:\\> prompt | ⏳ pending — needs INT 21h DOS calls implemented (multi-day) | — | — |
+| 28.8d | FreeDOS kernel full banner (3 lines + WATCOMC + FAT32 + Copyright) printed | ✅ | `837ede2` | 2026-05-15 |
+| 28.8e | FreeDOS COMMAND.COM (FreeCom 0.85a) loads + executes AUTOEXEC.BAT → FreeDOS ASCII logo | ✅ | (this commit) | 2026-05-15 |
+| 28.8f | Interactive `A:\\>` prompt accepting commands | ⏳ pending | — | — |
 | 28.8x | block-JIT INT instruction loses HLE trap (use --backend=json for FreeDOS) | ⏳ deferred | — | — |
 | 28.8  | FreeDOS boot | ⏳ pending | — | — |
 | 28.9  | Interactive commands | ⏳ pending | — | — |
