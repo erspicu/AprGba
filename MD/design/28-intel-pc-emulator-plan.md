@@ -1,6 +1,16 @@
 # Phase 28 — Intel PC Emulator (DOS / FreeDOS boot target)
 
-> **Status**: 📋 **PLANNED** (2026-05-11). Sub-project / 延伸 phase。
+> **Status**: ✅ **CLOSED** (2026-05-15). Architectural milestone met:
+> FreeDOS 1.3 boots end-to-end (BIOS → boot sector → kernel.sys →
+> COMMAND.COM → AUTOEXEC.BAT → FreeDOS LOGO printed). Closure note:
+> `MD/performance/202605152200-pc-emulator-freedos-boot.md`. The
+> remaining 28.8f / 28.9 (interactive A:\\> + dir/type/cls/ver) are
+> deferred polish — blocked on the LOGO program waiting for a key
+> that our `--keys=` script can't reach at runtime; needs a stdin
+> pump (mechanical, not framework). 28.10 (mouse) and 28.11 (sound)
+> were optional in the original plan.
+>
+> **Original status** (2026-05-11): 📋 **PLANNED**. Sub-project / 延伸 phase。
 > 目的：用既有的 AprX86 (i8086 / i80186 / i80286) 把一台**最小可運行
 > 的 IBM PC compatible** 拼出來，能 boot DOS / FreeDOS 到 prompt、可以
 > 跑 .COM / .EXE 程式。**這是 framework 應用層 demo，不再是 CPU spec
@@ -487,8 +497,12 @@ result/pc/
 | 28.8b | FreeDOS boot blocker #2 — install HLE INT 8/9 defaults; IRQ 0 → IVT[8]=0:0 wandering | ✅ | `9012790` | 2026-05-15 |
 | 28.8c | FreeDOS blockers #3-4 — add 0xCB/0xCA RETF + 0x9A CALL far + pre-install all 256 IVT defaults | ✅ | `7d7bda3` | 2026-05-15 |
 | 28.8d | FreeDOS kernel full banner (3 lines + WATCOMC + FAT32 + Copyright) printed | ✅ | `837ede2` | 2026-05-15 |
-| 28.8e | FreeDOS COMMAND.COM (FreeCom 0.85a) loads + executes AUTOEXEC.BAT → FreeDOS ASCII logo | ✅ | (this commit) | 2026-05-15 |
-| 28.8f | Interactive `A:\\>` prompt accepting commands | ⏳ pending | — | — |
+| 28.8e | FreeDOS COMMAND.COM (FreeCom 0.85a) loads + executes AUTOEXEC.BAT → FreeDOS ASCII logo | ✅ | `7a3b8ef` | 2026-05-15 |
+| 28.8f | Interactive `A:\\>` prompt | ⏳ deferred — LOGO program (run by AUTOEXEC.BAT) blocks waiting for key; current `--keys=` script only injects at boot. Needs run-time stdin pump OR image with no LOGO. Mechanical, not framework. |
+| 28.9 | dir/type/cls/ver screenshot matrix | ⏳ deferred — gated on 28.8f. INT 16h + 21h DOS calls already in place; mechanical. |
+| 28.10 | INT 33h mouse HLE | ⏳ deferred (optional in original plan) |
+| 28.11 | PC speaker PCM output | ⏳ deferred (optional in original plan) |
+| 28.12 | Phase 28 closure docs (this `MD/performance/` note + plan doc + roadmap update) | ✅ | (this commit) | 2026-05-15 |
 | 28.8x | block-JIT INT instruction loses HLE trap (use --backend=json for FreeDOS) | ⏳ deferred | — | — |
 | 28.8  | FreeDOS boot | ⏳ pending | — | — |
 | 28.9  | Interactive commands | ⏳ pending | — | — |

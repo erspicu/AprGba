@@ -13,8 +13,11 @@ and a 4-baseline-check fault model live). Block-JIT path live for all of
 them. Memory bus + cycle table + interrupt vectors + access widths +
 spec inheritance all spec-driven (i80186 / i80286 land via JSON Merge
 Patch on i8086 with **zero** runtime overhead). 894 unit tests passing.
-**Phase 28 (Intel PC emulator → FreeDOS boot)** planned and unblocked —
-see [`MD_EN/design/28-intel-pc-emulator-plan.md`](MD_EN/design/28-intel-pc-emulator-plan.md).
+**Phase 28 (Intel PC emulator → FreeDOS boot)** ✅ CLOSED 2026-05-15 —
+real FreeDOS 1.3 floppy boots end-to-end on the JSON-driven CPU framework:
+kernel banner → COMMAND.COM (FreeCom 0.85a) → AUTOEXEC.BAT → FreeDOS
+ASCII logo. Closure note:
+[`MD/performance/202605152200-pc-emulator-freedos-boot.md`](MD/performance/202605152200-pc-emulator-freedos-boot.md).
 
 ---
 

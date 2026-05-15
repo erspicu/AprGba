@@ -1353,7 +1353,11 @@ what is being added is IO controllers + HLE BIOS + WinForms UI window.
 | 28.5 | INT 13h floppy/HDD HLE + DiskImage + .img loader | ✅ |
 | 28.6 | INT 19h bootstrap (partial-LLE: real `CD 19` at FFFF:0000 + HLE handler) + self-written 1.44MB .img | ✅ |
 | 28.7 | Pic8259 + edge-triggered IRQ delivery (PIT→IRQ0, kbd→IRQ1) + emulator-thread INT injection | ✅ |
-| 28.8 | FreeDOS 1.3 boot attempt (3-5 days, high uncertainty) | ✅✅ 28.8a-e ✅ → **FreeDOS full boot**: kernel banner + FreeCom 0.85a COMMAND.COM loaded + AUTOEXEC.BAT runs + FreeDOS ASCII logo printed. INT 21h DOS calls are provided by FreeDOS kernel itself, no HLE needed. 28.8f (interactive A:\\> prompt) remains. |
+| 28.8 | FreeDOS 1.3 boot attempt | full boot screenshot | ✅ 28.8a-e — kernel + FreeCom + LOGO ✓ |
+| 28.9 | dir/type/cls/ver command screenshot matrix | 4 screenshots | ⏳ deferred — blocked on LOGO waiting for key |
+| 28.10 | INT 33h mouse HLE | optional | ⏳ deferred |
+| 28.11 | PC speaker PCM | optional | ⏳ deferred |
+| 28.12 | Closure docs (`MD/performance/...`) + plan/roadmap update | ✅ | `MD/performance/202605152200-pc-emulator-freedos-boot.md` |
 | 28.9 | Interactive A:\> + dir / type / cls / ver | ⏳ |
 | 28.10 | INT 33h mouse HLE | ⏳ optional |
 | 28.11 | PC speaker PCM output | ⏳ optional |
