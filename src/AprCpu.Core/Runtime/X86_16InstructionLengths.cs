@@ -262,6 +262,7 @@ public static class X86_16InstructionLengths
 
             // ---------- CALL rel16 / JMP rel16 / JMP rel8 ----------
             case 0xE8: case 0xE9:                          return (false, 2);
+            case 0xEA:                                     return (false, 4);   // JMP ptr16:16 (far direct) — Phase 28.8a
             case 0xEB:                                     return (false, 1);
 
             // ---------- IN/OUT DX ----------

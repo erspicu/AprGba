@@ -482,7 +482,9 @@ result/pc/
 | 28.4  | PIT 8253 + INT 1Ah + wall-clock BDA tick | ✅ | `ee1098e` | 2026-05-11 |
 | 28.5  | INT 13h floppy/HDD HLE + DiskImage + .img loader | ✅ | `d5cceee` | 2026-05-11 |
 | 28.6  | INT 19h bootstrap (partial-LLE) + self-written boot sector | ✅ | `ebbcaab` | 2026-05-11 |
-| 28.7  | Pic8259 + IRQ delivery model (PIT IRQ 0 + keyboard IRQ 1) | ✅ | (this commit) | 2026-05-11 |
+| 28.7  | Pic8259 + IRQ delivery model (PIT IRQ 0 + keyboard IRQ 1) | ✅ | `8c8f2b6` | 2026-05-11 |
+| 28.8a | FreeDOS boot blocker #1 — add 0xEA (JMP ptr16:16) to i8086 spec | ✅ | (this commit) | 2026-05-15 |
+| 28.8b | FreeDOS boot blocker #2 — CPU hangs at 0:005C after self-relocation | ⏳ pending | — | — |
 | 28.8  | FreeDOS boot | ⏳ pending | — | — |
 | 28.9  | Interactive commands | ⏳ pending | — | — |
 | 28.10 | INT 33h mouse | ⏳ optional | — | — |

@@ -1353,7 +1353,7 @@ what is being added is IO controllers + HLE BIOS + WinForms UI window.
 | 28.5 | INT 13h floppy/HDD HLE + DiskImage + .img loader | ✅ |
 | 28.6 | INT 19h bootstrap (partial-LLE: real `CD 19` at FFFF:0000 + HLE handler) + self-written 1.44MB .img | ✅ |
 | 28.7 | Pic8259 + edge-triggered IRQ delivery (PIT→IRQ0, kbd→IRQ1) + emulator-thread INT injection | ✅ |
-| 28.8 | FreeDOS 1.3 boot attempt (3-5 days, high uncertainty) | ⏳ |
+| 28.8 | FreeDOS 1.3 boot attempt (3-5 days, high uncertainty) | 🚧 in progress — 28.8a (0xEA opcode added) ✅, 28.8b CPU hang at 0:005C TODO |
 | 28.9 | Interactive A:\> + dir / type / cls / ver | ⏳ |
 | 28.10 | INT 33h mouse HLE | ⏳ optional |
 | 28.11 | PC speaker PCM output | ⏳ optional |

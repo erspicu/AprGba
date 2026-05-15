@@ -130,6 +130,7 @@ public static class X86_16Emitters
         // CALL rel16, RET (near).
         reg.Register(new X86JmpRel8Emitter());
         reg.Register(new X86JmpRel16Emitter());
+        reg.Register(new X86JmpFarDirectEmitter());
         reg.Register(new X86JccRel8Emitter());
         reg.Register(new X86JcxzRel8Emitter());
         reg.Register(new X86LoopEmitter());
@@ -4058,6 +4059,29 @@ internal sealed class X86JmpRel16Emitter : IMicroOpEmitter
         var ip = ctx.Builder.BuildLoad2(i16, ipPtr, "jmp16_ip");
         var newIp = ctx.Builder.BuildAdd(ip, disp16, "jmp16_newip");
         ctx.Builder.BuildStore(newIp, ipPtr);
+        var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
+    }
+}
+
+/// <summary>
+/// 28.8a — 0xEA JMP ptr16:16 (direct far jump). Reads 4 immediate
+/// bytes (IP_lo, IP_hi, CS_lo, CS_hi) and writes them into IP and CS
+/// respectively. Needed by the FreeDOS boot sector's self-relocation
+/// sequence at offset 0x57 (EA 5E 7C E0 1F = jmp 1FE0:7C5E).
+/// </summary>
+internal sealed class X86JmpFarDirectEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_jmp_far_direct";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var newIp = X86_16Emitters.FetchImm16(ctx, "jmpfar_ip");
+        var newCs = X86_16Emitters.FetchImm16(ctx, "jmpfar_cs");
+
+        ctx.Builder.BuildStore(newIp, ctx.GepStatusRegister("IP"));
+        ctx.Builder.BuildStore(newCs, ctx.GepStatusRegister("CS"));
+
         var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
         ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(i8, 1, false), pcwSlot);
     }

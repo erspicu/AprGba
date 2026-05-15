@@ -51,6 +51,30 @@
       ]
     },
     {
+      "name": "JmpFarDirect",
+      "comment": "0xEA JMP ptr16:16 — direct far jump. 4 immediate bytes following the opcode: IP_lo IP_hi CS_lo CS_hi. Added in Phase 28.8a to unblock FreeDOS boot sector self-relocation.",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xEA",
+      "instructions": [
+        {
+          "mnemonic": "JMP",
+          "since": "Intel8086",
+          "writes_pc": "always",
+          "manual_ref": "Intel SDM Vol.2 §JMP",
+          "cycles": {
+            "form": "15"
+          },
+          "steps": [
+            {
+              "op": "x86_jmp_far_direct"
+            }
+          ],
+          "id": "JMP_ptr16_16"
+        }
+      ]
+    },
+    {
       "name": "JccRel8",
       "comment": "0x70-0x7F Jcc rel8 — 16 conditional jumps with 4-bit cccc field encoding the predicate. Single emitter dispatches at runtime via switch on cccc; both taken and not-taken branches always advance IP past disp8.",
       "fields": {
