@@ -169,7 +169,10 @@ because it expects an INT 75h on DivZero, add it then. For now: dead weight.
 |---|---|---|
 | 29.1 | Spec loader extensions support — ✅ **DONE 2026-05-15** | `MachineSpec.Extensions` + `SpecLoader.LoadCpuSpecWithExtensions()` + `SpecCompiler.Compile(path, extensions)` + `X86JsonCpu(extensionPaths:)`. `spec/coprocessors/x87/i8087/cpu.json` + `groups/fpu-esc.json` created; FpuEscape entry **moved out** of `spec/cpu/x86-16/i8086/groups/misc.json` (proves merge end-to-end). FreeDOS regression intact (2838 HLE INT calls); real BIOS POST advanced F000:E706 → F000:F433. |
 | 29.2 | FPU register file in state struct — ✅ **DONE 2026-05-15** | `register_file_additions.status[]` parsing in `LoadCpuSpecWithExtensions`. Extension status registers appended to base `RegisterFile.Status[]` so base CPU's pre-cached offsets (FLAGS/IP/CS/etc.) stay stable. i8087 extension declares ST0-ST7 (64-bit i64 slots, bitcast to f64 in Phase 29.3+ emitters per Gemini's "ARM64-friendly f64 over x86_fp80" decision), FPU_TAGS (16-bit, 2 bits per ST(i)), FPU_CW (16-bit with PC/RC/IC/exception-mask fields), FPU_SW (16-bit with C0/C1/C2/C3 condition codes + TOP_SW mirror + sticky exception flags), FPU_TOP (32-bit index 0-7). Build green; FreeDOS regression intact (2840 HLE INT calls); apr-x86 standalone Tom Harte path also untouched. |
-| 29.3 | Data movement | FLD / FST / FSTP / FXCH / FCMOV (mem+reg forms) |
+| 29.3a | Per-byte FPU ESC dispatch split — ✅ **DONE 2026-05-15** | Replace single catch-all `FpuEscape` (mask=0xF8 match=0xD8) with 8 per-byte formats (mask=0xFF match=0xD8..0xDF) so each ESC byte gets its own dispatcher emitter (`x86_fpu_d8_dispatch` .. `x86_fpu_df_dispatch`). All 8 currently no-op so behavior is identical to pre-29.3, but the split lets us ship individual /reg sub-opcodes incrementally — D9 can land FLD/FSTP/FXCH/FLDZ while D8/DC stay no-op until 29.4 (arithmetic). FreeDOS regression: 2839 INT calls; real BIOS POST still advances to F000:F436. |
+| 29.3b | FNINIT + FLDZ + FSTP m32fp + state accessor | Phase 29.3 data-movement minimum: DB E3 (FNINIT), D9 EE (FLDZ), D9 /3 mem (FSTP m32fp). Adds `X86JsonCpu.TryReadFpuTop()` / `TryReadFpuCw()` accessors for unit-test verification. Test ROM `29.3-fpu-roundtrip.bin`: FNINIT → FLDZ → FSTP m32fp [scratch] → HLT; expected: scratch reads back 0x00000000 (IEEE 754 zero). |
+| 29.3c | FLD m32fp + FXCH ST(i) + FLD1/FLDPI/FLDL2E/... | D9 /0 mem (FLD m32fp memory-form load), D9 C8+i (FXCH register-form), D9 E8-EE constant loads. |
+| 29.3d | FLD/FST/FSTP m64fp | DD /0 /2 /3 mem forms (64-bit double load/store). |
 | 29.4 | Arithmetic | FADD / FSUB / FMUL / FDIV (+R variants, +P variants) |
 | 29.5 | Compares | FCOM / FCOMP / FCOMPP / FTST / FUCOM + FNSTSW AX |
 | 29.6 | Constants | FLDZ / FLD1 / FLDPI / FLDL2E / FLDL2T / FLDLG2 / FLDLN2 |
@@ -179,6 +182,224 @@ because it expects an INT 75h on DivZero, add it then. For now: dead weight.
 | 29.10 | Memory m80fp | Pack/unpack 10-byte format via extern helpers |
 | 29.11 | Integration test | Turbo Pascal hello-world with real-mode float math |
 | 29.12 | Capstone | AutoCAD R1.4 or Lotus 1-2-3 numeric demo |
+
+## Dispatcher emitter design (Phase 29.3+)
+
+Each `x86_fpu_d?_dispatch` emitter does a two-tier switch on the ModR/M
+byte. The decoder framework's `x86_fetch_modrm` (called in the format's
+step list before our dispatcher) caches `modrm_mod`, `modrm_reg`,
+`modrm_rm` into `EmitContext.Values`, so the dispatcher just resolves
+them and switches.
+
+Pseudo-code shape (mirrors `X86FfGroupDispatchEmitter` for 0xFF):
+
+```csharp
+public void Emit(EmitContext ctx, MicroOpStep step) {
+    var mod = ctx.Resolve("modrm_mod");
+    var reg = ctx.Resolve("modrm_reg");
+    var rm  = ctx.Resolve("modrm_rm");
+
+    // Memory form: mod != 11. Dispatch on /reg.
+    var memBB = ctx.Function.AppendBasicBlock("d9_mem");
+    var regBB = ctx.Function.AppendBasicBlock("d9_regform");
+    var endBB = ctx.Function.AppendBasicBlock("d9_end");
+    var isMem = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, mod, const_i32(3));
+    ctx.Builder.BuildCondBr(isMem, memBB, regBB);
+
+    ctx.Builder.PositionAtEnd(memBB);
+    // Need EA — call x86_modrm_compute_ea ourselves or have the format's
+    // step list emit it before dispatch. Cleaner: dispatch as the LAST
+    // step after fetch_modrm + compute_ea so EA is in scope.
+    var sw = ctx.Builder.BuildSwitch(reg, default_invalid, 8);
+    for (int r = 0; r < 8; r++) {
+        var arm = ctx.Function.AppendBasicBlock($"d9_mem_{r}");
+        sw.AddCase(const_i32(r), arm);
+        ctx.Builder.PositionAtEnd(arm);
+        switch (r) {
+            case 0: EmitFldM32(ctx);   break;   // FLD m32fp
+            case 1: /* invalid */      break;
+            case 2: EmitFstM32(ctx);   break;   // FST m32fp
+            case 3: EmitFstpM32(ctx);  break;   // FSTP m32fp
+            case 4: EmitFldenv(ctx);   break;   // FLDENV m14/m28
+            case 5: EmitFldcw(ctx);    break;   // FLDCW m16
+            case 6: EmitFstenv(ctx);   break;   // FSTENV
+            case 7: EmitFstcw(ctx);    break;   // FSTCW m16
+        }
+        ctx.Builder.BuildBr(endBB);
+    }
+
+    // Register form: mod == 11. The full 6-bit (reg, rm) tuple identifies
+    // the opcode. e.g., D9 C8 = FXCH ST(0), D9 EE = FLDZ.
+    ctx.Builder.PositionAtEnd(regBB);
+    var combined = ctx.Builder.BuildOr(
+        ctx.Builder.BuildShl(reg, const_i32(3)),
+        rm);  // 0..63
+    var swReg = ctx.Builder.BuildSwitch(combined, default_unhandled, 32);
+    swReg.AddCase(const_i32(0x00), bb_fld_st0);  // D9 C0 = FLD ST(0)
+    // ... C0-C7 = FLD ST(i)
+    // ... C8-CF = FXCH ST(i)
+    swReg.AddCase(const_i32(0x10), bb_fnop);     // D9 D0 = FNOP
+    swReg.AddCase(const_i32(0x20), bb_fchs);     // D9 E0 = FCHS
+    swReg.AddCase(const_i32(0x21), bb_fabs);     // D9 E1 = FABS
+    // ... E8-EE = FLD1 / FLDL2T / FLDL2E / FLDPI / FLDLG2 / FLDLN2 / FLDZ
+}
+```
+
+### ST(i) access pattern
+
+For "logical ST(i) → physical FPU_STn" addressing:
+
+```csharp
+LLVMValueRef GepLogicalSt(EmitContext ctx, LLVMValueRef logicalI /* i32 */) {
+    var top = ctx.Builder.BuildLoad2(i32, fpuTopPtr, "top");
+    var physI = ctx.Builder.BuildAnd(
+        ctx.Builder.BuildAdd(top, logicalI),
+        const_i32(7));
+    // FPU_ST0..ST7 are 8 consecutive status slots in CpuStateLayout.
+    // Compute the byte offset for slot (FPU_ST0 + physI * 8).
+    var st0Off = ctx.Layout.StatusOffset("FPU_ST0");
+    var byteOff = ctx.Builder.BuildAdd(
+        const_i32((int)st0Off),
+        ctx.Builder.BuildMul(physI, const_i32(8)));
+    // GEP via byte-pointer math (state struct is byte-addressable in our layout).
+    return ctx.Builder.BuildGEP2(i8, statePtr, byteOff, "st_phys_ptr");
+}
+```
+
+Read as f64 via bitcast:
+```csharp
+var slot = GepLogicalSt(ctx, logicalI);
+var asI64Ptr = ctx.Builder.BuildBitCast(slot, ptrToI64);
+var asI64    = ctx.Builder.BuildLoad2(i64, asI64Ptr);
+var asF64    = ctx.Builder.BuildBitCast(asI64, f64);
+```
+
+Write back:
+```csharp
+var asI64    = ctx.Builder.BuildBitCast(valF64, i64);
+ctx.Builder.BuildStore(asI64, asI64Ptr);
+```
+
+### FPU stack push/pop semantics
+
+**Push** (FLD, FLDZ, FILD, etc.):
+1. `top := (top - 1) & 7`
+2. Store new value into ST(0) (physical slot `top`)
+3. Update FPU_TAGS for slot `top` to indicate Valid/Zero/Special
+
+**Pop** (FSTP, FFREE, etc.):
+1. Update FPU_TAGS for slot `top` to 11 (Empty)
+2. `top := (top + 1) & 7`
+
+The Gemini guidance is to compute `physI` once per instruction (not in
+the LLVM IR) when possible — but our current dispatch is single-step
+per instruction, so each access does its own GEP. Acceptable for
+Phase 29.3 minimum-viable; constant-folding TOP reads is a 29.x
+optimization.
+
+## ESC byte → /reg opcode tables
+
+Reference tables for the 8 dispatchers. Each entry's "phase" column
+shows when it lands.
+
+### D8 — f32 arithmetic family (mod ≠ 3 = memory; mod = 3 = ST(0) op ST(i))
+
+| /reg | Memory form (mod ≠ 3) | Register form (mod = 3) | Phase |
+|---|---|---|---|
+| 0 | FADD m32fp     | FADD ST(0), ST(i)  | 29.4 |
+| 1 | FMUL m32fp     | FMUL ST(0), ST(i)  | 29.4 |
+| 2 | FCOM m32fp     | FCOM ST(0), ST(i)  | 29.5 |
+| 3 | FCOMP m32fp    | FCOMP ST(0), ST(i) | 29.5 |
+| 4 | FSUB m32fp     | FSUB ST(0), ST(i)  | 29.4 |
+| 5 | FSUBR m32fp    | FSUBR ST(0), ST(i) | 29.4 |
+| 6 | FDIV m32fp     | FDIV ST(0), ST(i)  | 29.4 |
+| 7 | FDIVR m32fp    | FDIVR ST(0), ST(i) | 29.4 |
+
+### D9 — data movement + constants + control (mod = 3 form is sub-opcode by full rm:reg)
+
+| /reg | Memory form (mod ≠ 3) | Phase |
+|---|---|---|
+| 0 | FLD m32fp        | 29.3c |
+| 1 | (invalid)        | — |
+| 2 | FST m32fp        | 29.3c |
+| 3 | FSTP m32fp       | 29.3b |
+| 4 | FLDENV m14/m28   | 29.9 |
+| 5 | FLDCW m16        | 29.9 |
+| 6 | FSTENV/FNSTENV   | 29.9 |
+| 7 | FSTCW/FNSTCW m16 | 29.9 |
+
+| Register form (mod = 3) — full second byte | Op | Phase |
+|---|---|---|
+| C0-C7 | FLD ST(i)         | 29.3c |
+| C8-CF | FXCH ST(i)        | 29.3c |
+| D0    | FNOP              | 29.8 |
+| E0    | FCHS              | 29.8 |
+| E1    | FABS              | 29.8 |
+| E4    | FTST              | 29.5 |
+| E5    | FXAM              | 29.5 |
+| E8    | FLD1              | 29.6 |
+| E9    | FLDL2T            | 29.6 |
+| EA    | FLDL2E            | 29.6 |
+| EB    | FLDPI             | 29.6 |
+| EC    | FLDLG2            | 29.6 |
+| ED    | FLDLN2            | 29.6 |
+| EE    | FLDZ              | 29.3b |
+| F0-FF | Transcendentals (F2XM1/FYL2X/FPTAN/FPATAN/...) | 29.7 |
+
+### DB — i32 ops + FNINIT + m80fp
+
+| /reg | Memory form (mod ≠ 3) | Phase |
+|---|---|---|
+| 0 | FILD m32int     | 29.3d |
+| 2 | FIST m32int     | 29.3d |
+| 3 | FISTP m32int    | 29.3d |
+| 5 | FLD m80fp       | 29.10 |
+| 7 | FSTP m80fp      | 29.10 |
+
+| Register form (mod = 3) — full second byte | Op | Phase |
+|---|---|---|
+| E2    | FNCLEX            | 29.9 |
+| E3    | FNINIT / FINIT    | 29.3b |
+| E4    | FNSETPM (287+, no-op on 8087) | — |
+
+### DD — f64 data movement + restore/save + FFREE
+
+| /reg | Memory form (mod ≠ 3) | Phase |
+|---|---|---|
+| 0 | FLD m64fp       | 29.3d |
+| 2 | FST m64fp       | 29.3d |
+| 3 | FSTP m64fp      | 29.3d |
+| 4 | FRSTOR m94/m108 | 29.9 |
+| 6 | FNSAVE m94/m108 | 29.9 |
+| 7 | FNSTSW m16      | 29.5 |
+
+| Register form (mod = 3) | Op | Phase |
+|---|---|---|
+| C0-C7 | FFREE ST(i)         | 29.8 |
+| D0-D7 | FST ST(i)           | 29.3c |
+| D8-DF | FSTP ST(i)          | 29.3c |
+| E0-E7 | FUCOM ST(i)         | 29.5 |
+| E8-EF | FUCOMP ST(i)        | 29.5 |
+
+### DF — i16 / i64 / BCD ops + FNSTSW AX
+
+| /reg | Memory form (mod ≠ 3) | Phase |
+|---|---|---|
+| 0 | FILD m16int     | 29.3d |
+| 2 | FIST m16int     | 29.3d |
+| 3 | FISTP m16int    | 29.3d |
+| 4 | FBLD m80bcd     | — (deferred) |
+| 5 | FILD m64int     | 29.3d |
+| 6 | FBSTP m80bcd    | — (deferred) |
+| 7 | FISTP m64int    | 29.3d |
+
+| Register form (mod = 3) | Op | Phase |
+|---|---|---|
+| E0 | FNSTSW AX (the only x87 op that writes a CPU GPR directly) | 29.5 |
+
+(DA / DC / DE follow similar patterns — i32 arithmetic, f64 arithmetic,
+i16/popping-variant arithmetic respectively. Documented in MD as needed
+during each sprint, not enumerated here.)
 
 ## Open questions
 

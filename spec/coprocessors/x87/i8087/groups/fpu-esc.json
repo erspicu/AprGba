@@ -1,29 +1,156 @@
 {
     "name": "FpuEscape",
-    "comment": "Intel 8087 ESC opcodes (0xD8-0xDF) — 8 opcode bytes each followed by a ModR/M-shaped second byte that the FPU consumes. Phase 28.IO no-op stub (single FpuEscape format mask=0xF8 match=0xD8): consume the ModR/M byte + any displacement and advance IP, do nothing else. This is enough for real PC/XT BIOS POST FPU detection — BIOS runs FNINIT/FSTCW/CMP to probe for 8087 presence; with no actual FPU side-effect the BIOS reads back its pre-cleared scratch byte, the compare fails, and the equipment-flag FPU bit is cleared (correct semantics for an 8086 without 8087 socketed). Real arithmetic, transcendentals, load/store land in Phase 29.2+.",
+    "comment": "Intel 8087 ESC opcodes (0xD8-0xDF). Each ESC byte gets its own format entry (mask=0xFF) with its own dispatcher emitter — splits Phase 28.IO's single catch-all (mask=0xF8) into 8 per-byte slots so individual sub-opcodes can be implemented incrementally. Phase 29.3+ each byte's dispatcher does a 2-tier switch: first on modrm.mod (00/01/10 = memory form, 11 = register form / no-operand op-extension), then on either modrm.reg (memory form) or the full 6-bit second-byte value (register form). Currently all 8 dispatchers fall through to no-op behavior — this keeps real-PC BIOS POST FPU detection happy. Each gets replaced with real semantics as the corresponding instructions ship: 29.3 (data movement: D9 /0 FLD, D9 /3 FSTP, D9 EE FLDZ, DB E3 FNINIT, etc.), 29.4 (arithmetic), 29.5 (compares), 29.6 (constants), 29.7 (transcendentals), 29.8 (misc), 29.9 (control).",
     "formats": [
         {
-            "name": "FpuEscape",
-            "comment": "0xD8-0xDF — 8087 FPU escape prefix. Phase 28.IO no-op stub: consume the ModR/M byte (and any disp it implies via has_modrm=true at the decoder level) and advance IP, but do nothing else. This unblocks real BIOS POST which probes for FPU presence via FNINIT/FLDCW. Without FPU emulation the BIOS detection will see 'no FPU' and skip FPU-related branches, which is correct behavior for an 8086-class machine without an 8087.",
+            "name": "FpuEscD8",
+            "comment": "D8 — f32 arithmetic family (FADD/FMUL/FCOM/FCOMP/FSUB/FSUBR/FDIV/FDIVR with m32fp or ST(i)). Phase 29.4.",
             "fields": {},
-            "mask": "0xF8",
+            "mask": "0xFF",
             "match": "0xD8",
             "has_modrm": true,
             "instructions": [
                 {
-                    "mnemonic": "FPU",
+                    "mnemonic": "FPU_D8",
                     "since": "Intel8086",
                     "writes_pc": "never",
-                    "manual_ref": "Intel SDM Vol.2 §FPU",
-                    "cycles": {
-                        "form": "2"
-                    },
-                    "steps": [
-                        {
-                            "op": "x86_fpu_noop"
-                        }
-                    ],
-                    "id": "FPU_noop_D8_DF"
+                    "manual_ref": "Intel SDM Vol.2 §FPU D8",
+                    "cycles": { "form": "2" },
+                    "steps": [ { "op": "x86_fpu_d8_dispatch" } ],
+                    "id": "FPU_D8_dispatch"
+                }
+            ]
+        },
+        {
+            "name": "FpuEscD9",
+            "comment": "D9 — data movement + constants + misc (FLD m32fp, FST m32fp, FSTP m32fp, FLDENV, FLDCW, FSTENV, FSTCW + FLD ST(i), FXCH, FNOP, FCHS, FABS, FTST, FXAM, FLD1, FLDL2T, FLDL2E, FLDPI, FLDLG2, FLDLN2, FLDZ). Phase 29.3 + 29.6 + 29.9.",
+            "fields": {},
+            "mask": "0xFF",
+            "match": "0xD9",
+            "has_modrm": true,
+            "instructions": [
+                {
+                    "mnemonic": "FPU_D9",
+                    "since": "Intel8086",
+                    "writes_pc": "never",
+                    "manual_ref": "Intel SDM Vol.2 §FPU D9",
+                    "cycles": { "form": "2" },
+                    "steps": [ { "op": "x86_fpu_d9_dispatch" } ],
+                    "id": "FPU_D9_dispatch"
+                }
+            ]
+        },
+        {
+            "name": "FpuEscDA",
+            "comment": "DA — i32 arithmetic / FCMOVcc (8087: integer arithmetic with m32int; P6+: FCMOVcc — we only support 8087-tier, so just the integer-arithmetic family).",
+            "fields": {},
+            "mask": "0xFF",
+            "match": "0xDA",
+            "has_modrm": true,
+            "instructions": [
+                {
+                    "mnemonic": "FPU_DA",
+                    "since": "Intel8086",
+                    "writes_pc": "never",
+                    "manual_ref": "Intel SDM Vol.2 §FPU DA",
+                    "cycles": { "form": "2" },
+                    "steps": [ { "op": "x86_fpu_da_dispatch" } ],
+                    "id": "FPU_DA_dispatch"
+                }
+            ]
+        },
+        {
+            "name": "FpuEscDB",
+            "comment": "DB — FILD/FIST/FISTP m32int + FNINIT (E3), FNCLEX (E2), FNSETPM (E4 — 287+ only, treat as no-op on 8087) + FLD/FSTP m80fp.",
+            "fields": {},
+            "mask": "0xFF",
+            "match": "0xDB",
+            "has_modrm": true,
+            "instructions": [
+                {
+                    "mnemonic": "FPU_DB",
+                    "since": "Intel8086",
+                    "writes_pc": "never",
+                    "manual_ref": "Intel SDM Vol.2 §FPU DB",
+                    "cycles": { "form": "2" },
+                    "steps": [ { "op": "x86_fpu_db_dispatch" } ],
+                    "id": "FPU_DB_dispatch"
+                }
+            ]
+        },
+        {
+            "name": "FpuEscDC",
+            "comment": "DC — f64 arithmetic family (FADD/FMUL/FSUB/FSUBR/FDIV/FDIVR with m64fp or ST(i) form).",
+            "fields": {},
+            "mask": "0xFF",
+            "match": "0xDC",
+            "has_modrm": true,
+            "instructions": [
+                {
+                    "mnemonic": "FPU_DC",
+                    "since": "Intel8086",
+                    "writes_pc": "never",
+                    "manual_ref": "Intel SDM Vol.2 §FPU DC",
+                    "cycles": { "form": "2" },
+                    "steps": [ { "op": "x86_fpu_dc_dispatch" } ],
+                    "id": "FPU_DC_dispatch"
+                }
+            ]
+        },
+        {
+            "name": "FpuEscDD",
+            "comment": "DD — FLD/FST/FSTP m64fp + FRSTOR/FNSAVE + FFREE ST(i) + FUCOM/FUCOMP.",
+            "fields": {},
+            "mask": "0xFF",
+            "match": "0xDD",
+            "has_modrm": true,
+            "instructions": [
+                {
+                    "mnemonic": "FPU_DD",
+                    "since": "Intel8086",
+                    "writes_pc": "never",
+                    "manual_ref": "Intel SDM Vol.2 §FPU DD",
+                    "cycles": { "form": "2" },
+                    "steps": [ { "op": "x86_fpu_dd_dispatch" } ],
+                    "id": "FPU_DD_dispatch"
+                }
+            ]
+        },
+        {
+            "name": "FpuEscDE",
+            "comment": "DE — i16 arithmetic + FADDP/FMULP/FCOMPP/FSUBRP/FSUBP/FDIVRP/FDIVP (pop-after register-register variants).",
+            "fields": {},
+            "mask": "0xFF",
+            "match": "0xDE",
+            "has_modrm": true,
+            "instructions": [
+                {
+                    "mnemonic": "FPU_DE",
+                    "since": "Intel8086",
+                    "writes_pc": "never",
+                    "manual_ref": "Intel SDM Vol.2 §FPU DE",
+                    "cycles": { "form": "2" },
+                    "steps": [ { "op": "x86_fpu_de_dispatch" } ],
+                    "id": "FPU_DE_dispatch"
+                }
+            ]
+        },
+        {
+            "name": "FpuEscDF",
+            "comment": "DF — FILD/FIST/FISTP m16int / m64int + FBLD/FBSTP m80 (BCD) + FNSTSW AX (E0, the 'special' one — only DF opcode that touches a CPU GPR directly).",
+            "fields": {},
+            "mask": "0xFF",
+            "match": "0xDF",
+            "has_modrm": true,
+            "instructions": [
+                {
+                    "mnemonic": "FPU_DF",
+                    "since": "Intel8086",
+                    "writes_pc": "never",
+                    "manual_ref": "Intel SDM Vol.2 §FPU DF",
+                    "cycles": { "form": "2" },
+                    "steps": [ { "op": "x86_fpu_df_dispatch" } ],
+                    "id": "FPU_DF_dispatch"
                 }
             ]
         }

@@ -180,6 +180,16 @@ public static class X86_16Emitters
         reg.Register(new X86OutImm8Emitter());
         reg.Register(new X86OutDxEmitter());
         reg.Register(new X86FpuNoopEmitter());
+        // Phase 29.3 — per-byte FPU ESC dispatchers (currently no-op stubs;
+        // real /reg sub-opcode handling lands in 29.3+ sprints).
+        reg.Register(new X86FpuD8DispatchEmitter());
+        reg.Register(new X86FpuD9DispatchEmitter());
+        reg.Register(new X86FpuDADispatchEmitter());
+        reg.Register(new X86FpuDBDispatchEmitter());
+        reg.Register(new X86FpuDCDispatchEmitter());
+        reg.Register(new X86FpuDDDispatchEmitter());
+        reg.Register(new X86FpuDEDispatchEmitter());
+        reg.Register(new X86FpuDFDispatchEmitter());
 
         // 24.6.7d2 — interrupt machinery (INT/INT3/INTO/IRET).
         reg.Register(new X86IntImm8Emitter());
@@ -5025,6 +5035,57 @@ internal sealed class X86FpuNoopEmitter : IMicroOpEmitter
         // an 8087 would trap to INT 7 (#NM) only on AT-class machines;
         // 8086/8088 silently ignore. We mirror that behavior.
     }
+}
+
+// Phase 29.3 — per-ESC-byte FPU dispatchers. Each is currently a no-op
+// stub matching the pre-29.3 unified x86_fpu_noop behavior; subsequent
+// sub-sprints upgrade individual /reg sub-opcodes to real semantics
+// without touching the other 7 dispatchers. The split makes it possible
+// to ship, say, FLD/FSTP/FNINIT (D9/DB ops) ahead of FADD/FMUL/FCOM
+// (D8/DC ops) since each ESC byte's emitter is independent. The dispatcher
+// shape (when implemented) is documented in
+// MD/design/29-x87-fpu-plan.md §3 — two-tier switch on (mod, /reg) for
+// memory forms and on the full 6-bit second-byte value for register/
+// no-operand forms (mod=11).
+internal sealed class X86FpuD8DispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fpu_d8_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.4 */ }
+}
+internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fpu_d9_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.3 — FLD/FST/FSTP/FXCH/FLDZ/FLD1/... lands here */ }
+}
+internal sealed class X86FpuDADispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fpu_da_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.4 */ }
+}
+internal sealed class X86FpuDBDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fpu_db_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.3 — FILD/FIST/FISTP m32int + FNINIT (E3) + FLD/FSTP m80fp lands here */ }
+}
+internal sealed class X86FpuDCDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fpu_dc_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.4 */ }
+}
+internal sealed class X86FpuDDDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fpu_dd_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.3 — FLD/FST/FSTP m64fp + FFREE lands here */ }
+}
+internal sealed class X86FpuDEDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fpu_de_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.4 */ }
+}
+internal sealed class X86FpuDFDispatchEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_fpu_df_dispatch";
+    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.5 — FNSTSW AX lives here */ }
 }
 
 internal sealed class X86OutDxEmitter : IMicroOpEmitter
