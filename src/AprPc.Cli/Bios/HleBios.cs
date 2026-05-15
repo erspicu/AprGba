@@ -17,6 +17,7 @@
 // to the same state, and the IRET preserves whatever the handler put
 // there (Intel doesn't push GPRs).
 
+using AprPc.Cli.Hardware;
 using AprPc.Cli.Memory;
 using AprX86.Cli.Cpu;
 using AprX86.Cli.Memory;
@@ -35,6 +36,7 @@ public sealed class HleBios
     private readonly X86JsonCpu _cpu;
     private readonly PcMemoryBus _bus;
     private readonly PcKeyboard _kbd;
+    private readonly PcPit _pit;
     private readonly bool _traceInt;
 
     // Bitset of which vectors this HLE implementation handles. Used
@@ -42,11 +44,12 @@ public sealed class HleBios
     // at F000:00xx is ours.
     private readonly bool[] _owned = new bool[256];
 
-    public HleBios(X86JsonCpu cpu, PcMemoryBus bus, PcKeyboard kbd, bool traceInt = false)
+    public HleBios(X86JsonCpu cpu, PcMemoryBus bus, PcKeyboard kbd, PcPit pit, bool traceInt = false)
     {
         _cpu      = cpu ?? throw new ArgumentNullException(nameof(cpu));
         _bus      = bus ?? throw new ArgumentNullException(nameof(bus));
         _kbd      = kbd ?? throw new ArgumentNullException(nameof(kbd));
+        _pit      = pit ?? throw new ArgumentNullException(nameof(pit));
         _traceInt = traceInt;
     }
 
@@ -58,7 +61,8 @@ public sealed class HleBios
     {
         InstallVector(0x10, "video");
         InstallVector(0x16, "keyboard");
-        // 28.4 / 28.5 / 28.6 add 0x1A / 0x13 / 0x19 here.
+        InstallVector(0x1A, "time");
+        // 28.5 / 28.6 add 0x13 / 0x19 here.
     }
 
     private void InstallVector(byte vector, string label)
@@ -95,6 +99,7 @@ public sealed class HleBios
         {
             case 0x10: Int10(state); break;
             case 0x16: Int16(state); break;
+            case 0x1A: Int1A(state); break;
             default:
                 // Unhandled — just IRET, no side effect.
                 break;
@@ -339,6 +344,36 @@ public sealed class HleBios
     private void Int16_GetShiftFlags(AprX86.Cli.Cpu.X86State state)
     {
         state.A.L = _kbd.ShiftFlags;
+    }
+
+    // ---------- INT 1Ah: time ----------
+
+    private void Int1A(AprX86.Cli.Cpu.X86State state)
+    {
+        switch (state.A.H)
+        {
+            case 0x00: Int1A_GetTicks(state); break;
+            // AH=01 set ticks, AH=02-07 RTC services etc. — defer.
+            default:
+                if (_traceInt)
+                    Console.Error.WriteLine($"  [HLE] INT 1Ah AH={state.A.H:X2} not implemented; no-op");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// AH=00 — get tick count since midnight.
+    ///   CX = high word of tick count
+    ///   DX = low  word of tick count
+    ///   AL = midnight-rollover flag (also cleared after read, per Intel)
+    /// </summary>
+    private void Int1A_GetTicks(AprX86.Cli.Cpu.X86State state)
+    {
+        uint ticks  = _pit.Ticks;
+        state.C.X   = (ushort)((ticks >> 16) & 0xFFFF);
+        state.D.X   = (ushort)(ticks & 0xFFFF);
+        state.A.L   = _pit.MidnightRolled;
+        if (_pit.MidnightRolled != 0) _pit.MidnightRolled = 0;
     }
 
     // ---------- IRET simulation ----------

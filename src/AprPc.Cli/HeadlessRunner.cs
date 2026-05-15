@@ -78,6 +78,10 @@ internal static class HeadlessRunner
             Console.WriteLine($"    CS:IP={state.CS:X4}:{state.IP:X4} AX={state.A.X:X4} BX={state.B.X:X4} CX={state.C.X:X4} DX={state.D.X:X4}");
             Console.WriteLine($"    DS={state.DS:X4} ES={state.ES:X4} SS={state.SS:X4} SP={state.SP:X4} BP={state.BP:X4}");
         }
+        if (runner.Pit is { } pit)
+        {
+            Console.WriteLine($"  PIT tick:   {pit.Ticks} ({pit.Ticks * 55} ms wall-clock equivalent)");
+        }
 
         if (opts.ScreenshotPath is { } ssPath && runner.Bus is { } bus2)
         {

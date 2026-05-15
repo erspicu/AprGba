@@ -28,6 +28,7 @@
 using System.Collections.Concurrent;
 using AprCpu.Core.JsonSpec;
 using AprPc.Cli.Bios;
+using AprPc.Cli.Hardware;
 using AprPc.Cli.Memory;
 using AprX86.Cli.Cpu;
 
@@ -64,10 +65,12 @@ public sealed class PcSystemRunner : IDisposable
     private X86JsonCpu? _cpu;
     private HleBios? _bios;
     private PcKeyboard? _kbd;
+    private PcPit? _pit;
     public PcMemoryBus? Bus      => _bus;
     public X86JsonCpu?  Cpu      => _cpu;
     public HleBios?     Bios     => _bios;
     public PcKeyboard?  Keyboard => _kbd;
+    public PcPit?       Pit      => _pit;
 
     // Phase 28.2 will fill this in from the CGA framebuffer slice
     // (4 KB at 0xB8000-0xB8FFF). For 28.0 the runner just zero-fills it
@@ -114,8 +117,12 @@ public sealed class PcSystemRunner : IDisposable
         _kbd = new PcKeyboard(_bus);
         _kbd.Reset();
 
+        // Phase 28.4 — PIT 8253 (used by HLE INT 1Ah).
+        _pit = new PcPit(_bus);
+        _pit.Reset();
+
         // Phase 28.2 — install HLE BIOS INT handlers + IVT entries.
-        _bios = new HleBios(_cpu, _bus, _kbd, traceInt: _options.TraceInt);
+        _bios = new HleBios(_cpu, _bus, _kbd, _pit, traceInt: _options.TraceInt);
         _bios.Install();
 
         // Start in Paused so LoadTestRom() / Open Floppy can land
@@ -244,6 +251,7 @@ public sealed class PcSystemRunner : IDisposable
     public void Dispose()
     {
         Stop();
+        _pit?.Dispose();
         _resumeEvent.Dispose();
         _cts.Dispose();
     }
