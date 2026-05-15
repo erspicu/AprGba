@@ -23,6 +23,17 @@ public sealed class PcOptions
     public string? BiosPath     { get; set; }
     public string  Memory       { get; set; } = "640k";
     public string  Backend      { get; set; } = "json-block";
+    /// <summary>
+    /// "lle" (default): the BIOS reset vector contains a real 8086
+    /// bootstrap routine at F000:E05B that does INT 13h read + far
+    /// JMP to 0:7C00. CPU executes real instructions for every step.
+    /// "hle": the reset vector is the 2-byte INT 19h opcode; the HLE
+    /// INT 19h handler synthesizes the boot-sector load + CS:IP
+    /// redirect via SimulateIret-skip. Functionally equivalent;
+    /// useful for comparing the two paths or when debugging the LLE
+    /// bootstrap itself.
+    /// </summary>
+    public string  BiosMode     { get; set; } = "lle";
 
     // UI config.
     public int     WindowScale  { get; set; } = 2;
@@ -75,6 +86,7 @@ public sealed class PcOptions
             else if (arg.StartsWith("--bios="))       o.BiosPath = arg["--bios=".Length..];
             else if (arg.StartsWith("--memory="))     o.Memory = arg["--memory=".Length..];
             else if (arg.StartsWith("--backend="))    o.Backend = arg["--backend=".Length..];
+            else if (arg.StartsWith("--bios-mode="))  o.BiosMode = arg["--bios-mode=".Length..];
             else if (arg.StartsWith("--window-scale=")) o.WindowScale = int.Parse(arg["--window-scale=".Length..]);
             else if (arg.StartsWith("--window-title=")) o.WindowTitle = arg["--window-title=".Length..];
             else if (arg.StartsWith("--screenshot="))  o.ScreenshotPath = arg["--screenshot=".Length..];
@@ -91,6 +103,9 @@ public sealed class PcOptions
 
         if (o.Backend is not ("legacy" or "json" or "json-block"))
             throw new ArgumentException($"--backend={o.Backend} not supported; expected legacy/json/json-block");
+
+        if (o.BiosMode is not ("lle" or "hle"))
+            throw new ArgumentException($"--bios-mode={o.BiosMode} not supported; expected hle/lle");
 
         if (o.WindowScale is < 1 or > 8)
             throw new ArgumentException($"--window-scale={o.WindowScale} out of range (1-8)");
@@ -119,6 +134,11 @@ public sealed class PcOptions
           --bios=PATH               real BIOS image (LLE); omit for HLE mode
           --memory=640k|1m          conventional RAM size            [default: 640k]
           --backend=json|json-block|legacy         [default: json-block]
+          --bios-mode=lle|hle                      [default: lle]
+                                    lle = real 8086 bootstrap routine at F000:E05B
+                                    hle = HLE INT 19h handler
+                                    (--bios=PATH loads a real BIOS image and
+                                     supersedes both modes)
 
         # UI
           --window-scale=N          1-8 framebuffer pixel-doubling   [default: 2]

@@ -106,8 +106,10 @@ public sealed class PcSystemRunner : IDisposable
             throw new InvalidOperationException($"cannot Start() from state {_state}");
 
         // Phase 28.1 — construct the real PC bus + CPU.
+        // BiosMode / BiosPath plumb through from PcOptions (--bios-mode,
+        // --bios) so the BIOS reset-vector stub is configurable.
         var spec = MachineSpecLoader.LoadFromFile(PcMemoryBus.LocateMachineSpec());
-        _bus = new PcMemoryBus(spec);
+        _bus = new PcMemoryBus(spec, biosMode: _options.BiosMode, biosImagePath: _options.BiosPath);
         _bus.Reset();
         _cpu = new X86JsonCpu(_bus.Memory,
             enableBlockJit: _options.Backend == "json-block",

@@ -53,6 +53,7 @@
 
 - **真 BIOS image LLE 作為主路徑** — Phoenix / AMI / Award 有 copyright，HLE 法律 + 工程都單純。
   - **註 (2026-05-15)**: `BIOS/firmware/` 有兩個 user 提供的 **public test BIOS** (`pcxtbios.bin` 8KB PC XT-class + `videorom.bin` 32KB Tseng Labs VGA)，無 license 問題；Phase 28.6+ 可選擇性走 LLE 路線取代部份 HLE INT handler 作為 learning value。HLE 仍然是預設。
+  - **Update Phase 28.6-Modes**: `--bios=PATH` flag added; real BIOS image **does load** into 0xFE000-0xFFFFF and CPU executes its code starting from the real reset vector. POST gets stuck early because port I/O is unimplemented (DRAM check, PIC programming, FPU detection via 0xDB/0xD9 are all no-ops in i8086 spec). Visible result: black CGA framebuffer — real BIOS never reaches its first INT 10h print before hitting unimplemented hardware. Documented as expected behavior; the `--bios=` plumbing is correct, the limitation is port I/O scope.
 - **CGA graphics mode**（mode 4/5/6 等 320×200 / 640×200 graphics）— text mode 夠 demo
 - **EGA / VGA / SVGA**
 - **80386+ 保護模式 / paging / V86 mode**
@@ -492,7 +493,8 @@ result/pc/
 | 28.4  | PIT 8253 + INT 1Ah + wall-clock BDA tick | ✅ | `ee1098e` | 2026-05-11 |
 | 28.5  | INT 13h floppy/HDD HLE + DiskImage + .img loader | ✅ | `d5cceee` | 2026-05-11 |
 | 28.6  | INT 19h bootstrap (partial-LLE) + self-written boot sector | ✅ | `ebbcaab` | 2026-05-11 |
-| 28.6-LLE | Upgrade to full LLE bootstrap (real 37-byte 8086 routine at F000:E05B) — unblocked by 28.8a/c far-control-flow opcodes | ✅ | (this commit) | 2026-05-15 |
+| 28.6-LLE | Upgrade to full LLE bootstrap (real 37-byte 8086 routine at F000:E05B) — unblocked by 28.8a/c far-control-flow opcodes | ✅ | `403953d` | 2026-05-15 |
+| 28.6-Modes | `--bios-mode=hle\|lle` CLI flag + `--bios=PATH` real-BIOS-image load | ✅ | (this commit) | 2026-05-15 |
 | 28.7  | Pic8259 + IRQ delivery model (PIT IRQ 0 + keyboard IRQ 1) | ✅ | `8c8f2b6` | 2026-05-11 |
 | 28.8a | FreeDOS boot blocker #1 — add 0xEA (JMP ptr16:16) to i8086 spec | ✅ | `e71f15a` | 2026-05-15 |
 | 28.8b | FreeDOS boot blocker #2 — install HLE INT 8/9 defaults; IRQ 0 → IVT[8]=0:0 wandering | ✅ | `9012790` | 2026-05-15 |

@@ -32,14 +32,19 @@ public sealed class PcMemoryBus
 
     private readonly X86Memory _mem;
     private readonly MachineSpec _spec;
+    private readonly string _biosMode;
+    private readonly string? _biosImagePath;
 
     public X86Memory Memory => _mem;
     public MachineSpec Spec => _spec;
+    public string BiosMode => _biosMode;
 
-    public PcMemoryBus(MachineSpec spec)
+    public PcMemoryBus(MachineSpec spec, string biosMode = "lle", string? biosImagePath = null)
     {
         _spec = spec ?? throw new ArgumentNullException(nameof(spec));
         _mem  = new X86Memory();
+        _biosMode = biosMode;
+        _biosImagePath = biosImagePath;
         ValidateSpec(spec);
     }
 
@@ -133,13 +138,44 @@ public sealed class PcMemoryBus
     /// </summary>
     private void InitializeBiosRomStub()
     {
-        // FFFF:0000 (phys 0xFFFF0): far JMP F000:E05B
-        //   EA ip_lo ip_hi cs_lo cs_hi  (5 bytes)
+        // === Real BIOS image override path ===
+        // If --bios=PATH was passed, load the image into the BIOS ROM
+        // area and skip the synthetic stubs entirely. The image's own
+        // reset-vector entry takes over.
+        //   8 KB image → maps to 0xFE000 - 0xFFFFF (PC XT-class)
+        //  16 KB image → maps to 0xFC000 - 0xFFFFF
+        //  32 KB image → 0xF8000 - 0xFFFFF (rarely used at top)
+        //  64 KB image → 0xF0000 - 0xFFFFF (AT-class full segment)
+        if (_biosImagePath is { } biosPath)
+        {
+            var biosBytes = File.ReadAllBytes(biosPath);
+            int loadAddr = 0x100000 - biosBytes.Length;
+            if (loadAddr < 0xC0000)
+                throw new InvalidDataException(
+                    $"BIOS image {biosPath}: {biosBytes.Length} bytes too large for ROM area (>= 256 KB)");
+            for (int i = 0; i < biosBytes.Length; i++)
+                _mem.Ram[loadAddr + i] = biosBytes[i];
+            return;
+        }
+
+        // === Synthetic BIOS stub: lle or hle ===
+        if (_biosMode == "hle")
+        {
+            // 2-byte INT 19h at FFFF:0000 + HLT fallback.
+            // HleBios.Int19 handler does the boot-sector read.
+            WriteByte(0xFFFF0, 0xCD);   // INT
+            WriteByte(0xFFFF1, 0x19);   //   19h
+            WriteByte(0xFFFF2, 0xF4);   // HLT
+            return;
+        }
+
+        // Default — lle: real 8086 bootstrap routine.
+        // FFFF:0000 = far JMP F000:E05B (5 bytes).
         WriteByte(0xFFFF0, 0xEA);
-        WriteByte(0xFFFF1, 0x5B);   // IP low
-        WriteByte(0xFFFF2, 0xE0);   // IP high
-        WriteByte(0xFFFF3, 0x00);   // CS low
-        WriteByte(0xFFFF4, 0xF0);   // CS high
+        WriteByte(0xFFFF1, 0x5B);
+        WriteByte(0xFFFF2, 0xE0);
+        WriteByte(0xFFFF3, 0x00);
+        WriteByte(0xFFFF4, 0xF0);
 
         // F000:E05B (phys 0xFE05B): real 8086 bootstrap routine.
         var bootstrap = new byte[]
