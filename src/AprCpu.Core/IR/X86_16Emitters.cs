@@ -5052,10 +5052,230 @@ internal sealed class X86FpuD8DispatchEmitter : IMicroOpEmitter
     public string OpName => "x86_fpu_d8_dispatch";
     public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.4 */ }
 }
+// Phase 29.3c — FPU stack helpers. Cover the canonical 8087 push/pop
+// patterns so individual D9/DB/DD opcodes don't each reinvent the stack-
+// rotation IR. Per Gemini design notes (MD/design/29-x87-fpu-plan.md §1,
+// §2): TOP is computed once per instruction; ST(i) reads use an 8-arm
+// switch on physical slot index since LLVM struct GEP wants constant
+// field indices. Internal precision is f64 (i64 storage + bitcast at
+// access — matches Gemini's "ARM64-friendly" recommendation).
+internal static class X86FpuHelpers
+{
+    /// <summary>
+    /// GEP into FPU_STn for runtime physical slot index. Uses an 8-arm
+    /// switch + phi node to land on the correct struct field. Phase 29.x
+    /// optimisation candidate (later: lay out FPU_ST0..ST7 as a flat
+    /// 64-byte block and use byte-offset GEP) but for 29.3 we prioritise
+    /// correctness over IR size.
+    /// </summary>
+    public static LLVMValueRef GepPhysicalSt(EmitContext ctx, LLVMValueRef physI, string label)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var i64 = LLVMTypeRef.Int64;
+        var i64Ptr = LLVMTypeRef.CreatePointer(i64, 0);
+
+        var endBB     = ctx.Function.AppendBasicBlock($"{label}_end");
+        var defaultBB = ctx.Function.AppendBasicBlock($"{label}_default");
+        var arms = new LLVMBasicBlockRef[8];
+        var armPtrs = new LLVMValueRef[8];
+        for (int i = 0; i < 8; i++) arms[i] = ctx.Function.AppendBasicBlock($"{label}_{i}");
+
+        var sw = ctx.Builder.BuildSwitch(physI, defaultBB, 8);
+        for (int i = 0; i < 8; i++)
+            sw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)i, false), arms[i]);
+
+        for (int i = 0; i < 8; i++)
+        {
+            ctx.Builder.PositionAtEnd(arms[i]);
+            armPtrs[i] = ctx.GepStatusRegister($"FPU_ST{i}");
+            ctx.Builder.BuildBr(endBB);
+        }
+        // Default arm: shouldn't fire (physI is always 0-7 after the AND-7
+        // mask in callers) but LLVM requires a default. Pick slot 0 as a
+        // safe fallback so we don't blow up on malformed input.
+        ctx.Builder.PositionAtEnd(defaultBB);
+        var defaultPtr = ctx.GepStatusRegister("FPU_ST0");
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+        var phi = ctx.Builder.BuildPhi(i64Ptr, label);
+        var blocks = new LLVMBasicBlockRef[9];
+        var vals   = new LLVMValueRef[9];
+        for (int i = 0; i < 8; i++) { blocks[i] = arms[i]; vals[i] = armPtrs[i]; }
+        blocks[8] = defaultBB; vals[8] = defaultPtr;
+        phi.AddIncoming(vals, blocks, 9);
+        return phi;
+    }
+
+    /// <summary>
+    /// Set the 2-bit tag for a physical slot. tag = 00=Valid, 01=Zero,
+    /// 10=Special, 11=Empty. Uses load → mask → or → store pattern on
+    /// FPU_TAGS. physI is i32, tag2bit is i16 in range 0-3.
+    /// </summary>
+    public static void SetTag(EmitContext ctx, LLVMValueRef physI, LLVMValueRef tag2bit, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var tagsPtr = ctx.GepStatusRegister("FPU_TAGS");
+        var oldTags = ctx.Builder.BuildLoad2(i16, tagsPtr, $"{label}_oldTags");
+
+        // shift = physI * 2 (i16-width shift amount)
+        var physI16 = ctx.Builder.BuildTrunc(physI, i16, $"{label}_physI16");
+        var shift = ctx.Builder.BuildShl(physI16,
+            LLVMValueRef.CreateConstInt(i16, 1, false), $"{label}_shift");
+        // mask = 0b11 << shift; cleared = oldTags & ~mask
+        var twoBits = LLVMValueRef.CreateConstInt(i16, 3, false);
+        var maskInPlace = ctx.Builder.BuildShl(twoBits, shift, $"{label}_mask");
+        var notMask = ctx.Builder.BuildNot(maskInPlace, $"{label}_notMask");
+        var cleared = ctx.Builder.BuildAnd(oldTags, notMask, $"{label}_cleared");
+        // newBits = tag << shift; merged = cleared | newBits
+        var newBits = ctx.Builder.BuildShl(tag2bit, shift, $"{label}_newBits");
+        var merged = ctx.Builder.BuildOr(cleared, newBits, $"{label}_merged");
+        ctx.Builder.BuildStore(merged, tagsPtr);
+    }
+
+    /// <summary>
+    /// FPU stack push: decrement TOP, store the value to the new TOP
+    /// slot, mark that slot's tag. valF64 is the f64 value to push;
+    /// tag2bit indicates the tag for the new slot (0=Valid, 1=Zero,
+    /// 2=Special).
+    /// </summary>
+    public static void Push(EmitContext ctx, LLVMValueRef valF64, LLVMValueRef tag2bit, string label)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var i64 = LLVMTypeRef.Int64;
+        var topPtr = ctx.GepStatusRegister("FPU_TOP");
+        var oldTop = ctx.Builder.BuildLoad2(i32, topPtr, $"{label}_oldTop");
+        var newTop = ctx.Builder.BuildAnd(
+            ctx.Builder.BuildSub(oldTop,
+                LLVMValueRef.CreateConstInt(i32, 1, false), $"{label}_newTopRaw"),
+            LLVMValueRef.CreateConstInt(i32, 7, false), $"{label}_newTop");
+        ctx.Builder.BuildStore(newTop, topPtr);
+
+        // Bitcast f64 → i64 for storage. The slot is i64-typed in the
+        // CpuStateLayout, so the host C# accessor can read it back via
+        // BitConverter.Int64BitsToDouble.
+        var valI64 = ctx.Builder.BuildBitCast(valF64, i64, $"{label}_valI64");
+        var slotPtr = GepPhysicalSt(ctx, newTop, $"{label}_slotPtr");
+        ctx.Builder.BuildStore(valI64, slotPtr);
+
+        SetTag(ctx, newTop, tag2bit, $"{label}_setTag");
+    }
+
+    /// <summary>
+    /// FPU stack pop: read ST(0) as f64, then increment TOP and clear
+    /// the popped slot's tag to Empty (11). Returns the f64 value.
+    /// </summary>
+    public static LLVMValueRef Pop(EmitContext ctx, string label)
+    {
+        var i32 = LLVMTypeRef.Int32;
+        var i64 = LLVMTypeRef.Int64;
+        var f64 = LLVMTypeRef.Double;
+        var topPtr = ctx.GepStatusRegister("FPU_TOP");
+        var oldTop = ctx.Builder.BuildLoad2(i32, topPtr, $"{label}_oldTop");
+
+        // Read ST(0) = physical slot oldTop.
+        var slotPtr = GepPhysicalSt(ctx, oldTop, $"{label}_slotPtr");
+        var valI64 = ctx.Builder.BuildLoad2(i64, slotPtr, $"{label}_valI64");
+        var valF64 = ctx.Builder.BuildBitCast(valI64, f64, $"{label}_valF64");
+
+        // Mark the freed slot as Empty (tag = 11).
+        var i16 = LLVMTypeRef.Int16;
+        SetTag(ctx, oldTop, LLVMValueRef.CreateConstInt(i16, 3, false), $"{label}_emptyTag");
+
+        // Advance TOP.
+        var newTop = ctx.Builder.BuildAnd(
+            ctx.Builder.BuildAdd(oldTop,
+                LLVMValueRef.CreateConstInt(i32, 1, false), $"{label}_newTopRaw"),
+            LLVMValueRef.CreateConstInt(i32, 7, false), $"{label}_newTop");
+        ctx.Builder.BuildStore(newTop, topPtr);
+
+        return valF64;
+    }
+}
+
 internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
 {
     public string OpName => "x86_fpu_d9_dispatch";
-    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.3 — FLD/FST/FSTP/FXCH/FLDZ/FLD1/... lands here */ }
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // Phase 29.3c — minimum data-movement subset:
+        //   D9 EE         = FLDZ            (push +0.0 to ST(0))
+        //   D9 /3 mod≠11  = FSTP m32fp      (pop ST(0) as f32 to EA)
+        // Other D9 ops (FLD m32fp /0, FXCH /reg≠FLD?, FLD1/FLDPI/...,
+        // FCHS, FABS, FTST, FXAM, FLDCW, FSTCW, FNOP) stay no-op until
+        // 29.3d / 29.6 / 29.8 / 29.9 sprints.
+        var i32 = LLVMTypeRef.Int32;
+        var i16 = LLVMTypeRef.Int16;
+        var i8  = LLVMTypeRef.Int8;
+        var f64 = LLVMTypeRef.Double;
+        var f32 = LLVMTypeRef.Float;
+
+        var mod = ctx.Resolve("modrm_mod");
+        var reg = ctx.Resolve("modrm_reg");
+        var rm  = ctx.Resolve("modrm_rm");
+
+        // FLDZ detection: mod=11 reg=101 rm=110 (full second byte EE).
+        var isMod3 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            mod, LLVMValueRef.CreateConstInt(i32, 3, false), "d9_isMod3");
+        var regSh = ctx.Builder.BuildShl(reg,
+            LLVMValueRef.CreateConstInt(i32, 3, false), "d9_regSh");
+        var combined = ctx.Builder.BuildOr(regSh, rm, "d9_combined");
+        var isFldzSub = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            combined, LLVMValueRef.CreateConstInt(i32, 0x2E, false), "d9_isFldzSub");
+        var isFldz = ctx.Builder.BuildAnd(isMod3, isFldzSub, "d9_isFldz");
+
+        var fldzBB    = ctx.Function.AppendBasicBlock("fldz");
+        var afterFldz = ctx.Function.AppendBasicBlock("after_fldz");
+        ctx.Builder.BuildCondBr(isFldz, fldzBB, afterFldz);
+
+        ctx.Builder.PositionAtEnd(fldzBB);
+        var zeroF64 = LLVMValueRef.CreateConstReal(f64, 0.0);
+        // Tag = 01 (Zero) per Intel manual classification of pushed +0.0.
+        X86FpuHelpers.Push(ctx, zeroF64,
+            LLVMValueRef.CreateConstInt(i16, 1, false), "fldz");
+        ctx.Builder.BuildBr(afterFldz);
+
+        // FSTP m32fp detection: mod != 11 AND reg == 3.
+        ctx.Builder.PositionAtEnd(afterFldz);
+        var isMem = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE,
+            mod, LLVMValueRef.CreateConstInt(i32, 3, false), "d9_isMem");
+        var isRegSlash3 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            reg, LLVMValueRef.CreateConstInt(i32, 3, false), "d9_isRegSlash3");
+        var isFstpM32 = ctx.Builder.BuildAnd(isMem, isRegSlash3, "d9_isFstpM32");
+
+        var fstpBB    = ctx.Function.AppendBasicBlock("fstp_m32");
+        var afterFstp = ctx.Function.AppendBasicBlock("after_fstp_m32");
+        ctx.Builder.BuildCondBr(isFstpM32, fstpBB, afterFstp);
+
+        ctx.Builder.PositionAtEnd(fstpBB);
+        // Pop ST(0) as f64, narrow to f32 via FPTrunc, bitcast to i32,
+        // write 4 bytes little-endian at EA.
+        var popped = X86FpuHelpers.Pop(ctx, "fstpm32");
+        var poppedF32 = ctx.Builder.BuildFPTrunc(popped, f32, "fstpm32_f32");
+        var poppedI32 = ctx.Builder.BuildBitCast(poppedF32, i32, "fstpm32_i32");
+
+        var eaBase = ctx.Resolve("ea_base");
+        var eaOff  = ctx.Resolve("ea_off");
+        for (int b = 0; b < 4; b++)
+        {
+            var shifted = b == 0
+                ? poppedI32
+                : ctx.Builder.BuildLShr(poppedI32,
+                    LLVMValueRef.CreateConstInt(i32, (uint)(b * 8), false),
+                    $"fstpm32_sh{b}");
+            var byteVal = ctx.Builder.BuildTrunc(shifted, i8, $"fstpm32_byte{b}");
+            var offPlus = b == 0
+                ? eaOff
+                : ctx.Builder.BuildAdd(eaOff,
+                    LLVMValueRef.CreateConstInt(LLVMTypeRef.Int16, (uint)b, false),
+                    $"fstpm32_off{b}");
+            X86_16Emitters.SegmentedWrite8FromBase(ctx, eaBase, offPlus, byteVal, $"fstpm32_w{b}");
+        }
+        ctx.Builder.BuildBr(afterFstp);
+
+        ctx.Builder.PositionAtEnd(afterFstp);
+        // All other D9 sub-opcodes fall through to here as no-op for now.
+    }
 }
 internal sealed class X86FpuDADispatchEmitter : IMicroOpEmitter
 {
