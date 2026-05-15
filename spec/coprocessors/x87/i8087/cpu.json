@@ -3,7 +3,82 @@
     "spec_version": "1.0",
     "name": "i8087",
     "extends_cpu": "Intel8086",
-    "comment": "Intel 8087 numeric coprocessor (1980). Phase 29.1 — minimal stub providing only the 0xD8-0xDF ESC opcode no-op handler that real PC/XT BIOS POST FPU detection needs. The full FPU register file (ST0-ST7, control word, status word, tag word, TOP), arithmetic opcodes (FADD/FSUB/FMUL/FDIV), loads/stores (FLD/FST/FSTP), compares (FCOM/FNSTSW), transcendentals (FPTAN/FPATAN/F2XM1/FYL2X), and control ops (FNINIT/FNCLEX/FLDCW/WAIT) land in Phase 29.2+ per MD/design/29-x87-fpu-plan.md. Loaded at machine level via spec/machines/<name>.json's 'extensions' array; the SpecLoader merges these groups into the base CPU's instruction sets at compile time so the JIT pipeline sees a single unified CPU model.",
+    "comment": "Intel 8087 numeric coprocessor (1980). Phase 29.1 (groups) added the no-op FPU escape stub for BIOS detection. Phase 29.2 (this revision) declares the FPU register file: 8 stack registers ST0-ST7 stored as 64-bit slots (LLVM i64 in the state struct, bitcast to f64 at access time per the Gemini design decision — see MD/design/29-x87-fpu-plan.md §2 'use f64 not x86_fp80 for ARM64 portability'), a 16-bit tag word (2 bits per register encoding empty/valid/zero/special), a 16-bit control word (rounding/precision/exception masks), a 16-bit status word (C0-C3 condition codes + top-of-stack pointer + exception flags), and a 32-bit TOP index (only the low 3 bits matter but i32 simplifies GEP in the emitters). Phase 29.3+ data movement, arithmetic, compares, transcendentals all reference these slots via the same StatusOffset path the base CPU's FLAGS/IP/etc. use.",
+    "register_file_additions": {
+        "status": [
+            {
+                "name": "FPU_ST0",
+                "width_bits": 64,
+                "fields": {},
+                "comment": "Stack-relative top-of-stack register. Physically slot 0 in the flat fpu_regs[8] array; logical ST(0) is whichever slot fpu_top points at. Emitters compute physical_index = (FPU_TOP + i) & 7 then GEP into the appropriate FPU_STn slot."
+            },
+            { "name": "FPU_ST1", "width_bits": 64, "fields": {} },
+            { "name": "FPU_ST2", "width_bits": 64, "fields": {} },
+            { "name": "FPU_ST3", "width_bits": 64, "fields": {} },
+            { "name": "FPU_ST4", "width_bits": 64, "fields": {} },
+            { "name": "FPU_ST5", "width_bits": 64, "fields": {} },
+            { "name": "FPU_ST6", "width_bits": 64, "fields": {} },
+            { "name": "FPU_ST7", "width_bits": 64, "fields": {} },
+            {
+                "name": "FPU_TAGS",
+                "width_bits": 16,
+                "fields": {
+                    "TAG0": "1:0",
+                    "TAG1": "3:2",
+                    "TAG2": "5:4",
+                    "TAG3": "7:6",
+                    "TAG4": "9:8",
+                    "TAG5": "11:10",
+                    "TAG6": "13:12",
+                    "TAG7": "15:14"
+                },
+                "comment": "2 bits per ST(i): 00=Valid, 01=Zero, 10=Special (NaN/Inf/denormal), 11=Empty. FNINIT sets all to 11."
+            },
+            {
+                "name": "FPU_CW",
+                "width_bits": 16,
+                "fields": {
+                    "IM": "0",
+                    "DM": "1",
+                    "ZM": "2",
+                    "OM": "3",
+                    "UM": "4",
+                    "PM": "5",
+                    "PC": "9:8",
+                    "RC": "11:10",
+                    "IC": "12"
+                },
+                "comment": "Control word. IM/DM/ZM/OM/UM/PM = exception masks (Invalid/Denormal/Zero/Overflow/Underflow/Precision). PC = precision control (00=24-bit, 10=53-bit, 11=64-bit). RC = rounding (00=nearest, 01=down, 10=up, 11=truncate). IC = infinity control (0=projective, 1=affine). FNINIT default = 0x03FF."
+            },
+            {
+                "name": "FPU_SW",
+                "width_bits": 16,
+                "fields": {
+                    "IE": "0",
+                    "DE": "1",
+                    "ZE": "2",
+                    "OE": "3",
+                    "UE": "4",
+                    "PE": "5",
+                    "SF": "6",
+                    "ES": "7",
+                    "C0": "8",
+                    "C1": "9",
+                    "C2": "10",
+                    "TOP_SW": "13:11",
+                    "C3": "14",
+                    "B": "15"
+                },
+                "comment": "Status word. IE/DE/ZE/OE/UE/PE/SF = sticky exception flags. ES = exception summary. C0-C3 = condition codes (set by FCOM/FUCOM/FTST/etc.). TOP_SW = mirror of FPU_TOP. B = busy. FNSTSW AX copies this into the CPU's AX register so the JIT'd compare path stays simple."
+            },
+            {
+                "name": "FPU_TOP",
+                "width_bits": 32,
+                "fields": {},
+                "comment": "Top-of-stack index (0-7). Only the low 3 bits matter but stored as i32 to simplify modular-index GEP in the emitters. Phase 29.3+ ST(i) access: physical_slot = (FPU_TOP + i) & 7."
+            }
+        ]
+    },
     "instruction_set_additions": {
         "Main": {
             "encoding_groups": [

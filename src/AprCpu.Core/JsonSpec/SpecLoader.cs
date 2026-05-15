@@ -96,6 +96,14 @@ public static class SpecLoader
         var mergedSets = new Dictionary<string, InstructionSetSpec>(StringComparer.OrdinalIgnoreCase);
         foreach (var (n, s) in loaded.InstructionSets) mergedSets[n] = s;
 
+        // N29.2 — accumulate register additions across all extensions, then
+        // splice into the base RegisterFile.Status[] at the end. Doing this
+        // in one pass keeps the merged CpuSpec immutable-rebuild simple
+        // (rather than mutating across each loop iteration).
+        var statusAdditions = new List<StatusRegister>();
+        var seenStatusNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var s in loaded.Cpu.RegisterFile.Status) seenStatusNames.Add(s.Name);
+
         foreach (var extPath in extensionPaths)
         {
             var fullExtPath = Path.GetFullPath(extPath);
@@ -128,8 +136,37 @@ public static class SpecLoader
             var extName = extRoot.TryGetProperty("name", out var nEl) && nEl.ValueKind == JsonValueKind.String
                 ? nEl.GetString() ?? "<unnamed>" : "<unnamed>";
 
+            // N29.2 — register_file_additions.status: extension contributes
+            // its own status registers (e.g. x87 ST0-ST7, FPU_CW, FPU_SW,
+            // FPU_TOP, FPU_TAGS). These appear in the merged CpuStateLayout
+            // after the base CPU's own status regs, in extension-declaration
+            // order. Phase 29.2 only handles .status (no banked_per_mode);
+            // pure x87 doesn't need per-mode banking. Phase 29.3+ FPU
+            // emitters access these slots via the same StatusOffset path
+            // as integer status regs, bitcasting i64 ↔ f64 for arithmetic.
+            if (extRoot.TryGetProperty("register_file_additions", out var rfAddEl)
+                && rfAddEl.ValueKind == JsonValueKind.Object
+                && rfAddEl.TryGetProperty("status", out var rfStatusEl)
+                && rfStatusEl.ValueKind == JsonValueKind.Array)
+            {
+                int idx = 0;
+                foreach (var s in rfStatusEl.EnumerateArray())
+                {
+                    var added = ParseStatusRegister(s, fullExtPath,
+                        $"$.register_file_additions.status[{idx}]");
+                    if (!seenStatusNames.Add(added.Name))
+                        throw new SpecValidationException(
+                            $"Extension '{extName}' adds status register '{added.Name}' " +
+                            $"which already exists in base CPU '{loaded.Cpu.Architecture.Id}' " +
+                            $"or in a previously-merged extension.",
+                            fullExtPath, $"$.register_file_additions.status[{idx}].name");
+                    statusAdditions.Add(added);
+                    idx++;
+                }
+            }
+
             if (!extRoot.TryGetProperty("instruction_set_additions", out var addEl))
-                continue;  // Pure register-only extensions (Phase 29.2+) would land here.
+                continue;  // Pure register-only extensions are fine — just no opcode groups to merge.
             if (addEl.ValueKind != JsonValueKind.Object)
                 throw new SpecValidationException(
                     "'instruction_set_additions' must be an object keyed by instruction-set name.",
@@ -174,7 +211,25 @@ public static class SpecLoader
             }
         }
 
-        return loaded with { InstructionSets = mergedSets };
+        // N29.2 — splice extension status registers onto the base CPU's
+        // RegisterFile.Status[]. Appended (not prepended) so existing base
+        // status-register slot offsets remain stable — every consumer of
+        // status[i] indexing (X86JsonCpu's pre-cached FLAGS/IP/CS/etc.
+        // offsets) keeps working without rebuild.
+        var mergedCpu = loaded.Cpu;
+        if (statusAdditions.Count > 0)
+        {
+            var newStatus = new List<StatusRegister>(
+                loaded.Cpu.RegisterFile.Status.Count + statusAdditions.Count);
+            newStatus.AddRange(loaded.Cpu.RegisterFile.Status);
+            newStatus.AddRange(statusAdditions);
+            mergedCpu = loaded.Cpu with
+            {
+                RegisterFile = loaded.Cpu.RegisterFile with { Status = newStatus }
+            };
+        }
+
+        return loaded with { Cpu = mergedCpu, InstructionSets = mergedSets };
     }
 
     private static LoadedSpec LoadCpuSpecInternal(string cpuJsonPath, HashSet<string> inProgress, int depth)

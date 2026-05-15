@@ -168,7 +168,7 @@ because it expects an INT 75h on DivZero, add it then. For now: dead weight.
 | Sprint | Scope | Notes |
 |---|---|---|
 | 29.1 | Spec loader extensions support — ✅ **DONE 2026-05-15** | `MachineSpec.Extensions` + `SpecLoader.LoadCpuSpecWithExtensions()` + `SpecCompiler.Compile(path, extensions)` + `X86JsonCpu(extensionPaths:)`. `spec/coprocessors/x87/i8087/cpu.json` + `groups/fpu-esc.json` created; FpuEscape entry **moved out** of `spec/cpu/x86-16/i8086/groups/misc.json` (proves merge end-to-end). FreeDOS regression intact (2838 HLE INT calls); real BIOS POST advanced F000:E706 → F000:F433. |
-| 29.2 | FPU register file in state struct | f64[8] + tags + top + cw + sw |
+| 29.2 | FPU register file in state struct — ✅ **DONE 2026-05-15** | `register_file_additions.status[]` parsing in `LoadCpuSpecWithExtensions`. Extension status registers appended to base `RegisterFile.Status[]` so base CPU's pre-cached offsets (FLAGS/IP/CS/etc.) stay stable. i8087 extension declares ST0-ST7 (64-bit i64 slots, bitcast to f64 in Phase 29.3+ emitters per Gemini's "ARM64-friendly f64 over x86_fp80" decision), FPU_TAGS (16-bit, 2 bits per ST(i)), FPU_CW (16-bit with PC/RC/IC/exception-mask fields), FPU_SW (16-bit with C0/C1/C2/C3 condition codes + TOP_SW mirror + sticky exception flags), FPU_TOP (32-bit index 0-7). Build green; FreeDOS regression intact (2840 HLE INT calls); apr-x86 standalone Tom Harte path also untouched. |
 | 29.3 | Data movement | FLD / FST / FSTP / FXCH / FCMOV (mem+reg forms) |
 | 29.4 | Arithmetic | FADD / FSUB / FMUL / FDIV (+R variants, +P variants) |
 | 29.5 | Compares | FCOM / FCOMP / FCOMPP / FTST / FUCOM + FNSTSW AX |
