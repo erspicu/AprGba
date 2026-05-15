@@ -5379,6 +5379,198 @@ internal static class X86FpuHelpers
     }
 
     /// <summary>
+    /// Phase 29.10 — read 10-byte m80fp from EA, convert to f64. The
+    /// 80-bit extended precision format has 1 sign bit, 15-bit
+    /// exponent (bias 16383), 1 explicit integer bit, and 63-bit
+    /// fraction — laid out little-endian as: bytes 0-7 are mantissa
+    /// (low 63 bits) + integer bit (bit 63 of byte 7), bytes 8-9 are
+    /// exponent (low 15 bits of byte 8/9) + sign (bit 15 = MSB of
+    /// byte 9).
+    ///
+    /// Conversion to f64 (bias 1023, implicit integer bit) handles 3
+    /// cases without branching, using LLVM `select`:
+    /// - exp_m80 == 0          → f64 exp = 0 (zero / denormal collapses to 0)
+    /// - exp_m80 == 0x7FFF     → f64 exp = 0x7FF (Inf / NaN)
+    /// - otherwise (normal)    → f64 exp = exp_m80 - 15360
+    ///
+    /// Mantissa: shift right 11 bits to convert 63-bit to 52-bit (low
+    /// 11 bits discarded — acceptable precision loss per Gemini's
+    /// "f64 internal" decision).
+    /// </summary>
+    public static LLVMValueRef LoadMemF80AsF64(EmitContext ctx,
+        LLVMValueRef eaBase, LLVMValueRef eaOff, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var i64 = LLVMTypeRef.Int64;
+        var f64 = LLVMTypeRef.Double;
+
+        // Read 8 bytes for m80_lo (mantissa + integer bit) and 2 bytes
+        // for m80_hi (exponent + sign).
+        LLVMValueRef? lo = null;
+        for (int b = 0; b < 8; b++)
+        {
+            var off = b == 0 ? eaOff
+                : ctx.Builder.BuildAdd(eaOff,
+                    LLVMValueRef.CreateConstInt(i16, (uint)b, false),
+                    $"{label}_lo_o{b}");
+            var byteVal = X86_16Emitters.SegmentedRead8FromBase(ctx, eaBase, off, $"{label}_lo_b{b}");
+            var ext = ctx.Builder.BuildZExt(byteVal, i64, $"{label}_lo_z{b}");
+            var shifted = b == 0
+                ? ext
+                : ctx.Builder.BuildShl(ext,
+                    LLVMValueRef.CreateConstInt(i64, (uint)(b * 8), false),
+                    $"{label}_lo_s{b}");
+            lo = lo is null ? shifted : ctx.Builder.BuildOr(lo.Value, shifted, $"{label}_lo_a{b}");
+        }
+        var m80lo = lo!.Value;
+
+        LLVMValueRef? hi = null;
+        for (int b = 0; b < 2; b++)
+        {
+            var off = ctx.Builder.BuildAdd(eaOff,
+                LLVMValueRef.CreateConstInt(i16, (uint)(8 + b), false),
+                $"{label}_hi_o{b}");
+            var byteVal = X86_16Emitters.SegmentedRead8FromBase(ctx, eaBase, off, $"{label}_hi_b{b}");
+            var ext = ctx.Builder.BuildZExt(byteVal, i32, $"{label}_hi_z{b}");
+            var shifted = b == 0
+                ? ext
+                : ctx.Builder.BuildShl(ext,
+                    LLVMValueRef.CreateConstInt(i32, (uint)(b * 8), false),
+                    $"{label}_hi_s{b}");
+            hi = hi is null ? shifted : ctx.Builder.BuildOr(hi.Value, shifted, $"{label}_hi_a{b}");
+        }
+        var m80hi32 = hi!.Value;
+
+        // Decompose.
+        var signI32 = ctx.Builder.BuildAnd(
+            ctx.Builder.BuildLShr(m80hi32,
+                LLVMValueRef.CreateConstInt(i32, 15, false), $"{label}_signShr"),
+            LLVMValueRef.CreateConstInt(i32, 1, false), $"{label}_sign");
+        var expM80 = ctx.Builder.BuildAnd(m80hi32,
+            LLVMValueRef.CreateConstInt(i32, 0x7FFF, false), $"{label}_expM80");
+        var mantM80 = ctx.Builder.BuildAnd(m80lo,
+            LLVMValueRef.CreateConstInt(i64, 0x7FFFFFFFFFFFFFFFUL, false), $"{label}_mantM80");
+
+        // f64 exponent select.
+        var isZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, expM80,
+            LLVMValueRef.CreateConstInt(i32, 0, false), $"{label}_isZero");
+        var isMax = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, expM80,
+            LLVMValueRef.CreateConstInt(i32, 0x7FFF, false), $"{label}_isMax");
+        var expNormal = ctx.Builder.BuildSub(expM80,
+            LLVMValueRef.CreateConstInt(i32, 15360, false), $"{label}_expNorm");
+        var expAfterMax = ctx.Builder.BuildSelect(isMax,
+            LLVMValueRef.CreateConstInt(i32, 0x7FF, false), expNormal, $"{label}_expMax");
+        var expF64 = ctx.Builder.BuildSelect(isZero,
+            LLVMValueRef.CreateConstInt(i32, 0, false), expAfterMax, $"{label}_expF64");
+
+        // Mantissa shift right 11.
+        var mantF64 = ctx.Builder.BuildLShr(mantM80,
+            LLVMValueRef.CreateConstInt(i64, 11, false), $"{label}_mantF64");
+
+        // Assemble f64 bits.
+        var signI64 = ctx.Builder.BuildZExt(signI32, i64, $"{label}_signI64");
+        var expI64 = ctx.Builder.BuildZExt(expF64, i64, $"{label}_expI64");
+        var signSh = ctx.Builder.BuildShl(signI64,
+            LLVMValueRef.CreateConstInt(i64, 63, false), $"{label}_signSh");
+        var expSh = ctx.Builder.BuildShl(expI64,
+            LLVMValueRef.CreateConstInt(i64, 52, false), $"{label}_expSh");
+        var bits = ctx.Builder.BuildOr(
+            ctx.Builder.BuildOr(signSh, expSh, $"{label}_or_se"),
+            mantF64, $"{label}_bits");
+        return ctx.Builder.BuildBitCast(bits, f64, $"{label}_f64");
+    }
+
+    /// <summary>
+    /// Phase 29.10 — write f64 to 10-byte m80fp at EA. Inverse of
+    /// LoadMemF80AsF64: expand 11-bit exp + 52-bit mantissa to
+    /// 15-bit exp + 63-bit mantissa with explicit integer bit. Zero
+    /// inputs produce an all-zero m80; Inf/NaN preserve via the
+    /// 0x7FFF → 0x7FF exp mapping; normal numbers shift the bias.
+    /// </summary>
+    public static void StoreMemF80(EmitContext ctx,
+        LLVMValueRef eaBase, LLVMValueRef eaOff, LLVMValueRef valF64, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var i64 = LLVMTypeRef.Int64;
+
+        var bits = ctx.Builder.BuildBitCast(valF64, i64, $"{label}_bits");
+
+        var signI64 = ctx.Builder.BuildAnd(
+            ctx.Builder.BuildLShr(bits,
+                LLVMValueRef.CreateConstInt(i64, 63, false), $"{label}_signShr"),
+            LLVMValueRef.CreateConstInt(i64, 1, false), $"{label}_sign");
+        var expF64 = ctx.Builder.BuildAnd(
+            ctx.Builder.BuildLShr(bits,
+                LLVMValueRef.CreateConstInt(i64, 52, false), $"{label}_expShr"),
+            LLVMValueRef.CreateConstInt(i64, 0x7FF, false), $"{label}_expF64");
+        var mantF64 = ctx.Builder.BuildAnd(bits,
+            LLVMValueRef.CreateConstInt(i64, 0xFFFFFFFFFFFFFUL, false), $"{label}_mantF64");
+
+        var isZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, expF64,
+            LLVMValueRef.CreateConstInt(i64, 0, false), $"{label}_isZero");
+        var isMax = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, expF64,
+            LLVMValueRef.CreateConstInt(i64, 0x7FF, false), $"{label}_isMax");
+        var expNormal = ctx.Builder.BuildAdd(expF64,
+            LLVMValueRef.CreateConstInt(i64, 15360, false), $"{label}_expNorm");
+        var expAfterMax = ctx.Builder.BuildSelect(isMax,
+            LLVMValueRef.CreateConstInt(i64, 0x7FFF, false), expNormal, $"{label}_expMax");
+        var expM80 = ctx.Builder.BuildSelect(isZero,
+            LLVMValueRef.CreateConstInt(i64, 0, false), expAfterMax, $"{label}_expM80");
+
+        // Integer bit = 1 unless zero (then 0). For Inf/NaN it's 1 to
+        // match Intel's "unnormal" rejection — modern programs always
+        // use normal/pseudo-normal m80.
+        var intBit = ctx.Builder.BuildSelect(isZero,
+            LLVMValueRef.CreateConstInt(i64, 0, false),
+            LLVMValueRef.CreateConstInt(i64, 1, false), $"{label}_intBit");
+
+        // Mantissa shift left 11.
+        var mantM80 = ctx.Builder.BuildShl(mantF64,
+            LLVMValueRef.CreateConstInt(i64, 11, false), $"{label}_mantM80");
+        var m80lo = ctx.Builder.BuildOr(
+            ctx.Builder.BuildShl(intBit,
+                LLVMValueRef.CreateConstInt(i64, 63, false), $"{label}_intSh"),
+            mantM80, $"{label}_m80lo");
+        var m80hi = ctx.Builder.BuildOr(
+            ctx.Builder.BuildShl(signI64,
+                LLVMValueRef.CreateConstInt(i64, 15, false), $"{label}_signSh"),
+            expM80, $"{label}_m80hi");
+
+        // Write 8 bytes m80lo + 2 bytes m80hi.
+        for (int b = 0; b < 8; b++)
+        {
+            var shifted = b == 0
+                ? m80lo
+                : ctx.Builder.BuildLShr(m80lo,
+                    LLVMValueRef.CreateConstInt(i64, (uint)(b * 8), false),
+                    $"{label}_lo_sh{b}");
+            var byteVal = ctx.Builder.BuildTrunc(shifted, i8, $"{label}_lo_b{b}");
+            var off = b == 0 ? eaOff
+                : ctx.Builder.BuildAdd(eaOff,
+                    LLVMValueRef.CreateConstInt(i16, (uint)b, false),
+                    $"{label}_lo_o{b}");
+            X86_16Emitters.SegmentedWrite8FromBase(ctx, eaBase, off, byteVal, $"{label}_lo_w{b}");
+        }
+        for (int b = 0; b < 2; b++)
+        {
+            var shifted = b == 0
+                ? m80hi
+                : ctx.Builder.BuildLShr(m80hi,
+                    LLVMValueRef.CreateConstInt(i64, (uint)(b * 8), false),
+                    $"{label}_hi_sh{b}");
+            var byteVal = ctx.Builder.BuildTrunc(shifted, i8, $"{label}_hi_b{b}");
+            var off = ctx.Builder.BuildAdd(eaOff,
+                LLVMValueRef.CreateConstInt(i16, (uint)(8 + b), false),
+                $"{label}_hi_o{b}");
+            X86_16Emitters.SegmentedWrite8FromBase(ctx, eaBase, off, byteVal, $"{label}_hi_w{b}");
+        }
+    }
+
+    /// <summary>
     /// Phase 29.3e — read 8 bytes m64fp from EA, assemble i64, bitcast
     /// to f64. No widening needed since internal precision is already
     /// f64 — this is the matched-precision counterpart to LoadMemF32AsF64
@@ -5409,6 +5601,36 @@ internal static class X86FpuHelpers
             acc = acc is null ? shifted : ctx.Builder.BuildOr(acc.Value, shifted, $"{label}_a{b}");
         }
         return ctx.Builder.BuildBitCast(acc!.Value, f64, $"{label}_f64");
+    }
+
+    /// <summary>
+    /// Phase 29.3c+ — narrow f64 → f32 via FPTrunc and write 4 bytes
+    /// little-endian to EA. Shared by FSTP m32fp / FST m32fp + future
+    /// memory-form arithmetic that stores narrowed results.
+    /// </summary>
+    public static void StoreMemF32(EmitContext ctx,
+        LLVMValueRef eaBase, LLVMValueRef eaOff, LLVMValueRef valF64, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i32 = LLVMTypeRef.Int32;
+        var f32 = LLVMTypeRef.Float;
+        var asF32 = ctx.Builder.BuildFPTrunc(valF64, f32, $"{label}_f32");
+        var asI32 = ctx.Builder.BuildBitCast(asF32, i32, $"{label}_i32");
+        for (int b = 0; b < 4; b++)
+        {
+            var shifted = b == 0
+                ? asI32
+                : ctx.Builder.BuildLShr(asI32,
+                    LLVMValueRef.CreateConstInt(i32, (uint)(b * 8), false),
+                    $"{label}_sh{b}");
+            var byteVal = ctx.Builder.BuildTrunc(shifted, i8, $"{label}_b{b}");
+            var off = b == 0 ? eaOff
+                : ctx.Builder.BuildAdd(eaOff,
+                    LLVMValueRef.CreateConstInt(i16, (uint)b, false),
+                    $"{label}_o{b}");
+            X86_16Emitters.SegmentedWrite8FromBase(ctx, eaBase, off, byteVal, $"{label}_w{b}");
+        }
     }
 
     /// <summary>
@@ -5664,28 +5886,20 @@ internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
         }
         ctx.Builder.BuildBr(endBB);
 
-        // /3 FSTP m32fp — pop ST(0), FPTrunc to f32, bitcast i32, write 4
-        // bytes little-endian at EA.
+        // /2 FST m32fp — same as FSTP but no pop. Phase 29.3c+ supplement.
+        ctx.Builder.PositionAtEnd(memArms[2]);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "fstm32_st0");
+            X86FpuHelpers.StoreMemF32(ctx, eaBase, eaOff, st0, "fstm32");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // /3 FSTP m32fp — Pop ST(0) then write as f32 to EA.
         ctx.Builder.PositionAtEnd(memArms[3]);
         {
             var popped = X86FpuHelpers.Pop(ctx, "fstpm32");
-            var poppedF32 = ctx.Builder.BuildFPTrunc(popped, f32, "fstpm32_f32");
-            var poppedI32 = ctx.Builder.BuildBitCast(poppedF32, i32, "fstpm32_i32");
-            for (int b = 0; b < 4; b++)
-            {
-                var shifted = b == 0
-                    ? poppedI32
-                    : ctx.Builder.BuildLShr(poppedI32,
-                        LLVMValueRef.CreateConstInt(i32, (uint)(b * 8), false),
-                        $"fstpm32_sh{b}");
-                var byteVal = ctx.Builder.BuildTrunc(shifted, i8, $"fstpm32_byte{b}");
-                var offPlus = b == 0
-                    ? eaOff
-                    : ctx.Builder.BuildAdd(eaOff,
-                        LLVMValueRef.CreateConstInt(i16, (uint)b, false),
-                        $"fstpm32_off{b}");
-                X86_16Emitters.SegmentedWrite8FromBase(ctx, eaBase, offPlus, byteVal, $"fstpm32_w{b}");
-            }
+            X86FpuHelpers.StoreMemF32(ctx, eaBase, eaOff, popped, "fstpm32");
         }
         ctx.Builder.BuildBr(endBB);
 
@@ -5708,12 +5922,11 @@ internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
         }
         ctx.Builder.BuildBr(endBB);
 
-        // /1 /2 /4 /6 — no-op for Phase 29.9. /4 FLDENV and /6 FSTENV/
-        // FNSTENV (save/restore 14- or 28-byte FPU environment block) are
-        // complex and rarely needed by DOS code; defer to a future sprint.
+        // /1 /4 /6 — no-op. /4 FLDENV / /6 FSTENV (14/28-byte FPU env
+        // block save / restore) are complex and rare in DOS code; defer.
         for (int r = 0; r < 8; r++)
         {
-            if (r == 0 || r == 3 || r == 5 || r == 7) continue;
+            if (r == 0 || r == 2 || r == 3 || r == 5 || r == 7) continue;
             ctx.Builder.PositionAtEnd(memArms[r]);
             ctx.Builder.BuildBr(endBB);
         }
@@ -5725,6 +5938,33 @@ internal sealed class X86FpuD9DispatchEmitter : IMicroOpEmitter
         var regSh = ctx.Builder.BuildShl(reg,
             LLVMValueRef.CreateConstInt(i32, 3, false), "d9_regSh");
         var combined = ctx.Builder.BuildOr(regSh, rm, "d9_combined");
+
+        // FLD ST(i) covers combined 0x00..0x07 (D9 C0..C7) — push the
+        // value of logical ST(i). Range check like FXCH (i = rm).
+        var isFldRegLo = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGE,
+            combined, LLVMValueRef.CreateConstInt(i32, 0x00, false), "d9_isFldRegLo");
+        var isFldRegHi = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntULE,
+            combined, LLVMValueRef.CreateConstInt(i32, 0x07, false), "d9_isFldRegHi");
+        var isFldReg = ctx.Builder.BuildAnd(isFldRegLo, isFldRegHi, "d9_isFldReg");
+
+        var fldRegBB     = ctx.Function.AppendBasicBlock("fld_reg");
+        var afterFldRegBB = ctx.Function.AppendBasicBlock("after_fld_reg");
+        ctx.Builder.BuildCondBr(isFldReg, fldRegBB, afterFldRegBB);
+
+        ctx.Builder.PositionAtEnd(fldRegBB);
+        {
+            // FLD ST(i): read ST(i) BEFORE the push (Intel SDM rule —
+            // i refers to the pre-push stack). Then push the value, which
+            // decrements TOP and writes to the new ST(0) slot. Reading
+            // BEFORE means we don't accidentally overwrite or read from
+            // the slot we're about to push into.
+            var val = X86FpuHelpers.LoadLogicalSt(ctx, rm, "fldreg_val");
+            X86FpuHelpers.Push(ctx, val,
+                LLVMValueRef.CreateConstInt(i16, 0, false), "fldreg");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(afterFldRegBB);
 
         // FXCH covers combined 0x08..0x0F (C8..CF) — 8 contiguous opcodes
         // that all swap ST(0) with ST(i) where i = rm. Detect via range
@@ -5981,6 +6221,7 @@ internal sealed class X86FpuDBDispatchEmitter : IMicroOpEmitter
         // would equal 0xE3 exactly. Using `mod == 3 && (reg << 3 | rm) == 0x23`
         // is equivalent and avoids reconstructing the mod field.
         var i32 = LLVMTypeRef.Int32;
+        var i16 = LLVMTypeRef.Int16;
         var mod = ctx.Resolve("modrm_mod");
         var reg = ctx.Resolve("modrm_reg");
         var rm  = ctx.Resolve("modrm_rm");
@@ -5991,22 +6232,61 @@ internal sealed class X86FpuDBDispatchEmitter : IMicroOpEmitter
             LLVMValueRef.CreateConstInt(i32, 3, false), "db_regSh");
         var combined = ctx.Builder.BuildOr(regSh, rm, "db_combined");
 
-        // Two reg-form opcodes wired in 29.3b/29.9:
-        //   DB E2 = FNCLEX (mod=11 reg=100 rm=010 = combined 0x22)
-        //   DB E3 = FNINIT (mod=11 reg=100 rm=011 = combined 0x23)
-        // Use a switch on `combined` (gated by mod==11) so future DB
-        // reg-form opcodes (FNSETPM E4 = 0x24, FSETPM E5 = 0x25) can be
-        // added cleanly. Other DB sub-opcodes (FILD/FIST/FISTP m32int +
-        // FLD/FSTP m80fp) stay no-op until 29.3e / 29.10.
+        // Phase 29.10 — DB memory-form coverage:
+        //   DB /5 mod≠11  FLD m80fp   (load extended precision, push)
+        //   DB /7 mod≠11  FSTP m80fp  (pop, store extended precision)
+        // Reg-form opcodes wired in 29.3b / 29.9:
+        //   DB E2 = FNCLEX (mod=11 combined 0x22)
+        //   DB E3 = FNINIT (mod=11 combined 0x23)
+        // Other DB sub-opcodes (FILD/FIST/FISTP m32int) stay no-op.
         var endBB = ctx.Function.AppendBasicBlock("db_end");
+        var memBB = ctx.Function.AppendBasicBlock("db_mem");
+        var regBB = ctx.Function.AppendBasicBlock("db_reg");
+        ctx.Builder.BuildCondBr(isMod3, regBB, memBB);
+
+        // ----- Memory form: switch on /reg for FLD/FSTP m80fp -----
+        ctx.Builder.PositionAtEnd(memBB);
+        var eaBase = ctx.Resolve("ea_base");
+        var eaOff  = ctx.Resolve("ea_off");
+        var memDefault = ctx.Function.AppendBasicBlock("db_mem_default");
+        var memArms = new LLVMBasicBlockRef[8];
+        for (int r = 0; r < 8; r++) memArms[r] = ctx.Function.AppendBasicBlock($"db_mem_{r}");
+        var memSw = ctx.Builder.BuildSwitch(reg, memDefault, 8);
+        for (int r = 0; r < 8; r++)
+            memSw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)r, false), memArms[r]);
+
+        // /5 FLD m80fp — read 10 bytes, convert to f64, push.
+        ctx.Builder.PositionAtEnd(memArms[5]);
+        {
+            var v = X86FpuHelpers.LoadMemF80AsF64(ctx, eaBase, eaOff, "fldm80");
+            X86FpuHelpers.Push(ctx, v,
+                LLVMValueRef.CreateConstInt(i16, 0, false), "fldm80");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // /7 FSTP m80fp — pop ST(0), convert to 10-byte m80fp, write.
+        ctx.Builder.PositionAtEnd(memArms[7]);
+        {
+            var v = X86FpuHelpers.Pop(ctx, "fstpm80");
+            X86FpuHelpers.StoreMemF80(ctx, eaBase, eaOff, v, "fstpm80");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // /0 /1 /2 /3 /4 /6 — no-op (FILD/FIST/FISTP m32int deferred).
+        for (int r = 0; r < 8; r++)
+        {
+            if (r == 5 || r == 7) continue;
+            ctx.Builder.PositionAtEnd(memArms[r]);
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(memDefault);
+        ctx.Builder.BuildBr(endBB);
+
+        // ----- Register form: switch on combined for FNCLEX/FNINIT -----
+        ctx.Builder.PositionAtEnd(regBB);
         var defaultBB = ctx.Function.AppendBasicBlock("db_default");
         var fninitBB  = ctx.Function.AppendBasicBlock("fninit");
         var fnclexBB  = ctx.Function.AppendBasicBlock("fnclex");
-
-        var dispatchBB = ctx.Function.AppendBasicBlock("db_dispatch");
-        ctx.Builder.BuildCondBr(isMod3, dispatchBB, endBB);
-
-        ctx.Builder.PositionAtEnd(dispatchBB);
         var sw = ctx.Builder.BuildSwitch(combined, defaultBB, 2);
         sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x22, false), fnclexBB);
         sw.AddCase(LLVMValueRef.CreateConstInt(i32, 0x23, false), fninitBB);
@@ -6021,7 +6301,6 @@ internal sealed class X86FpuDBDispatchEmitter : IMicroOpEmitter
         // Real 8087 also clears FPU_IP / FPU_OP and the last-instruction
         // opcode register; we don't model those, so they're not touched.
         ctx.Builder.PositionAtEnd(fninitBB);
-        var i16 = LLVMTypeRef.Int16;
         ctx.Builder.BuildStore(
             LLVMValueRef.CreateConstInt(i16, 0x037F, false),
             ctx.GepStatusRegister("FPU_CW"));
