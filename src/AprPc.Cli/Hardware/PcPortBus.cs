@@ -93,12 +93,47 @@ public sealed class PcPortBus
             // CMOS data
             0x71 => _cmos[_cmosIndex & 0x3F],
 
+            // MDA / CGA video status registers (0x3BA / 0x3DA).
+            // Real silicon: bit 0 = horizontal retrace (cycles every
+            // ~70 μs at 15.7 kHz), bit 3 = vertical retrace (every
+            // ~16.7 ms at 60 Hz). BIOS POST + DOS games poll these to
+            // sync to retrace boundaries before writing the
+            // framebuffer (avoids tearing). Without time-varying bits
+            // the polling loop spins forever.
+            //
+            // Phase 29-supp — implement via a per-read counter. Each
+            // call increments _videoStatusCount and returns alternating
+            // bit 0 + bit 3 patterns so the BIOS sees both edges within
+            // a few reads. Not cycle-accurate but breaks the spin loop
+            // and lets the BIOS POST advance past video init.
+            0x3BA or 0x3DA => ReadVideoStatus(),
+
             // Default — open bus
             _ => 0xFF,
         };
         if (_traceIo && port != 0x40 && port != 0x21)   // skip the noisy ones
             Console.Error.WriteLine($"  [IO] IN  port=0x{port:X3} → 0x{v:X2}");
         return v;
+    }
+
+    // Phase 29-supp — MDA/CGA status register read counter. Each access
+    // bumps the counter; we produce a 4-state cycle (00, 01, 09, 08) so
+    // both bit 0 (HSYNC) and bit 3 (VSYNC) traverse all four edges
+    // within 4 reads. BIOS polling code samples these to find both the
+    // start and end of retrace pulses; a per-read counter is enough for
+    // POST detection without needing wall-clock cycle accuracy.
+    private long _videoStatusCount;
+    private byte ReadVideoStatus()
+    {
+        _videoStatusCount++;
+        var c = _videoStatusCount & 3;
+        return c switch
+        {
+            0 => 0x00,   // neither retrace
+            1 => 0x01,   // HSYNC only
+            2 => 0x09,   // both
+            _ => 0x08,   // VSYNC only
+        };
     }
 
     public ushort Read16(ushort port)

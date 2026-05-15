@@ -153,12 +153,33 @@ internal static class HeadlessRunner
         if (opts.ScreenshotPath is { } ssPath && runner.Bus is { } bus2)
         {
             // Phase 28.2 — real CGA framebuffer → PNG via the existing
-            // AprX86.Cli.Video.X86CgaRenderer.
+            // AprX86.Cli.Video.X86CgaRenderer. Phase 29-supp — renderer
+            // auto-detects MDA vs CGA based on which framebuffer has
+            // printable content (real BIOS POST writes MDA 0xB0000).
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(ssPath)) ?? ".");
+                int fbBase = X86CgaRenderer.PickFramebufferBase(bus2.Memory.Ram);
                 X86CgaRenderer.Render(bus2.Memory.Ram, ssPath);
-                Console.WriteLine($"  screenshot: {ssPath} ({X86CgaRenderer.ImgW}×{X86CgaRenderer.ImgH} PNG)");
+                Console.WriteLine($"  screenshot: {ssPath} ({X86CgaRenderer.ImgW}×{X86CgaRenderer.ImgH} PNG, fb=0x{fbBase:X5} {(fbBase == 0xB0000 ? "MDA" : "CGA")})");
+
+                // Phase 29-supp — also dump the first 3 rows of the
+                // picked framebuffer as ASCII (printable chars + dots
+                // for non-printable) so trace logs show what the BIOS
+                // actually drew. Useful when running headless and you
+                // can't view the PNG.
+                Console.WriteLine($"  text preview (first 3 rows):");
+                for (int row = 0; row < 3; row++)
+                {
+                    var sb = new System.Text.StringBuilder("    | ");
+                    for (int col = 0; col < 80; col++)
+                    {
+                        byte ch = bus2.Memory.Ram[fbBase + (row * 80 + col) * 2];
+                        sb.Append(ch >= 0x20 && ch < 0x7F ? (char)ch : '.');
+                    }
+                    sb.Append(" |");
+                    Console.WriteLine(sb.ToString());
+                }
             }
             catch (FileNotFoundException ex)
             {

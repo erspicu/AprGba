@@ -37,19 +37,56 @@ public static class X86CgaRenderer
 
     /// <summary>
     /// Render the CGA text-mode framebuffer at 0xB8000 to a PNG file.
+    /// Auto-detects MDA vs CGA: if 0xB8000 looks empty (mostly zero
+    /// char bytes) but 0xB0000 has content, switches to MDA. Phase
+    /// 29-supp — real PC/XT BIOS with MDA card writes to 0xB0000;
+    /// without this we'd render a black PNG even though POST text is
+    /// in memory.
     /// </summary>
     public static void Render(byte[] mem, string outPath)
     {
-        var rgb = RenderToRgbBytes(mem);
+        int fbBase = PickFramebufferBase(mem);
+        var rgb = RenderToRgbBytes(mem, fbBase);
         PngWriter.SavePng(rgb, ImgW, ImgH, outPath);
     }
 
+    /// <summary>Sum of non-zero char bytes in a text-mode framebuffer.</summary>
+    private static int FbContentScore(byte[] mem, int fbBase)
+    {
+        int score = 0;
+        for (int i = 0; i < CellsW * CellsH; i++)
+        {
+            byte ch = mem[fbBase + i * 2];
+            if (ch != 0x00 && ch != 0x20) score++;
+        }
+        return score;
+    }
+
     /// <summary>
-    /// Render the CGA text-mode framebuffer at 0xB8000 into a packed
-    /// 24bpp RGB byte buffer (size <c>ImgW * ImgH * 3</c>). Used by
-    /// both the PNG writer and the WinForms framebuffer blt path.
+    /// Phase 29-supp — pick whichever of CGA / MDA framebuffer has
+    /// printable content. Most machines map only one or the other.
     /// </summary>
-    public static byte[] RenderToRgbBytes(byte[] mem)
+    public static int PickFramebufferBase(byte[] mem)
+    {
+        int cga = FbContentScore(mem, 0xB8000);
+        int mda = FbContentScore(mem, 0xB0000);
+        return mda > cga ? 0xB0000 : 0xB8000;
+    }
+
+    /// <summary>
+    /// Backward-compat overload — defaults to 0xB8000 (CGA). New
+    /// callers should pass the framebuffer base explicitly when MDA
+    /// auto-detect (above) doesn't apply.
+    /// </summary>
+    public static byte[] RenderToRgbBytes(byte[] mem) => RenderToRgbBytes(mem, 0xB8000);
+
+    /// <summary>
+    /// Render the text-mode framebuffer at <paramref name="fbBase"/>
+    /// into a packed 24bpp RGB byte buffer (size <c>ImgW * ImgH * 3</c>).
+    /// Used by both the PNG writer and the WinForms framebuffer blt
+    /// path. fbBase = 0xB8000 for CGA, 0xB0000 for MDA.
+    /// </summary>
+    public static byte[] RenderToRgbBytes(byte[] mem, int fbBase)
     {
         var fontDir = X86CgaFont.LocateAprFontDir()
             ?? throw new FileNotFoundException(
@@ -62,7 +99,7 @@ public static class X86CgaRenderer
         for (int cy = 0; cy < CellsH; cy++)
         for (int cx = 0; cx < CellsW; cx++)
         {
-            int cellOff = 0xB8000 + (cy * CellsW + cx) * 2;
+            int cellOff = fbBase + (cy * CellsW + cx) * 2;
             byte ch    = mem[cellOff];
             byte attr  = mem[cellOff + 1];
             uint fg    = Palette[attr & 0x0F];
