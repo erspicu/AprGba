@@ -126,8 +126,12 @@ test-roms/x86/
 
 ## Deferred (truly optional)
 
-- m80fp pack/unpack (10-byte extended format; rare outside Turbo
-  Pascal Extended)
+(2026-05-16 supplemental sprint `dff7d7e` filled the m80fp gap — see
+the closure note at
+`MD/performance/202605160100-x87-fpu-functional-complete.md` for
+details. Items below are the genuine "won't ship without a real DOS
+program asking for them" set.)
+
 - DC/DA/DE arithmetic family (f64 reg arith + i32/i16 integer arith +
   pop-after register variants — pattern mirrors of D8)
 - DF integer load/store (FILD/FIST/FISTP m16/m32/m64int — only

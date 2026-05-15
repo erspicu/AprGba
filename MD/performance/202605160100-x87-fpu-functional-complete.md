@@ -34,9 +34,10 @@ SpecCompiler (single LLVM module)
 | Category | Opcodes | Sprint | Verified by |
 |---|---|---|---|
 | Stack push/pop helpers | (internal) | 29.3c | Used by everything below |
-| Data movement m32fp | FLD m32, FSTP m32 | 29.3c/d | 29.3-fpu-roundtrip.com |
+| Data movement m32fp | FLD m32, FST m32, FSTP m32 | 29.3c/d + gap-fill | 29.3-fpu-roundtrip.com + 29.10-fpu-fillgaps.com |
 | Data movement m64fp | FLD m64, FST m64, FSTP m64 | 29.3e | 29.11-fpu-integration.com |
-| Register-form FLD/FXCH | FXCH ST(i) | 29.3d | 29.3d-fpu-suite.com |
+| Data movement m80fp | FLD m80, FSTP m80 (via f64 internal) | 29.10 | 29.10-fpu-fillgaps.com |
+| Register-form FLD/FXCH | FLD ST(i), FXCH ST(i) | 29.3d + gap-fill | 29.3d-fpu-suite.com + 29.10-fpu-fillgaps.com |
 | Constants | FLD1, FLDL2T, FLDL2E, FLDPI, FLDLG2, FLDLN2, FLDZ | 29.3d | 29.3d-fpu-suite.com |
 | Arithmetic (m32 + ST(i)) | FADD, FMUL, FSUB, FSUBR, FDIV, FDIVR | 29.4 | 29.4-fpu-arith.com |
 | Compares | FCOM, FCOMP, FTST (29.8) | 29.5/8 | 29.5-fpu-compare.com |
@@ -48,8 +49,9 @@ SpecCompiler (single LLVM module)
 | Control | FNINIT, FNCLEX, FLDCW, FSTCW | 29.3b/9 | 29.3-fninit.com + 29.9-fpu-control.com |
 | Integration capstone | Hypotenuse via chained ops | 29.11 | 29.11-fpu-integration.com |
 
-That's **~30 distinct opcodes** covering every category Intel 8087/80287
-documented in the SDM Volume 2 for the ESC family (0xD8-0xDF).
+That's **~35 distinct opcodes** covering every category Intel 8087/80287
+documented in the SDM Volume 2 for the ESC family (0xD8-0xDF). (Update
+counter reflects the 2026-05-16 supplemental gap-fill below.)
 
 ## Test ROM matrix
 
@@ -119,9 +121,10 @@ d479e17 feat(N29.9): FPU control — FLDCW / FSTCW / FNCLEX
 
 ## Deferred (truly optional)
 
-- **m80fp (10-byte extended precision)** — pack/unpack via C# helpers
-  to/from f64. Turbo Pascal "Extended" type + 387+ FBLD/FBSTP. Almost
-  never used outside specific math libraries; defer until needed.
+(Update 2026-05-16 supplemental sprint `dff7d7e`: m80fp was originally
+deferred here but has since been implemented via LLVM IR bit
+manipulation — see "Update: 29.3c/d/10 gap-fill" section below.)
+
 - **DC/DA/DE arithmetic family** — f64-form arithmetic with reg
   writeback direction reversed (DC), i32 / i16 integer arithmetic (DA/
   DE), pop-after register-register variants (DE). All pattern mirrors
@@ -153,6 +156,42 @@ single-CPU level; Phase 27 proved spec inheritance (i80286 extends
 i8086). Phase 29 proves orthogonal extension — the FPU is not an
 inherited variant of the CPU; it's a peer component merged at machine
 configuration time.
+
+## Update: 29.3c/d/10 gap-fill (2026-05-16 same-day supplemental)
+
+Per user request following the initial closure, three remaining
+data-movement gaps were filled in commit `dff7d7e`. The opcode
+coverage table above is updated to reflect this; the Deferred list
+above had "m80fp" removed.
+
+| Sub-sprint | Opcode | Behavior |
+|---|---|---|
+| 29.3c-supp | D9 /2 mem FST m32fp | Same as FSTP m32 but no pop — keeps ST(0) on stack |
+| 29.3d-supp | D9 C0-C7 FLD ST(i) | Copy logical ST(i) onto top (push); i = rm |
+| 29.10 | DB /5 mem FLD m80fp | Read 10 bytes LE, convert 80-bit → f64, push |
+| 29.10 | DB /7 mem FSTP m80fp | Pop ST(0), convert f64 → 80-bit, write 10 bytes |
+
+New `X86FpuHelpers` helpers:
+- `StoreMemF32(eaBase, eaOff, valF64)` — DRY refactor shared by FSTP m32 + FST m32 (FPTrunc + 4 byte writes).
+- `LoadMemF80AsF64(eaBase, eaOff)` — 10 bytes → decompose sign/exp/mant → branch-free `select` on (exp==0 / exp==0x7FFF / normal) → f64 bits.
+- `StoreMemF80(eaBase, eaOff, valF64)` — inverse: bitcast f64 → decompose → same select pattern → write 10 bytes.
+
+The m80fp implementation does the bit manipulation entirely in LLVM IR
+using `select` (no cond-br), lowering cleanly to x86-64 CMOV. Special
+cases (zero, Inf/NaN) handled without branches. f64 internal precision
+means a m80 → f64 round-trip loses the low 11 bits of mantissa
+(documented as acceptable per Gemini's "f64 internal" decision, §2).
+
+Test ROM `test-roms/x86/29.10-fpu-fillgaps.com` (94 bytes) verifies
+all 4 new ops:
+- FST m32 + FSTP m32 of π → both `[out]` and `[out2]` contain `0x40490FDB` (proves FST didn't pop)
+- FLD ST(1) of 3.5 → FSTP m32 → out high WORD = `0x4060`
+- FLD m80(e) → FSTP m32 → e_f32 high WORD = `0x402D` (matches `(float)M_E`)
+
+Final state AX/BX/CX/DX = `0x4049 / 0x4049 / 0x4060 / 0x402D`.
+FreeDOS HLE regression: 2838 INT calls. Plan doc updated to mark
+29.10 ✅ DONE and to confirm 29.6 was already covered in 29.3d (no
+separate work).
 
 ## Cross-references
 

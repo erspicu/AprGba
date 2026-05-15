@@ -1334,7 +1334,7 @@ separate, runtime unified**（QEMU TCG / Bochs / 86Box 都這麼做）。Phase 2
 
 ### Deferred (truly optional)
 
-- **m80fp** (10-byte 擴展精度 / Turbo Pascal Extended) — pack/unpack helper 可後補
+- ~~**m80fp** (10-byte 擴展精度 / Turbo Pascal Extended)~~ — **2026-05-16 補完** (`dff7d7e`)，連同 `FST m32` (D9 /2) + `FLD ST(i)` (D9 C0-C7) 一起補上。LLVM IR 內 bit manipulation 處理 80-bit → f64 轉換（branch-free `select`），test ROM `29.10-fpu-fillgaps.com` 驗證 FLD m80(e) → FSTP m32 = `(float)M_E` bit-exact。
 - **DC/DA/DE 算術 family** — D8 pattern mirror，~1 sprint 可加
 - **DF 整數 load/store** (FILD/FIST/FISTP m16/m32/m64int) — 只做 FNSTSW AX
 - **FSCALE/FXTRACT/FPREM** — libm 內部用，留給未來 80387 emulation
