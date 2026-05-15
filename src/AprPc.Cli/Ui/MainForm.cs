@@ -9,18 +9,18 @@
 
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using AprX86.Cli.Video;
 
 namespace AprPc.Cli.Ui;
 
 public sealed class MainForm : Form
 {
-    private const int CharCols = 80;
-    private const int CharRows = 25;
-    private const int CellW    = 8;
-    private const int CellH    = 16;
-    public  const int CanvasW  = CharCols * CellW;   // 640
-    public  const int CanvasH  = CharRows * CellH;   // 400
+    // Canvas geometry: drive it from X86CgaRenderer so the WinForms
+    // surface and the headless PNG renderer always agree.
+    public  const int CanvasW  = X86CgaRenderer.ImgW;   // 640
+    public  const int CanvasH  = X86CgaRenderer.ImgH;   // 350
 
     private readonly PcOptions _options;
     private readonly PcSystemRunner _runner;
@@ -148,8 +148,7 @@ public sealed class MainForm : Form
 
     private void RefreshFromRunner()
     {
-        // Approximate MIPS-ish display (instructions/sec for the
-        // placeholder loop — replaced by real CPU MIPS in 28.1+).
+        // === Stats line ===
         var now = DateTime.UtcNow;
         var dt  = (now - _lastSampleTime).TotalSeconds;
         if (dt >= 0.5)
@@ -161,8 +160,67 @@ public sealed class MainForm : Form
             _lastInstrCount  = cur;
             _lastSampleTime  = now;
         }
-
         _statusState.Text = _runner.State.ToString();
+
+        // === Framebuffer blt (Phase 28.2) ===
+        // Pull the B800 framebuffer through X86CgaRenderer.RenderToRgbBytes
+        // and blit into our PictureBox bitmap. Skipped before the
+        // runner has constructed the bus (Start() not called yet).
+        if (_runner.Bus is { } bus)
+        {
+            try
+            {
+                var rgb = X86CgaRenderer.RenderToRgbBytes(bus.Memory.Ram);
+                BltRgbIntoBitmap(rgb, _frameBitmap);
+                _canvas.Invalidate();
+            }
+            catch (FileNotFoundException)
+            {
+                // CGA font directory missing — Apr86 dump not present.
+                // Don't spam the user every 16ms; status bar shows it.
+                _statusState.Text = "Idle (no CGA font)";
+            }
+        }
+    }
+
+    private static void BltRgbIntoBitmap(byte[] rgbBgrSwapped, Bitmap bm)
+    {
+        // X86CgaRenderer emits 24bpp **RGB** packed; System.Drawing's
+        // Format24bppRgb is actually **BGR** in memory layout. We swap
+        // R and B during the blit.
+        var data = bm.LockBits(
+            new Rectangle(0, 0, bm.Width, bm.Height),
+            ImageLockMode.WriteOnly,
+            PixelFormat.Format24bppRgb);
+        try
+        {
+            int stride = data.Stride;
+            int rowLen = bm.Width * 3;
+            unsafe
+            {
+                byte* dst = (byte*)data.Scan0;
+                for (int y = 0; y < bm.Height; y++)
+                {
+                    int srcRow = y * rowLen;
+                    int dstRow = y * stride;
+                    for (int x = 0; x < bm.Width; x++)
+                    {
+                        // src is R G B
+                        byte r = rgbBgrSwapped[srcRow + x * 3 + 0];
+                        byte g = rgbBgrSwapped[srcRow + x * 3 + 1];
+                        byte b = rgbBgrSwapped[srcRow + x * 3 + 2];
+                        // dst is B G R
+                        dst[dstRow + x * 3 + 0] = b;
+                        dst[dstRow + x * 3 + 1] = g;
+                        dst[dstRow + x * 3 + 2] = r;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            bm.UnlockBits(data);
+        }
     }
 
     private void TogglePause()

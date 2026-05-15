@@ -27,6 +27,7 @@
 
 using System.Collections.Concurrent;
 using AprCpu.Core.JsonSpec;
+using AprPc.Cli.Bios;
 using AprPc.Cli.Memory;
 using AprX86.Cli.Cpu;
 
@@ -61,8 +62,10 @@ public sealed class PcSystemRunner : IDisposable
     // can construct PcSystemRunner before a disk image is available.
     private PcMemoryBus? _bus;
     private X86JsonCpu? _cpu;
+    private HleBios? _bios;
     public PcMemoryBus? Bus => _bus;
     public X86JsonCpu?  Cpu => _cpu;
+    public HleBios?     Bios => _bios;
 
     // Phase 28.2 will fill this in from the CGA framebuffer slice
     // (4 KB at 0xB8000-0xB8FFF). For 28.0 the runner just zero-fills it
@@ -104,6 +107,10 @@ public sealed class PcSystemRunner : IDisposable
             variant: _options.Cpu);
         _cpu.Reset();
         _cpu.SetEntryPoint(0xFFFF, 0x0000);   // 8086 reset vector
+
+        // Phase 28.2 — install HLE BIOS INT handlers + IVT entries.
+        _bios = new HleBios(_cpu, _bus, traceInt: _options.TraceInt);
+        _bios.Install();
 
         // Start in Paused so LoadTestRom() / Open Floppy can land
         // before the CPU starts stepping. Avoids a race where the
@@ -192,8 +199,19 @@ public sealed class PcSystemRunner : IDisposable
                     continue;
                 }
 
-                if (_cpu is not null)
+                if (_cpu is not null && _bios is not null)
                 {
+                    // Phase 28.2 — HLE trap check. If CS:IP landed at
+                    // an installed BIOS vector (F000:00xx), dispatch
+                    // the C# handler + simulate IRET instead of
+                    // executing the F000:00xx body (there isn't one).
+                    var st = _cpu.State;
+                    if (_bios.IsTrapped(st.CS, st.IP))
+                    {
+                        _bios.Dispatch((byte)st.IP);
+                        Interlocked.Increment(ref _instructionsExecuted);
+                        continue;
+                    }
                     _cpu.Step();
                     Interlocked.Increment(ref _instructionsExecuted);
                 }

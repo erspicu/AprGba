@@ -1,12 +1,10 @@
 // HeadlessRunner — `--headless` execution path. No UI window.
 //
-// Phase 28.0: prints the resolved config + runs the (placeholder)
-// emulator thread for `--max-cycles` ticks or `--frames` frames, then
-// optionally writes a screenshot PNG and exits. This keeps CI / smoke
-// tests independent of WinForms entirely.
-//
-// 28.2+ will plug in the real CGA framebuffer → PNG path via the
-// existing AprX86.Cli.Video.X86CgaRenderer.
+// Prints the resolved config, optionally loads a flat ROM into RAM
+// at 0000:7C00, runs the CPU until --max-cycles is hit or it HLTs,
+// dumps register state, and optionally writes a CGA framebuffer PNG.
+
+using AprX86.Cli.Video;
 
 namespace AprPc.Cli;
 
@@ -67,13 +65,20 @@ internal static class HeadlessRunner
             Console.WriteLine($"    DS={state.DS:X4} ES={state.ES:X4} SS={state.SS:X4} SP={state.SP:X4} BP={state.BP:X4}");
         }
 
-        if (opts.ScreenshotPath is { } ssPath)
+        if (opts.ScreenshotPath is { } ssPath && runner.Bus is { } bus)
         {
-            // Phase 28.1 still has no real CGA renderer wired through
-            // PcMemoryBus → PNG (28.2). Write an empty stub so CI
-            // plumbing can verify the path was honoured.
-            File.WriteAllBytes(ssPath, Array.Empty<byte>());
-            Console.WriteLine($"  screenshot: {ssPath} (empty stub; 28.2 wires real CGA → PNG)");
+            // Phase 28.2 — real CGA framebuffer → PNG via the existing
+            // AprX86.Cli.Video.X86CgaRenderer.
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(ssPath)) ?? ".");
+                X86CgaRenderer.Render(bus.Memory.Ram, ssPath);
+                Console.WriteLine($"  screenshot: {ssPath} ({X86CgaRenderer.ImgW}×{X86CgaRenderer.ImgH} PNG)");
+            }
+            catch (FileNotFoundException ex)
+            {
+                Console.Error.WriteLine($"  screenshot: skipped — {ex.Message}");
+            }
         }
 
         return 0;

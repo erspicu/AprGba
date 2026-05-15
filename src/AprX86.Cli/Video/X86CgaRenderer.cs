@@ -40,13 +40,23 @@ public static class X86CgaRenderer
     /// </summary>
     public static void Render(byte[] mem, string outPath)
     {
+        var rgb = RenderToRgbBytes(mem);
+        PngWriter.SavePng(rgb, ImgW, ImgH, outPath);
+    }
+
+    /// <summary>
+    /// Render the CGA text-mode framebuffer at 0xB8000 into a packed
+    /// 24bpp RGB byte buffer (size <c>ImgW * ImgH * 3</c>). Used by
+    /// both the PNG writer and the WinForms framebuffer blt path.
+    /// </summary>
+    public static byte[] RenderToRgbBytes(byte[] mem)
+    {
         var fontDir = X86CgaFont.LocateAprFontDir()
             ?? throw new FileNotFoundException(
                 "could not locate OldProject/Apr86/Apr8086/ASII_FONT/. " +
                 "Clone the Apr86 source repo into OldProject/Apr86 (it ships the 256 8×14 CGA glyph PNGs).");
         X86CgaFont.EnsureLoaded(fontDir);
 
-        // Build packed RGB scanlines (3 bytes per pixel) for PngWriter.
         var rgb = new byte[ImgW * ImgH * 3];
 
         for (int cy = 0; cy < CellsH; cy++)
@@ -60,7 +70,7 @@ public static class X86CgaRenderer
             DrawGlyph(rgb, ch, cx * X86CgaFont.FontW, cy * X86CgaFont.FontH, fg, bg);
         }
 
-        PngWriter.SavePng(rgb, ImgW, ImgH, outPath);
+        return rgb;
     }
 
     private static void DrawGlyph(byte[] rgb, byte ch, int x0, int y0, uint fg, uint bg)
