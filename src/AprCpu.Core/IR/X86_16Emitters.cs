@@ -5379,6 +5379,66 @@ internal static class X86FpuHelpers
     }
 
     /// <summary>
+    /// Phase 29.3e — read 8 bytes m64fp from EA, assemble i64, bitcast
+    /// to f64. No widening needed since internal precision is already
+    /// f64 — this is the matched-precision counterpart to LoadMemF32AsF64
+    /// used by FLD m64fp + DC arithmetic family.
+    /// </summary>
+    public static LLVMValueRef LoadMemF64(EmitContext ctx,
+        LLVMValueRef eaBase, LLVMValueRef eaOff, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i64 = LLVMTypeRef.Int64;
+        var f64 = LLVMTypeRef.Double;
+        // Read 8 bytes; assemble into i64 LE.
+        LLVMValueRef? acc = null;
+        for (int b = 0; b < 8; b++)
+        {
+            var off = b == 0 ? eaOff
+                : ctx.Builder.BuildAdd(eaOff,
+                    LLVMValueRef.CreateConstInt(i16, (uint)b, false),
+                    $"{label}_o{b}");
+            var byteVal = X86_16Emitters.SegmentedRead8FromBase(ctx, eaBase, off, $"{label}_b{b}");
+            var ext = ctx.Builder.BuildZExt(byteVal, i64, $"{label}_z{b}");
+            var shifted = b == 0
+                ? ext
+                : ctx.Builder.BuildShl(ext,
+                    LLVMValueRef.CreateConstInt(i64, (uint)(b * 8), false),
+                    $"{label}_s{b}");
+            acc = acc is null ? shifted : ctx.Builder.BuildOr(acc.Value, shifted, $"{label}_a{b}");
+        }
+        return ctx.Builder.BuildBitCast(acc!.Value, f64, $"{label}_f64");
+    }
+
+    /// <summary>
+    /// Phase 29.3e — bitcast f64 → i64 and write 8 bytes little-endian
+    /// to EA. Matched-precision store; no narrowing.
+    /// </summary>
+    public static void StoreMemF64(EmitContext ctx,
+        LLVMValueRef eaBase, LLVMValueRef eaOff, LLVMValueRef valF64, string label)
+    {
+        var i8  = LLVMTypeRef.Int8;
+        var i16 = LLVMTypeRef.Int16;
+        var i64 = LLVMTypeRef.Int64;
+        var valI64 = ctx.Builder.BuildBitCast(valF64, i64, $"{label}_i64");
+        for (int b = 0; b < 8; b++)
+        {
+            var shifted = b == 0
+                ? valI64
+                : ctx.Builder.BuildLShr(valI64,
+                    LLVMValueRef.CreateConstInt(i64, (uint)(b * 8), false),
+                    $"{label}_sh{b}");
+            var byteVal = ctx.Builder.BuildTrunc(shifted, i8, $"{label}_b{b}");
+            var off = b == 0 ? eaOff
+                : ctx.Builder.BuildAdd(eaOff,
+                    LLVMValueRef.CreateConstInt(i16, (uint)b, false),
+                    $"{label}_o{b}");
+            X86_16Emitters.SegmentedWrite8FromBase(ctx, eaBase, off, byteVal, $"{label}_w{b}");
+        }
+    }
+
+    /// <summary>
     /// Phase 29.4 — read a 4-byte m32fp from EA, assemble i32, bitcast
     /// f32, FPExt to f64. Common pattern shared by FLD m32fp and the
     /// memory-form arithmetic ops (FADD m32fp, FMUL m32fp, etc.).
@@ -6007,33 +6067,86 @@ internal sealed class X86FpuDDDispatchEmitter : IMicroOpEmitter
     public string OpName => "x86_fpu_dd_dispatch";
     public void Emit(EmitContext ctx, MicroOpStep step)
     {
-        // Phase 29.8 — only FFREE ST(i) (mod=11 reg=000 rm=0..7,
-        // combined = 0x00..0x07). FFREE marks ST(i)'s tag as Empty (11)
-        // but does NOT change TOP or the data slot — programs use it to
-        // tell the FPU a slot's value is no longer needed (frees the slot
-        // without going through pop), letting subsequent FLD reuse it
-        // without raising stack-overflow.
-        // Other DD sub-opcodes (FLD/FST/FSTP m64fp + FRSTOR + FNSAVE +
-        // FUCOM/FUCOMP) stay no-op until 29.3e / 29.9.
+        // Phase 29.3e — DD memory-form coverage:
+        //   DD /0 mod≠11  FLD  m64fp   (load f64 from EA, push)
+        //   DD /2 mod≠11  FST  m64fp   (store ST(0) as f64 to EA)
+        //   DD /3 mod≠11  FSTP m64fp   (FST + pop)
+        // Phase 29.8 — DD register-form:
+        //   DD C0-C7      FFREE ST(i)  (mod=11 reg=0)
+        // Other DD ops (FRSTOR /4, FNSAVE /6, FNSTSW m16 /7, FUCOM/FUCOMP)
+        // stay no-op for now.
         var i32 = LLVMTypeRef.Int32;
         var i16 = LLVMTypeRef.Int16;
+        var f64 = LLVMTypeRef.Double;
         var mod = ctx.Resolve("modrm_mod");
         var reg = ctx.Resolve("modrm_reg");
         var rm  = ctx.Resolve("modrm_rm");
 
         var isMod3 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
             mod, LLVMValueRef.CreateConstInt(i32, 3, false), "dd_isMod3");
+        var memBB = ctx.Function.AppendBasicBlock("dd_mem");
+        var regBB = ctx.Function.AppendBasicBlock("dd_reg");
+        var endBB = ctx.Function.AppendBasicBlock("dd_end");
+        ctx.Builder.BuildCondBr(isMod3, regBB, memBB);
+
+        // Memory form: switch on /reg for FLD/FST/FSTP m64fp.
+        ctx.Builder.PositionAtEnd(memBB);
+        var eaBase = ctx.Resolve("ea_base");
+        var eaOff  = ctx.Resolve("ea_off");
+        var memDefault = ctx.Function.AppendBasicBlock("dd_mem_default");
+        var memArms = new LLVMBasicBlockRef[8];
+        for (int r = 0; r < 8; r++) memArms[r] = ctx.Function.AppendBasicBlock($"dd_mem_{r}");
+        var memSw = ctx.Builder.BuildSwitch(reg, memDefault, 8);
+        for (int r = 0; r < 8; r++)
+            memSw.AddCase(LLVMValueRef.CreateConstInt(i32, (uint)r, false), memArms[r]);
+
+        // /0 FLD m64fp — read 8 bytes, push as f64.
+        ctx.Builder.PositionAtEnd(memArms[0]);
+        {
+            var val = X86FpuHelpers.LoadMemF64(ctx, eaBase, eaOff, "fldm64");
+            X86FpuHelpers.Push(ctx, val,
+                LLVMValueRef.CreateConstInt(i16, 0, false), "fldm64");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // /2 FST m64fp — load ST(0), write 8 bytes, no pop.
+        ctx.Builder.PositionAtEnd(memArms[2]);
+        {
+            var st0 = X86FpuHelpers.LoadLogicalSt(ctx,
+                LLVMValueRef.CreateConstInt(i32, 0, false), "fstm64_st0");
+            X86FpuHelpers.StoreMemF64(ctx, eaBase, eaOff, st0, "fstm64");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // /3 FSTP m64fp — Pop, write 8 bytes.
+        ctx.Builder.PositionAtEnd(memArms[3]);
+        {
+            var val = X86FpuHelpers.Pop(ctx, "fstpm64");
+            X86FpuHelpers.StoreMemF64(ctx, eaBase, eaOff, val, "fstpm64");
+        }
+        ctx.Builder.BuildBr(endBB);
+
+        // /1 /4-/7 — no-op for Phase 29.3e.
+        for (int r = 0; r < 8; r++)
+        {
+            if (r == 0 || r == 2 || r == 3) continue;
+            ctx.Builder.PositionAtEnd(memArms[r]);
+            ctx.Builder.BuildBr(endBB);
+        }
+        ctx.Builder.PositionAtEnd(memDefault);
+        ctx.Builder.BuildBr(endBB);
+
+        // Register form: FFREE ST(i) — reg=0 (DD C0-C7).
+        ctx.Builder.PositionAtEnd(regBB);
         var isRegZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
             reg, LLVMValueRef.CreateConstInt(i32, 0, false), "dd_isRegZero");
-        var isFfree = ctx.Builder.BuildAnd(isMod3, isRegZero, "dd_isFfree");
-
-        var ffreeBB = ctx.Function.AppendBasicBlock("ffree");
-        var endBB   = ctx.Function.AppendBasicBlock("dd_end");
-        ctx.Builder.BuildCondBr(isFfree, ffreeBB, endBB);
+        var ffreeBB    = ctx.Function.AppendBasicBlock("ffree");
+        var afterFfree = ctx.Function.AppendBasicBlock("after_ffree");
+        ctx.Builder.BuildCondBr(isRegZero, ffreeBB, afterFfree);
 
         ctx.Builder.PositionAtEnd(ffreeBB);
         {
-            // FFREE ST(i): physI = (TOP + rm) & 7; set tag of physI to Empty.
+            // FFREE ST(i): physI = (TOP + rm) & 7; tag of physI := Empty.
             var top = X86FpuHelpers.LoadTop(ctx, "ffree_top");
             var sumIdx = ctx.Builder.BuildAdd(top, rm, "ffree_sum");
             var physI = ctx.Builder.BuildAnd(sumIdx,
@@ -6041,6 +6154,9 @@ internal sealed class X86FpuDDDispatchEmitter : IMicroOpEmitter
             X86FpuHelpers.SetTag(ctx, physI,
                 LLVMValueRef.CreateConstInt(i16, 3, false), "ffree_emptyTag");
         }
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(afterFfree);
         ctx.Builder.BuildBr(endBB);
 
         ctx.Builder.PositionAtEnd(endBB);

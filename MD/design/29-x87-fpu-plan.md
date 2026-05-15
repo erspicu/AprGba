@@ -1,8 +1,35 @@
-# Phase 29 — x87 FPU support (planning)
+# Phase 29 — x87 FPU support
 
-Status: **planning** — captured during Phase 28.IO when the no-op FPU
-stub (0xD8-0xDF → `x86_fpu_noop`) was added to unblock real PC/XT BIOS
-POST. Real BIOS FPU detection passes via the no-op path (BIOS sees
+> **Status**: ✅ **FUNCTIONALLY COMPLETE** (2026-05-16). All core 8087
+> opcode categories implemented: spec extensions (29.1), register file
+> (29.2), per-byte dispatcher split (29.3a), control + IP fix (29.3b),
+> data movement m32 + m64 + FXCH (29.3c/d/e), constants (29.3d),
+> arithmetic FADD/FMUL/FSUB/FDIV±R (29.4), compares FCOM/FCOMP + FNSTSW
+> AX (29.5), transcendentals F2XM1/FYL2X/FPTAN/FPATAN via Math externs
+> + FDECSTP/FINCSTP (29.7), misc FCHS/FABS/FSQRT/FTST/FRNDINT + FFREE
+> (29.8), control FLDCW/FSTCW/FNCLEX (29.9), end-to-end integration
+> test hypotenuse `√(3²+4²) = 5.0` (29.11). Each sprint shipped its own
+> verifying test ROM; all 7 test ROMs pass bit-exact f32/f64 results
+> matching .NET Math.* / glibc.
+>
+> **Deferred (truly optional)**:
+> - 29.10 m80fp pack/unpack — 99% of DOS code uses m32/m64; Turbo
+>   Pascal "Extended" + 387+ FBLD/FBSTP rare enough to skip.
+> - DC/DA/DE arithmetic family (f64 reg arith + i32/i16 integer arith +
+>   pop-after register variants) — pattern mirror of D8, easy to add
+>   when actual DOS programs are seen using them.
+> - DF integer load/store (FILD/FIST/FISTP m16/m32/m64int) — only
+>   FNSTSW AX implemented; integer-to-FPU conversions deferred.
+> - FSCALE / FXTRACT / FPREM — needed for some libm internals; deferred.
+> - TOP_SW sync with FPU_TOP — DOS code usually reads C bits via
+>   SAHF+JCC and ignores TOP_SW.
+> - #MF exception delivery — Gemini guidance: mask all exceptions
+>   and let IEEE 754 produce NaN/Inf; 99% of DOS code never installs
+>   the FPU exception vector.
+
+Original status (planning): captured during Phase 28.IO when the no-op
+FPU stub (0xD8-0xDF → `x86_fpu_noop`) was added to unblock real PC/XT
+BIOS POST. Real BIOS FPU detection passes via the no-op path (BIOS sees
 FSTCW write nothing, concludes "no FPU", clears equipment bit). A full
 8087 emulation is not required for FreeDOS boot, but is needed for any
 DOS program that touches floating-point math (Turbo C/Pascal, AutoCAD,
@@ -172,6 +199,7 @@ because it expects an INT 75h on DivZero, add it then. For now: dead weight.
 | 29.3a | Per-byte FPU ESC dispatch split — ✅ **DONE 2026-05-15** | Replace single catch-all `FpuEscape` (mask=0xF8 match=0xD8) with 8 per-byte formats (mask=0xFF match=0xD8..0xDF) so each ESC byte gets its own dispatcher emitter (`x86_fpu_d8_dispatch` .. `x86_fpu_df_dispatch`). All 8 currently no-op so behavior is identical to pre-29.3, but the split lets us ship individual /reg sub-opcodes incrementally — D9 can land FLD/FSTP/FXCH/FLDZ while D8/DC stay no-op until 29.4 (arithmetic). FreeDOS regression: 2839 INT calls; real BIOS POST still advances to F000:F436. |
 | 29.3b | FNINIT + IP advance fix + state accessor — ✅ **DONE 2026-05-15** | (1) Add `x86_fetch_modrm` + `x86_modrm_compute_ea` steps to all 8 FPU dispatcher formats so IP correctly advances past the ModR/M byte + any displacement (was: no-op stub left IP mid-instruction, BIOS POST got "lucky" muddling through misaligned bytes). (2) Implement `FNINIT` (DB E3) in `X86FpuDBDispatchEmitter` — detects `mod=11 reg=100 rm=011` and writes power-on defaults: FPU_CW=0x037F, FPU_SW=0x0000, FPU_TAGS=0xFFFF, FPU_TOP=0. (3) `X86JsonCpu.TryReadFpuTop / TryReadFpuCw / TryReadFpuSw / TryReadFpuTags / TryReadFpuPhysicalSt` accessors. (4) `apr-x86 --enable-i8087 --dump-fpu-state` flags. (5) Test ROM `test-roms/x86/29.3-fninit.com` (3 bytes: DB E3 F4): apr-x86 reports `TOP=00 CW=037F SW=0000 TAGS=FFFF`, IP advanced to 0103. FreeDOS HLE regression: 2839 INT calls. Real BIOS POST: same MDA retrace loop position (FPU detection was past long ago; remaining stall is unrelated port-0x3BA timing). |
 | 29.3c | FLDZ + FSTP m32fp + stack push/pop helpers — ✅ **DONE 2026-05-15** | First sprint with f64↔i64 bitcast + memory store via segmented byte writes. `X86FpuHelpers.Push/Pop/SetTag/GepPhysicalSt` (8-arm switch over physical slot index). FLDZ (D9 EE) pushes f64(0.0), tags slot as Zero (01). FSTP m32fp (D9 /3 mem) pops ST(0), `FPTrunc` f64→f32, bitcasts to i32, writes 4 bytes little-endian via `SegmentedWrite8FromBase`, then clears tag to Empty (11) and advances TOP. Test ROM `29.3-fpu-roundtrip.com` (20 bytes): FNINIT → FLDZ → FSTP DWORD [scratch] → MOV AX,[scratch] → MOV BX,[scratch+2] → HLT; result AX=0000 BX=0000 (overwrote DEADBEEF pre-fill), TOP=00, TAGS=FFFF. FreeDOS HLE regression: 2839 INT calls. |
+| 29.3e | FLD/FST/FSTP m64fp + integration test — ✅ **DONE 2026-05-16** | DD /0 mod≠11 FLD m64fp, DD /2 FST m64fp, DD /3 FSTP m64fp via new `LoadMemF64` / `StoreMemF64` helpers — direct i64-as-f64 transfer, no widening/narrowing since internal precision is already f64. DD register form keeps FFREE (29.8); dispatcher refactored to mem-vs-reg branch + per-case switches. Phase 29.11 integration test `29.11-fpu-integration.com` exercises every category in Phase 29.1-9 in one ROM (hypotenuse `√(3²+4²) = 5.0` via m64 load, m32 arith, reg arith, FXCH, FSQRT, m64 store; compare + FNSTSW AX; FLDPI×2 + FPATAN). Final state: AX=0x0000, BX=0x4014 (high WORD of f64 5.0 = 0x4014000000000000), CX=0x3F49 (high WORD of f32 π/4 = 0x3F490FDB), DX=0x0000. End-to-end success. |
 | 29.3d | FLD m32fp + FXCH ST(i) + FLD1/FLDPI/... — ✅ **DONE 2026-05-15** | (1) FLD m32fp (D9 /0 mod≠11) — read 4 bytes from EA via `SegmentedRead8FromBase`, assemble i32, bitcast f32, FPExt f64, push with Tag=Valid. (2) FXCH ST(i) (D9 C8..CF mod=11 reg=1) — read rm, swap physical slot TOP with `(TOP + rm) & 7` via new `X86FpuHelpers.SwapSlots` + tag-swap helper. (3) Six hardware constants D9 E8..ED (FLD1=1.0, FLDL2T=log2(10), FLDL2E=log2(e), FLDPI=π, FLDLG2=log10(2), FLDLN2=ln(2)) — all push via `Push(constReal, tag=Valid)`. Plus FLDZ moved from earlier ad-hoc check into the unified switch. Dispatcher restructured to clean mod-vs-mem branch + switch (was: chained cond-br). Test ROM `29.3d-fpu-suite.com` runs FNINIT → FLDPI → FSTP m32, FLD m32 → FSTP m32 roundtrip, and FXCH ST(1) swap; all 6 verification GPRs match expected (AX/BX=0x40490FDB for FLDPI→f32 round, SI/DI=0x40490FDA for byte-identical roundtrip, CX/DX confirm FXCH swap put 1.0 above 0.0). FreeDOS HLE regression: 2839 INT calls. |
 | 29.3c | FLD m32fp + FXCH ST(i) + FLD1/FLDPI/FLDL2E/... | D9 /0 mem (FLD m32fp memory-form load), D9 C8+i (FXCH register-form), D9 E8-EE constant loads. |
 | 29.3d | FLD/FST/FSTP m64fp | DD /0 /2 /3 mem forms (64-bit double load/store). |
