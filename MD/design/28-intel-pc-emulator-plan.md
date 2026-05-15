@@ -89,44 +89,138 @@ FreeDOS 還有個額外好處：boot media 跟 `.img` 都社群現成下載得�
 ## 3. 架構總覽
 
 ```
-                 ┌──────────────────────────────────────┐
-                 │     AprPc.Cli (new harness project)  │
-                 │                                       │
-   ROM image     │   PcSystemRunner                      │
-   .img file ───▶│      │                                │
-                 │      ├─▶ AprX86Backend (existing CPU) │
-                 │      │     spec: i8086                │
-                 │      │                                │
-                 │      ├─▶ PcMemoryBus (new)            │
-   keystroke ───▶│      │     • 640 KB conventional      │
-   from user/UI  │      │     • B800:0000 CGA framebuf   │
-                 │      │     • F000:0000 BIOS ROM stub  │
-                 │      │     • IVT @ 0000:0000          │
-                 │      │                                │
-                 │      ├─▶ HleBios (new)                │
-                 │      │     • INT 10h / 13h / 16h / …  │
-                 │      │     • bootstrap (INT 19h)      │
-                 │      │                                │
-                 │      ├─▶ Pic8259  ─ IRQ 0/1/6/14      │
-                 │      ├─▶ Pit8253  ─ timer tick        │
-                 │      ├─▶ Kbd8042  ─ scancode buf      │
-                 │      └─▶ FloppyImg / HddImg (.img)    │
-                 │                                       │
-                 │   CGA text-mode renderer (existing)   │
-                 │   ──▶ PNG / framebuffer output        │
-                 └──────────────────────────────────────┘
+   CLI args ──▶  apr-pc.exe (single launchable, 不是 headless tool)
+                     │
+                     │  parse args → open UI window
+                     ▼
+   ┌─────────────────────────────────────────────────────────┐
+   │   AprPc.Ui (WinForms window — main thread)              │
+   │   ┌─────────────────────────────────────────────────┐   │
+   │   │  Menu: File / Emulation / Disk / View / Help    │   │
+   │   ├─────────────────────────────────────────────────┤   │
+   │   │                                                  │   │
+   │   │   CGA framebuffer canvas (640×400 px scaled)     │   │
+   │   │   ← bitmap blt from emulator thread @ 60 Hz      │   │
+   │   │                                                  │   │
+   │   ├─────────────────────────────────────────────────┤   │
+   │   │  Status bar: CPU MIPS / disk LED / capslock      │   │
+   │   └─────────────────────────────────────────────────┘   │
+   │           ▲                          │                   │
+   │           │ framebuffer              │ key/mouse event   │
+   │           │ (BitmapData)             ▼                   │
+   │   ┌─────────────────────────────────────────────────┐   │
+   │   │   PcSystemRunner (emulator thread)              │   │
+   │   │                                                  │   │
+   │   │   ├─▶ AprX86Backend (existing CPU)              │   │
+   │   │   │     spec: i8086 / i80186 / i80286 (per CLI) │   │
+   │   │   ├─▶ PcMemoryBus                               │   │
+   │   │   ├─▶ HleBios (or LLE BIOS image if --bios=)    │   │
+   │   │   ├─▶ Pic8259 / Pit8253 / Kbd8042               │   │
+   │   │   └─▶ FloppyImg / HddImg                        │   │
+   │   └─────────────────────────────────────────────────┘   │
+   └─────────────────────────────────────────────────────────┘
 ```
+
+### Threading 模型
+
+- **UI thread**：WinForms message pump，負責 menu / framebuffer 顯示 /
+  input event 捕捉。
+- **Emulator thread**：跑 CPU dispatch loop、IO controllers、disk image
+  讀寫。專屬 thread 不卡 UI。
+- **Buffering**：framebuffer 用 `lock(...)` 共用 byte[]；input event 用
+  thread-safe queue 從 UI thread 推到 emulator thread。
+- **暫停 / 步進**：UI menu「Pause / Step / Reset」訊號 emulator thread
+  在 dispatch loop 邊界 check。
+
+> WinForms 是首選，理由：(1) .NET 10 內建（`Microsoft.WindowsDesktop.App`
+> workload），(2) 單窗 + 選單 + bitmap blt 寫起來最少 line，
+> (3) keyboard hook + timer 都 mature。WPF 之後想換不難（已有 thread
+> 邊界）。Avalonia / MAUI 等跨平台 UI 不是 Phase 28 scope。
 
 ### 跟現有 codebase 的關係
 
-- **新 project**：`src/AprPc.Cli/`（不直接擴 `AprX86.Cli`，那邊保持「純 CPU harness」用於 Tom Harte / .com 跑分）
+- **新 project**：`src/AprPc.Cli/`（含 UI）— 雙身分：
+  - 預設 launch → 開 UI 視窗（互動模式）
+  - `--headless --screenshot=path` flag → 維持 headless 模式可給 CI 跑
 - **重用**：
   - `AprX86.Cli.Cpu.X86JsonCpu` — 直接當 CPU 元件
-  - `AprX86.Cli.Memory.X86Memory` 的設計 — 但要擴成 MMIO 友善版（PcMemoryBus）
-  - 現有 CGA text-mode renderer（`src/AprX86.Cli/X86CgaRenderer.cs`）— 直接拿來用
+  - `AprX86.Cli.Memory.X86Memory` 的設計 — 擴成 MMIO 友善版（PcMemoryBus）
+  - 現有 CGA text-mode renderer（`src/AprX86.Cli/X86CgaRenderer.cs`）— 直接拿來用做 framebuffer → Bitmap 轉換
   - `spec/cpu/x86-16/i8086/cpu.json` — CPU spec 不動
 - **新 spec**：
   - `spec/machines/ibm-pc-xt.json`（machine-level：memory map、IRQ wiring、port range）
+
+### CLI 介面
+
+```
+apr-pc [options]
+
+# 必選一個（互斥）
+  --floppy-a=PATH           A: 軟碟映像（.img / .ima，1.44 MB / 720 KB / 360 KB）
+  --hdd=PATH                C: 硬碟映像（.img，FAT12/16 partition）
+  # 兩個可同時帶；BIOS 開機優先順序 A: → C:
+
+# 系統設定（皆有預設）
+  --cpu=i8086 | i8088 | i80186 | i80188 | i80286   [default: i8086]
+  --bios=PATH               真實 BIOS image（LLE 模式）；省略則 HLE
+  --memory=640k | 1m         conventional RAM 大小             [default: 640k]
+  --backend=json | json-block | legacy              [default: json-block]
+
+# UI 設定
+  --window-scale=1 | 2 | 3                          [default: 2]
+                            視窗放大倍率（CGA 640×400 像素 × scale）
+  --window-title="..."      主視窗 caption                     [default: "AprPc"]
+  --fullscreen              開啟全螢幕模式
+
+# Headless / CI 模式
+  --headless                不開 UI 視窗
+  --screenshot=PATH         指定截圖輸出（headless 配合）
+  --max-cycles=N            執行 N cycle 後 halt（headless 自動結束）
+  --frames=N                執行 N 個 frame 後 halt
+
+# Debug
+  --trace-int               每個 INT 指令印 vector + AH（log 到 stderr）
+  --trace-io                每個 IN/OUT port 印 port + value
+  --trace-irq               每次 PIC IRQ deliver 印 vector
+  --verbose                 啟動時印完整 system config
+
+# 範例
+  apr-pc --floppy-a=BIOS/freedos-1.3.img
+  apr-pc --hdd=disks/c.img --cpu=i80286
+  apr-pc --floppy-a=BIOS/test-boot.img --window-scale=3 --trace-int
+  apr-pc --floppy-a=BIOS/test.img --headless --screenshot=temp/out.png --max-cycles=10000000
+```
+
+### UI 視窗 menu
+
+```
+File
+  Open Floppy A...
+  Open HDD...
+  Recent Files →
+  Exit
+
+Emulation
+  Reset (Ctrl+R)
+  Pause / Resume (F5)
+  Step One Instruction (F10)
+  Step One Frame (F11)
+
+Disk
+  Eject Floppy A
+  Floppy Write-Protect ▣
+  HDD Read-Only ▣
+
+View
+  Window Scale  →  1× / 2× / 3×
+  Show CPU MIPS ▣
+  Show Disk LED ▣
+  Take Screenshot... (PrintScreen)
+
+Help
+  Keyboard Shortcuts
+  About...
+```
 
 ---
 
@@ -134,17 +228,20 @@ FreeDOS 還有個額外好處：boot media 跟 `.img` 都社群現成下載得�
 
 每個 sub-phase = 1 commit milestone。Sub-phase 內部用 micro-sprint 推進。
 
-### Phase 28.0 — Project scaffolding（~1 day）
+### Phase 28.0 — Project scaffolding + UI shell（~2 day）
 
 | Deliverable | Done when |
 |---|---|
-| `src/AprPc.Cli/AprPc.Cli.csproj` exists, references AprCpu.Core + AprX86.Cli | `dotnet build` passes |
-| `AprPc.Cli/Program.cs` — CLI arg parsing skeleton (`--floppy=A.img --hdd=C.img --max-cycles=N --screenshot=path`) | `dotnet run --project src/AprPc.Cli -- --help` prints usage |
+| `src/AprPc.Cli/AprPc.Cli.csproj` — TargetFramework `net10.0-windows`, `UseWindowsForms=true`，references AprCpu.Core + AprX86.Cli | `dotnet build` passes (含 Windows desktop workload) |
+| `Program.cs` — CLI arg parsing（§3 CLI 介面），分流：default → `AprPc.Ui.MainForm.Run(...)`；`--headless` → `HeadlessRunner.Run(...)` | `apr-pc --help` 印完整 usage；`apr-pc` （無 arg）→ 開空 UI 視窗 |
+| `MainForm.cs`（WinForms）：menu bar、固定 640×400 px canvas、status bar，視窗放大 scale 從 `--window-scale` 來 | 視窗開得起來；menu 各 entry 都連到 dummy handler（顯示 "TODO" MessageBox） |
+| `PcSystemRunner.cs`（emulator thread skeleton） — owns CPU + memory + (empty) IO components；thread-safe Start/Pause/Stop/Step API | UI thread 跟 emulator thread 互動 plumbing 完成（先跑 dummy loop） |
 | `spec/machines/ibm-pc-xt.json` 骨架（先抄 `gba.json` 結構，標記 TODO） | SpecLoader 載得起來 |
-| Skeleton `PcSystemRunner.cs` — owns CPU + memory + (empty) IO components | Builds, runs nothing yet |
 | MD/design/28-... 更新 ✅ status | This doc, with status table |
 
-**Commit**: `feat(N28.0): AprPc.Cli scaffolding`
+**Demo**: `apr-pc` → 開空白 UI 視窗，menu 都點得開（但都 "TODO"），右下角 status bar 顯示 "Idle / 0 MIPS"。
+
+**Commit**: `feat(N28.0): AprPc.Cli + WinForms UI shell + emulator thread plumbing`
 
 ### Phase 28.1 — Memory map + IVT + reset vector（~1 day）
 
@@ -168,7 +265,8 @@ FreeDOS 還有個額外好處：boot media 跟 `.img` 都社群現成下載得�
 | `HleBios` class — 攔截 CPU 的 INT 指令、查 AH 分派 | INT instruction 跳到 HleBios.Dispatch() 而不是 IVT |
 | 機制：BIOS ROM 內每個 INT vector 指到 F000:某 offset 的 `IRET` opcode；CPU 真的去 push CS:IP+FLAGS、jmp F000:offset、跑 IRET — 但中間 host 攔截 fetch 觸發 HLE call。或者用 magic instruction trap pattern。決定走哪條 → 寫在 `MD/design/28.2-hle-bios-mechanics.md` | 機制 decision 寫好 + 實作 |
 | **INT 10h** subset:<br>  • AH=0Eh teletype output (`char to current cursor`)<br>  • AH=02h set cursor position<br>  • AH=03h get cursor position<br>  • AH=06h scroll up<br>  • AH=09h write char + attr at cursor<br>  • AH=0Fh get current video mode<br>  • AH=00h set video mode（只支援 mode 3 = 80×25 color）| 各自寫 unit test：mov ah, <fn>; int 0x10 → 看 CGA framebuf / cursor 狀態 |
-| CGA renderer 整合：每次 `--screenshot=` 時掃 B800 framebuffer 渲染 PNG | 既有 `X86CgaRenderer` 接過來 |
+| **UI 整合**：MainForm canvas 每 16.7 ms（60 Hz）從 emulator thread 拉 B800 framebuffer → BitmapData blt | 跑 28.2-hello.com 即時看到 "Hi" 出現在 UI 視窗 |
+| Headless 模式：`--screenshot=` 時掃 B800 framebuffer 渲染 PNG | 既有 `X86CgaRenderer` 接過來 |
 
 **Demo**: 寫一個 `28.2-hello.com`：
 ```asm
@@ -188,7 +286,7 @@ hlt
 | Deliverable | Done when |
 |---|---|
 | `Kbd8042` 元件 — scancode buffer + port 60h read + port 64h status | 港內讀寫對 |
-| Host 端 input pump — Console.ReadKey() / stdin pipe / 從 `--keys=` 參數模擬 | Test 可 inject keystroke |
+| Host 端 input pump — `MainForm.KeyDown/KeyUp` → thread-safe queue → emulator thread → 8042 scancode buffer。Headless 走 `--keys=` 參數模擬 | UI 視窗 focus 時敲 key 看得到 scancode 進 buffer |
 | IRQ 1 wiring：scancode 寫入時觸發 PIC IRQ 1 → CPU acknowledge → IVT jump | CPU 看得到 INT 9 |
 | **INT 16h** HLE:<br>  • AH=00h read char and scancode (block until key)<br>  • AH=01h check if key available (zero flag)<br>  • AH=02h read shift flags state | unit test 通 |
 | BIOS Data Area: keyboard buffer @ 0040:001E-003D + head/tail pointer | 一致 |
@@ -265,9 +363,10 @@ hlt
 
 | Deliverable | Done when |
 |---|---|
-| Console pipe → keyboard buffer：stdin / TUI 都可餵 keystroke | 鍵入 `dir` 看得到結果 |
-| Screenshot 在按某個 hotkey / pipe magic 時生效 | 自動截圖工具 |
+| UI keyboard input 在 FreeDOS prompt 下正常運作（包含 BackSpace / Enter / arrow keys / 大小寫） | 鍵入 `dir` 看得到結果 |
+| PrintScreen hotkey → 自動寫 PNG 到 `temp/` | menu / hotkey 都動作 |
 | 跑 FreeDOS 內建 4 個基本 command 都成功：<br>  • `dir` — 列 A:\ 內容<br>  • `type readme.txt` — 印檔案內容<br>  • `cls` — 清螢幕<br>  • `ver` — 印 FreeDOS 版本 | 4 個截圖證明 |
+| Headless 模式：`--keys="dir\r"` style script input 也通 | CI 友好 |
 
 **Commit**: `feat(N28.9): FreeDOS interactive mode + 4 basic commands captured`
 
@@ -325,19 +424,19 @@ result/pc/
 
 | Phase | 估計 | Cumulative |
 |---|---|---|
-| 28.0 | 1 day | 1 |
-| 28.1 | 1 day | 2 |
-| 28.2 | 2 day | 4 |
-| 28.3 | 2 day | 6 |
-| 28.4 | 1-2 day | 8 |
-| 28.5 | 2 day | 10 |
-| 28.6 | 1 day | 11 |
-| 28.7 | 1-2 day | 13 |
-| 28.8 | **3-5 day**（高度不確定）| 16-18 |
-| 28.9 | 2 day | 18-20 |
-| 28.10 | 1 day（optional） | 19-21 |
-| 28.11 | 1-2 day（optional） | 20-23 |
-| 28.12 | 1 day | 21-24 |
+| 28.0 | **2 day**（UI shell 加進來） | 2 |
+| 28.1 | 1 day | 3 |
+| 28.2 | 2 day | 5 |
+| 28.3 | 2 day | 7 |
+| 28.4 | 1-2 day | 9 |
+| 28.5 | 2 day | 11 |
+| 28.6 | 1 day | 12 |
+| 28.7 | 1-2 day | 14 |
+| 28.8 | **3-5 day**（高度不確定）| 17-19 |
+| 28.9 | 2 day | 19-21 |
+| 28.10 | 1 day（optional） | 20-22 |
+| 28.11 | 1-2 day（optional） | 21-24 |
+| 28.12 | 1 day | 22-25 |
 
 **~3-4 週** 連續工作日。配合 /loop 跟雜事，現實 1.5-2 個月。
 
@@ -404,7 +503,32 @@ result/pc/
 
 ---
 
-## 11. 開工前 checklist
+## 11. Gemini 諮詢時機（per `MD/process/02-ai-collaboration-workflow.md` Pattern B）
+
+Phase 28 比前面所有 phase 都更容易踩 spec 細節坑 — IBM PC 周邊每個都
+40 年歷史、各家 BIOS 處理 quirk 不同、Intel 寫的不一定是業界實際採用的。
+**遇到下面這類問題優先查 Gemini，不要憑訓練資料硬寫**：
+
+| 問題類型 | 例子 | 為什麼問 Gemini |
+|---|---|---|
+| **PC 周邊 controller register 細節** | "8259 ICW1 ICW2 順序、ICW4 ELCR 哪台 PC 有"、"8042 status port bit 7 含意"、"PIT mode 2 vs mode 3 在 channel 0 行為差" | vendor datasheet 跟業界實作有出入；Gemini 看過多種 emulator source |
+| **BIOS INT 行為 corner case** | "INT 13h AH=02h 讀超過軌道末端怎麼處理"、"INT 10h AH=06h 滾動 0 行的意思（清屏 vs no-op）"、"INT 16h AH=00h 跟 AH=10h 差別" | Intel BIOS spec 寫得不全；常見 commercial BIOS 行為要看實作 |
+| **DOS internals 假設** | "FreeDOS boot sector 是不是先用 INT 13h CHS 還是直接 BIOS table"、"INT 25h/26h FAT12 sector 編號"、"COMMAND.COM resident size" | DOS 內部不是 spec 寫死，要看 source |
+| **8086 silicon quirk 確認** | "PUSH SP 是 pre-dec 還是 post-dec"（已確認 pre-dec）、"REP MOVSB 在 IRQ 觸發時 CX 行為" | Intel 文件 ambiguous 時 query |
+| **業界做法對照** | "DOSBox / PCem / 86Box 在這個 case 怎麼處理"、"做最小 PC 主流選擇是 HLE 還是 LLE" | Phase 28 跨完整實作可以省 corner case 數天 |
+
+**怎麼問**（per workflow doc）：
+- 用英文，一次一個問題
+- 附上 context：版本、我們目前怎麼做、為什麼覺得有問題
+- `python tools/knowledgebase/gemini_query.py "<question>"` — 自動 log 到 `tools/knowledgebase/message/`
+
+**不要為了問而問**：能自己讀 Intel 80286 PRM / Apr86 source / FreeDOS
+source 解掉的不需要 Gemini。Pattern A（不問）90% 的工作 OK；Pattern B
+（問）保留給 fork point。
+
+---
+
+## 12. 開工前 checklist
 
 開 phase 28.0 前先確認：
 
@@ -417,7 +541,7 @@ result/pc/
 
 ---
 
-## 12. 為什麼這 phase 不靠 spec 機制做
+## 13. 為什麼這 phase 不靠 spec 機制做
 
 跟 Phase 24-27 的 CPU spec inheritance 不同 — Phase 28 主要的擴充
 是「IBM PC 周邊系統」，這些是 *machine-level* 而不是 *ISA-level* 的事。
