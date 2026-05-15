@@ -5120,10 +5120,15 @@ internal sealed class X86FpuD8DispatchEmitter : IMicroOpEmitter
             LLVMValueRef.CreateConstInt(i32, 0, false), fmul, "d8_storeMul");
         ctx.Builder.BuildBr(endBB);
 
-        // /2 FCOM / /3 FCOMP — Phase 29.5; no-op for now.
+        // /2 FCOM: ST(0) vs operand → set C3/C2/C0 in FPU_SW.
         ctx.Builder.PositionAtEnd(arms[2]);
+        X86FpuHelpers.Compare(ctx, st0, operand, "d8_fcom");
         ctx.Builder.BuildBr(endBB);
+
+        // /3 FCOMP: same as FCOM, then pop ST(0).
         ctx.Builder.PositionAtEnd(arms[3]);
+        X86FpuHelpers.Compare(ctx, st0, operand, "d8_fcomp");
+        X86FpuHelpers.Pop(ctx, "d8_fcomp_pop");
         ctx.Builder.BuildBr(endBB);
 
         // /4 FSUB: ST(0) = ST(0) - operand
@@ -5390,6 +5395,54 @@ internal static class X86FpuHelpers
             $"{label}_i32");
         var asF32 = ctx.Builder.BuildBitCast(assembled, f32, $"{label}_f32");
         return ctx.Builder.BuildFPExt(asF32, f64, $"{label}_f64");
+    }
+
+    /// <summary>
+    /// Phase 29.5 — FPU compare. Writes the C0 (bit 8), C1 (bit 9, cleared
+    /// per Intel SDM rule for non-stack-overflow compares), C2 (bit 10),
+    /// and C3 (bit 14) condition codes into FPU_SW. Mapping per Intel SDM:
+    /// <code>
+    ///   ST(0) > operand  → C3 0  C2 0  C0 0
+    ///   ST(0) &lt; operand  → C3 0  C2 0  C0 1
+    ///   ST(0) = operand  → C3 1  C2 0  C0 0
+    ///   Unordered (NaN)  → C3 1  C2 1  C0 1
+    /// </code>
+    /// Implementation uses LLVM unordered-aware predicates so NaN cases
+    /// produce the correct C2=1 set:
+    /// <code>
+    ///   C3 = fcmp ueq (unordered or equal)
+    ///   C2 = fcmp uno (unordered)
+    ///   C0 = fcmp ult (unordered or less than)
+    /// </code>
+    /// Read-modify-write FPU_SW: clear bits 0x4700 (C3|C2|C1|C0), OR in
+    /// the new condition bits.
+    /// </summary>
+    public static void Compare(EmitContext ctx, LLVMValueRef st0F64, LLVMValueRef operandF64, string label)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var c3 = ctx.Builder.BuildFCmp(LLVMRealPredicate.LLVMRealUEQ, st0F64, operandF64, $"{label}_c3");
+        var c2 = ctx.Builder.BuildFCmp(LLVMRealPredicate.LLVMRealUNO, st0F64, operandF64, $"{label}_c2");
+        var c0 = ctx.Builder.BuildFCmp(LLVMRealPredicate.LLVMRealULT, st0F64, operandF64, $"{label}_c0");
+
+        var c3_16 = ctx.Builder.BuildZExt(c3, i16, $"{label}_c3z");
+        var c2_16 = ctx.Builder.BuildZExt(c2, i16, $"{label}_c2z");
+        var c0_16 = ctx.Builder.BuildZExt(c0, i16, $"{label}_c0z");
+        var c3_sh = ctx.Builder.BuildShl(c3_16,
+            LLVMValueRef.CreateConstInt(i16, 14, false), $"{label}_c3sh");
+        var c2_sh = ctx.Builder.BuildShl(c2_16,
+            LLVMValueRef.CreateConstInt(i16, 10, false), $"{label}_c2sh");
+        var c0_sh = ctx.Builder.BuildShl(c0_16,
+            LLVMValueRef.CreateConstInt(i16, 8, false), $"{label}_c0sh");
+
+        var swPtr = ctx.GepStatusRegister("FPU_SW");
+        var oldSw = ctx.Builder.BuildLoad2(i16, swPtr, $"{label}_oldSw");
+        // Clear C3 (0x4000) + C2 (0x0400) + C1 (0x0200) + C0 (0x0100) = 0x4700
+        var cleared = ctx.Builder.BuildAnd(oldSw,
+            LLVMValueRef.CreateConstInt(i16, 0xB8FF, false), $"{label}_cleared");
+        var withC3 = ctx.Builder.BuildOr(cleared, c3_sh, $"{label}_or3");
+        var withC32 = ctx.Builder.BuildOr(withC3, c2_sh, $"{label}_or32");
+        var newSw = ctx.Builder.BuildOr(withC32, c0_sh, $"{label}_newSw");
+        ctx.Builder.BuildStore(newSw, swPtr);
     }
 
     /// <summary>
@@ -5691,7 +5744,41 @@ internal sealed class X86FpuDEDispatchEmitter : IMicroOpEmitter
 internal sealed class X86FpuDFDispatchEmitter : IMicroOpEmitter
 {
     public string OpName => "x86_fpu_df_dispatch";
-    public void Emit(EmitContext ctx, MicroOpStep step) { /* Phase 29.5 — FNSTSW AX lives here */ }
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        // Phase 29.5 — DF E0 = FNSTSW AX. The only x87 op that writes
+        // directly into a CPU GPR. Encoding: mod=11 reg=100 rm=000,
+        // i.e. combined = 0x20. Other DF sub-opcodes (FILD m16/m64int,
+        // FIST m16int, FISTP m16/m64int, FBLD/FBSTP m80bcd) stay no-op
+        // until 29.3e / deferred.
+        var i32 = LLVMTypeRef.Int32;
+        var i16 = LLVMTypeRef.Int16;
+        var mod = ctx.Resolve("modrm_mod");
+        var reg = ctx.Resolve("modrm_reg");
+        var rm  = ctx.Resolve("modrm_rm");
+
+        var isMod3 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            mod, LLVMValueRef.CreateConstInt(i32, 3, false), "df_isMod3");
+        var regSh = ctx.Builder.BuildShl(reg,
+            LLVMValueRef.CreateConstInt(i32, 3, false), "df_regSh");
+        var combined = ctx.Builder.BuildOr(regSh, rm, "df_combined");
+        var isE0 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+            combined, LLVMValueRef.CreateConstInt(i32, 0x20, false), "df_isE0");
+        var isFnstswAx = ctx.Builder.BuildAnd(isMod3, isE0, "df_isFnstswAx");
+
+        var doBB  = ctx.Function.AppendBasicBlock("fnstsw_ax");
+        var endBB = ctx.Function.AppendBasicBlock("df_end");
+        ctx.Builder.BuildCondBr(isFnstswAx, doBB, endBB);
+
+        ctx.Builder.PositionAtEnd(doBB);
+        var swPtr = ctx.GepStatusRegister("FPU_SW");
+        var sw = ctx.Builder.BuildLoad2(i16, swPtr, "df_sw");
+        var axPtr = ctx.GepGpr(0);  // AX is GPR 0 in x86-16 ModR/M ordering
+        ctx.Builder.BuildStore(sw, axPtr);
+        ctx.Builder.BuildBr(endBB);
+
+        ctx.Builder.PositionAtEnd(endBB);
+    }
 }
 
 internal sealed class X86OutDxEmitter : IMicroOpEmitter
