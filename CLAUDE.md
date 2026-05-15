@@ -9,6 +9,32 @@ repository. Keep concise; add new rules as they emerge.
 方案討論、結尾摘要）。**程式碼、commit message、檔案內容、設計文件
 等寫到檔案的內容仍維持英文**，避免污染現有 codebase 的語言一致性。
 
+## 每完成一個 phase / sprint → 更新進度文件 + commit & push
+
+**規則**：工作任務完成「一個規劃任務階段」（= 一個 sub-phase / sprint）
+之後，必須做完下列三件事才算結束：
+
+1. **更新進度文件**：
+   - 該 phase 的 plan doc（例如 `MD/design/28-intel-pc-emulator-plan.md`）
+     的 sprint status 表格標 ✅、填 commit hash 與完成日。
+   - 若有 closure note（phase 全部結束）也要寫到 `MD/performance/<時戳>.md`。
+   - `MD/design/03-roadmap.md` 若該 phase 在最上層 roadmap 表內，也要 sync。
+   - 同樣的內容更新到 `MD_EN/` 版本（簡略 mirror 即可，不重譯細節）。
+   - `README.md` 若 status section 或 "Where this could go" 有提到，sync。
+2. **`git commit`**：commit message 用 conventional commits 格式
+   （`feat(N28.X): …` / `docs(N28): …` / `refactor(spec): …` 等），
+   訊息結尾照 CLAUDE.md 規則加 Co-Authored-By。
+3. **`git push origin <branch>`**：立即推上去，**不 bunch commits**。每個
+   sprint deliverable 自成 commit。
+
+理由：每個 sprint 自成 atomic 單位、可單獨 bisect / revert；progress
+docs 跟 code 同步更新避免「文件講 ⏳ pending 但 git log 顯示 commit 了」
+這種 drift。
+
+例外：純 internal scratch / debug helper（Tier 0/1，沒 user-visible
+deliverable 的）可以多 commit 才 push，但 progress docs 仍以 sprint 為
+單位更新。
+
 ## Commit QA workflow
 
 Commit 前依改動性質跑對應 tier 的 QA — 詳細流程在

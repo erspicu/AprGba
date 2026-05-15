@@ -1183,12 +1183,17 @@ block-JIT 反超 N1 約 5%。**每一步都同時提升 declarativity 而 perf �
 
 ---
 
-## 24 系列：Intel 8086 第 4 顆 CPU 移植（2026-05-10 起）🚧 進行中
+## 24 系列：Intel 8086 第 4 顆 CPU 移植（2026-05-10 起）✅ 完成（含 25/26/27 後續 phase）
 
 繼 N 系列完工後加上的 4th CPU milestone — 以 Intel 8086 / x86-16 為
 題，要回答「framework 真的支援 4 顆 CPU」這個 framework genericity
 claim 的最後 evidence。完整 phase plan 在
 [`MD/design/24-8086-port-plan.md`](/MD/design/24-8086-port-plan.md)。
+
+**2026-05-11 整個 24 系列 + 後續 25 / 26 / 27 phase 收口完成**。
+i80186 / i80286（含 real mode 完整指令集 + protected-mode 4-check fault
+model）全到位，spec 用 inheritance chain depth=3 表達。後續是 Phase 28
+（Intel PC 完整模擬）— 不再加 CPU、改做周邊機器。
 
 | Series | 內容 | 範圍 | 狀態 |
 |---|---|---|---|
@@ -1252,3 +1257,42 @@ LR35902 / 6502 走同一條 declarative spec → IR pipeline，**24.6 是
 - 24.8 80286：~10-20 commit；protected mode 是另一個維度
 
 合計 50-90 commits 範圍；本 session 完成 8 個關鍵 foundation commits。
+
+---
+
+## 28 系列：Intel PC emulator（FreeDOS boot 目標）📋 PLANNED（2026-05-11 起）
+
+24-27 系列把 i8086 / i80186 / i80286 CPU 端推到 protected-mode 完整 fault
+model；28 系列改方向：**用既有 CPU 拼一台最低限度的 IBM PC compatible，
+能 boot FreeDOS 到 prompt**。完整 phase plan 在
+[`MD/design/28-intel-pc-emulator-plan.md`](/MD/design/28-intel-pc-emulator-plan.md)。
+
+**這不是 framework 層工作** — CPU spec 不變，加的是 IO controller +
+HLE BIOS + UI window。Framework genericity claim 的最後一塊拼圖
+（「framework 真的能跑 commercial OS」），不是 spec-driven，是 application 層。
+
+| Series | 內容 | 範圍 | 狀態 |
+|---|---|---|---|
+| **開工前 checklist** | FreeDOS image 下載、NASM 驗、Tom Harte regression baseline、T2 visual matrix baseline | 4/4 通過 (2026-05-11) | ✅ |
+| **28.0** | AprPc.Cli scaffolding + WinForms UI shell + emulator thread plumbing | `apr-pc` 開空 UI 視窗、menu 點得開 | ⏳ |
+| **28.1** | Memory map + IVT + reset vector + BIOS Data Area | `mov bx, [0x410]` 讀 equipment word 對 | ⏳ |
+| **28.2** | HLE BIOS framework + INT 10h（teletype / cursor / scroll / video mode）+ UI framebuffer blt @ 60 Hz | 28.2-hello.com 跑 + UI 視窗看到 "Hi" | ⏳ |
+| **28.3** | INT 16h + 8042 keyboard + IRQ 1 + WinForms KeyDown input pump | 28.3-echo.com 鍵入 echo 印出 | ⏳ |
+| **28.4** | PIT 8253 + IRQ 0 timer tick + INT 1Ah + 18.2 Hz tick | 跑 1 秒看 tick 跳 ~18 次 | ⏳ |
+| **28.5** | INT 13h floppy/HDD HLE + `.img` loader | 讀寫 .img 對 | ⏳ |
+| **28.6** | INT 19h bootstrap + 自寫 boot sector demo | 截圖看 "AprPc bootstrap OK" | ⏳ |
+| **28.7** | Pic8259 + 完整 IRQ delivery model + sync micro-op | timer + keyboard 都能正確 deliver IRQ | ⏳ |
+| **28.8** | FreeDOS 1.3 boot attempt（高度不確定）| `A:\>` prompt 截圖 | ⏳ |
+| **28.9** | Interactive `A:\>` + dir / type / cls / ver 基本 command | 4 個 command 各自截圖 | ⏳ |
+| **28.10** | INT 33h mouse HLE | optional | ⏳ |
+| **28.11** | PC speaker PCM → WAV 輸出 | optional | ⏳ |
+| **28.12** | 收口 + closure docs | `MD/performance/<時戳>-pc-emulator-freedos-boot.md` + README PC section | ⏳ |
+
+**時程估計**：~3-4 週連續工作日；現實 1.5-2 個月。最大不確定性在 28.8
+（FreeDOS 真實 boot 流程）— 預期會切成很多 micro-sprint 解 INT call /
+port I/O / DOS internals 細節。
+
+**Gemini 諮詢時機**（per [`MD/process/02-ai-collaboration-workflow.md`](/MD/process/02-ai-collaboration-workflow.md) Pattern B）：
+PC 周邊 controller register quirk、BIOS INT corner case、DOS internals
+假設、業界做法對照（DOSBox / PCem / 86Box）。Phase 28 預期會比之前 Phase
+更高頻率啟用 Pattern B — 細節 doc 在 28-plan §11。

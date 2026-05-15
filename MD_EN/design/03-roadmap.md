@@ -1328,3 +1328,38 @@ N1 baseline, per-instr is flat, block-JIT comes in ~5% ahead of N1.
 
 Full commit list: `git log --oneline | grep -E "feat|docs.*N[0-9]"`;
 detailed closeout docs in `MD/performance/2026050[89]*.md`.
+
+
+---
+
+## 28-series: Intel PC emulator (FreeDOS boot target) 📋 PLANNED (2026-05-11 onward)
+
+After phases 24-27 finished the i8086 / i80186 / i80286 CPU side (real
+mode + protected-mode 4-check fault model), the 28 series pivots:
+**build a minimum IBM PC compatible around the existing CPU and boot
+FreeDOS**. Full phase plan: [`MD_EN/design/28-intel-pc-emulator-plan.md`](28-intel-pc-emulator-plan.md).
+
+This is application layer, not framework layer — CPU spec is unchanged;
+what is being added is IO controllers + HLE BIOS + WinForms UI window.
+
+| Series | Content | Status |
+|---|---|---|
+| Pre-work checklist | FreeDOS image / NASM / Tom Harte regression / T2 baseline | ✅ 4/4 (2026-05-11) |
+| 28.0 | AprPc.Cli scaffolding + WinForms UI shell + emulator-thread plumbing | ⏳ |
+| 28.1 | Memory map + IVT + reset vector + BIOS Data Area | ⏳ |
+| 28.2 | HLE BIOS + INT 10h + 60 Hz framebuffer blt | ⏳ |
+| 28.3 | INT 16h + 8042 keyboard + IRQ 1 + WinForms input | ⏳ |
+| 28.4 | PIT 8253 + IRQ 0 timer tick + INT 1Ah | ⏳ |
+| 28.5 | INT 13h floppy/HDD HLE + .img loader | ⏳ |
+| 28.6 | INT 19h bootstrap + first self-written boot sector | ⏳ |
+| 28.7 | Pic8259 + full IRQ delivery model | ⏳ |
+| 28.8 | FreeDOS 1.3 boot attempt (3-5 days, high uncertainty) | ⏳ |
+| 28.9 | Interactive A:\> + dir / type / cls / ver | ⏳ |
+| 28.10 | INT 33h mouse HLE | ⏳ optional |
+| 28.11 | PC speaker PCM output | ⏳ optional |
+| 28.12 | Closure docs | ⏳ |
+
+Estimate: ~3-4 weeks continuous; realistically 1.5–2 months with /loop interruptions.
+Largest uncertainty in 28.8 (FreeDOS real boot flow). Gemini consultation
+pattern (per [`MD_EN/process/02-ai-collaboration-workflow.md`](../process/02-ai-collaboration-workflow.md)
+Pattern B) expected to be more active in this phase than in any previous.

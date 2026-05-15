@@ -13,6 +13,8 @@ and a 4-baseline-check fault model live). Block-JIT path live for all of
 them. Memory bus + cycle table + interrupt vectors + access widths +
 spec inheritance all spec-driven (i80186 / i80286 land via JSON Merge
 Patch on i8086 with **zero** runtime overhead). 894 unit tests passing.
+**Phase 28 (Intel PC emulator → FreeDOS boot)** planned and unblocked —
+see [`MD_EN/design/28-intel-pc-emulator-plan.md`](MD_EN/design/28-intel-pc-emulator-plan.md).
 
 ---
 
@@ -294,6 +296,7 @@ Look at `spec/cpu/lr35902/cpu.json` + `spec/cpu/lr35902/groups/*.json` for a com
 
 ### 8. Where this could go
 
+- **Phase 28 — Intel PC emulator (FreeDOS boot target).** Planned 2026-05-11; pre-work checklist green; ready to start. Boots FreeDOS 1.3 floppy via existing i8086 backend + minimal HLE-BIOS (INT 10h/13h/16h/19h/1Ah) + 8259/8253/8042 stubs + CGA text-mode UI window (WinForms). Sub-phases 28.0 → 28.12 detailed in [`MD_EN/design/28-intel-pc-emulator-plan.md`](MD_EN/design/28-intel-pc-emulator-plan.md).
 - **More CPUs.** Z80 (Master System / GG), 8080 (CP/M), 68000 (Genesis / Neo Geo / early Mac), MIPS R3000 (PS1), MIPS R4300i (N64), 80386 (next x86 family chain) — all expressible in the same JSON model. Variable-width + prefix-decoded + unofficial-opcode ISAs already work (LR35902 0xCB; 2A03 unofficial cc=11; x86 0x0F escape + ModR/M + SIB).
 - **Additional execution backends.** The `EmitContext` routing layer means a future AOT compiler, WebAssembly target, or different IR backend can slot in alongside the LLVM JIT.
 - **Spec-time IR pre-passes.** Dead-flag elimination, micro-op fusion, hot-opcode inlining — all naturally extend the existing AST pre-pass mechanism.
@@ -590,6 +593,7 @@ done
 
 框架設計成下面這些是「加法擴充」、不是「架構重寫」：
 
+- **Phase 28 — Intel PC 模擬器（FreeDOS boot 目標）。** 2026-05-11 規劃完成；開工前 checklist 全綠；可動工。透過既有 i8086 backend + 最小 HLE-BIOS (INT 10h/13h/16h/19h/1Ah) + 8259/8253/8042 stub + CGA text-mode UI 視窗 (WinForms) 來 boot FreeDOS 1.3 floppy。Sub-phase 28.0 → 28.12 詳見 [`MD/design/28-intel-pc-emulator-plan.md`](MD/design/28-intel-pc-emulator-plan.md)。
 - **更多 CPU。** Z80 (Master System / GG)、8080 (CP/M)、68000 (Genesis / Neo Geo / 早期 Mac)、MIPS R3000 (PS1)、MIPS R4300i (N64)、80386 (下一條 x86 family chain) — 全都能用同一個 JSON 模型表達。變寬 + prefix-decoded + unofficial-opcode ISA 都已經 work (LR35902 0xCB；2A03 unofficial cc=11；x86 0x0F escape + ModR/M + SIB)。
 - **其他 execution backend。** `EmitContext` routing layer 表示未來 AOT compiler、WebAssembly target、不同的 IR backend 都能跟 LLVM JIT 並列、不用動 emitter。
 - **Spec-time IR pre-pass。** Dead-flag elimination、micro-op fusion、hot-opcode inlining — 全都自然延伸現有的 AST pre-pass 機制。
