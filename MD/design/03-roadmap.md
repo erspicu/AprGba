@@ -1275,7 +1275,7 @@ HLE BIOS + UI window。Framework genericity claim 的最後一塊拼圖
 |---|---|---|---|
 | **開工前 checklist** | FreeDOS image 下載、NASM 驗、Tom Harte regression baseline、T2 visual matrix baseline | 4/4 通過 (2026-05-11) | ✅ |
 | **28.0** | AprPc.Cli scaffolding + WinForms UI shell + emulator thread plumbing | `apr-pc` 開空 UI 視窗、menu 點得開 | ✅ |
-| **28.1** | Memory map + IVT + reset vector + BIOS Data Area | `mov bx, [0x410]` 讀 equipment word 對 | ⏳ |
+| **28.1** | Memory map + IVT + reset vector + BIOS Data Area | `mov bx, [0x410]` 讀 equipment word 對 | ✅ |
 | **28.2** | HLE BIOS framework + INT 10h（teletype / cursor / scroll / video mode）+ UI framebuffer blt @ 60 Hz | 28.2-hello.com 跑 + UI 視窗看到 "Hi" | ⏳ |
 | **28.3** | INT 16h + 8042 keyboard + IRQ 1 + WinForms KeyDown input pump | 28.3-echo.com 鍵入 echo 印出 | ⏳ |
 | **28.4** | PIT 8253 + IRQ 0 timer tick + INT 1Ah + 18.2 Hz tick | 跑 1 秒看 tick 跳 ~18 次 | ⏳ |

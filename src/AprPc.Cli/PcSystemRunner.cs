@@ -26,6 +26,9 @@
 // volatile state field + ManualResetEventSlim.
 
 using System.Collections.Concurrent;
+using AprCpu.Core.JsonSpec;
+using AprPc.Cli.Memory;
+using AprX86.Cli.Cpu;
 
 namespace AprPc.Cli;
 
@@ -54,6 +57,13 @@ public sealed class PcSystemRunner : IDisposable
     private readonly ManualResetEventSlim _resumeEvent = new(initialState: false);
     private readonly CancellationTokenSource _cts = new();
 
+    // Phase 28.1 — real PC bus + CPU. Built lazily on Start() so the UI
+    // can construct PcSystemRunner before a disk image is available.
+    private PcMemoryBus? _bus;
+    private X86JsonCpu? _cpu;
+    public PcMemoryBus? Bus => _bus;
+    public X86JsonCpu?  Cpu => _cpu;
+
     // Phase 28.2 will fill this in from the CGA framebuffer slice
     // (4 KB at 0xB8000-0xB8FFF). For 28.0 the runner just zero-fills it
     // periodically so the UI has something deterministic to draw.
@@ -74,20 +84,53 @@ public sealed class PcSystemRunner : IDisposable
         _options = options ?? throw new ArgumentNullException(nameof(options));
     }
 
-    /// <summary>Begin emulation on a background thread.</summary>
+    /// <summary>
+    /// Build the PC bus + CPU and spin up the emulator thread.
+    /// The thread starts in <see cref="RunnerState.Paused"/> so callers
+    /// can wire up test ROMs / disk images before stepping begins;
+    /// call <see cref="Resume"/> to actually start executing.
+    /// </summary>
     public void Start()
     {
         if (_state is not RunnerState.Idle)
             throw new InvalidOperationException($"cannot Start() from state {_state}");
 
-        _state = RunnerState.Running;
-        _resumeEvent.Set();
+        // Phase 28.1 — construct the real PC bus + CPU.
+        var spec = MachineSpecLoader.LoadFromFile(PcMemoryBus.LocateMachineSpec());
+        _bus = new PcMemoryBus(spec);
+        _bus.Reset();
+        _cpu = new X86JsonCpu(_bus.Memory,
+            enableBlockJit: _options.Backend == "json-block",
+            variant: _options.Cpu);
+        _cpu.Reset();
+        _cpu.SetEntryPoint(0xFFFF, 0x0000);   // 8086 reset vector
+
+        // Start in Paused so LoadTestRom() / Open Floppy can land
+        // before the CPU starts stepping. Avoids a race where the
+        // emulator thread executes the BIOS-ROM HLT at FFFF:0000
+        // before the host had a chance to redirect entry point.
+        _state = RunnerState.Paused;
+        _resumeEvent.Reset();
         _thread = new Thread(EmulatorThreadProc)
         {
             Name = "AprPc.Emulator",
             IsBackground = true,
         };
         _thread.Start();
+    }
+
+    /// <summary>
+    /// Phase 28.1 — preload a test ROM at a given (segment, offset)
+    /// and set the CPU entry point there, bypassing the BIOS reset
+    /// vector. Used for unit-test-style fixtures before Phase 28.6
+    /// adds the real INT 19h bootstrap.
+    /// </summary>
+    public void LoadTestRom(byte[] bytes, ushort segment, ushort offset)
+    {
+        if (_bus is null || _cpu is null)
+            throw new InvalidOperationException("LoadTestRom must be called after Start()");
+        _bus.LoadBinary(bytes, segment, offset);
+        _cpu.SetEntryPoint(segment, offset);
     }
 
     /// <summary>Request pause; emulator thread parks at next safe boundary.</summary>
@@ -127,22 +170,42 @@ public sealed class PcSystemRunner : IDisposable
 
     private void EmulatorThreadProc()
     {
-        // Phase 28.0 placeholder loop: just count "instructions" so the
-        // status bar has something to display, and drain input events
-        // so the queue doesn't grow unbounded if the UI feeds it before
-        // the real 8042 emulator exists. Sleeps 10 ms per tick to keep
-        // CPU usage near zero in scaffolding mode.
+        // Phase 28.1 — real CPU dispatch. Step the 8086 at the configured
+        // backend speed, drain input events (still ignored — Phase 28.3
+        // adds the 8042 buffer), update the instruction counter for the
+        // status bar. Halts when CPU hits HLT (Phase 28.7+ will instead
+        // hook in IRQ wake-up via the PIC).
         var token = _cts.Token;
-        while (!token.IsCancellationRequested && _state is not RunnerState.Stopping)
+        try
         {
-            _resumeEvent.Wait(token);
-            if (token.IsCancellationRequested) break;
+            while (!token.IsCancellationRequested && _state is not RunnerState.Stopping)
+            {
+                _resumeEvent.Wait(token);
+                if (token.IsCancellationRequested) break;
 
-            // Drain any pending input events (discarded in 28.0).
-            while (_inputQueue.TryDequeue(out _)) { }
+                while (_inputQueue.TryDequeue(out _)) { /* TODO 28.3 */ }
 
-            Interlocked.Increment(ref _instructionsExecuted);
-            Thread.Sleep(10);
+                if (_cpu is { Halted: true })
+                {
+                    // Park until external Reset/Stop arrives.
+                    Thread.Sleep(50);
+                    continue;
+                }
+
+                if (_cpu is not null)
+                {
+                    _cpu.Step();
+                    Interlocked.Increment(ref _instructionsExecuted);
+                }
+                else
+                {
+                    Thread.Sleep(10);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // expected — Stop() cancels the token to unblock Wait()
         }
     }
 

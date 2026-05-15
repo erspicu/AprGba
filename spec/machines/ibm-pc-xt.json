@@ -43,7 +43,7 @@
             "name": "vga_graphics",
             "addr_start": "0x000A0000",
             "addr_end_exclusive": "0x000B0000",
-            "type": "mmio",
+            "type": "io",
             "handler": "vga_unmapped",
             "readable": true,
             "writable": true,
@@ -54,7 +54,7 @@
             "name": "mda_text",
             "addr_start": "0x000B0000",
             "addr_end_exclusive": "0x000B8000",
-            "type": "mmio",
+            "type": "io",
             "handler": "mda_unmapped",
             "readable": true,
             "writable": true,
@@ -65,7 +65,7 @@
             "name": "cga_text",
             "addr_start": "0x000B8000",
             "addr_end_exclusive": "0x000C0000",
-            "type": "mmio",
+            "type": "io",
             "handler": "cga",
             "readable": true,
             "writable": true,
@@ -97,7 +97,7 @@
     ],
     "interrupt_vectors": {
         "reset_cs": "0xFFFF",
-        "reset_ip": "0x0000",
-        "comment": "8086 RESET vector: CS=FFFF, IP=0000 -> physical 0xFFFF0. BIOS ROM placed at F000:0000-F000:FFFF, with a near jmp at FFFF:0000 to F000:E05B (XT-class cold-start entry)."
-    }
+        "reset_ip": "0x0000"
+    },
+    "comment_interrupt_vectors": "8086 RESET vector: CS=FFFF, IP=0000 -> physical 0xFFFF0. BIOS ROM placed at F000:0000-F000:FFFF, with a near jmp at FFFF:0000 to F000:E05B (XT-class cold-start entry)."
 }

@@ -53,5 +53,6 @@ if (opts.Headless)
 // UI mode — standard WinForms message pump on the main thread.
 ApplicationConfiguration.Initialize();
 runner.Start();
+runner.Resume();    // no test-ROM injection path in UI mode yet (Phase 28.5+)
 Application.Run(new MainForm(opts, runner));
 return 0;

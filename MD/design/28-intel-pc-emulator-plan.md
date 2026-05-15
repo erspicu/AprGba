@@ -474,8 +474,8 @@ result/pc/
 
 | Phase | Sub-phase | Status | Commit | 完成日 |
 |---|---|---|---|---|
-| 28.0  | Project scaffolding + UI shell | ✅ | (this commit) | 2026-05-11 |
-| 28.1  | Memory map + IVT | ⏳ pending | — | — |
+| 28.0  | Project scaffolding + UI shell | ✅ | `245729e` | 2026-05-11 |
+| 28.1  | Memory map + IVT + BIOS Data Area + reset vector | ✅ | (this commit) | 2026-05-11 |
 | 28.2  | HLE BIOS + INT 10h | ⏳ pending | — | — |
 | 28.3  | INT 16h + keyboard | ⏳ pending | — | — |
 | 28.4  | PIT + INT 1Ah | ⏳ pending | — | — |
