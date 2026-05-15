@@ -35,15 +35,17 @@ public sealed class PcPit : IDisposable
     public const int BdaMidnightRolled  = 0x00470;
 
     private readonly PcMemoryBus _bus;
+    private readonly Pic8259? _pic;
     private readonly object _lock = new();
     private System.Threading.Timer? _timer;
     private uint _ticks;
     private byte _midnightRolled;
     private bool _speakerGate;
 
-    public PcPit(PcMemoryBus bus)
+    public PcPit(PcMemoryBus bus, Pic8259? pic = null)
     {
         _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+        _pic = pic;
     }
 
     /// <summary>Snapshot of the current 32-bit tick count.</summary>
@@ -131,6 +133,10 @@ public sealed class PcPit : IDisposable
             }
             WriteBdaTickLocked();
         }
+        // Phase 28.7 — assert IRQ 0 so the (HLE or user-installed)
+        // INT 8 handler runs as well. Done outside the lock to avoid
+        // holding two locks simultaneously.
+        _pic?.AssertIrq(0);
     }
 
     private void WriteBdaTickLocked()

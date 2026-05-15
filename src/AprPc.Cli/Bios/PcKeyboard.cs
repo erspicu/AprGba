@@ -20,6 +20,7 @@
 // Empty: head == tail. Full: (tail + 2) wrapping == head. Wrap from
 // 0x003C back to 0x001E.
 
+using AprPc.Cli.Hardware;
 using AprPc.Cli.Memory;
 
 namespace AprPc.Cli.Bios;
@@ -36,11 +37,13 @@ public sealed class PcKeyboard
     public const ushort BufferEndOffset   = 0x003E;
 
     private readonly PcMemoryBus _bus;
+    private readonly Pic8259? _pic;
     private readonly object _lock = new();
 
-    public PcKeyboard(PcMemoryBus bus)
+    public PcKeyboard(PcMemoryBus bus, Pic8259? pic = null)
     {
         _bus = bus ?? throw new ArgumentNullException(nameof(bus));
+        _pic = pic;
     }
 
     /// <summary>Initialise BDA head/tail/range. Call after PcMemoryBus.Reset().</summary>
@@ -59,6 +62,7 @@ public sealed class PcKeyboard
     /// <summary>Enqueue an (ASCII, scancode) pair. Drops the keystroke if the buffer is full.</summary>
     public bool Enqueue(byte ascii, byte scancode)
     {
+        bool ok;
         lock (_lock)
         {
             ushort head = _bus.ReadWord16(BdaHead);
@@ -69,8 +73,13 @@ public sealed class PcKeyboard
             _bus.WriteByte(physWrite,     ascii);
             _bus.WriteByte(physWrite + 1, scancode);
             _bus.WriteWord16(BdaTail, next);
-            return true;
+            ok = true;
         }
+        // Phase 28.7 — assert IRQ 1 so any user-installed INT 9 handler
+        // runs (real BIOS INT 9 is the keyboard ISR; we don't install
+        // an HLE one, but user code may).
+        _pic?.AssertIrq(1);
+        return ok;
     }
 
     /// <summary>True iff the ring is empty (no keystrokes pending).</summary>

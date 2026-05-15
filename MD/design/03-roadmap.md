@@ -1281,7 +1281,7 @@ HLE BIOS + UI window。Framework genericity claim 的最後一塊拼圖
 | **28.4** | PIT 8253 + INT 1Ah + 18.2 Hz wall-clock BDA tick | 28.4-tick-readback.bin: INT 1Ah AH=00 回 DX>0, PIT advanced 5 ticks at end ✓ | ✅ (IRQ 0 wiring deferred to 28.7) |
 | **28.5** | INT 13h floppy/HDD HLE + `DiskImage` class + `.img` loader (AH=00/01/02/03/04/08/15) | 28.5-int13-readback.bin 從 FreeDOS 1.3 floppy 讀 boot sector + 55 AA magic 對 ✓ | ✅ |
 | **28.6** | INT 19h bootstrap (partial-LLE: real `CD 19` from FFFF:0000 → HLE handler) + 自寫 boot sector demo (1.44 MB img with 55 AA magic) | 28.6-hello-boot.img 顯示 "AprPc bootstrap OK" | ✅ |
-| **28.7** | Pic8259 + 完整 IRQ delivery model + sync micro-op | timer + keyboard 都能正確 deliver IRQ | ⏳ |
+| **28.7** | Pic8259 + edge-triggered IRQ delivery (PIT→IRQ0, kbd→IRQ1) + emulator-thread INT injection | 28.7-irq-pit.img: STI + 用戶安裝 INT 8 hook, 1 秒後 counter ≥ 3, "IRQ OK 3" 印出 ✓ | ✅ |
 | **28.8** | FreeDOS 1.3 boot attempt（高度不確定）| `A:\>` prompt 截圖 | ⏳ |
 | **28.9** | Interactive `A:\>` + dir / type / cls / ver 基本 command | 4 個 command 各自截圖 | ⏳ |
 | **28.10** | INT 33h mouse HLE | optional | ⏳ |

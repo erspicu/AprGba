@@ -1352,7 +1352,7 @@ what is being added is IO controllers + HLE BIOS + WinForms UI window.
 | 28.4 | PIT 8253 + INT 1Ah + 18.2Hz wall-clock BDA tick | ✅ (IRQ 0 wiring deferred to 28.7) |
 | 28.5 | INT 13h floppy/HDD HLE + DiskImage + .img loader | ✅ |
 | 28.6 | INT 19h bootstrap (partial-LLE: real `CD 19` at FFFF:0000 + HLE handler) + self-written 1.44MB .img | ✅ |
-| 28.7 | Pic8259 + full IRQ delivery model | ⏳ |
+| 28.7 | Pic8259 + edge-triggered IRQ delivery (PIT→IRQ0, kbd→IRQ1) + emulator-thread INT injection | ✅ |
 | 28.8 | FreeDOS 1.3 boot attempt (3-5 days, high uncertainty) | ⏳ |
 | 28.9 | Interactive A:\> + dir / type / cls / ver | ⏳ |
 | 28.10 | INT 33h mouse HLE | ⏳ optional |

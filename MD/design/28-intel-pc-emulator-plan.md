@@ -481,8 +481,8 @@ result/pc/
 | 28.3  | INT 16h + keyboard buffer + WinForms KeyDown queue | ✅ | `92d8e11` | 2026-05-11 |
 | 28.4  | PIT 8253 + INT 1Ah + wall-clock BDA tick | ✅ | `ee1098e` | 2026-05-11 |
 | 28.5  | INT 13h floppy/HDD HLE + DiskImage + .img loader | ✅ | `d5cceee` | 2026-05-11 |
-| 28.6  | INT 19h bootstrap (partial-LLE) + self-written boot sector | ✅ | (this commit) | 2026-05-11 |
-| 28.7  | PIC + IRQ delivery | ⏳ pending | — | — |
+| 28.6  | INT 19h bootstrap (partial-LLE) + self-written boot sector | ✅ | `ebbcaab` | 2026-05-11 |
+| 28.7  | Pic8259 + IRQ delivery model (PIT IRQ 0 + keyboard IRQ 1) | ✅ | (this commit) | 2026-05-11 |
 | 28.8  | FreeDOS boot | ⏳ pending | — | — |
 | 28.9  | Interactive commands | ⏳ pending | — | — |
 | 28.10 | INT 33h mouse | ⏳ optional | — | — |
