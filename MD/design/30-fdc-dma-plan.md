@@ -139,6 +139,87 @@ boot sector starts `EB 3C 90 46 52 44 4F 53` (= "FRDOS5.1" OEM
 signature), root dir first entry shows `46 44 31 33 2D 42 4F 4F 54
 20 20 08` (= volume label "FD13-BOOT" with attribute 0x08).
 
+### 30.6c — ROL with CL count > 1 was wrong — FIXED (2026-05-16) ✅
+
+**Real BIOS + FreeDOS BOOTS END-TO-END!** Text preview after the fix:
+```
+| FreeCom version 0.85a - WATCOMC - XMS_Swap [Jul 10 2021 19:28:06]        |
+```
+
+The root cause was traced via memory-write/read watches + per-CS CPU
+trace filtering down to a CPU emulation bug:
+
+**Buggy code path**: `src/AprCpu.Core/IR/X86_16Emitters.cs`
+`X86ShiftRotateW16CountClEmitter` "rol" arm had a TODO stub that
+delegated `ROL r/m16, CL` to count=1 logic (shift left by 1
+regardless of actual CL value). The comment said:
+> ROL/ROR/RCL/RCR with count!=1 have notoriously undefined silicon
+> behaviour; we delegate to the count=1 IR ... This is wrong for
+> count>1 but correct for count=1, which covers most real code that
+> ever reaches D2/D3 with a small dynamic count.
+
+pcxtbios.bin INT 13h handler uses `MOV CL, 4; ROL AX, CL` to compute
+the 24-bit DMA base + page register split from the caller's 16-bit
+ES segment:
+```
+F000:ED5F  MOV AX, [BP+0xC]   ; AX = caller's ES (= 0x1FE0)
+F000:ED62  MOV CL, 4
+F000:ED64  ROL AX, CL         ; expected 0xFE01 (true ROL by 4)
+                              ; got 0x3FC0 (ROL by 1 stub)
+F000:ED66  ...                ; rest of arithmetic
+F000:ED75  OUT 0x04, AL       ; programs DMA base lo
+```
+
+With buggy ROL by 1, BIOS computed DMA base 0xA360 (linear `0x0A360`).
+With correct ROL by 4, BIOS would compute 0x61A0 with page=2 (linear
+`0x261A0` ≈ `(ES << 4) + BX` = `0x251A0` adjusted for the ROL trick).
+
+**Fix**: implement proper count-based ROL using `lhs << n | lhs >> (16 - n)`
+where `n = CL & 0x1F` (8086 doesn't mask but the i16 operand width
+limits effective rotation to mod 16). Sets CF = LSB of result.
+OF only architecturally defined for count=1 but we emit the count=1
+formula for code that may sample it after multi-bit ROL.
+
+```csharp
+case "rol":
+{
+    var nWide = ctx.Builder.BuildAnd(clClamp,
+        LLVMValueRef.CreateConstInt(i8, 15, false), "rolc16_n");
+    var n16 = ctx.Builder.BuildZExt(nWide, i16, "rolc16_n16");
+    var leftPart  = ctx.Builder.BuildShl(lhs, n16, "rolc16_left");
+    var rightShift = ctx.Builder.BuildSub(
+        LLVMValueRef.CreateConstInt(i16, 16, false), n16, "rolc16_rsh");
+    var rightPart = ctx.Builder.BuildLShr(lhs, rightShift, "rolc16_right");
+    result = ctx.Builder.BuildOr(leftPart, rightPart, "rolc16_r");
+    // CF = LSB of result; OF = MSB(result) ^ CF (count=1 formula reused).
+    ...
+}
+```
+
+Standalone test ROM `test-roms/x86/30-rol-cl-test.com` validates:
+- `0x1FE0 ROL 4 = 0xFE01` ✓
+- `0xC123 ROL 8 = 0x23C1` ✓
+- `0x0001 ROL 15 = 0x8000` ✓
+- `0xFFFF ROL N = 0xFFFF` ✓
+
+End-to-end test (`apr-pc --bios=BIOS/firmware/pcxtbios.bin
+--floppy-a=BIOS/freedos-1.3-floppy.img`):
+- BIOS POST ✓
+- INT 19h loads boot sector via real FDC ✓
+- Boot sector executes, self-relocates, loads root dir + FAT ✓
+- FAT walker walks chain to kernel.sys ✓
+- Kernel loaded, jumps to FreeDOS kernel.sys ✓
+- COMMAND.COM (FreeCom 0.85a) banner printed to MDA framebuffer ✓
+
+**Deferred but related**:
+- Same count=1 stub still in W8 (8-bit) path (line ~7181). Real DOS
+  code rarely uses `ROL r/m8, CL` with CL>1, but should be fixed for
+  completeness. Same approach: `lhs << n | lhs >> (8 - n)` with
+  n = CL mod 8.
+- ROR/RCL/RCR variants also stubbed. ROR can be done similarly. RCL/
+  RCR need carry-bit handling in the rotation ring (9-bit / 17-bit).
+  None hit in the FreeDOS boot path.
+
 ### 30.6b — Trace-cpu identified real root cause (2026-05-16)
 
 The 30.6 Gemini analysis said "boot sector self-relocation didn't

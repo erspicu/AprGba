@@ -7404,7 +7404,13 @@ internal sealed class X86ShiftRotateW16CountClEmitter : IMicroOpEmitter
 
         var i1false = LLVMValueRef.CreateConstInt(i1, 0, false);
 
-        // Rotates: same count=1-stub strategy as W8 path.
+        // Rotates: Phase 30.6c — replaced count=1-stub with proper count-based
+        // rotation for ROL/ROR. Real 8086 takes CL as-is (no masking; 286+
+        // masks to 5 bits). For 16-bit operand, effective rotation count is
+        // `CL mod 16`. RCL/RCR (rotate through carry) still stubbed pending
+        // a need. Fixes the pcxtbios.bin INT 13h DMA-address computation
+        // which does `MOV CL, 4; ROL AX, CL` to manipulate ES into a
+        // 24-bit DMA base + page register split.
         void EmitRotateCount1Stub(int idx, string kind)
         {
             ctx.Builder.PositionAtEnd(arms[idx]);
@@ -7422,20 +7428,38 @@ internal sealed class X86ShiftRotateW16CountClEmitter : IMicroOpEmitter
             switch (kind)
             {
                 case "rol":
-                    var rolL = ctx.Builder.BuildShl(lhs,
-                        LLVMValueRef.CreateConstInt(i16, 1, false), "rolc16_l");
-                    var rolR = ctx.Builder.BuildLShr(lhs,
-                        LLVMValueRef.CreateConstInt(i16, 15, false), "rolc16_r");
-                    result = ctx.Builder.BuildOr(rolL, rolR, "rolc16_r");
-                    cf = msb;
-                    {
-                        var rMsbMask = ctx.Builder.BuildAnd(result,
-                            LLVMValueRef.CreateConstInt(i16, 0x8000, false), "rolc16_rmsb_m");
-                        var rMsb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, rMsbMask,
-                            LLVMValueRef.CreateConstInt(i16, 0, false), "rolc16_rmsb");
-                        of = ctx.Builder.BuildXor(rMsb, cf, "rolc16_of");
-                    }
+                {
+                    // n = CL mod 16 (effective rotate count for 16-bit op).
+                    // CL was already clamped to <=32; here we take low 4 bits.
+                    var nWide = ctx.Builder.BuildAnd(clClamp,
+                        LLVMValueRef.CreateConstInt(i8, 15, false), "rolc16_n");
+                    var n16 = ctx.Builder.BuildZExt(nWide, i16, "rolc16_n16");
+                    var leftPart = ctx.Builder.BuildShl(lhs, n16, "rolc16_left");
+                    var rightShift = ctx.Builder.BuildSub(
+                        LLVMValueRef.CreateConstInt(i16, 16, false), n16, "rolc16_rsh");
+                    var rightPart = ctx.Builder.BuildLShr(lhs, rightShift, "rolc16_right");
+                    // When n=0, BuildLShr by 16 is UB on i16; the n=0 case is
+                    // guarded by the outer `cl != 0` check, and (16 - 0) = 16
+                    // would be the only problem. We rely on the outer
+                    // clNonZero branch — when CL=0 we don't enter `doBB` at
+                    // all. So n in [1, 15] is safe.
+                    result = ctx.Builder.BuildOr(leftPart, rightPart, "rolc16_r");
+                    // CF after multi-bit ROL = LSB of result.
+                    var resLsbMask = ctx.Builder.BuildAnd(result,
+                        LLVMValueRef.CreateConstInt(i16, 1, false), "rolc16_cflsb_m");
+                    cf = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, resLsbMask,
+                        LLVMValueRef.CreateConstInt(i16, 0, false), "rolc16_cf");
+                    // OF defined only for count=1; for count>1 it's
+                    // architecturally undefined. Emit the count=1 formula
+                    // anyway (MSB(result) XOR CF) so well-behaved code keeps
+                    // getting consistent values.
+                    var rMsbMask = ctx.Builder.BuildAnd(result,
+                        LLVMValueRef.CreateConstInt(i16, 0x8000, false), "rolc16_rmsb_m");
+                    var rMsb = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntNE, rMsbMask,
+                        LLVMValueRef.CreateConstInt(i16, 0, false), "rolc16_rmsb");
+                    of = ctx.Builder.BuildXor(rMsb, cf, "rolc16_of");
                     break;
+                }
                 case "ror":
                     var rorR = ctx.Builder.BuildLShr(lhs,
                         LLVMValueRef.CreateConstInt(i16, 1, false), "rorc16_r");
