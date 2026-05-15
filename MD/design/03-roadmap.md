@@ -1287,10 +1287,7 @@ HLE BIOS + UI window。Framework genericity claim 的最後一塊拼圖
 | **28.10** | INT 33h mouse HLE | optional | ⏳ deferred |
 | **28.11** | PC speaker PCM | optional | ⏳ deferred |
 | **28.12** | 收口 docs (`MD/performance/...`) + plan/roadmap | ✅ | `MD/performance/202605152200-pc-emulator-freedos-boot.md` |
-| **28.9** | Interactive `A:\>` + dir / type / cls / ver 基本 command | 4 個 command 各自截圖 | ⏳ |
-| **28.10** | INT 33h mouse HLE | optional | ⏳ |
-| **28.11** | PC speaker PCM → WAV 輸出 | optional | ⏳ |
-| **28.12** | 收口 + closure docs | `MD/performance/<時戳>-pc-emulator-freedos-boot.md` + README PC section | ⏳ |
+| **28.IO** | Port I/O dispatch + PcPortBus + FPU detection no-op stub | PIC/PIT/8042/CMOS dispatch + 0xD8-0xDF stub；real BIOS POST 推進到 F000:F436 (MDA retrace loop) | ✅ `b110599` — `MD/performance/202605152230-pc-emulator-phase-28-io.md` |
 
 **時程估計**：~3-4 週連續工作日；現實 1.5-2 個月。最大不確定性在 28.8
 （FreeDOS 真實 boot 流程）— 預期會切成很多 micro-sprint 解 INT call /
@@ -1300,3 +1297,58 @@ port I/O / DOS internals 細節。
 PC 周邊 controller register quirk、BIOS INT corner case、DOS internals
 假設、業界做法對照（DOSBox / PCem / 86Box）。Phase 28 預期會比之前 Phase
 更高頻率啟用 Pattern B — 細節 doc 在 28-plan §11。
+
+---
+
+## 29 系列：Intel 8087 / 80287 FPU（coprocessor mix-in）✅ 完成（2026-05-15 起，~6 小時）
+
+Phase 28.IO 加 0xD8-0xDF no-op stub 解 BIOS POST 後，使用者問「FPU 是不是該寫進
+框架？」— Gemini 諮詢兩波（FPU 基本設計 + separate-vs-integrated）後，確認**files
+separate, runtime unified**（QEMU TCG / Bochs / 86Box 都這麼做）。Phase 29 兼負
+兩件事：
+
+1. **框架層**：證明 JSON-driven framework 支援**正交 extension** — 不靠 inheritance
+   (Phase 27 證的)，而是 machine-config 時間透過 `"extensions": [...]` mix-in 一個
+   peer component（同一 LLVM module、同一 state struct）
+2. **應用層**：~30 個 Intel 8087/80287 ESC opcodes 全部走 declarative spec 跑通，end-
+   to-end 用 hypotenuse `√(3²+4²) = 5.0` integration test 證明 chain 全動
+
+完整 phase plan + opcode 對照表 + dispatcher design pseudo-code 在
+[`MD/design/29-x87-fpu-plan.md`](/MD/design/29-x87-fpu-plan.md)，closure note 在
+[`MD/performance/202605160100-x87-fpu-functional-complete.md`](/MD/performance/202605160100-x87-fpu-functional-complete.md)。
+
+| Sprint | 內容 | commit | Test ROM |
+|---|---|---|---|
+| **29.1** | `MachineSpec.Extensions` + `SpecLoader.LoadCpuSpecWithExtensions` + `SpecCompiler.Compile(path, exts)` + `X86JsonCpu(extensionPaths:)`；移 FpuEscape entry 出 i8086 base spec 到 `spec/coprocessors/x87/i8087/cpu.json` | `4747037` | — |
+| **29.2** | `register_file_additions.status[]` parsing；i8087 spec 宣告 ST0-ST7 (i64) + FPU_TAGS/CW/SW/TOP | `7a08584` | — |
+| **29.3a** | 拆 FpuEscape 從 catch-all (mask=0xF8) 成 8 個 per-byte format (mask=0xFF)，每 ESC byte 各自 dispatcher | `d9143f3` | — |
+| **29.3b** | FNINIT (DB E3) 真實實作 + IP advance bug fix (加 `x86_fetch_modrm` + `x86_modrm_compute_ea` step) + `X86JsonCpu.TryReadFpu*` accessors + `apr-x86 --enable-i8087 --dump-fpu-state` | `6a50751` | 29.3-fninit.com |
+| **29.3c** | FLDZ (D9 EE) + FSTP m32fp (D9 /3) + Push/Pop helpers + `GepPhysicalSt` 8-arm switch | `e60e5c3` | 29.3-fpu-roundtrip.com |
+| **29.3d** | FLD m32fp (D9 /0) + FXCH ST(i) (D9 C8-CF) + 6 hardware 常數 (D9 E8-EE: FLD1/FLDL2T/FLDL2E/FLDPI/FLDLG2/FLDLN2)；D9 register-form refactor 成單一大 switch | `95e49cb` | 29.3d-fpu-suite.com |
+| **29.4** | D8 算術 family — FADD/FMUL/FSUB/FSUBR/FDIV/FDIVR 全 6 ops × {m32fp, ST(i)} forms；新 helpers `LoadLogicalSt` / `StoreLogicalSt` / `LoadMemF32AsF64` | `c401d0d` | 29.4-fpu-arith.com |
+| **29.5** | FCOM (D8 /2) + FCOMP (D8 /3) + FNSTSW AX (DF E0)；`X86FpuHelpers.Compare` 用 unordered-aware LLVM fcmp 正確處理 NaN | `a8aa6e5` | 29.5-fpu-compare.com |
+| **29.8** | misc unary — FCHS (D9 E0) / FABS (D9 E1) / FSQRT (D9 FA) / FTST (D9 E4) / FRNDINT (D9 FC) + FNOP (D9 D0) + FFREE (DD C0-C7)；`BuildIntrinsicCallF64` helper for llvm.fabs/sqrt/rint | `26a25f0` | 29.8-fpu-misc.com |
+| **29.9** | control — FLDCW m16 (D9 /5) + FSTCW m16 (D9 /7) + FNCLEX (DB E2)；純 i16 transfer | `d479e17` | 29.9-fpu-control.com |
+| **29.7** | transcendentals via C# `Math.*` extern (per Gemini ARM64-portability guidance) — F2XM1 (D9 F0) / FYL2X (D9 F1) / FPTAN (D9 F2) / FPATAN (D9 F3) + FDECSTP (D9 F6) / FINCSTP (D9 F7)；`CallFpuUnary` / `CallFpuBinary` helpers | `5983ef5` | 29.7-fpu-transcendental.com |
+| **29.3e + 29.11** | FLD/FST/FSTP m64fp (DD /0 /2 /3) + integration capstone — 1 ROM 跑 hypotenuse `√(3²+4²) = 5.0` 透過 m64 load + m32 arith + reg arith + FXCH + FSQRT + m64 store + FCOM + FNSTSW AX + FLDPI×2 + FPATAN + m32 store | `2513905` | 29.11-fpu-integration.com |
+
+### Deferred (truly optional)
+
+- **m80fp** (10-byte 擴展精度 / Turbo Pascal Extended) — pack/unpack helper 可後補
+- **DC/DA/DE 算術 family** — D8 pattern mirror，~1 sprint 可加
+- **DF 整數 load/store** (FILD/FIST/FISTP m16/m32/m64int) — 只做 FNSTSW AX
+- **FSCALE/FXTRACT/FPREM** — libm 內部用，留給未來 80387 emulation
+- **TOP_SW ↔ FPU_TOP 同步** — DOS code 通常走 SAHF+JCC，不讀 TOP_SW
+- **#MF exception delivery** — Gemini 建議跳過（masked exceptions 是 99% DOS code 用法）
+
+### 為何 Phase 29 對 framework 重要
+
+Phase 24-26 證明 single-CPU JSON dispatch 動。Phase 27 證明 spec inheritance
+(i80286 extends i8086) 動。Phase 29 證明**正交 extension** — FPU 不是 CPU 的繼承
+變種，是 machine-config 時間 mix-in 的對等 component。同一個 i8086 base spec 可以
+配 8087 / 配無 FPU / 未來配 Weitek 1167 — 全靠改 `spec/machines/*.json` 的
+`"extensions"` array。這是 swappable-coprocessor model 的完整實證。
+
+**全部 7 個 test ROM 通過 bit-exact f32/f64 verification**（vs .NET Math.*）。
+FreeDOS HLE regression 整段保持綠（每個 sprint ~2839 INT calls）。Gemini 諮詢 logs
+保留在 `tools/knowledgebase/message/20260515_*.txt`。

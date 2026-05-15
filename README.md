@@ -18,6 +18,20 @@ real FreeDOS 1.3 floppy boots end-to-end on the JSON-driven CPU framework:
 kernel banner → COMMAND.COM (FreeCom 0.85a) → AUTOEXEC.BAT → FreeDOS
 ASCII logo. Closure note:
 [`MD/performance/202605152200-pc-emulator-freedos-boot.md`](MD/performance/202605152200-pc-emulator-freedos-boot.md).
+**Phase 29 (Intel 8087 / 80287 FPU as coprocessor mix-in)** ✅
+FUNCTIONALLY COMPLETE 2026-05-16 — ~30 8087/287 ESC opcodes (FNINIT,
+data movement m32/m64, FLD/FSTP/FXCH, 6 hardware constants, arithmetic
+FADD/FMUL/FSUB/FDIV±R, compares FCOM/FCOMP + FNSTSW AX, misc
+FCHS/FABS/FSQRT/FTST/FRNDINT/FFREE, control FLDCW/FSTCW/FNCLEX,
+transcendentals F2XM1/FYL2X/FPTAN/FPATAN via C# `Math.*` externs) wired
+through the JSON-driven framework as an **orthogonal coprocessor
+extension** — `spec/machines/ibm-pc-xt.json`'s `"extensions"` array
+loads `spec/coprocessors/x87/i8087/cpu.json` which is merged into the
+base i8086 spec at load time. Same LLVM module, single state struct,
+swappable silicon model. Integration capstone test computes
+`√(3² + 4²) = 5.0` via chained FPU ops, bit-exact f32/f64. Closure
+note:
+[`MD/performance/202605160100-x87-fpu-functional-complete.md`](MD/performance/202605160100-x87-fpu-functional-complete.md).
 
 ---
 
