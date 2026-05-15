@@ -153,6 +153,18 @@ public sealed class PcSystemRunner : IDisposable
         _cpu.SetEntryPoint(segment, offset);
     }
 
+    /// <summary>
+    /// Phase 28.5 — mount a disk image at a BIOS drive number
+    /// (0x00 = A, 0x01 = B, 0x80 = C). The image becomes readable
+    /// via INT 13h.
+    /// </summary>
+    public void MountDisk(byte drive, DiskImage img)
+    {
+        if (_bios is null)
+            throw new InvalidOperationException("MountDisk must be called after Start()");
+        _bios.AttachDisk(drive, img);
+    }
+
     /// <summary>Request pause; emulator thread parks at next safe boundary.</summary>
     public void Pause()
     {

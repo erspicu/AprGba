@@ -1,9 +1,11 @@
 // HeadlessRunner — `--headless` execution path. No UI window.
 //
-// Prints the resolved config, optionally loads a flat ROM into RAM
-// at 0000:7C00, runs the CPU until --max-cycles is hit or it HLTs,
+// Prints the resolved config, optionally mounts disk images via
+// --floppy-a / --hdd, optionally loads a tiny test ROM at 0000:7C00
+// via --test-rom, runs the CPU until --max-cycles is hit or it HLTs,
 // dumps register state, and optionally writes a CGA framebuffer PNG.
 
+using AprPc.Cli.Hardware;
 using AprX86.Cli.Video;
 
 namespace AprPc.Cli;
@@ -22,11 +24,42 @@ internal static class HeadlessRunner
         // thread Paused. We wire up any test ROM, then Resume.
         runner.Start();
 
+        // Phase 28.5 — distinguish disk image (≥ 64 KB) from tiny
+        // test ROM. Test ROMs (28.1-28.4 demos) are < 1 KB and get
+        // loaded straight to 0:7C00 for direct execution; floppy
+        // images are mounted as drive 0x00 and accessed via INT 13h.
+        // A user can pass --test-rom + --floppy-a together so the
+        // small fixture can exercise INT 13h against a real image.
         if (opts.FloppyAPath is { } floppyPath)
         {
-            var bytes = File.ReadAllBytes(floppyPath);
+            var size = new FileInfo(floppyPath).Length;
+            if (size >= 64 * 1024)
+            {
+                var disk = DiskImage.LoadFloppy(floppyPath);
+                runner.MountDisk(0x00, disk);
+                Console.WriteLine($"  floppy A: {floppyPath} ({size / 1024} KB, " +
+                    $"{disk.Cylinders}x{disk.Heads}x{disk.Sectors} CHS)");
+            }
+            else
+            {
+                var bytes = File.ReadAllBytes(floppyPath);
+                runner.LoadTestRom(bytes, segment: 0x0000, offset: 0x7C00);
+                Console.WriteLine($"  loaded:   {bytes.Length} bytes -> 0000:7C00 (legacy --floppy-a as test ROM)");
+            }
+        }
+
+        if (opts.HddPath is { } hddPath)
+        {
+            var disk = DiskImage.LoadHardDisk(hddPath);
+            runner.MountDisk(0x80, disk);
+            Console.WriteLine($"  hdd:      {hddPath} ({disk.TotalSectors * 512L / 1024} KB)");
+        }
+
+        if (opts.TestRomPath is { } testRomPath)
+        {
+            var bytes = File.ReadAllBytes(testRomPath);
             runner.LoadTestRom(bytes, segment: 0x0000, offset: 0x7C00);
-            Console.WriteLine($"  loaded:   {bytes.Length} bytes -> 0000:7C00");
+            Console.WriteLine($"  test ROM: {bytes.Length} bytes -> 0000:7C00");
         }
 
         // Phase 28.3 — pre-load the keyboard buffer with scripted keys.

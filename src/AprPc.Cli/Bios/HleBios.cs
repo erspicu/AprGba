@@ -44,6 +44,11 @@ public sealed class HleBios
     // at F000:00xx is ours.
     private readonly bool[] _owned = new bool[256];
 
+    // Phase 28.5 — attached disks by drive number (0=A, 1=B, 0x80=C, 0x81=D).
+    private readonly Dictionary<byte, DiskImage> _disks = new();
+    // Last INT 13h status code (returned by AH=01).
+    private byte _diskLastStatus;
+
     public HleBios(X86JsonCpu cpu, PcMemoryBus bus, PcKeyboard kbd, PcPit pit, bool traceInt = false)
     {
         _cpu      = cpu ?? throw new ArgumentNullException(nameof(cpu));
@@ -53,6 +58,15 @@ public sealed class HleBios
         _traceInt = traceInt;
     }
 
+    /// <summary>Phase 28.5 — attach a disk image to a drive number.</summary>
+    public void AttachDisk(byte drive, DiskImage img)
+    {
+        _disks[drive] = img;
+        if (_traceInt)
+            Console.Error.WriteLine($"  [HLE] attached drive {drive:X2}h ({img.Kind}) " +
+                $"geom={img.Cylinders}x{img.Heads}x{img.Sectors} ({img.TotalSectors * 512 / 1024} KB)");
+    }
+
     /// <summary>
     /// Install IVT entries for every supported vector. Call once after
     /// PcMemoryBus.Reset() has zeroed the IVT region.
@@ -60,9 +74,10 @@ public sealed class HleBios
     public void Install()
     {
         InstallVector(0x10, "video");
+        InstallVector(0x13, "disk");
         InstallVector(0x16, "keyboard");
         InstallVector(0x1A, "time");
-        // 28.5 / 28.6 add 0x13 / 0x19 here.
+        // 28.6 adds 0x19 (bootstrap) here.
     }
 
     private void InstallVector(byte vector, string label)
@@ -98,6 +113,7 @@ public sealed class HleBios
         switch (vector)
         {
             case 0x10: Int10(state); break;
+            case 0x13: Int13(state); break;
             case 0x16: Int16(state); break;
             case 0x1A: Int1A(state); break;
             default:
@@ -283,6 +299,193 @@ public sealed class HleBios
         state.A.L = _bus.ReadByte(0x00449);
         state.A.H = (byte)_bus.ReadWord16(0x0044A);
         state.B.H = _bus.ReadByte(0x00462);
+    }
+
+    // ---------- INT 13h: disk ----------
+
+    // Status codes per Intel BIOS doc (RBIL Table 00234).
+    private const byte DiskOk            = 0x00;
+    private const byte DiskBadCmd        = 0x01;
+    private const byte DiskNoMedia       = 0x06;
+    private const byte DiskSectorNotFound = 0x04;
+    private const byte DiskWriteProtect  = 0x03;
+
+    private void Int13(AprX86.Cli.Cpu.X86State state)
+    {
+        switch (state.A.H)
+        {
+            case 0x00: Int13_Reset(state); break;
+            case 0x01: Int13_LastStatus(state); break;
+            case 0x02: Int13_Read(state); break;
+            case 0x03: Int13_Write(state); break;
+            case 0x04: Int13_Verify(state); break;
+            case 0x08: Int13_GetDriveParams(state); break;
+            case 0x15: Int13_GetDiskType(state); break;
+            default:
+                if (_traceInt)
+                    Console.Error.WriteLine($"  [HLE] INT 13h AH={state.A.H:X2} not implemented; failing");
+                Int13Fail(state, DiskBadCmd);
+                break;
+        }
+    }
+
+    private void Int13Ok(AprX86.Cli.Cpu.X86State state, byte ret = DiskOk)
+    {
+        state.A.H = ret;
+        state.FlagC = false;
+        _diskLastStatus = ret;
+    }
+
+    private void Int13Fail(AprX86.Cli.Cpu.X86State state, byte status)
+    {
+        state.A.H = status;
+        state.FlagC = true;
+        _diskLastStatus = status;
+    }
+
+    /// <summary>AH=00 — reset disk system. DL = drive. We just clear last-status.</summary>
+    private void Int13_Reset(AprX86.Cli.Cpu.X86State state)
+    {
+        Int13Ok(state);
+    }
+
+    /// <summary>AH=01 — return last status in AH. DL = drive (currently ignored — single global last-status).</summary>
+    private void Int13_LastStatus(AprX86.Cli.Cpu.X86State state)
+    {
+        state.A.H = _diskLastStatus;
+        state.FlagC = _diskLastStatus != DiskOk;
+    }
+
+    /// <summary>AH=02 — read sectors. AL = count, CH/CL = cyl/sec, DH/DL = head/drive, ES:BX = buffer.</summary>
+    private void Int13_Read(AprX86.Cli.Cpu.X86State state)
+    {
+        if (!_disks.TryGetValue(state.D.L, out var disk))
+        {
+            Int13Fail(state, DiskNoMedia);
+            state.A.L = 0;
+            return;
+        }
+        int cyl = state.C.H | ((state.C.L & 0xC0) << 2);   // 10-bit cylinder
+        int sec = state.C.L & 0x3F;                         // 6-bit sector (1-indexed)
+        int head = state.D.H;
+        int count = state.A.L;
+        int lba = disk.ChsToLba(cyl, head, sec);
+        if (lba < 0)
+        {
+            Int13Fail(state, DiskSectorNotFound);
+            state.A.L = 0;
+            return;
+        }
+        var buf = new byte[count * DiskImage.SectorSize];
+        int got = disk.ReadSectors(lba, count, buf);
+        int physBase = X86Memory.LinearAddr(state.ES, state.B.X);
+        for (int i = 0; i < got * DiskImage.SectorSize; i++)
+            _bus.WriteByte(physBase + i, buf[i]);
+
+        state.A.L = (byte)got;
+        if (got == count) Int13Ok(state);
+        else              Int13Fail(state, DiskSectorNotFound);
+    }
+
+    /// <summary>AH=03 — write sectors. Same register layout as AH=02.</summary>
+    private void Int13_Write(AprX86.Cli.Cpu.X86State state)
+    {
+        if (!_disks.TryGetValue(state.D.L, out var disk))
+        {
+            Int13Fail(state, DiskNoMedia);
+            state.A.L = 0;
+            return;
+        }
+        if (disk.ReadOnly)
+        {
+            Int13Fail(state, DiskWriteProtect);
+            state.A.L = 0;
+            return;
+        }
+        int cyl = state.C.H | ((state.C.L & 0xC0) << 2);
+        int sec = state.C.L & 0x3F;
+        int head = state.D.H;
+        int count = state.A.L;
+        int lba = disk.ChsToLba(cyl, head, sec);
+        if (lba < 0)
+        {
+            Int13Fail(state, DiskSectorNotFound);
+            state.A.L = 0;
+            return;
+        }
+        var buf = new byte[count * DiskImage.SectorSize];
+        int physBase = X86Memory.LinearAddr(state.ES, state.B.X);
+        for (int i = 0; i < buf.Length; i++)
+            buf[i] = _bus.ReadByte(physBase + i);
+
+        int wrote = disk.WriteSectors(lba, count, buf);
+        state.A.L = (byte)wrote;
+        if (wrote == count) Int13Ok(state);
+        else                Int13Fail(state, DiskSectorNotFound);
+    }
+
+    /// <summary>AH=04 — verify sectors. We just check the LBA range is valid.</summary>
+    private void Int13_Verify(AprX86.Cli.Cpu.X86State state)
+    {
+        if (!_disks.TryGetValue(state.D.L, out var disk))
+        {
+            Int13Fail(state, DiskNoMedia);
+            return;
+        }
+        int cyl = state.C.H | ((state.C.L & 0xC0) << 2);
+        int sec = state.C.L & 0x3F;
+        int head = state.D.H;
+        int lba = disk.ChsToLba(cyl, head, sec);
+        if (lba < 0) Int13Fail(state, DiskSectorNotFound);
+        else         Int13Ok(state);
+    }
+
+    /// <summary>AH=08 — get drive parameters. CH/CL = max cyl/sec, DH = max head, DL = drive count.</summary>
+    private void Int13_GetDriveParams(AprX86.Cli.Cpu.X86State state)
+    {
+        if (!_disks.TryGetValue(state.D.L, out var disk))
+        {
+            Int13Fail(state, DiskNoMedia);
+            return;
+        }
+        int maxCyl = disk.Cylinders - 1;
+        int maxHead = disk.Heads - 1;
+        int sectorsPerTrack = disk.Sectors;
+        state.C.H = (byte)(maxCyl & 0xFF);
+        state.C.L = (byte)((sectorsPerTrack & 0x3F) | ((maxCyl >> 2) & 0xC0));
+        state.D.H = (byte)maxHead;
+        // DL = number of drives of the same type attached.
+        int sameKind = 0;
+        foreach (var d in _disks.Values)
+            if (d.Kind == disk.Kind) sameKind++;
+        state.D.L = (byte)sameKind;
+        // BL on AT-class = drive type (4 = 1.44 MB).
+        state.B.L = disk.Kind == DiskKind.Floppy ? (byte)4 : (byte)0;
+        // ES:DI = pointer to drive parameter table — not provided.
+        state.ES = 0; state.DI = 0;
+        Int13Ok(state);
+    }
+
+    /// <summary>AH=15 — get disk type. AH on return: 0=no disk, 1=floppy no diskchg, 2=floppy w/diskchg, 3=fixed.</summary>
+    private void Int13_GetDiskType(AprX86.Cli.Cpu.X86State state)
+    {
+        if (!_disks.TryGetValue(state.D.L, out var disk))
+        {
+            state.A.H = 0; state.FlagC = false; return;
+        }
+        if (disk.Kind == DiskKind.Floppy)
+        {
+            state.A.H = 0x02;
+        }
+        else
+        {
+            state.A.H = 0x03;
+            // CX:DX = sector count (32-bit) for fixed disks.
+            uint total = (uint)disk.TotalSectors;
+            state.C.X = (ushort)((total >> 16) & 0xFFFF);
+            state.D.X = (ushort)(total & 0xFFFF);
+        }
+        state.FlagC = false;
     }
 
     // ---------- INT 16h: keyboard ----------

@@ -41,7 +41,8 @@
 
 ### Out of scope（明確不做，免得 scope creep）
 
-- **真 BIOS image LLE**（Phoenix / AMI / Award 都有 copyright；走 HLE 法律 + 工程都單純）
+- **真 BIOS image LLE 作為主路徑** — Phoenix / AMI / Award 有 copyright，HLE 法律 + 工程都單純。
+  - **註 (2026-05-15)**: `BIOS/firmware/` 有兩個 user 提供的 **public test BIOS** (`pcxtbios.bin` 8KB PC XT-class + `videorom.bin` 32KB Tseng Labs VGA)，無 license 問題；Phase 28.6+ 可選擇性走 LLE 路線取代部份 HLE INT handler 作為 learning value。HLE 仍然是預設。
 - **CGA graphics mode**（mode 4/5/6 等 320×200 / 640×200 graphics）— text mode 夠 demo
 - **EGA / VGA / SVGA**
 - **80386+ 保護模式 / paging / V86 mode**
@@ -478,8 +479,8 @@ result/pc/
 | 28.1  | Memory map + IVT + BIOS Data Area + reset vector | ✅ | `35a73ea` | 2026-05-11 |
 | 28.2  | HLE BIOS framework + INT 10h + UI framebuffer blt | ✅ | `413afeb` | 2026-05-11 |
 | 28.3  | INT 16h + keyboard buffer + WinForms KeyDown queue | ✅ | `92d8e11` | 2026-05-11 |
-| 28.4  | PIT 8253 + INT 1Ah + wall-clock BDA tick | ✅ | (this commit) | 2026-05-11 |
-| 28.5  | INT 13h + .img | ⏳ pending | — | — |
+| 28.4  | PIT 8253 + INT 1Ah + wall-clock BDA tick | ✅ | `ee1098e` | 2026-05-11 |
+| 28.5  | INT 13h floppy/HDD HLE + DiskImage + .img loader | ✅ | (this commit) | 2026-05-11 |
 | 28.6  | INT 19h bootstrap | ⏳ pending | — | — |
 | 28.7  | PIC + IRQ delivery | ⏳ pending | — | — |
 | 28.8  | FreeDOS boot | ⏳ pending | — | — |

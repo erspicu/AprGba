@@ -1350,7 +1350,7 @@ what is being added is IO controllers + HLE BIOS + WinForms UI window.
 | 28.2 | HLE BIOS + INT 10h + 60 Hz framebuffer blt | ✅ |
 | 28.3 | INT 16h + 8042 keyboard buffer (BDA-level HLE) + WinForms input + headless `--keys=` script | ✅ (IRQ 1 wiring deferred to 28.7) |
 | 28.4 | PIT 8253 + INT 1Ah + 18.2Hz wall-clock BDA tick | ✅ (IRQ 0 wiring deferred to 28.7) |
-| 28.5 | INT 13h floppy/HDD HLE + .img loader | ⏳ |
+| 28.5 | INT 13h floppy/HDD HLE + DiskImage + .img loader | ✅ |
 | 28.6 | INT 19h bootstrap + first self-written boot sector | ⏳ |
 | 28.7 | Pic8259 + full IRQ delivery model | ⏳ |
 | 28.8 | FreeDOS 1.3 boot attempt (3-5 days, high uncertainty) | ⏳ |

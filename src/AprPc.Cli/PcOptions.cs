@@ -12,6 +12,12 @@ public sealed class PcOptions
     public string? FloppyAPath  { get; set; }
     public string? HddPath      { get; set; }
 
+    // Phase 28.5 — test ROM (tiny boot sector binary, < 1 KB) loaded
+    // directly to 0000:7C00 + entry point set. Coexists with
+    // --floppy-a (which now mounts a real .img to drive 0x00) so test
+    // fixtures can exercise INT 13h against a real floppy.
+    public string? TestRomPath  { get; set; }
+
     // System config.
     public string  Cpu          { get; set; } = "i8086";
     public string? BiosPath     { get; set; }
@@ -59,6 +65,7 @@ public sealed class PcOptions
             // Value flags --key=value.
             else if (arg.StartsWith("--floppy-a="))   o.FloppyAPath = arg["--floppy-a=".Length..];
             else if (arg.StartsWith("--hdd="))        o.HddPath = arg["--hdd=".Length..];
+            else if (arg.StartsWith("--test-rom="))   o.TestRomPath = arg["--test-rom=".Length..];
             else if (arg.StartsWith("--cpu="))        o.Cpu = arg["--cpu=".Length..];
             else if (arg.StartsWith("--bios="))       o.BiosPath = arg["--bios=".Length..];
             else if (arg.StartsWith("--memory="))     o.Memory = arg["--memory=".Length..];
@@ -98,6 +105,8 @@ public sealed class PcOptions
         # Disk inputs
           --floppy-a=PATH           A: floppy image (.img, 1.44MB / 720KB / 360KB)
           --hdd=PATH                C: hard disk image (.img, FAT12/16 partition)
+          --test-rom=PATH           tiny boot-sector binary loaded directly
+                                    to 0000:7C00 (coexists with --floppy-a)
 
         # System config (all have defaults)
           --cpu=i8086|i8088|i80186|i80188|i80286   [default: i8086]

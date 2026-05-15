@@ -1279,7 +1279,7 @@ HLE BIOS + UI window。Framework genericity claim 的最後一塊拼圖
 | **28.2** | HLE BIOS framework + INT 10h（teletype / cursor / scroll / video mode）+ UI framebuffer blt @ 60 Hz | 28.2-hello-bios.bin: "Hi AprPc!" 端到端 + PNG screenshot 對 | ✅ |
 | **28.3** | INT 16h + 8042 keyboard buffer (BDA-level HLE) + WinForms KeyDown input pump + headless `--keys=` script | 28.3-echo.bin 讀 9 字 echo 印出 + ESC stop | ✅ (IRQ 1 wiring deferred to 28.7) |
 | **28.4** | PIT 8253 + INT 1Ah + 18.2 Hz wall-clock BDA tick | 28.4-tick-readback.bin: INT 1Ah AH=00 回 DX>0, PIT advanced 5 ticks at end ✓ | ✅ (IRQ 0 wiring deferred to 28.7) |
-| **28.5** | INT 13h floppy/HDD HLE + `.img` loader | 讀寫 .img 對 | ⏳ |
+| **28.5** | INT 13h floppy/HDD HLE + `DiskImage` class + `.img` loader (AH=00/01/02/03/04/08/15) | 28.5-int13-readback.bin 從 FreeDOS 1.3 floppy 讀 boot sector + 55 AA magic 對 ✓ | ✅ |
 | **28.6** | INT 19h bootstrap + 自寫 boot sector demo | 截圖看 "AprPc bootstrap OK" | ⏳ |
 | **28.7** | Pic8259 + 完整 IRQ delivery model + sync micro-op | timer + keyboard 都能正確 deliver IRQ | ⏳ |
 | **28.8** | FreeDOS 1.3 boot attempt（高度不確定）| `A:\>` prompt 截圖 | ⏳ |
