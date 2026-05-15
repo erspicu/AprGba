@@ -1348,7 +1348,7 @@ what is being added is IO controllers + HLE BIOS + WinForms UI window.
 | 28.0 | AprPc.Cli scaffolding + WinForms UI shell + emulator-thread plumbing | ✅ |
 | 28.1 | Memory map + IVT + reset vector + BIOS Data Area | ✅ |
 | 28.2 | HLE BIOS + INT 10h + 60 Hz framebuffer blt | ✅ |
-| 28.3 | INT 16h + 8042 keyboard + IRQ 1 + WinForms input | ⏳ |
+| 28.3 | INT 16h + 8042 keyboard buffer (BDA-level HLE) + WinForms input + headless `--keys=` script | ✅ (IRQ 1 wiring deferred to 28.7) |
 | 28.4 | PIT 8253 + IRQ 0 timer tick + INT 1Ah | ⏳ |
 | 28.5 | INT 13h floppy/HDD HLE + .img loader | ⏳ |
 | 28.6 | INT 19h bootstrap + first self-written boot sector | ⏳ |

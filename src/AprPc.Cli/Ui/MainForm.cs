@@ -131,9 +131,45 @@ public sealed class MainForm : Form
         _refreshTimer.Tick += (_, _) => RefreshFromRunner();
         _refreshTimer.Start();
 
-        // === Keyboard plumbing — Phase 28.3 will replace this with real scancode mapping ===
-        KeyDown += (_, e) => _runner.PostKeyEvent((byte)e.KeyValue, KeyEventKind.Down);
-        KeyUp   += (_, e) => _runner.PostKeyEvent((byte)e.KeyValue, KeyEventKind.Up);
+        // === Keyboard plumbing (Phase 28.3) ===
+        // KeyPress gives the printable ASCII (honours shift); KeyDown
+        // covers non-printable keys (Esc, BackSpace, F-keys). The
+        // emulator thread reads from PcKeyboard via INT 16h HLE.
+        KeyPress += (_, e) =>
+        {
+            byte ascii = (byte)e.KeyChar;
+            byte scan  = e.KeyChar switch
+            {
+                '\r' or '\n' => 0x1C,
+                '\b'         => 0x0E,
+                '\t'         => 0x0F,
+                ' '          => 0x39,
+                (char)0x1B   => 0x01,
+                _            => 0x00,
+            };
+            _runner.Keyboard?.Enqueue(ascii, scan);
+        };
+        KeyDown += (_, e) =>
+        {
+            // Catch keys that don't fire KeyPress: Esc / BS / Enter
+            // can be ambiguous depending on platform; ignore those
+            // here since KeyPress already handles them.
+            byte ascii = 0, scan = 0;
+            switch (e.KeyCode)
+            {
+                case Keys.Escape:    ascii = 0x1B; scan = 0x01; break;
+                case Keys.Back:      ascii = 0x08; scan = 0x0E; break;
+                case Keys.Enter:     ascii = 0x0D; scan = 0x1C; break;
+                case Keys.Up:        ascii = 0x00; scan = 0x48; break;
+                case Keys.Down:      ascii = 0x00; scan = 0x50; break;
+                case Keys.Left:      ascii = 0x00; scan = 0x4B; break;
+                case Keys.Right:     ascii = 0x00; scan = 0x4D; break;
+                case Keys.F1:        ascii = 0x00; scan = 0x3B; break;
+                case Keys.F10:       ascii = 0x00; scan = 0x44; break;
+                default: return;
+            }
+            _runner.Keyboard?.Enqueue(ascii, scan);
+        };
 
         // Apply fullscreen if requested.
         if (options.Fullscreen)

@@ -34,6 +34,7 @@ public sealed class HleBios
 
     private readonly X86JsonCpu _cpu;
     private readonly PcMemoryBus _bus;
+    private readonly PcKeyboard _kbd;
     private readonly bool _traceInt;
 
     // Bitset of which vectors this HLE implementation handles. Used
@@ -41,10 +42,11 @@ public sealed class HleBios
     // at F000:00xx is ours.
     private readonly bool[] _owned = new bool[256];
 
-    public HleBios(X86JsonCpu cpu, PcMemoryBus bus, bool traceInt = false)
+    public HleBios(X86JsonCpu cpu, PcMemoryBus bus, PcKeyboard kbd, bool traceInt = false)
     {
         _cpu      = cpu ?? throw new ArgumentNullException(nameof(cpu));
         _bus      = bus ?? throw new ArgumentNullException(nameof(bus));
+        _kbd      = kbd ?? throw new ArgumentNullException(nameof(kbd));
         _traceInt = traceInt;
     }
 
@@ -55,7 +57,8 @@ public sealed class HleBios
     public void Install()
     {
         InstallVector(0x10, "video");
-        // 28.3 / 28.4 / 28.5 / 28.6 add 0x16 / 0x1A / 0x13 / 0x19 here.
+        InstallVector(0x16, "keyboard");
+        // 28.4 / 28.5 / 28.6 add 0x1A / 0x13 / 0x19 here.
     }
 
     private void InstallVector(byte vector, string label)
@@ -91,6 +94,7 @@ public sealed class HleBios
         switch (vector)
         {
             case 0x10: Int10(state); break;
+            case 0x16: Int16(state); break;
             default:
                 // Unhandled — just IRET, no side effect.
                 break;
@@ -98,6 +102,17 @@ public sealed class HleBios
 
         SimulateIret(state);
         _cpu.LoadState(state);
+    }
+
+    /// <summary>
+    /// Returns true if INT 16h AH=00 is currently blocked waiting on
+    /// an empty keyboard buffer. The emulator thread uses this to
+    /// park the CPU instead of busy-spinning the dispatch loop.
+    /// </summary>
+    public bool IsBlockedOnKeyboard(ushort cs, ushort ip)
+    {
+        if (!IsTrapped(cs, ip) || (byte)ip != 0x16) return false;
+        return _cpu.State.A.H == 0x00 && _kbd.IsEmpty;
     }
 
     // ---------- INT 10h: video ----------
@@ -263,6 +278,67 @@ public sealed class HleBios
         state.A.L = _bus.ReadByte(0x00449);
         state.A.H = (byte)_bus.ReadWord16(0x0044A);
         state.B.H = _bus.ReadByte(0x00462);
+    }
+
+    // ---------- INT 16h: keyboard ----------
+
+    private void Int16(AprX86.Cli.Cpu.X86State state)
+    {
+        switch (state.A.H)
+        {
+            case 0x00: Int16_ReadChar(state); break;
+            case 0x01: Int16_PeekChar(state); break;
+            case 0x02: Int16_GetShiftFlags(state); break;
+            default:
+                if (_traceInt)
+                    Console.Error.WriteLine($"  [HLE] INT 16h AH={state.A.H:X2} not implemented; no-op");
+                break;
+        }
+    }
+
+    /// <summary>
+    /// AH=00 — block-wait for a keystroke; return AL=ascii, AH=scancode.
+    /// Caller (PcSystemRunner) gates the dispatch so we never actually
+    /// block here: it only invokes Dispatch(0x16) when the buffer is
+    /// non-empty. We do one final defensive check to keep the contract
+    /// simple — if the buffer is somehow empty, return (0, 0).
+    /// </summary>
+    private void Int16_ReadChar(AprX86.Cli.Cpu.X86State state)
+    {
+        if (_kbd.TryDequeue(out byte ascii, out byte scancode))
+        {
+            state.A.L = ascii;
+            state.A.H = scancode;
+        }
+        else
+        {
+            state.A.L = 0;
+            state.A.H = 0;
+        }
+    }
+
+    /// <summary>
+    /// AH=01 — peek. If a keystroke is available: ZF=0, AL=ascii,
+    /// AH=scancode. Otherwise: ZF=1.
+    /// </summary>
+    private void Int16_PeekChar(AprX86.Cli.Cpu.X86State state)
+    {
+        if (_kbd.TryPeek(out byte ascii, out byte scancode))
+        {
+            state.A.L = ascii;
+            state.A.H = scancode;
+            state.FlagZ = false;
+        }
+        else
+        {
+            state.FlagZ = true;
+        }
+    }
+
+    /// <summary>AH=02 — read BDA shift-flags byte into AL.</summary>
+    private void Int16_GetShiftFlags(AprX86.Cli.Cpu.X86State state)
+    {
+        state.A.L = _kbd.ShiftFlags;
     }
 
     // ---------- IRET simulation ----------

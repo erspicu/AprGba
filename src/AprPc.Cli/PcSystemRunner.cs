@@ -63,9 +63,11 @@ public sealed class PcSystemRunner : IDisposable
     private PcMemoryBus? _bus;
     private X86JsonCpu? _cpu;
     private HleBios? _bios;
-    public PcMemoryBus? Bus => _bus;
-    public X86JsonCpu?  Cpu => _cpu;
-    public HleBios?     Bios => _bios;
+    private PcKeyboard? _kbd;
+    public PcMemoryBus? Bus      => _bus;
+    public X86JsonCpu?  Cpu      => _cpu;
+    public HleBios?     Bios     => _bios;
+    public PcKeyboard?  Keyboard => _kbd;
 
     // Phase 28.2 will fill this in from the CGA framebuffer slice
     // (4 KB at 0xB8000-0xB8FFF). For 28.0 the runner just zero-fills it
@@ -108,8 +110,12 @@ public sealed class PcSystemRunner : IDisposable
         _cpu.Reset();
         _cpu.SetEntryPoint(0xFFFF, 0x0000);   // 8086 reset vector
 
+        // Phase 28.3 — keyboard state (used by HLE INT 16h).
+        _kbd = new PcKeyboard(_bus);
+        _kbd.Reset();
+
         // Phase 28.2 — install HLE BIOS INT handlers + IVT entries.
-        _bios = new HleBios(_cpu, _bus, traceInt: _options.TraceInt);
+        _bios = new HleBios(_cpu, _bus, _kbd, traceInt: _options.TraceInt);
         _bios.Install();
 
         // Start in Paused so LoadTestRom() / Open Floppy can land
@@ -201,13 +207,21 @@ public sealed class PcSystemRunner : IDisposable
 
                 if (_cpu is not null && _bios is not null)
                 {
-                    // Phase 28.2 — HLE trap check. If CS:IP landed at
-                    // an installed BIOS vector (F000:00xx), dispatch
-                    // the C# handler + simulate IRET instead of
-                    // executing the F000:00xx body (there isn't one).
                     var st = _cpu.State;
                     if (_bios.IsTrapped(st.CS, st.IP))
                     {
+                        // Phase 28.3 — INT 16h AH=00 blocks on an empty
+                        // keyboard buffer. Park the CPU instead of
+                        // returning AL=0, mirroring real-mode INT 16h
+                        // behavior. Sleep briefly so the host UI thread
+                        // can enqueue a key (Phase 28.7's PIC + IRQ 1
+                        // path will swap this for proper interrupt-
+                        // driven wake-up).
+                        if (_bios.IsBlockedOnKeyboard(st.CS, st.IP))
+                        {
+                            Thread.Sleep(5);
+                            continue;
+                        }
                         _bios.Dispatch((byte)st.IP);
                         Interlocked.Increment(ref _instructionsExecuted);
                         continue;

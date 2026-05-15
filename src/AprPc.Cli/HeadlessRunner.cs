@@ -29,6 +29,20 @@ internal static class HeadlessRunner
             Console.WriteLine($"  loaded:   {bytes.Length} bytes -> 0000:7C00");
         }
 
+        // Phase 28.3 — pre-load the keyboard buffer with scripted keys.
+        // Useful for CI: --keys="hi\r" prints "hi" through an INT 16h
+        // read loop. Honours \r / \n / \t / \\ / \e (ESC) escapes.
+        if (opts.KeysScript is { } script && runner.Keyboard is { } kbd)
+        {
+            int injected = 0;
+            foreach (var (ascii, scancode) in ExpandKeyScript(script))
+            {
+                if (!kbd.Enqueue(ascii, scancode)) break;
+                injected++;
+            }
+            Console.WriteLine($"  keys:     {injected} keystrokes preloaded into buffer");
+        }
+
         runner.Resume();
 
         // Limit driver — max-cycles in CPU instructions. Default 1M
@@ -65,14 +79,14 @@ internal static class HeadlessRunner
             Console.WriteLine($"    DS={state.DS:X4} ES={state.ES:X4} SS={state.SS:X4} SP={state.SP:X4} BP={state.BP:X4}");
         }
 
-        if (opts.ScreenshotPath is { } ssPath && runner.Bus is { } bus)
+        if (opts.ScreenshotPath is { } ssPath && runner.Bus is { } bus2)
         {
             // Phase 28.2 — real CGA framebuffer → PNG via the existing
             // AprX86.Cli.Video.X86CgaRenderer.
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(ssPath)) ?? ".");
-                X86CgaRenderer.Render(bus.Memory.Ram, ssPath);
+                X86CgaRenderer.Render(bus2.Memory.Ram, ssPath);
                 Console.WriteLine($"  screenshot: {ssPath} ({X86CgaRenderer.ImgW}×{X86CgaRenderer.ImgH} PNG)");
             }
             catch (FileNotFoundException ex)
@@ -82,5 +96,90 @@ internal static class HeadlessRunner
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Expand a --keys=... script into (ascii, scancode) pairs.
+    /// Supported escapes: \r (Enter), \n (LF), \t (Tab), \b (BS),
+    /// \e (Esc), \\ (literal backslash). Other backslash sequences
+    /// are passed through verbatim.
+    /// </summary>
+    private static IEnumerable<(byte ascii, byte scancode)> ExpandKeyScript(string script)
+    {
+        for (int i = 0; i < script.Length; i++)
+        {
+            char c = script[i];
+            byte ascii;
+            byte scan = 0;
+            if (c == '\\' && i + 1 < script.Length)
+            {
+                char esc = script[++i];
+                (ascii, scan) = esc switch
+                {
+                    'r' => ((byte)0x0D, (byte)0x1C),  // Enter
+                    'n' => ((byte)0x0A, (byte)0x1C),
+                    't' => ((byte)0x09, (byte)0x0F),
+                    'b' => ((byte)0x08, (byte)0x0E),  // BackSpace
+                    'e' => ((byte)0x1B, (byte)0x01),  // Esc
+                    '\\' => ((byte)'\\', (byte)0x2B),
+                    _   => ((byte)esc,  (byte)0),
+                };
+            }
+            else
+            {
+                ascii = (byte)c;
+                // Approximate scancode mapping for typeable ASCII —
+                // good enough for CI testing of INT 16h.
+                scan = ScancodeForAscii(c);
+            }
+            yield return (ascii, scan);
+        }
+    }
+
+    private static byte ScancodeForAscii(char c)
+    {
+        // IBM PC scancode set 1 lookup for the most common ASCII keys.
+        // 0 means "unknown" — INT 16h consumers usually look only at AL.
+        return c switch
+        {
+            ' '              => 0x39,
+            'a' or 'A'       => 0x1E,
+            'b' or 'B'       => 0x30,
+            'c' or 'C'       => 0x2E,
+            'd' or 'D'       => 0x20,
+            'e' or 'E'       => 0x12,
+            'f' or 'F'       => 0x21,
+            'g' or 'G'       => 0x22,
+            'h' or 'H'       => 0x23,
+            'i' or 'I'       => 0x17,
+            'j' or 'J'       => 0x24,
+            'k' or 'K'       => 0x25,
+            'l' or 'L'       => 0x26,
+            'm' or 'M'       => 0x32,
+            'n' or 'N'       => 0x31,
+            'o' or 'O'       => 0x18,
+            'p' or 'P'       => 0x19,
+            'q' or 'Q'       => 0x10,
+            'r' or 'R'       => 0x13,
+            's' or 'S'       => 0x1F,
+            't' or 'T'       => 0x14,
+            'u' or 'U'       => 0x16,
+            'v' or 'V'       => 0x2F,
+            'w' or 'W'       => 0x11,
+            'x' or 'X'       => 0x2D,
+            'y' or 'Y'       => 0x15,
+            'z' or 'Z'       => 0x2C,
+            '0'              => 0x0B,
+            '1'              => 0x02,
+            '2'              => 0x03,
+            '3'              => 0x04,
+            '4'              => 0x05,
+            '5'              => 0x06,
+            '6'              => 0x07,
+            '7'              => 0x08,
+            '8'              => 0x09,
+            '9'              => 0x0A,
+            _                => 0,
+        };
     }
 }
