@@ -76,8 +76,8 @@ public sealed class HleBios
         InstallVector(0x10, "video");
         InstallVector(0x13, "disk");
         InstallVector(0x16, "keyboard");
+        InstallVector(0x19, "bootstrap");
         InstallVector(0x1A, "time");
-        // 28.6 adds 0x19 (bootstrap) here.
     }
 
     private void InstallVector(byte vector, string label)
@@ -110,18 +110,20 @@ public sealed class HleBios
             Console.Error.WriteLine(
                 $"  [HLE] INT {vector:X2}h AH={state.A.H:X2} AL={state.A.L:X2} BX={state.B.X:X4} CX={state.C.X:X4} DX={state.D.X:X4}");
 
+        bool skipIret = false;
         switch (vector)
         {
             case 0x10: Int10(state); break;
             case 0x13: Int13(state); break;
             case 0x16: Int16(state); break;
+            case 0x19: Int19(state); skipIret = true; break;
             case 0x1A: Int1A(state); break;
             default:
                 // Unhandled — just IRET, no side effect.
                 break;
         }
 
-        SimulateIret(state);
+        if (!skipIret) SimulateIret(state);
         _cpu.LoadState(state);
     }
 
@@ -486,6 +488,58 @@ public sealed class HleBios
             state.D.X = (ushort)(total & 0xFFFF);
         }
         state.FlagC = false;
+    }
+
+    // ---------- INT 19h: bootstrap loader ----------
+
+    /// <summary>
+    /// INT 19h — the BIOS bootstrap. Try drive 0 (A:) first, then
+    /// drive 0x80 (C:). For each: read sector 0 (CHS=0/0/1) into
+    /// 0000:7C00; if the last two bytes are the 55 AA boot magic,
+    /// set CS=0, IP=0x7C00, DL=drive, and **skip IRET** (caller in
+    /// Dispatch sees the skipIret flag and leaves the stack alone
+    /// so the CPU resumes execution at the boot sector).
+    ///
+    /// If no bootable disk is found, the routine falls back to
+    /// setting CS:IP=F000:FFF2 (= the HLT instruction right after
+    /// the INT 19h opcode at FFFF:0000); HLT halts the CPU.
+    /// </summary>
+    private void Int19(AprX86.Cli.Cpu.X86State state)
+    {
+        byte[] candidates = new byte[] { 0x00, 0x80 };
+        foreach (byte drive in candidates)
+        {
+            if (!_disks.TryGetValue(drive, out var disk)) continue;
+            var boot = new byte[DiskImage.SectorSize];
+            int got = disk.ReadSectors(0, 1, boot);
+            if (got != 1) continue;
+            // Boot magic check at offset 510/511.
+            if (boot[510] != 0x55 || boot[511] != 0xAA)
+            {
+                if (_traceInt)
+                    Console.Error.WriteLine($"  [HLE] INT 19h: drive {drive:X2}h sector 0 lacks 55 AA magic; skipping");
+                continue;
+            }
+            // Copy to 0000:7C00 (physical 0x07C00).
+            for (int i = 0; i < boot.Length; i++)
+                _bus.WriteByte(0x07C00 + i, boot[i]);
+
+            state.CS = 0x0000;
+            state.IP = 0x7C00;
+            state.D.L = drive;
+            // Conventional: clear DH; preserve other GPRs / segs at
+            // their reset-zero state. The boot sector is responsible
+            // for setting up its own DS/ES/SS/SP.
+            state.D.H = 0;
+            if (_traceInt)
+                Console.Error.WriteLine($"  [HLE] INT 19h booted from drive {drive:X2}h (sector 0 -> 0000:7C00)");
+            return;
+        }
+        // No bootable disk — fall through to HLT at FFFF:0002.
+        state.CS = 0xFFFF;
+        state.IP = 0x0002;
+        if (_traceInt)
+            Console.Error.WriteLine("  [HLE] INT 19h: no bootable disk; halting");
     }
 
     // ---------- INT 16h: keyboard ----------

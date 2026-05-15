@@ -102,22 +102,33 @@ public sealed class PcMemoryBus
     }
 
     /// <summary>
-    /// Place a minimal BIOS ROM stub at the 8086 reset vector:
-    /// FFFF:0000 -> JMP F000:FFF0_TO_ENTRY -> HLT
+    /// Place the BIOS ROM stub at the 8086 reset vector. Phase 28.6
+    /// uses a **partial LLE** approach:
+    /// <list type="bullet">
+    /// <item>FFFF:0000 (phys 0xFFFF0): two real-CPU 8086 instructions
+    /// — <c>INT 19h</c> (0xCD 0x19) followed by <c>HLT</c> (0xF4) as a
+    /// fallback. The CPU executes real bytes from BIOS ROM.</item>
+    /// <item>The INT 19h vector is HLE-trapped (HleBios.Int19): the
+    /// handler reads sector 0 of drive 0 via DiskImage and rewrites
+    /// CS:IP directly to 0000:7C00 (skipping the IRET pop) so the
+    /// CPU resumes execution from the loaded boot sector.</item>
+    /// </list>
     ///
-    /// Phase 28.2 will replace this with INT-vector trampolines that
-    /// the HLE BIOS attaches to (each IVT slot points to a unique
-    /// F000:XXXX address whose body is just IRET; host intercepts the
-    /// fetch at that address to dispatch the HLE handler).
-    ///
-    /// For 28.1 the stub literally halts so a test ROM placed at
-    /// some other location (e.g. 0000:7C00 as if booting) won't be
-    /// auto-overwritten by the BIOS.
+    /// A purer LLE path — real 8086 code that does INT 13h read +
+    /// far JMP to 0:7C00 — needs the 0xEA (JMP ptr16:16) and 0xCB
+    /// (RETF) opcodes which are deferred in the i8086 spec
+    /// (see <c>spec/cpu/x86-16/i8086/groups/control-flow.json</c>
+    /// "Far CALL/JMP ... deferred"). Adding them is appropriate
+    /// future-Phase work; for 28.6 the partial-LLE HLE INT 19h
+    /// approach gets us a real reset-vector boot flow today.
     /// </summary>
     private void InitializeBiosRomStub()
     {
-        // At FFFF:0000 (= phys 0xFFFF0) put: F4 = HLT
-        WriteByte(0xFFFF0, 0xF4);
+        // FFFF:0000: INT 19h (bootstrap), then HLT as fallback if
+        // INT 19h ever returns (it won't, the handler skips IRET).
+        WriteByte(0xFFFF0, 0xCD);   // INT
+        WriteByte(0xFFFF1, 0x19);   //   19h
+        WriteByte(0xFFFF2, 0xF4);   // HLT
     }
 
     public byte ReadByte(int physAddr) => _mem.ReadByte(physAddr);
