@@ -62,6 +62,21 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
     public static void NotifyExternalMemoryWrite(uint addr)
         => _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
 
+    /// <summary>
+    /// Phase 30.15b — install this CPU + its memory as the singleton
+    /// "active" pair seen by the unmanaged extern shims (MemRead8 /
+    /// MemWrite8 / etc.). Required for the lockstep harness which
+    /// alternates Step() calls between two CPU instances; without
+    /// re-pointing the singletons each iteration, the wrong memory
+    /// would back the JIT-emitted load/store calls and writes would
+    /// land on the wrong instance.
+    /// </summary>
+    public void SetActiveForLockstep()
+    {
+        _activeMem = _mem;
+        _activeCpu = this;
+    }
+
     private readonly X86Memory                  _mem;
     private readonly LoadedSpec                  _spec;
     private readonly HostRuntime                 _rt;

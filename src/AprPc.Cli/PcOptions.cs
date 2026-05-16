@@ -63,6 +63,14 @@ public sealed class PcOptions
 
     // Headless / CI mode.
     public bool    Headless     { get; set; }
+    /// <summary>
+    /// Phase 30.15b — `--lockstep-bjit` runs two CPU envs side-by-side
+    /// (per-instr A vs block-JIT B with block size = 1) and reports the
+    /// first architectural-state divergence. Tool for hunting JIT bugs
+    /// — not a normal runtime mode. See MD/design/30.15-blockjit-pc-
+    /// investigation.md.
+    /// </summary>
+    public bool    LockstepBjit { get; set; }
     public string? ScreenshotPath { get; set; }
     public long?   MaxCycles    { get; set; }
     public long?   Frames       { get; set; }
@@ -144,6 +152,7 @@ public sealed class PcOptions
             // No-value flags first.
             if      (arg == "--fullscreen")  o.Fullscreen = true;
             else if (arg == "--headless")    o.Headless = true;
+            else if (arg == "--lockstep-bjit") o.LockstepBjit = true;
             else if (arg == "--trace-int")   o.TraceInt = true;
             else if (arg == "--trace-io")    o.TraceIo = true;
             else if (arg == "--trace-irq")   o.TraceIrq = true;

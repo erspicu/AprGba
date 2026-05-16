@@ -98,6 +98,20 @@ public sealed class PcPit : IDisposable
     }
 
     /// <summary>
+    /// Phase 30.15b — stop the wall-clock timer entirely. Used by the
+    /// lockstep harness so two PCs running at different per-Step speeds
+    /// don't get different numbers of BDA-tick writes (which would
+    /// surface as false-positive memory divergences during diff).
+    /// Safe to call multiple times.
+    /// </summary>
+    public void StopForLockstep()
+    {
+        _timer?.Dispose();
+        _timer = null;
+        IrqEnabled = false;
+    }
+
+    /// <summary>
     /// Manually advance the tick count. Used by tests / fixtures that
     /// want a deterministic value without waiting for wall clock.
     /// </summary>
@@ -147,8 +161,21 @@ public sealed class PcPit : IDisposable
         // Phase 28.7 — assert IRQ 0 so the (HLE or user-installed)
         // INT 8 handler runs as well. Done outside the lock to avoid
         // holding two locks simultaneously.
-        _pic?.AssertIrq(0);
+        // Phase 30.15b — IrqEnabled toggle for the lockstep harness:
+        // PIT-driven IRQ delivery is non-deterministic (wall-clock
+        // timing differs between per-instr and block-JIT backends),
+        // so the harness flips this off to keep the two CPUs in sync.
+        if (IrqEnabled)
+            _pic?.AssertIrq(0);
     }
+
+    /// <summary>
+    /// Phase 30.15b — when false, <see cref="WriteBdaTickLocked"/> still
+    /// advances the BDA tick word but does NOT assert IRQ 0. Used by
+    /// the lockstep harness to avoid non-deterministic IRQ delivery
+    /// (wall-clock driven) interfering with per-instruction comparison.
+    /// </summary>
+    public bool IrqEnabled { get; set; } = true;
 
     private void WriteBdaTickLocked()
     {

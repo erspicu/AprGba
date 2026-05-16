@@ -58,6 +58,12 @@ KbdTrace.Init("temp/kbd-trace.log");
 // captured there and (by default) mirrored to stdout in real time.
 AprPc.Cli.Hardware.PcPortBus.ResetPortE9Log();
 
+// Phase 30.15b — `--lockstep-bjit` runs a CPU-state-divergence harness
+// instead of the normal emulator. Two CPUs side-by-side, no GUI, stops
+// at the first per-instruction architectural mismatch.
+if (opts.LockstepBjit)
+    return AprPc.Cli.Diagnostics.PcLockstep.Run(opts);
+
 using var runner = new PcSystemRunner(opts);
 
 if (opts.Headless)

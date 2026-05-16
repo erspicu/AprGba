@@ -182,6 +182,59 @@ public sealed unsafe class BlockFunctionBuilder
         var pcOffsetBytes = (uint)set.PcOffsetBytes;
         var pcWrittenSlotInEntry = Layout.GepPcWritten(builder, statePtr);
 
+        // Phase 30.15b — for spec-PC-bumping ISAs (currently x86 and
+        // 6502) we pre-write the post-opcode PC value into the PC slot
+        // before each instruction's emit list runs. Historically that
+        // pre-write used `bi.Pc + 1` directly, where `bi.Pc` is the
+        // LINEAR 20-bit address of the instruction (CS<<4)+IP for x86.
+        // That's correct ONLY when CS==0 (linear==IP); for any other
+        // CS the IP slot got the linear value, which silently worked
+        // for high segments (e.g. CS=F000 → linear=0xFExxx → IP slot
+        // gets 0xExxx = original IP+1 by coincidence) but broke for
+        // low segments (e.g. CS=0x30:IP=0xF6 → linear=0x3F6 → IP slot
+        // got 0x3F7 instead of 0xF7, derailing the next fetch by
+        // hundreds of bytes). pcxtbios reuses CS=0x30:IP<0x200 as a
+        // scratch segment after POST relocates, so this was the bug
+        // that made block-JIT diverge during the FreeDOS boot chain.
+        //
+        // Correct fix: at block ENTRY load the runtime IP and save it
+        // as a local; each instruction's pre-write becomes
+        //   IP_at_block_entry + (bi.Pc - block_start_linear) + 1
+        // The (bi.Pc - block_start_linear) is the offset within the
+        // block in bytes; (off + 1) is "post-opcode position" for the
+        // instruction at that offset.
+        //
+        // Per-instr does NOT have this bug because each StepOne reads
+        // IP fresh from the slot and advances it explicitly per fetch.
+        string? blockPcRegName = null;
+        if (block.Instructions.Count > 0 && block.InstrSizeBytes == 0u
+            && Layout.RegisterFile.GeneralPurpose.PcIndex is null
+            && Environment.GetEnvironmentVariable("APR_NO_PC_PREWRITE") is null)
+        {
+            if (allocaProvider is not null && allocaProvider.HasStatus("PC", null)) blockPcRegName = "PC";
+            else if (allocaProvider is not null && allocaProvider.HasStatus("IP", null)) blockPcRegName = "IP";
+        }
+        LLVMValueRef ipAtBlockStart = default;
+        LLVMTypeRef blockPcType = default;
+        LLVMValueRef blockPcAlloca = default;
+        uint blockStartLinear = block.Instructions.Count > 0 ? block.Instructions[0].Pc : 0u;
+        if (blockPcRegName is not null)
+        {
+            var def = Layout.GetStatusRegisterDef(blockPcRegName);
+            blockPcType = def.WidthBits switch
+            {
+                16 => LLVMTypeRef.Int16,
+                32 => LLVMTypeRef.Int32,
+                _ => throw new NotSupportedException($"{blockPcRegName} width {def.WidthBits} unsupported")
+            };
+            // Use the EmitContext getter so the read routes through the
+            // alloca shadow when active. allocaProvider already initialised
+            // the IP alloca from state buffer at entry; the load here gives
+            // us the runtime IP-at-block-entry value as an SSA value.
+            blockPcAlloca = ctx.GepStatusRegister(blockPcRegName);
+            ipAtBlockStart = builder.BuildLoad2(blockPcType, blockPcAlloca, "ip_block_start");
+        }
+
         // For each instruction we'll create up to 5 BBs: pre, exec,
         // post, budget_check (predictive downcount), advance.
         // Pre-create them all so we can branch forward.
@@ -292,32 +345,17 @@ public sealed unsafe class BlockFunctionBuilder
             // the IP slot only stores the 16-bit offset. We compute the
             // pre-write value from the LOW 16 bits of (bi.Pc + 1), which
             // is the post-opcode IP value (CS unchanged across the block).
-            string? pcRegName = null;
-            if (allocaProvider is not null
-                && block.InstrSizeBytes == 0u
-                && Layout.RegisterFile.GeneralPurpose.PcIndex is null
-                && Environment.GetEnvironmentVariable("APR_NO_PC_PREWRITE") is null)
+            // Phase 30.15b — replace the broken `(bi.Pc + 1) & mask`
+            // pre-write with `ipAtBlockStart + (bi.Pc - blockStartLinear) + 1`.
+            // The runtime-loaded IP_at_block_start correctly reflects whatever
+            // segmentation the caller used to reach this cached block.
+            if (blockPcRegName is not null)
             {
-                if (allocaProvider.HasStatus("PC", null)) pcRegName = "PC";
-                else if (allocaProvider.HasStatus("IP", null)) pcRegName = "IP";
-            }
-            if (pcRegName is not null)
-            {
-                var pcDef = Layout.GetStatusRegisterDef(pcRegName);
-                var pcType = pcDef.WidthBits switch
-                {
-                    16 => LLVMTypeRef.Int16,
-                    32 => LLVMTypeRef.Int32,
-                    _ => throw new NotSupportedException($"{pcRegName} width {pcDef.WidthBits} unsupported")
-                };
-                var pcPtrAlloca = ctx.GepStatusRegister(pcRegName);
-                // For 8086 the IP slot is 16-bit; bi.Pc may be the linear
-                // 20-bit address. Mask to the IP slot's width.
-                var widthMask = pcDef.WidthBits >= 32 ? 0xFFFFFFFFu : (1u << pcDef.WidthBits) - 1;
-                var pcPreWrite = (uint)((bi.Pc + 1u) & widthMask);
-                builder.BuildStore(
-                    LLVMValueRef.CreateConstInt(pcType, pcPreWrite, false),
-                    pcPtrAlloca);
+                int offsetInBlock = (int)(bi.Pc - blockStartLinear);
+                var addend = LLVMValueRef.CreateConstInt(blockPcType,
+                    (ulong)(offsetInBlock + 1), false);
+                var pcPreWrite = builder.BuildAdd(ipAtBlockStart, addend, $"ip_pre_i{i}");
+                builder.BuildStore(pcPreWrite, blockPcAlloca);
             }
 
             // Cond gate: only if instr-set has global cond AND instr is
