@@ -1,0 +1,158 @@
+Timestamp: 2026-05-16T20:07:03
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I implemented --video=mda|cga for my pcxtbios.bin + FreeDOS emulator (closing the loop on your earlier 20260516_192231.txt consultation). CGA works perfectly. MDA has TWO issues:
+
+PROBLEM 1: MDA renders with COLOR
+My X86CgaRenderer uses a 16-color CGA palette to interpret the attribute byte (fg = palette[attr & 0x0F], bg = palette[(attr >> 4) & 0x07]) regardless of video mode. Real MDA is monochrome only.
+
+PROBLEM 2: `dir` layout wrong in MDA mode
+Same broken layout user reported in pic/6.png BEFORE the --video=mda was added (text appears at column 40+ of each row, leaving left half empty -- classic 40-col content rendered as 80-col). Suggests pcxtbios.bin is NOT actually switching to MDA mode 7 even though port 0x62 reports MDA per our --video=mda config. CGA mode (--video=cga) works perfectly with proper 80-col layout, so it's MDA-specific.
+
+For PROBLEM 1, I need the EXACT MDA attribute byte interpretation:
+
+1. What does each value of the attribute byte mean in real MDA hardware?
+   For example: 0x00 = ?, 0x01 = ?, 0x07 = ?, 0x09 = ?, 0x0F = ?,
+   0x70 = ?, 0x78 = ?, 0xF0 = ?, etc. Give me the COMPLETE bitfield
+   layout (bit purpose, bit position).
+
+2. The classic MDA modes for an attribute byte are typically described as:
+   * Invisible (black on black)
+   * Underlined
+   * Normal (light gray on black, sometimes "monochrome white" with slight green tint)
+   * Bright
+   * Reverse video (black on light gray)
+   * Blink
+   How do these map to specific attribute byte values? Which bits encode each?
+
+3. The MDA monitor's phosphor is amber or green or paper-white depending
+   on monitor model. For a typical IBM 5151 emulation, what RGB triplet
+   should I use for the "light gray" / "monochrome white" foreground?
+   And for the "bright" intensified version?
+
+For PROBLEM 2:
+
+4. When pcxtbios.bin POST reads our port 0x62 reporting MDA (low 4 bits
+   = 0x03 = vv=11 ff=00, after the OUT 0xAD to Port B selector), does
+   it ACTUALLY call INT 10h AH=00 (Set Video Mode) with AL=7 to
+   initialize MDA? Or does it only set BDA[0x49]=7 without running the
+   CRTC programming + framebuffer clear path?
+
+5. Does pcxtbios.bin MDA init path probe the MDA CRTC at port
+   0x3B4/0x3B5 to verify the card is present? If our port stubs default
+   to 0xFF, will BIOS see "no MDA card" and fall back to a degenerate
+   mode that explains the broken layout?
+
+6. What's the minimum MDA hardware emulation needed for pcxtbios.bin to
+   successfully complete its MDA Set Video Mode path? Just CRTC ports
+   0x3B4/0x3B5 returning something non-0xFF? Or also the MDA status
+   port 0x3BA returning specific bits? Or framebuffer 0xB0000 having
+   specific content?
+
+7. If BIOS believes MDA is present and sets BDA[0x49]=7, does the
+   teletype path (INT 10h AH=0E) implicitly write to 0xB0000 (per BDA
+   page segment), or does it always write to 0xB8000 regardless?
+
+========================================================================
+RESPONSE
+========================================================================
+Here is the exact technical breakdown to solve both of your MDA issues.
+
+### PROBLEM 1: MDA Attribute Byte & Color
+
+Unlike CGA which treats the attribute byte as a strict 4-bit Foreground / 4-bit Background RGBI palette, the MDA hardware uses hardcoded logic gates to map specific bit combinations to monochrome behaviors. 
+
+#### 1. The MDA Attribute Bitfield
+The byte is laid out exactly like CGA, but interpreted differently by the hardware:
+* **Bit 7:** Blink
+* **Bits 6, 5, 4:** Background Color
+* **Bit 3:** Foreground Intensity (Bright)
+* **Bits 2, 1, 0:** Foreground Color
+
+#### 2. Exact MDA Value Mapping
+The MDA card ignores most RGB combinations and only looks for specific patterns. Here is the strict mapping you must implement in your renderer:
+
+* **Invisible (Black on Black):** Foreground bits (2-0) are `0` AND Background bits (6-4) are `0`.
+  * Base value: `0x00`
+  * With intensity/blink: `0x08`, `0x80`, `0x88`
+* **Underline:** Foreground bits (2-0) are `1` AND Background bits (6-4) are `0`.
+  * Base value: `0x01`
+  * Bright Underline: `0x09` (adds bit 3)
+  * Blinking Underline: `0x81`, `0x89`
+* **Reverse Video (Black on Green):** Foreground bits (2-0) are `0` AND Background bits (6-4) are `7`.
+  * Base value: `0x70`
+  * Blinking Reverse Video: `0xF0`
+  * *(Note: In strict IBM MDA, the intensity bit 3 does nothing in reverse video because the foreground is black. Some clones made the background bright, but `0x70` is the standard).*
+* **Normal (Green on Black):** Any other combination not listed above defaults to normal text!
+  * Standard Base: `0x07`
+  * Bright Normal: `0x0F` (adds bit 3)
+  * Blinking Normal: `0x87`, `0x8F`
+
+**How to implement this in code:**
+```c
+// Pseudocode for MDA attribute decoding
+bool blink     = (attr & 0x80) != 0;
+bool intense   = (attr & 0x08) != 0;
+uint8_t fg_rgb = (attr & 0x07);
+uint8_t bg_rgb = (attr >> 4) & 0x07;
+
+if (fg_rgb == 0 && bg_rgb == 0) {
+    // INVISIBLE
+} else if (fg_rgb == 1 && bg_rgb == 0) {
+    // UNDERLINE (draw normal text, plus line at bottom of character cell)
+} else if (fg_rgb == 0 && bg_rgb == 7) {
+    // REVERSE VIDEO
+} else {
+    // NORMAL
+}
+```
+
+#### 3. Authentic RGB Triplets (IBM 5151 Monitor)
+The legendary IBM 5151 used a P39 phosphor with a long persistence and a highly specific green hue.
+* **Background:** `#000000`
+* **Normal / Dim Green:** `#00A800` (roughly 66% green)
+* **Bright / Intense Green:** `#54FC54` (Bright green with a slight desaturation to mimic CRT beam spread)
+
+*(If you want to emulate a paper-white monitor, use `#AAAAAA` and `#FFFFFF`. For amber, use `#A8A800` and `#FCFC54`)*.
+
+---
+
+### PROBLEM 2: `dir` Layout Wrong (The 40-Column Bug)
+
+If your output looks like 40-column CGA rendering, **the BIOS did not initialize MDA.** It fell back to 40-col mode because your emulator failed one of its hardware checks. Here are the answers to why:
+
+#### 4. Does it call INT 10h AH=00 AL=7?
+Yes. During POST, if the BIOS reads the DIP switches and determines MDA is requested, it calls INT 10h AH=00 AL=07. **HOWEVER**, before it succeeds, the BIOS routine actively tests the hardware to ensure the card is actually plugged in. If this test fails, it aborts MDA initialization and usually defaults to mode 1 (CGA 40-col).
+
+#### 5 & 6. What minimum hardware emulation is needed?
+Your emulator is likely failing one (or both) of these two checks:
+
+**Check A: Video RAM Presence (Most likely culprit)**
+When the BIOS attempts to set Mode 7, it does a quick Read/Write test at `0xB0000`. 
+* *Your fix:* Ensure your memory bus maps Read/Write RAM to the physical addresses `0xB0000` through `0xB0FFF` (4KB). If your memory controller ignores writes here or reads back `0x00`/`0xFF`, the BIOS assumes "No MDA card present" and falls back to CGA.
+
+**Check B: The Switch Multiplexer (Port 0x61/0x62)**
+You mentioned: *"after the OUT 0xAD to Port B selector, port 0x62 reports MDA (low 4 bits = 0x03)"*.
+**This is a red flag!** 
+In PC/XT architecture, PPI Port B (0x61) bit 3 is a multiplexer for the motherboard DIP switches:
+* If Port `0x61` bit 3 is **1**, Port `0x62` returns switches 1-4 (RAM amount, Coprocessor, Disk drives).
+* If Port `0x61` bit 3 is **0**, Port `0x62` returns switches 5-8 (**Video type**, RAM).
+
+The value `0xAD` is binary `1010 1101`. **Bit 3 is 1!** If you are returning your `0x03` (MDA) when the BIOS writes `0xAD`, you are telling the BIOS about RAM/Floppy drives, not video. To tell the BIOS you have MDA, you must return `0x03` *only* when Port `0x61` bit 3 is `0`.
+
+**Check C: Status Port 0x3BA (Optional but good practice)**
+Some BIOSes read `0x3BA` and wait for bit 7 (VSync) to toggle. If your unmapped port stub blindly returns `0xFF`, the BIOS loops forever or errors out.
+* *Your fix:* Make reads to port `0x3BA` return `0x00`, or ideally, toggle bit 7 between 1 and 0 on alternating reads.
+
+#### 7. Does the teletype path implicitly write to 0xB0000 or 0xB8000?
+Teletype (INT 10h AH=0E) relies **100% on the BIOS Data Area (BDA)**. 
+It checks `BDA[0x49]` to find the current video mode. 
+* If `BDA[0x49] == 7`, it writes to segment `0xB000`. 
+* If `BDA[0x49] <= 6`, it writes to segment `0xB800`.
+
+**Conclusion for Problem 2:**
+Your emulator currently fails the MDA hardware init (likely because RAM at `0xB0000` isn't returning data, or the Port 0x61 bit 3 multiplexing logic is incorrect). Therefore, `BDA[0x49]` never gets set to 7. It falls back to CGA 40-col (Mode 1), setting `BDA[0x49]=1`, `BDA[0x4A]=40` (width), and writes to `0xB8000`. Your renderer is trying to draw an MDA screen, but the BIOS is spitting out standard 40-col CGA data. 
+
+Fix the Port 0x61 bit 3 multiplexer and ensure `0xB0000` holds state, and `pcxtbios.bin` will successfully transition to Mode 7!

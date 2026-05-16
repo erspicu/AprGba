@@ -74,9 +74,14 @@ state, assert IRQ 6.
 | 30.6b | Debug tools: `--trace-cpu-cs`, `--watch-mem`, `--watch-read`, wider memory dump | `c18bcb4` |
 | 30.6c | **CPU `ROL r/m16, CL` count > 1 fix** | `e62a462` |
 | 30.6 (end-to-end) | pcxtbios.bin + FreeDOS boot to COMMAND.COM | `e62a462` |
-| **30.7a** | **GUI + real-BIOS keyboard end-to-end interactive A:\\>** (16 sub-bugs: XLAT opcode missing, HLT wake-on-IRQ, FDC motor stall hack, edge-triggered IRQ 1 + port 0x61 ack pulse Option C, etc.) See [`MD_EN/performance/202605161900-realbios-keyboard-gui-end-to-end.md`](../performance/202605161900-realbios-keyboard-gui-end-to-end.md). | ✅ this commit |
-| 30.8 | Speed up real-BIOS interactive (`dir` is 5-10 min on per-instr backend) | ⏳ deferred |
-| 30.9 | block-JIT + Phase 29 FPU correctness — biggest interactive-speed win | ⏳ deferred |
+| **30.7a** | **GUI + real-BIOS keyboard end-to-end interactive A:\\>** (16 sub-bugs: XLAT opcode missing, HLT wake-on-IRQ, FDC motor stall hack, edge-triggered IRQ 1 + port 0x61 ack pulse Option C, etc.) | ✅ `64cb41b` |
+| 30.7a-followup | 8250 UART + LPT printer status stubs (defensive) | ✅ `58e38a8` |
+| **30.7b** | **Full GUI FreeDOS interactive — dir / ver visible end-to-end**: F12 framebuffer dump hotkey, KeyDown/KeyUp Shift modifier handling, attribute=0 renderer workaround | ✅ `3d3c215` |
+| **30.7c** | **`--video=mda\|cga` selector** + correct port 0x62 PPI mapping per pcxtbios.asm + reverted renderer hack. CGA path 100% works. MDA path partial. | ✅ `9dbb8fc` |
+| **30.7d** | MDA-aware renderer — IBM 5151 green phosphor + attribute byte pattern-match (invisible/underline/reverse/normal). MDA now renders correctly in mono colours. | ✅ this commit |
+| 30.8 | Force pcxtbios MDA mode 7 when `--video=mda` (currently both VRAM probes pass -> BIOS picks CGA) | ⏳ deferred |
+| 30.9 | Speed up real-BIOS interactive (~500K inst/sec floor; FreeCom $P prompt redraw polls disk per PIT tick) | ⏳ deferred |
+| 30.10 | block-JIT + Phase 29 FPU correctness — biggest interactive-speed win | ⏳ deferred |
 
 ## The critical bug — CPU `ROL r/m16, CL` with count > 1
 

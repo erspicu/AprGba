@@ -130,23 +130,30 @@ public sealed class PcPortBus
 
     private byte Read62()
     {
-        // Phase 30.7c — per pcxtbios.bin reading pattern (LOW 4 bits both
-        // reads, selector via Port B bit 2 toggling between memory bits
-        // and video+floppy bits).
+        // Phase 30.7c — pcxtbios.bin (Sergey Kiselev VirtualXT educational
+        // BIOS) reads port 0x62 twice (per pcxtbios.asm source), with an
+        // OUT 0xAD to Port 0x61 in between:
+        //
+        //   in al, 62h            ; first read = memory in low 4 bits
+        //   and al, 0Fh
+        //   mov ah, al
+        //   mov al, 10101101b     ; 0xAD
+        //   out dx, al            ; dx = 0x61 (Port B)
+        //   in al, 62h            ; second read = video+floppy in low 4 bits
+        //
+        // We use Port B BIT 2 as the bank selector. 0xAD has bit 2 = 1
+        // so this matches BIOS's intent. (NOTE: Gemini consults
+        // contradicted each other on bit 2 vs bit 3. Empirically bit 2
+        // works for CGA via --video=cga -- user-verified at commit
+        // 9dbb8fc. Don't change without re-testing CGA.)
+        //
+        //   bit 2 = 0 -> memory in low 4 bits (0x03 = 256KB-class)
+        //   bit 2 = 1 -> video+floppy in low 4 bits:
+        //                bits 0-1 = video (00=EGA, 01=CGA40, 10=CGA80, 11=MDA)
+        //                bits 2-3 = floppy count - 1 (00 = 1 drive)
         bool selectVideoFloppy = (_port61 & 0x04) != 0;
-        if (!selectVideoFloppy)
-        {
-            // First-read state: memory size in low 4 bits.
-            // 0x03 = 256KB-class planar memory (XT then memory-tests
-            // the rest up to 640KB). High 4 bits are 0; pcxtbios ANDs
-            // with 0x0F anyway so they don't matter.
-            return 0x03;
-        }
-        // Second-read state: video+floppy in low 4 bits.
-        //   bits 0-1: video (00=EGA, 01=CGA40, 10=CGA80, 11=MDA)
-        //   bits 2-3: floppy count - 1 (00 = 1 drive)
+        if (!selectVideoFloppy) return 0x03;
         byte videoBits = _video == "mda" ? (byte)0x03 : (byte)0x02;
-        // floppy = 1 drive = 00 in bits 2-3.
         return videoBits;
     }
 

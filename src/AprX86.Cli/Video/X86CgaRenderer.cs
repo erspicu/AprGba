@@ -35,6 +35,16 @@ public static class X86CgaRenderer
         0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
     };
 
+    // 30.7d — MDA-specific colours (IBM 5151 P39 green phosphor approx.
+    // per Gemini 20260516_200703.txt). Real MDA hardware uses hardcoded
+    // logic gates that pattern-match the attribute byte, not a 16-colour
+    // palette. The bit positions of the byte are the same as CGA
+    // (bit 7 = blink, bits 6-4 = bg, bit 3 = intensity, bits 2-0 = fg)
+    // but only specific combinations are honoured.
+    private const uint MdaBlack    = 0x000000;
+    private const uint MdaDimGreen = 0x00A800;   // normal text
+    private const uint MdaBright   = 0x54FC54;   // intensity bit 3 set
+
     /// <summary>
     /// Render the CGA text-mode framebuffer at 0xB8000 to a PNG file.
     /// Auto-detects MDA vs CGA: if 0xB8000 looks empty (mostly zero
@@ -95,6 +105,14 @@ public static class X86CgaRenderer
         X86CgaFont.EnsureLoaded(fontDir);
 
         var rgb = new byte[ImgW * ImgH * 3];
+        // 30.7d — MDA vs CGA attribute decode is fundamentally different:
+        // real MDA hardware pattern-matches specific bit combinations to
+        // hardcoded behaviours (invisible / underline / normal / reverse)
+        // rather than indexing a colour palette. We detect MDA vs CGA
+        // mode purely by framebuffer base address (BIOS chose 0xB0000
+        // for MDA mode 7, 0xB8000 for CGA modes 0-6). Future: also
+        // honour BDA[0x49] mode byte if the heuristic ever picks wrong.
+        bool isMda = fbBase == 0xB0000;
 
         for (int cy = 0; cy < CellsH; cy++)
         for (int cx = 0; cx < CellsW; cx++)
@@ -102,12 +120,44 @@ public static class X86CgaRenderer
             int cellOff = fbBase + (cy * CellsW + cx) * 2;
             byte ch    = mem[cellOff];
             byte attr  = mem[cellOff + 1];
-            uint fg    = Palette[attr & 0x0F];
-            uint bg    = Palette[(attr >> 4) & 0x07];      // bit 7 = blink, ignored
+            uint fg, bg;
+            if (isMda) (fg, bg) = MdaDecodeAttr(attr);
+            else
+            {
+                fg = Palette[attr & 0x0F];
+                bg = Palette[(attr >> 4) & 0x07];   // bit 7 = blink, ignored
+            }
             DrawGlyph(rgb, ch, cx * X86CgaFont.FontW, cy * X86CgaFont.FontH, fg, bg);
         }
 
         return rgb;
+    }
+
+    /// <summary>
+    /// Decode MDA text-mode attribute byte to (foreground, background)
+    /// RGB pair. Real IBM MDA hardware ignores most CGA-style colour
+    /// combos and only honours these four patterns (per IBM MDA tech
+    /// ref + Gemini 20260516_200703.txt):
+    ///   fg=000, bg=000           -> INVISIBLE (black on black)
+    ///   fg=001, bg=000           -> UNDERLINE (we render as normal text;
+    ///                                 underline glyph not yet rendered)
+    ///   fg=000, bg=111           -> REVERSE VIDEO (black on green)
+    ///   anything else            -> NORMAL (green on black)
+    /// Intensity (bit 3) brightens the foreground in non-reverse cells.
+    /// Blink (bit 7) ignored.
+    /// </summary>
+    private static (uint fg, uint bg) MdaDecodeAttr(byte attr)
+    {
+        int fgBits = attr & 0x07;
+        int bgBits = (attr >> 4) & 0x07;
+        bool intense = (attr & 0x08) != 0;
+        if (fgBits == 0 && bgBits == 0)
+            return (MdaBlack, MdaBlack);                       // invisible
+        if (fgBits == 0 && bgBits == 7)
+            return (MdaBlack, MdaDimGreen);                    // reverse video
+        // Normal text (incl. underline path which we draw as plain text
+        // for now). Intensity bit brightens the foreground.
+        return (intense ? MdaBright : MdaDimGreen, MdaBlack);
     }
 
     private static void DrawGlyph(byte[] rgb, byte ch, int x0, int y0, uint fg, uint bg)
