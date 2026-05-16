@@ -252,6 +252,28 @@ public sealed class PcPortBus
             // and lets the BIOS POST advance past video init.
             0x3BA or 0x3DA => ReadVideoStatus(),
 
+            // Phase 30.7a — UART (8250) and LPT (parallel printer) status
+            // stubs per Gemini consultation. FreeDOS COMMAND.COM print
+            // path appears to mirror STDOUT to COM1 or LPT1 and waits
+            // for "transmit ready" forever without these. Returning
+            // "always ready" makes DOS think the byte was accepted
+            // instantly so the next char keeps flowing.
+            //
+            //   COM1 (0x3F8-0x3FF):
+            //     0x3FD LSR: bit 5 = TBE (transmit buffer empty)
+            //                bit 6 = TSE (transmit shift empty)
+            //                bit 0 = data ready (we report none).
+            //     0x3FE MSR: bit 4 = CTS, bit 5 = DSR (ready).
+            //   LPT1 (0x378-0x37F):
+            //     0x379 status: bit 7 = busy active-low (= 1 means NOT busy)
+            //                   bit 6 = ack (no ack pending)
+            //                   bit 4 = select (printer online)
+            //                   bit 3 = error active-low (= 1 means no error)
+            0x3FD or 0x2FD => 0x60,   // COM1/COM2 LSR = TBE | TSE, no data ready
+            0x3FE or 0x2FE => 0x30,   // COM1/COM2 MSR = CTS | DSR
+            0x379          => 0xD8,   // LPT1 status = not-busy + no-ack + online + no-error
+            0x279          => 0xD8,   // LPT2 status mirror
+
             // Default — open bus
             _ => 0xFF,
         };
