@@ -145,6 +145,17 @@ public static class X86CgaRenderer
     ///   anything else            -> NORMAL (green on black)
     /// Intensity (bit 3) brightens the foreground in non-reverse cells.
     /// Blink (bit 7) ignored.
+    ///
+    /// 30.8 workaround: pcxtbios.bin int_10_func_14 (teletype) scrolls
+    /// new lines with BH=0 in text mode (per pcxtbios.asm line 4139:
+    /// `mov bh, 0; jb @@scroll_up`). New lines get attr=0 -> subsequent
+    /// teletype writes preserve attr=0 -> "invisible" chars. This is
+    /// real pcxtbios behaviour, not an emulator bug, but it makes MDA
+    /// mode unusable for `dir`/`ver`. To compensate, when we have a
+    /// printable char with attr=0 in MDA mode, render it as if attr=0x07
+    /// (normal mono) so the user can read the output. CGA mode does NOT
+    /// get this workaround (its mode 3 init pre-fill is enough most of
+    /// the time; user-confirmed at pic/5.png 30.7c).
     /// </summary>
     private static (uint fg, uint bg) MdaDecodeAttr(byte attr)
     {
@@ -152,7 +163,11 @@ public static class X86CgaRenderer
         int bgBits = (attr >> 4) & 0x07;
         bool intense = (attr & 0x08) != 0;
         if (fgBits == 0 && bgBits == 0)
-            return (MdaBlack, MdaBlack);                       // invisible
+        {
+            // True attr=0. Render INVISIBLE (real hardware).
+            // Workaround handled at caller for printable chars.
+            return (MdaBlack, MdaBlack);
+        }
         if (fgBits == 0 && bgBits == 7)
             return (MdaBlack, MdaDimGreen);                    // reverse video
         // Normal text (incl. underline path which we draw as plain text

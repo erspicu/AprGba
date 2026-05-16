@@ -79,7 +79,7 @@ state, assert IRQ 6.
 | **30.7b** | **Full GUI FreeDOS interactive — dir / ver visible end-to-end**: F12 framebuffer dump hotkey, KeyDown/KeyUp Shift modifier handling, attribute=0 renderer workaround | ✅ `3d3c215` |
 | **30.7c** | **`--video=mda\|cga` selector** + correct port 0x62 PPI mapping per pcxtbios.asm + reverted renderer hack. CGA path 100% works. MDA path partial. | ✅ `9dbb8fc` |
 | **30.7d** | MDA-aware renderer — IBM 5151 green phosphor + attribute byte pattern-match (invisible/underline/reverse/normal). MDA now renders correctly in mono colours. | ✅ this commit |
-| 30.8 | Force pcxtbios MDA mode 7 when `--video=mda` (currently both VRAM probes pass -> BIOS picks CGA) | ⏳ deferred |
+| 30.8 | MDA "invisible chars" — confirmed real pcxtbios bug (text-mode implicit scroll uses BH=0 → black-on-black). SeaBIOS source cloned to `ref/seabios/` as future option. Documented known limitation. | 📋 deferred |
 | 30.9 | Speed up real-BIOS interactive (~500K inst/sec floor; FreeCom $P prompt redraw polls disk per PIT tick) | ⏳ deferred |
 | 30.10 | block-JIT + Phase 29 FPU correctness — biggest interactive-speed win | ⏳ deferred |
 

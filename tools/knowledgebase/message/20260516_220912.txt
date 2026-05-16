@@ -1,0 +1,122 @@
+Timestamp: 2026-05-16T22:09:12
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I've confirmed a real IBM PC / pcxtbios.bin behaviour and need advice on how other PC emulators (DOSBox, PCem, 86Box, MartyPC, etc.) typically handle it.
+
+THE BEHAVIOUR:
+pcxtbios.bin's INT 10h AH=0Eh (teletype) handler implicitly scrolls the screen when the cursor reaches the bottom. The scroll routine fills the new bottom line via INT 10h AH=06h (scroll up). For graphics mode, BH (scroll fill attribute) is read from the current cell via AH=08h (read attribute at cursor). For TEXT MODE, BH is HARD-CODED TO 0 (= black foreground on black background = invisible).
+
+Source verbatim (pcxtbios.asm @ line 4138-4153, public domain, github.com/virtualxt/pcxtbios):
+
+    call mode_check        ; is this text mode?
+    mov  bh, 0
+    jb   @@scroll_up       ; "Skip if text mode" -- BH stays 0
+    mov  ah, 8
+    int  10h               ; else read attribute
+    mov  bh, ah
+  @@scroll_up:
+    mov  ah, 6             ; INT 10h AH=06 scroll up
+    mov  al, 1
+    xor  cx, cx
+    mov  dh, 18h
+    mov  dl, [ds:4Ah]
+    dec  dl
+    int  10h
+    ret
+
+CONSEQUENCE in our emulator:
+- pcxtbios mode 7 (MDA 80x25) init clears 0xB0000 with 0x0720 (space + attr 0x07) — good.
+- First screenful of teletype output renders fine (cells inherit pre-fill attr 0x07).
+- After the cursor scrolls past line 24, the bottom row is filled with attr=0 (= invisible).
+- Subsequent teletype writes preserve attr (BIOS AH=0Eh writes char only, not attr).
+- Result: from row 25 onward, every character is rendered black-on-black.
+
+FreeDOS `dir` output spans many rows; in MDA mode the file listing rows are invisible to the user. CGA mode (--video=cga, mode 3) somehow doesn't show this symptom as badly (perhaps because mode 3 init defaults differently, or because something resets attr=0 to attr=0x07 in CGA scroll path — TBD).
+
+QUESTIONS:
+
+1. Is the "scroll fill = 0 for text mode" behaviour in pcxtbios.bin a faithful reproduction of original IBM XT BIOS, or is it a pcxtbios-specific bug? My understanding from the comment "Skip if text mode" is that this is intentional (= text mode doesn't read existing attr because text-mode background colours weren't a thing on the original CGA layout). But the result is visually broken for any program that doesn't explicitly INT 10h AH=06 with BH=0x07 before/after teletype output.
+
+2. How do mature PC emulators (DOSBox, DOSBox-X, PCem, 86Box, MartyPC, Bochs, QEMU's CGA emulation) handle this? Specifically:
+   a) Do they implement INT 10h themselves (HLE bypass real BIOS) and quietly use BH=0x07 instead of 0?
+   b) Do they ship a patched BIOS that fixes this?
+   c) Do they render attr=0 cells as visible somehow (renderer hack)?
+   d) Do they just accept the IBM-faithful behaviour and tell users to live with it?
+   e) Something else?
+
+3. Is there a known DOS-side workaround? Maybe a TSR like ANSI.SYS that re-implements INT 10h with proper scroll fill?
+
+4. For our use case (educational / framework demo emulator, want FreeDOS interactive A:\> to be visibly usable), what's the recommended trade-off:
+   - Renderer hack: cosmetically promote attr=0 + non-zero char to attr=0x07 in MDA mode? (My current implementation.)
+   - HLE intercept INT 10h AH=06 to force BH != 0?
+   - Patch the BIOS ROM bytes in memory at load time?
+   - Ship a "fixed" BIOS variant?
+   - Accept the quirk and document it as authentic?
+
+5. Does CGA mode actually NOT have this issue, or does it have it but less visible? On real CGA mode 3 (80x25 colour), if BIOS scroll fills with BH=0, the new line would be black-on-black just like MDA. Why does our --video=cga test render dir output completely visibly without any renderer workaround?
+
+========================================================================
+RESPONSE
+========================================================================
+This is a fantastic technical question. You have hit on a classic intersection of BIOS implementation details, video memory addressing, and emulator design. 
+
+Here is the short answer: **This is definitely a bug in `pcxtbios`, not authentic IBM XT behavior.** Emulators that use authentic BIOS ROMs or use High-Level Emulation (HLE) do not exhibit this issue because they handle the Teletype scroll fill correctly.
+
+Here is the deep dive answering all of your questions, starting with the mystery of CGA vs. MDA, as it unlocks the whole problem.
+
+---
+
+### 5. Why does CGA work but MDA fails? (The Root Cause)
+To understand why CGA works fine in your emulator while MDA renders black-on-black, we have to look closely at the `pcxtbios.asm` snippet you provided:
+
+```assembly
+    call mode_check        ; returns Carry Flag (CF) based on mode
+    mov  bh, 0
+    jb   @@scroll_up       ; Jump if CF=1 (Graphics mode)
+    mov  ah, 8             ; --- FALLTHROUGH FOR TEXT MODE ---
+    int  10h               ; Read character and attribute at cursor
+    mov  bh, ah            ; Put attribute into BH for the scroll fill
+  @@scroll_up:
+    ...
+```
+
+The comment in the source code (`"Skip if text mode"`) is slightly misleading or written backwards by the author. What this code actually does is:
+1. If the mode is **Graphics**, skip the attribute read and use `BH=0` (because graphics modes don't have text attributes; they draw pixels on a black background).
+2. If the mode is **Text**, read the attribute at the current cursor position using `INT 10h AH=08h`, and use *that* attribute to fill the new scrolled line.
+
+**So why does MDA fail?** 
+The bug isn't in the scroll routine; **the bug is in `pcxtbios`'s `INT 10h AH=08h` (Read Attribute) implementation.** 
+
+In CGA mode (Mode 3), video memory is at segment `0xB800`. The BIOS reads the attribute at the cursor, correctly finds `0x07`, and fills the scroll with `0x07`.
+In MDA mode (Mode 7), video memory is at segment `0xB000`. It is highly likely that `pcxtbios`'s `AH=08h` routine has a bug where it hard-codes the text-mode segment to `0xB800`, or calculates the MDA offset incorrectly. Therefore, in MDA mode, the BIOS tries to read the screen attribute but accidentally reads from uninitialized memory at `0xB800` (which your emulator likely initializes to `0x00`). It reads an attribute of `0x00`, passes it to the scroll routine, and paints your new line black-on-black!
+
+### 1. Is this faithful to original IBM XT BIOS?
+**No.** The original IBM PC 5150 and XT 5160 BIOSes correctly handle Teletype scrolling in MDA and CGA. The IBM BIOS `TTY_OUTPUT` routine dynamically checks the active video page and current attribute, and correctly reads the attribute from either `0xB000` (MDA) or `0xB800` (CGA) to ensure the newly scrolled line matches the current text color. `pcxtbios` is a clean-room, open-source BIOS. It is lightweight but notoriously buggy and incomplete compared to genuine IBM BIOS.
+
+### 2. How do mature PC emulators handle this?
+They don't have to hack around it, because they don't use buggy BIOSes:
+*   **PCem, 86Box, MartyPC (LLE / Cycle-accurate):** These emulators require the user to provide *authentic* BIOS ROM images (like the actual IBM, AMI, or Phoenix ROMs). Because genuine ROMs don't have this bug, the emulator's video hardware just does what the BIOS tells it to, and it works perfectly.
+*   **DOSBox, DOSBox-X (HLE):** They intercept `INT 10h` entirely. Their built-in High-Level Emulation handles `AH=0Eh` by looking at the current cursor position, grabbing the active attribute, and performing the scroll-fill natively in C++ using `0x07` or the current attribute.
+*   **Bochs, QEMU:** These ship with **SeaBIOS** (or VGABIOS). SeaBIOS is a highly mature, heavily tested open-source BIOS that correctly handles `INT 10h` segment addressing for both MDA and CGA.
+
+### 3. Is there a known DOS-side workaround?
+Yes. Loading `ANSI.SYS` (or alternative TSRs like `NANSI.SYS` / `NNANSI.COM`) replaces the DOS standard output driver. `ANSI.SYS` intercepts the output, maintains its own internal state of the current text attributes, and often draws directly to video RAM or uses explicit BIOS calls that bypass the `TTY_OUTPUT` bugs. 
+
+Furthermore, many DOS applications (like Norton Commander, Edit, or basically any UI-driven app) bypass the BIOS entirely and write directly to `0xB8000` or `0xB0000`, which is why you only notice this bug when using the standard DOS `dir` command (which relies on DOS `INT 21h AH=09h`, which cascades to BIOS `INT 10h AH=0Eh`).
+
+### 4. What is the recommended trade-off for your emulator?
+**Do NOT use the Renderer hack.** 
+Promoting `attr=0` to `attr=0x07` in your PPU/CRTC logic will break DOS software. Some games and programs intentionally use black-on-black text to hide passwords, create "fade out" effects, or draw invisible collision maps. If you hack your renderer, you will reveal things that are supposed to be hidden.
+
+Here are the best paths forward for your emulator, in order of preference:
+
+**Recommendation A: Ditch `pcxtbios` and use SeaBIOS.**
+If your emulator allows GPLv3 code, use SeaBIOS. It is the gold standard for open-source x86 emulator BIOSes. It supports MDA/CGA/EGA/VGA seamlessly, and your `dir` output will work flawlessly with zero emulator-side hacks.
+
+**Recommendation B: Fix the bug in `pcxtbios` (or binary patch it).**
+If you want to keep using `pcxtbios` (e.g., for Public Domain licensing or its tiny footprint), fix the BIOS itself. Look at the `INT 10h AH=08h` handler in the `pcxtbios` source. You will likely find it fails to check for Mode 7 when calculating the video segment. You can compile a fixed `.bin` and ship that, or, at load time, apply a binary patch in your emulator's memory to the `pcxtbios` ROM array that forces `BH=0x07` right before the `@@scroll_up` label.
+
+**Recommendation C: HLE Intercept.**
+If you prefer not to touch the ROM, you can intercept `INT 10h` at the emulator level. When `AH=06h` (Scroll) is called, check if `AL=01`, `BH=00`, and `VideoMode == 7`. If so, dynamically change the CPU's `BH` register to `0x07` before executing the interrupt. This fixes the symptom without touching the renderer, keeping your PPU emulation clean and hardware-accurate.

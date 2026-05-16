@@ -546,7 +546,16 @@ public sealed class MainForm : Form
         if (_runner.Bus is not { } bus) return;
         var mem = bus.Memory.Ram;
         int fbBase = X86CgaRenderer.PickFramebufferBase(mem);
-        KbdTrace.Log($"=== F12 SCREEN DUMP fbBase=0x{fbBase:X5} BDA[0x49]=0x{mem[0x0449]:X2} ===");
+        // Expanded BDA video state — pcxtbios spec handbook §2/§5
+        byte equip = mem[0x0410];                                            // equipment flag low byte
+        byte mode  = mem[0x0449];                                            // current video mode (BDA[0x49])
+        ushort cols = (ushort)(mem[0x044A] | (mem[0x044B] << 8));            // CRT columns (BDA[0x4A])
+        ushort regen = (ushort)(mem[0x044C] | (mem[0x044D] << 8));           // regen size (BDA[0x4C])
+        ushort fbSeg = (ushort)(mem[0x0463] | (mem[0x0464] << 8));           // CRT base segment (BDA[0x63])
+        KbdTrace.Log($"=== F12 SCREEN DUMP fbBase=0x{fbBase:X5} " +
+            $"BDA[0x10]=0x{equip:X2}(equip,video={(equip >> 4) & 0x3:X}) " +
+            $"BDA[0x49]={mode}(mode) BDA[0x4A]={cols}(cols) BDA[0x4C]=0x{regen:X4}(regen) " +
+            $"BDA[0x63]={fbSeg:X4}(fbSeg) ===");
         for (int row = 0; row < 25; row++)
         {
             int rowOff = fbBase + row * 80 * 2;

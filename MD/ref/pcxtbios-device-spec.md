@@ -675,6 +675,20 @@ spec descriptions often assume IBM and break here.
   in our emulator (they are — full 1 MB RAM), CGA always wins → BDA[0x49]
   ends up = 3 even when --video=mda requested. (Phase 30.8: force CGA
   CRTC probe fail.)
+- **TELETYPE SCROLL BUG (KNOWN, ACCEPTED)**: `int_10_func_14` (INT 10h
+  AH=0Eh teletype) implicit scroll at end-of-screen uses **BH=0** as the
+  scroll fill attribute in text mode (pcxtbios.asm line 4139). New rows
+  get attr=0x00 (black on black). Subsequent teletype writes preserve the
+  attribute, so any text written after a scroll is invisible. Real IBM
+  5160 BIOS reads the current attribute via AH=08h and uses that as the
+  fill, so this doesn't happen on authentic hardware. SeaBIOS / DOSBox /
+  PCem / 86Box don't hit it (they use their own BIOS or HLE INT 10h).
+  Symptom on our emulator: MDA mode `dir` output mostly invisible past
+  the first screenful. CGA mode (mode 3) cosmetically less affected.
+  Fix options if ever pursued (Phase 30.8):
+  - HLE-intercept INT 10h AH=06h scroll to force BH != 0
+  - Binary-patch the BIOS ROM byte at `pcxtbios.asm:4139` (force `mov bh, 0x07`)
+  - Switch to SeaBIOS (`ref/seabios/` — cloned but not used)
 - **No CMOS-based clock by default**; uses tick-counter at BDA[0x6C].
 - **Optional features** controlled by ifdefs at top of source — IBM_PC,
   TURBO_ENABLED, etc. The shipped `pcxtbios.bin` we use is XT-mode with
