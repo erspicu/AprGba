@@ -34,17 +34,23 @@ public sealed class PcMemoryBus
     private readonly MachineSpec _spec;
     private readonly string _biosMode;
     private readonly string? _biosImagePath;
+    private readonly string? _videoBiosPath;
 
     public X86Memory Memory => _mem;
     public MachineSpec Spec => _spec;
     public string BiosMode => _biosMode;
 
-    public PcMemoryBus(MachineSpec spec, string biosMode = "lle", string? biosImagePath = null)
+    public PcMemoryBus(
+        MachineSpec spec,
+        string biosMode = "lle",
+        string? biosImagePath = null,
+        string? videoBiosPath = null)
     {
         _spec = spec ?? throw new ArgumentNullException(nameof(spec));
         _mem  = new X86Memory();
         _biosMode = biosMode;
         _biosImagePath = biosImagePath;
+        _videoBiosPath = videoBiosPath;
         ValidateSpec(spec);
     }
 
@@ -177,7 +183,84 @@ public sealed class PcMemoryBus
             // to BIOSes matching this pattern (won't corrupt other ROMs).
             // See ref/pcxtbios/pcxtbios.asm line 4138-4143 for the source.
             ApplyPcxtbiosScrollFix(loadAddr, biosBytes.Length);
+            LoadVideoBios();
             return;
+        }
+    }
+
+    /// <summary>
+    /// Phase 30.12 — load an option-ROM image (typically the VGA BIOS,
+    /// e.g. <c>BIOS/firmware/videorom.bin</c>) into the expansion-ROM
+    /// region at 0xC0000. The IBM-PC POST scans 0xC0000..0xDE000 in 2 KB
+    /// steps for the 0x55 0xAA signature; on hit it FAR-CALLs offset 3.
+    /// pcxtbios.asm line 819-880 implements that scan, so loading the
+    /// VGA BIOS here is enough to have it called automatically without
+    /// any pcxtbios patch.
+    ///
+    /// Smoke-test only: we validate signature + checksum and load the
+    /// bytes, but do NOT yet emulate the VGA registers (3C0-3DF) the
+    /// init code will probe. Expect the init code to either hang in a
+    /// port-read loop or take an unsupported-opcode trap on the first
+    /// I/O the host port bus doesn't recognise. Future work (Phase B+)
+    /// implements the actual VGA hardware.
+    /// </summary>
+    private void LoadVideoBios()
+    {
+        if (_videoBiosPath is not { } path) return;
+
+        var rom = File.ReadAllBytes(path);
+        const int loadAddr = 0xC0000;
+        const int maxLen   = 0xE0000 - 0xC0000;  // 128 KB option-ROM window
+
+        // Sanity: signature 55 AA at offset 0
+        if (rom.Length < 4 || rom[0] != 0x55 || rom[1] != 0xAA)
+            throw new InvalidDataException(
+                $"--video-bios={path}: missing 0x55 0xAA option-ROM signature " +
+                $"(first 2 bytes: 0x{rom[0]:X2} 0x{rom[1]:X2}). " +
+                "Expected a standard PC option-ROM image.");
+
+        // Declared ROM size: byte at +2 is (length / 512)
+        int declaredLen = rom[2] * 512;
+        if (declaredLen != rom.Length)
+        {
+            Console.Error.WriteLine(
+                $"  [VBIOS] WARNING: declared length 0x{declaredLen:X} " +
+                $"(byte +2 = 0x{rom[2]:X2} * 512) != file length 0x{rom.Length:X} " +
+                "— using file length");
+        }
+        if (rom.Length > maxLen)
+            throw new InvalidDataException(
+                $"--video-bios={path}: {rom.Length} bytes > {maxLen} (0xC0000-0xE0000 window)");
+
+        // Checksum: sum of all bytes mod 256 must be zero for the POST
+        // scan to accept the ROM and FAR-CALL its entry point. Compute
+        // and warn if mismatched (but still load — useful for inspection).
+        int sum = 0;
+        for (int i = 0; i < rom.Length; i++) sum += rom[i];
+        sum &= 0xFF;
+
+        for (int i = 0; i < rom.Length; i++)
+            _mem.Ram[loadAddr + i] = rom[i];
+
+        Console.Error.WriteLine(
+            $"  [VBIOS] loaded {path} at 0x{loadAddr:X5}-0x{loadAddr + rom.Length - 1:X5} " +
+            $"({rom.Length} bytes, checksum {(sum == 0 ? "OK" : $"BAD: 0x{sum:X2}")})");
+
+        // Heuristic banner: find first long printable ASCII run in the
+        // first 256 bytes (vendor copyright string), useful for telling
+        // a Tseng / OAK / Cirrus ROM apart at a glance.
+        for (int i = 0; i < Math.Min(256, rom.Length); i++)
+        {
+            if (rom[i] < 0x20 || rom[i] >= 0x7F) continue;
+            int j = i;
+            while (j < rom.Length && rom[j] >= 0x20 && rom[j] < 0x7F) j++;
+            if (j - i >= 24)
+            {
+                var s = System.Text.Encoding.ASCII.GetString(rom, i, j - i);
+                Console.Error.WriteLine($"  [VBIOS] banner @0x{i:X3}: {s.Trim()}");
+                break;
+            }
+            i = j;
         }
     }
 

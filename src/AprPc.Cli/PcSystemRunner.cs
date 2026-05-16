@@ -120,7 +120,11 @@ public sealed class PcSystemRunner : IDisposable
         // --bios) so the BIOS reset-vector stub is configurable.
         var machineSpecPath = PcMemoryBus.LocateMachineSpec();
         var spec = MachineSpecLoader.LoadFromFile(machineSpecPath);
-        _bus = new PcMemoryBus(spec, biosMode: _options.BiosMode, biosImagePath: _options.BiosPath);
+        _bus = new PcMemoryBus(
+            spec,
+            biosMode: _options.BiosMode,
+            biosImagePath: _options.BiosPath,
+            videoBiosPath: _options.VideoBiosPath);
         _bus.Reset();
 
         // Phase 29.1 — resolve machine-declared coprocessor / ISA extension

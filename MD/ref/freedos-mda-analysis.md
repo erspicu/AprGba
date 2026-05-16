@@ -255,6 +255,38 @@ visible including the file table that was invisible before the fix.
    chars present). Documented as a deliberate forgiveness rule for
    "FreeDOS-era software written for color but running on MDA".
 
+### Postscript (2026-05-16): VBIOS-driven mode 3 is the cleanest answer
+
+Phase 30.12 (videorom.bin Option ROM loader) — adding
+`--video-bios=BIOS/firmware/videorom.bin` (Tseng Labs ET4000 32 KB VGA
+BIOS, 1992) — turned out to be a much simpler fix for the whole class
+of "FreeDOS-on-MDA" rendering issues than chasing each individual
+attr quirk:
+
+1. pcxtbios POST scans 0xC0000-0xFE000 for `0x55 0xAA` and FAR-CALLs
+   offset 3. Loading the Tseng VBIOS at 0xC0000 made this run
+   automatically — `caller=C000` shows up 157 times in the INT 10h
+   trace from a single boot.
+2. The VBIOS init forced the active video mode to **3** (CGA 80x25
+   colour text at 0xB8000) instead of 7 (MDA at 0xB0000). All
+   subsequent FreeDOS output goes through the proper 16-colour CGA
+   attribute path, which our renderer already handles correctly via
+   the standard CGA palette.
+3. Visual result: `result/pc/auto-test-20260516-164332.png` — full
+   FreeDOS installer in colour ("FreeDOS" green, "overwrite" red,
+   "stop NOW!" red, "[Y,N]" green), `dir` listing fully visible, and
+   the ASCII-art banner shows the original blue/green CGA design.
+
+This means MDA-mode work (the `--video=mda` path) is now optional /
+historical; the recommended setup is:
+```
+--bios=BIOS/firmware/pcxtbios.bin
+--video-bios=BIOS/firmware/videorom.bin
+--floppy-a=BIOS/freedos-1.3-floppy.img
+```
+The MDA fixes still ship and are still correct for the `pcxtbios.bin`-
+only path, but they are not the user-facing recommendation any more.
+
 ## References
 
 - `ref/freedos/kernel/kernel/console.asm` — CON device driver

@@ -21,6 +21,21 @@ public sealed class PcOptions
     // System config.
     public string  Cpu          { get; set; } = "i8086";
     public string? BiosPath     { get; set; }
+    /// <summary>
+    /// Phase 30.12 — option ROM image (Video BIOS / network BIOS / etc.)
+    /// loaded into the C0000-DE000 expansion-ROM region. The IBM PC POST
+    /// scans this region in 2 KB increments looking for the 0x55 0xAA
+    /// signature; on hit it FAR CALLs offset 3 of the ROM so its init
+    /// stub can hook INT 10h / install vectors / probe its hardware.
+    ///
+    /// Initial use case: <c>BIOS/firmware/videorom.bin</c> (Tseng Labs
+    /// ET4000 32 KB VGA BIOS, 1992 V8.02X). Loading the ROM is
+    /// independent of whether we actually emulate the VGA hardware it
+    /// talks to via I/O ports 0x3C0-0x3DF — the smoke test exists to
+    /// expose what the ROM probes for, before deciding whether to commit
+    /// to full VGA register / framebuffer emulation.
+    /// </summary>
+    public string? VideoBiosPath { get; set; }
     public string  Memory       { get; set; } = "640k";
     public string  Backend      { get; set; } = "json-block";
     /// <summary>
@@ -152,6 +167,7 @@ public sealed class PcOptions
             else if (arg.StartsWith("--test-rom="))   o.TestRomPath = arg["--test-rom=".Length..];
             else if (arg.StartsWith("--cpu="))        o.Cpu = arg["--cpu=".Length..];
             else if (arg.StartsWith("--bios="))       o.BiosPath = arg["--bios=".Length..];
+            else if (arg.StartsWith("--video-bios=")) o.VideoBiosPath = arg["--video-bios=".Length..];
             else if (arg.StartsWith("--memory="))     o.Memory = arg["--memory=".Length..];
             else if (arg.StartsWith("--backend="))    o.Backend = arg["--backend=".Length..];
             else if (arg.StartsWith("--bios-mode="))  o.BiosMode = arg["--bios-mode=".Length..];
@@ -206,6 +222,13 @@ public sealed class PcOptions
         # System config (all have defaults)
           --cpu=i8086|i8088|i80186|i80188|i80286   [default: i8086]
           --bios=PATH               real BIOS image (LLE); omit for HLE mode
+          --video-bios=PATH         option ROM image (e.g. videorom.bin, VGA
+                                    Tseng ET4000 BIOS). Loaded at 0xC0000 so
+                                    pcxtbios POST detects it and FAR-CALLs
+                                    its init at offset 3. Phase 30.12 smoke
+                                    test — actual VGA register emulation is
+                                    not yet implemented, so the init code
+                                    will likely hang on the first I/O probe.
           --memory=640k|1m          conventional RAM size            [default: 640k]
           --backend=json|json-block|legacy         [default: json-block]
           --bios-mode=lle|hle                      [default: lle]

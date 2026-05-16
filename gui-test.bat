@@ -5,8 +5,9 @@ REM
 REM Usage:
 REM   gui-test.bat                 HLE BIOS + FreeDOS (per-instruction backend,
 REM                                because HLE + block-JIT hits Phase 28.8x)
-REM   gui-test.bat realbios        real pcxtbios.bin + FreeDOS (Phase 30 path,
-REM                                block-JIT is fine here -- no HLE traps)
+REM   gui-test.bat realbios        real pcxtbios.bin + videorom.bin + FreeDOS
+REM                                (VGA mode 3, recommended). 2nd arg = mda|cga|vga
+REM                                (default vga); 3rd arg = "auto" for AutoTester.
 REM   gui-test.bat hle-jit         HLE BIOS + block-JIT  (known broken; for
 REM                                reproducing Phase 28.8x)
 REM   gui-test.bat build           force rebuild before launching (HLE mode)
@@ -77,9 +78,16 @@ goto :eof
 call :ensure_dll
 set FLOPPY=BIOS\freedos-1.3-floppy.img
 set BIOS=BIOS\firmware\pcxtbios.bin
-REM Second positional arg picks video adapter: mda (default) or cga.
+REM Second positional arg picks video adapter:
+REM   mda  = pcxtbios MDA path only (monochrome, attr-quirks)
+REM   cga  = pcxtbios CGA path only
+REM   vga  = pcxtbios + load videorom.bin (Tseng ET4000 VGA BIOS) at 0xC0000.
+REM          POST FAR-CALLs its init; the VGA BIOS forces mode 3 (CGA color)
+REM          and everything renders properly. Phase 30.12, recommended default.
 set VIDEO=%2
-if "%VIDEO%"=="" set VIDEO=mda
+if "%VIDEO%"=="" set VIDEO=vga
+set VBIOS_ARG=
+if /i "%VIDEO%"=="vga" set VBIOS_ARG=--video-bios=BIOS\firmware\videorom.bin
 if not exist "%FLOPPY%" (
     echo [gui-test] Missing %FLOPPY%.
     exit /b 1
@@ -100,5 +108,9 @@ set AUTO=%3
 set AUTO_ARG=
 if /i "%AUTO%"=="auto" set AUTO_ARG=--auto-test=freedos-mda-dir
 echo [gui-test] Mode: Real BIOS pcxtbios.bin + FreeDOS  (Phase 30 path, backend=json, video=%VIDEO%, auto=%AUTO%)
-dotnet "%DLL%" --bios=%BIOS% --floppy-a=%FLOPPY% --backend=json --video=%VIDEO% %AUTO_ARG% --window-scale=2 --window-title="AprPc - real BIOS pcxtbios.bin (%VIDEO%)" --verbose
+REM --video=vga also passes through the MDA renderer codepath as a fallback;
+REM whichever framebuffer (0xB0000 or 0xB8000) the VBIOS init populates wins.
+set VIDEO_RENDER=%VIDEO%
+if /i "%VIDEO%"=="vga" set VIDEO_RENDER=cga
+dotnet "%DLL%" --bios=%BIOS% %VBIOS_ARG% --floppy-a=%FLOPPY% --backend=json --video=%VIDEO_RENDER% %AUTO_ARG% --window-scale=2 --window-title="AprPc - real BIOS pcxtbios.bin (%VIDEO%)" --verbose
 goto :eof
