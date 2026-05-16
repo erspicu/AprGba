@@ -44,6 +44,27 @@ register; the prior stub gave wrong rotation and silently corrupted DMA
 target addresses). Real-BIOS chain validates Phase 28.IO + 29 + 30 +
 30.6c hang together. Plan: [`MD/design/30-fdc-dma-plan.md`](MD/design/30-fdc-dma-plan.md).
 
+**Phase 30.12 (Tseng ET4000 VGA BIOS as option ROM)** ✅ 2026-05-16 —
+`--video-bios=BIOS/firmware/videorom.bin` loads the 32 KB Tseng VGA
+BIOS at 0xC0000; pcxtbios POST scans the option-ROM region (asm line
+819-880), finds the `55 AA` signature + valid checksum, and FAR-CALLs
+offset 3. The Tseng init code runs (157 INT 10h calls from `caller=C000`
+in trace) and forces video mode 3, so FreeDOS renders in full 16-colour
+text via the existing CGA decoder. Smoke-test-only — no VGA register or
+0xA0000 planar framebuffer emulation yet.
+
+**Phase 30.14 (DOS test-binary injection workflow)** ✅ 2026-05-16 —
+three pieces enable end-to-end automated DOS test runs:
+(1) Port 0xE9 debug-out hook à la Bochs / QEMU
+(`OUT 0xE9, AL` → `temp/port-e9.log` + `[E9] ...` on host stdout).
+(2) `--floppy-b=PATH` second floppy mount + equipment-word fix declaring
+2 drives so FreeDOS treats B: as a real drive (uncovered a subtler
+pcxtbios `TURBO_ENABLED` bug — Port 0x61 SW2 selector is bit 3,
+not bit 2; bit 2 is sticky-high turbo flag).
+(3) `tools/make_fat12_floppy.py` — pure-Python FAT12 1.44 MB builder
+(no mtools dep needed). Full workflow doc:
+[`MD/process/03-dos-test-injection-workflow.md`](MD/process/03-dos-test-injection-workflow.md).
+
 ---
 
 ## English
