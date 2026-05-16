@@ -156,6 +156,18 @@ public static class PcLockstep
             Console.WriteLine("  PIT tick: fully disabled (APR_LOCKSTEP_PIT_PERIOD=0)");
         }
 
+        // Phase 30.15c — APR_LOCKSTEP_IRQ=1 also asserts PIT IRQ on
+        // each deterministic tick AND delivers pending vectors. Used
+        // to reproduce the async-IRQ-related divergence the lockstep
+        // harness misses by default.
+        bool deliverIrqs = Environment.GetEnvironmentVariable("APR_LOCKSTEP_IRQ") == "1";
+        if (deliverIrqs)
+        {
+            stepA.DeliverPendingIrqs = true;
+            stepB.DeliverPendingIrqs = true;
+            Console.WriteLine("  IRQ delivery: ENABLED (synthesised PUSH/JMP at every Step pre-check)");
+        }
+
         long maxSteps = options.MaxCycles ?? 5_000_000;
         Console.WriteLine($"  running lockstep up to {maxSteps:N0} steps...");
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -339,10 +351,58 @@ internal sealed class X86LockstepStepper : ISteppableCpu
     public void Step()
     {
         _env.Activate();
+        // Phase 30.15c — mirror PcSystemRunner's pre-step IRQ delivery
+        // so the lockstep harness can reproduce the async-IRQ path that
+        // the normal emulator uses. When DeterministicPitPeriod > 0 the
+        // step counter periodically asserts IRQ 0 (PIT timer); if IF=1
+        // at that moment, the pending vector is delivered (synthesised
+        // PUSH FLAGS/CS/IP + JMP IVT[n]) BEFORE the next Cpu.Step().
+        if (DeliverPendingIrqs)
+        {
+            var st = _env.Cpu.State;
+            if (st.FlagI && _env.Pic.DequeueNextVector() is byte vec)
+            {
+                DeliverInterruptToEnv(_env, vec, st);
+                _env.Cpu.LoadState(st);
+            }
+        }
         _env.Cpu.Step();
         _steps++;
         if (DeterministicPitPeriod > 0 && (_steps % DeterministicPitPeriod) == 0)
+        {
             _env.Pit.AdvanceTicks(1);
+            if (DeliverPendingIrqs)
+                _env.Pic.AssertIrq(0);
+        }
+    }
+
+    /// <summary>
+    /// When true, also mirror PcSystemRunner's pre-step IRQ delivery
+    /// (asserting PIT IRQ on the deterministic tick + delivering the
+    /// next pending vector before each Step). Off by default — used
+    /// only when hunting Phase 30.15c async-IRQ bugs.
+    /// </summary>
+    public bool DeliverPendingIrqs { get; set; } = false;
+
+    private static void DeliverInterruptToEnv(PcLockstepEnv env, byte vec, AprX86.Cli.Cpu.X86State st)
+    {
+        // Identical to PcSystemRunner.DeliverInterrupt minus the trace
+        // log (which references private _irqCounts there). Pushes
+        // FLAGS, CS, IP onto the SS stack, clears IF/TF, jumps to
+        // IVT[vec].
+        var bus = env.Bus;
+        ushort flagsVal = st.GetFlags();
+        st.SP = (ushort)(st.SP - 2);
+        bus.WriteWord16(AprX86.Cli.Memory.X86Memory.LinearAddr(st.SS, st.SP), flagsVal);
+        st.SP = (ushort)(st.SP - 2);
+        bus.WriteWord16(AprX86.Cli.Memory.X86Memory.LinearAddr(st.SS, st.SP), st.CS);
+        st.SP = (ushort)(st.SP - 2);
+        bus.WriteWord16(AprX86.Cli.Memory.X86Memory.LinearAddr(st.SS, st.SP), st.IP);
+        st.FlagI = false;
+        st.FlagT = false;
+        int slot = vec * 4;
+        st.IP = bus.ReadWord16(slot);
+        st.CS = bus.ReadWord16(slot + 2);
     }
 
     public byte ReadByteFromBus(ulong addr)
