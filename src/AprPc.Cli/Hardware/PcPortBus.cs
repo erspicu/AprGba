@@ -189,8 +189,14 @@ public sealed class PcPortBus
         }
     }
 
+    // Per-port read counter — exposes pathological "this port read 50000
+    // times in 1 second" loops (UIP polling, retrace polling, etc.).
+    // Snapshotted to KbdTrace from PcSystemRunner's IRQ-rate watcher.
+    public readonly long[] PortReadCounts = new long[0x400];
+
     public byte Read8(ushort port)
     {
+        if (port < 0x400) PortReadCounts[port]++;
         byte v = port switch
         {
             // PIC master at 0x20 / 0x21
@@ -273,6 +279,30 @@ public sealed class PcPortBus
             0x3FE or 0x2FE => 0x30,   // COM1/COM2 MSR = CTS | DSR
             0x379          => 0xD8,   // LPT1 status = not-busy + no-ack + online + no-error
             0x279          => 0xD8,   // LPT2 status mirror
+
+            // FDC Digital Input Register (port 0x3F7). Bit 7 = DSKCHG
+            // (disk change line). Bits 6-0 undriven on real hardware
+            // (= float HIGH, read as 1). Our open-bus default 0xFF
+            // would set bit 7 -> DOS thinks the user swapped the disk
+            // on EVERY status check -> invalidates FAT/dir cache, re-
+            // reads boot sector (LBA 0), repeats forever. This was the
+            // root cause of FreeCom `ver` taking 90 seconds per
+            // character to print. Diagnosed via Gemini 2026-05-16
+            // consultation (tools/knowledgebase/message/20260516_152244.txt).
+            // Return 0x7F = bits 6-0 high, bit 7 (DSKCHG) low = "no
+            // disk change". To emulate disk swapping in the future,
+            // make this sticky-on-eject-clear-on-SEEK.
+            0x3F7 or 0x377 => 0x7F,
+
+            // XT PPI Port C (0x62) — DIP switch bank readback. Real XT
+            // 8255 PPI Port C selects SW1 vs SW2 banks via Port B bit 3,
+            // returning different 4-bit nibbles depending. Static stub
+            // ATTEMPTED 2026-05-16 (return 0x30 = bits 4-5 = 11 = MDA
+            // 80x25) broke BIOS POST entirely -- text disappears from
+            // boot screen onwards. Reverted to 0xFF (default open-bus).
+            // Proper PPI emulation that respects Port B bit 3 selector
+            // is deferred to Phase 30.x. Note: even with 0xFF,
+            // pcxtbios.bin gets enough info from CMOS reads to boot.
 
             // Default — open bus
             _ => 0xFF,

@@ -83,10 +83,9 @@ public sealed class MainForm : Form
         viewMenu.DropDownItems.Add(new ToolStripMenuItem("Show CPU MIPS") { Checked = true, CheckOnClick = true });
         viewMenu.DropDownItems.Add(new ToolStripMenuItem("Show Disk LED") { Checked = true, CheckOnClick = true });
         viewMenu.DropDownItems.Add(new ToolStripSeparator());
-        // F12 instead of Keys.PrintScreen: ToolStripMenuItem.ShortcutKeys validates
-        // against the Shortcut enum (a Keys subset that doesn't include PrintScreen);
-        // assigning PrintScreen throws InvalidEnumArgumentException at ctor.
-        var ssItem = new ToolStripMenuItem("Take &Screenshot...") { ShortcutKeys = Keys.F12 };
+        // No menu shortcut for screenshot -- F12 is used by the keyboard
+        // debug "dump screen framebuffer to log" hotkey in KeyDown.
+        var ssItem = new ToolStripMenuItem("Take &Screenshot...");
         ssItem.Click += (_, _) => Todo("View: Screenshot");
         viewMenu.DropDownItems.Add(ssItem);
 
@@ -207,6 +206,21 @@ public sealed class MainForm : Form
                 case Keys.Right:     ascii = 0x00; scan = 0x4D; break;
                 case Keys.F1:        ascii = 0x00; scan = 0x3B; break;
                 case Keys.F10:       ascii = 0x00; scan = 0x44; break;
+                // Modifier keys -- inject make code on KeyDown, BIOS
+                // INT 9 ISR updates BDA[0x17] shift-state flags. Break
+                // code on KeyUp (see OnKeyUp override) clears them.
+                // Without this, BIOS thinks shift is never held and
+                // Shift+4 prints '4' instead of '$' etc.
+                case Keys.ShiftKey:
+                case Keys.LShiftKey: scan = 0x2A; break;
+                case Keys.RShiftKey: scan = 0x36; break;
+                case Keys.ControlKey:
+                case Keys.LControlKey: scan = 0x1D; break;
+                case Keys.RControlKey: scan = 0x1D; break;  // XT had no R-Ctrl
+                case Keys.Menu:
+                case Keys.LMenu:     scan = 0x38; break;     // Left Alt
+                case Keys.RMenu:     scan = 0x38; break;     // XT had no R-Alt
+                case Keys.CapsLock:  scan = 0x3A; break;
                 case Keys.F11:
                     // Debug hotkey: dump current CPU state to kbd-trace
                     // instead of injecting a scancode. Useful for "press
@@ -223,6 +237,15 @@ public sealed class MainForm : Form
                             $"DS={st?.DS:X4} ES={st?.ES:X4} SS={st?.SS:X4} " +
                             $"halted={_runner.Cpu?.Halted}");
                     }
+                    return;
+                case Keys.F12:
+                    // Debug hotkey: dump current text framebuffer (MDA
+                    // 0xB0000 or CGA 0xB8000, auto-detected) to
+                    // kbd-trace as ASCII text + attribute hex. Lets us
+                    // see whether "invisible" output is actually present
+                    // in framebuffer memory (attribute=0 black-on-black
+                    // bug confirmation) or genuinely missing.
+                    DumpScreenToLog();
                     return;
                 // Digits 0..9 (top row, not numpad)
                 case Keys.D0:        ascii = (byte)'0'; scan = 0x0B; break;
@@ -275,6 +298,21 @@ public sealed class MainForm : Form
             {
                 _runner.Keyboard?.Enqueue(ascii, scan);
             }
+        };
+
+        // KeyUp -- inject the BREAK code (= make code | 0x80) so the
+        // BIOS INT 9 ISR can track "key released" and clear shift /
+        // ctrl / alt bits in BDA[0x17]. Without this, modifier state
+        // sticks forever after first press. Real-BIOS mode only;
+        // HLE BDA-direct path doesn't have a release concept.
+        KeyUp += (_, e) =>
+        {
+            if (!realBiosKbd) return;
+            byte scan = MapKeyCodeToScancode(e.KeyCode);
+            if (scan == 0) return;
+            byte breakCode = (byte)(scan | 0x80);
+            KbdTrace.Log($"KeyUp code={e.KeyCode} scan=0x{scan:X2} break=0x{breakCode:X2}");
+            _runner.Ports?.InjectScancode(breakCode);
         };
 
         // Apply fullscreen if requested.
@@ -457,6 +495,76 @@ public sealed class MainForm : Form
         _refreshTimer.Stop();
         _runner.Stop();
         base.OnFormClosing(e);
+    }
+
+    /// <summary>
+    /// Standalone scancode lookup -- used by KeyUp to compute the break
+    /// code for the matching key. Mirrors the switch inside KeyDown but
+    /// trimmed (omits ascii). Returns 0 for unmapped keys (no break
+    /// code sent -- safe default).
+    /// </summary>
+    private static byte MapKeyCodeToScancode(Keys k) => k switch
+    {
+        Keys.Escape    => 0x01,
+        Keys.Back      => 0x0E,
+        Keys.Enter     => 0x1C,
+        Keys.Tab       => 0x0F,
+        Keys.Space     => 0x39,
+        Keys.Up        => 0x48,
+        Keys.Down      => 0x50,
+        Keys.Left      => 0x4B,
+        Keys.Right     => 0x4D,
+        Keys.F1        => 0x3B,
+        Keys.F10       => 0x44,
+        Keys.ShiftKey or Keys.LShiftKey   => 0x2A,
+        Keys.RShiftKey                    => 0x36,
+        Keys.ControlKey or Keys.LControlKey or Keys.RControlKey => 0x1D,
+        Keys.Menu or Keys.LMenu or Keys.RMenu                   => 0x38,
+        Keys.CapsLock  => 0x3A,
+        Keys.D0 => 0x0B, Keys.D1 => 0x02, Keys.D2 => 0x03, Keys.D3 => 0x04,
+        Keys.D4 => 0x05, Keys.D5 => 0x06, Keys.D6 => 0x07, Keys.D7 => 0x08,
+        Keys.D8 => 0x09, Keys.D9 => 0x0A,
+        Keys.A => 0x1E, Keys.B => 0x30, Keys.C => 0x2E, Keys.D => 0x20,
+        Keys.E => 0x12, Keys.F => 0x21, Keys.G => 0x22, Keys.H => 0x23,
+        Keys.I => 0x17, Keys.J => 0x24, Keys.K => 0x25, Keys.L => 0x26,
+        Keys.M => 0x32, Keys.N => 0x31, Keys.O => 0x18, Keys.P => 0x19,
+        Keys.Q => 0x10, Keys.R => 0x13, Keys.S => 0x1F, Keys.T => 0x14,
+        Keys.U => 0x16, Keys.V => 0x2F, Keys.W => 0x11, Keys.X => 0x2D,
+        Keys.Y => 0x15, Keys.Z => 0x2C,
+        _ => 0,
+    };
+
+    /// <summary>
+    /// Dump the 80x25 text framebuffer (MDA 0xB0000 or CGA 0xB8000) as
+    /// ASCII to kbd-trace.log. Per-row layout: row=NN "..." (cleaned,
+    /// nulls/zeros shown as '.') then attribute hex dump. Helps confirm
+    /// whether the "invisible chars" symptom is char-bytes present with
+    /// attribute byte == 0 (black on black) vs char-bytes truly missing.
+    /// </summary>
+    private void DumpScreenToLog()
+    {
+        if (_runner.Bus is not { } bus) return;
+        var mem = bus.Memory.Ram;
+        int fbBase = X86CgaRenderer.PickFramebufferBase(mem);
+        KbdTrace.Log($"=== F12 SCREEN DUMP fbBase=0x{fbBase:X5} BDA[0x49]=0x{mem[0x0449]:X2} ===");
+        for (int row = 0; row < 25; row++)
+        {
+            int rowOff = fbBase + row * 80 * 2;
+            var chars = new char[80];
+            int nonZeroAttr = 0;
+            for (int col = 0; col < 80; col++)
+            {
+                byte ch = mem[rowOff + col * 2];
+                byte at = mem[rowOff + col * 2 + 1];
+                chars[col] = (ch >= 0x20 && ch < 0x7F) ? (char)ch :
+                             (ch == 0x00 ? '_' : '.');
+                if (at != 0) nonZeroAttr++;
+            }
+            string line = new string(chars).TrimEnd();
+            if (line.Length > 0 || nonZeroAttr > 0)
+                KbdTrace.Log($"  row{row:D2} attrs={nonZeroAttr}/80 \"{line}\"");
+        }
+        KbdTrace.Log($"=== END SCREEN DUMP ===");
     }
 
     /// <summary>

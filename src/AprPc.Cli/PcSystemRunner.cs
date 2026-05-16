@@ -70,6 +70,12 @@ public sealed class PcSystemRunner : IDisposable
     private PcPortBus? _ports;
     private Fdc8272? _fdc;       // Phase 30 — only constructed in real-BIOS mode
     private Dma8237? _dma;       // Phase 30 — paired with _fdc
+
+    // Per-vector IRQ delivery counter. Snapshotted + reset to KbdTrace
+    // every 1s by the emulator thread so we can see "X dispatched 10000
+    // times in the last second" pathological patterns.
+    private readonly long[] _irqCounts = new long[256];
+    private DateTime _lastIrqSnapshotTime = DateTime.UtcNow;
     public PcMemoryBus? Bus      => _bus;
     public X86JsonCpu?  Cpu      => _cpu;
     public HleBios?     Bios     => _bios;
@@ -332,6 +338,47 @@ public sealed class PcSystemRunner : IDisposable
 
                 while (_inputQueue.TryDequeue(out _)) { /* TODO 28.3 */ }
 
+                // Phase 30.7a debug — snapshot per-vector IRQ delivery
+                // counts to KbdTrace once per second. A pathological
+                // pattern (e.g. IRQ 6 firing 10000/sec) makes the cause
+                // of "CPU alive but no progress" debuggable post-hoc.
+                var nowIrq = DateTime.UtcNow;
+                if ((nowIrq - _lastIrqSnapshotTime).TotalSeconds >= 1.0)
+                {
+                    var nonZero = new System.Text.StringBuilder();
+                    for (int v = 0; v < 256; v++)
+                    {
+                        if (_irqCounts[v] == 0) continue;
+                        if (nonZero.Length > 0) nonZero.Append(' ');
+                        nonZero.Append($"INT{v:X2}={_irqCounts[v]}");
+                        _irqCounts[v] = 0;
+                    }
+                    if (nonZero.Length > 0)
+                        AprPc.Cli.Diagnostics.KbdTrace.Log($"IRQ_RATE_1s {nonZero}");
+                    _lastIrqSnapshotTime = nowIrq;
+
+                    // Same cadence -- per-port read counts. Only log ports
+                    // hit > 50 times per second (filters out PIT BDA poll,
+                    // PIC IMR check, etc.). A port read 5000+ times = a
+                    // tight polling loop on that port.
+                    if (_ports is { } ports)
+                    {
+                        var hotPorts = new System.Text.StringBuilder();
+                        for (int p = 0; p < ports.PortReadCounts.Length; p++)
+                        {
+                            long c = ports.PortReadCounts[p];
+                            if (c >= 50)
+                            {
+                                if (hotPorts.Length > 0) hotPorts.Append(' ');
+                                hotPorts.Append($"0x{p:X3}={c}");
+                            }
+                            ports.PortReadCounts[p] = 0;
+                        }
+                        if (hotPorts.Length > 0)
+                            AprPc.Cli.Diagnostics.KbdTrace.Log($"PORT_READ_RATE_1s {hotPorts}");
+                    }
+                }
+
                 if (_cpu is { Halted: true })
                 {
                     // Phase 28.7c — HLT wake-on-IRQ. Real silicon resumes
@@ -478,6 +525,10 @@ public sealed class PcSystemRunner : IDisposable
                 $"{_bus.ReadWord16(AprX86.Cli.Memory.X86Memory.LinearAddr(st.SS, st.SP)):X4}) " +
                 $"BDA head=0x{headBefore:X4} tail=0x{tailBefore:X4}");
         }
+        // Count every IRQ vector dispatched -- exposes any "this IRQ
+        // fires thousands of times per second" pathological pattern.
+        // Snapshot dumped to KbdTrace every 1s by the IRQ rate watcher.
+        _irqCounts[vec & 0xFF]++;
     }
 
     public void Dispose()

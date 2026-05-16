@@ -1,0 +1,150 @@
+Timestamp: 2026-05-16T18:34:59
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Major new diagnostic data on my x86-16 emulator running pcxtbios.bin + FreeDOS 1.3. Two findings overturn the previous "DOS is slow" hypothesis.
+
+FINDING 1: OUTPUT IS BEING WRITTEN, JUST INVISIBLE
+
+User reports: at the A:\> prompt, typing `dir<Enter>` shows just the first 2 lines (Volume label + Volume Serial Number). After waiting, typing `dir<Enter>` AGAIN, the screen scrolls -- previous content rolls UP, suggesting NEW lines were emitted during the wait but were never rendered visibly. Same with `ver` -- the FreeCom version banner appears partial, then later commands push it up.
+
+So FreeCom is actually printing all the output. The framebuffer is presumably being written. But the screen doesn't show new content -- new chars appear to be "invisible" (perhaps black-on-black attribute, or written to wrong segment, or attribute byte zero so glyph not drawn).
+
+EMULATOR CONTEXT for rendering:
+- MDA mode forced (real BIOS configures MDA on XT). Framebuffer at physical 0xB0000.
+- WinForms host renders by calling X86CgaRenderer.RenderToRgbBytes(ram, fbBase) every 16ms.
+- Auto-detect picks MDA (0xB0000) vs CGA (0xB8000) by scanning for non-zero non-space char bytes -- whichever framebuffer has more wins.
+- Each cell is 2 bytes: char + attribute. Attribute layout for MDA: bits 0-2 = foreground intensity (0=black, 1=normal, 2=bright, ...), bit 7 = blink, bit 4-6 = background. For text-mode "white-on-black", attribute is typically 0x07.
+
+KEY OBSERVATION: the original boot-time output ("FreeDOS installation program" green/blue banner, "Welcome", the "do you want to proceed [Y,N]?", "installation has been aborted") all printed VISIBLY in the early screenshot. So basic teletype works. Only POST-prompt output goes invisible.
+
+QUESTIONS ABOUT FINDING 1:
+1. Could there be a "video mode" mismatch where the BIOS INT 10h teletype writes to the framebuffer with attribute byte 0 (black-on-black) -- making chars present but invisible? My X86CgaRenderer uses Palette[attr & 0x0F] for foreground; if attr=0, foreground=black, background=black, glyph drawn but invisible.
+2. What changes after we reach A:\> prompt that could flip the default video attribute from "white-on-black" (0x07) to "black-on-black" (0x00)?
+3. Could FreeDOS's CON driver or COMMAND.COM cursor management write to BDA[0x49] (current video mode) or BDA[0x65] (current attribute) such that subsequent INT 10h calls use a zero attribute?
+4. Is the BDA "current video mode" location BDA[0x49] (offset 0040:0049) populated to a value real BIOS recognises as MDA-compatible? Maybe POST wrote a CGA mode there and INT 10h scroll-up clears the new line with a wrong attribute.
+
+FINDING 2: SHIFT+DIGIT DOESN'T PRODUCE SHIFTED CHARS
+
+User reports: typing Shift+4 doesn't produce '$' -- they can't type '$' or any shifted symbol. This blocks them from typing the "prompt $N$G" command you suggested.
+
+My MainForm.KeyDown handler (real-BIOS mode) maps:
+   case Keys.D4: ascii = (byte)'4'; scan = 0x05; break;
+And injects ONLY the scancode (0x05) -- BIOS INT 9 ISR is responsible for translating scancode + shift state to ASCII '$'. I do NOT inject any shift-make-code before the digit; I do NOT detect e.KeyData.Shift.
+
+QUESTIONS ABOUT FINDING 2:
+5. What does the real PC XT BIOS INT 9 ISR (pcxtbios.bin) do to track shift state? It must read scancodes 0x2A / 0x36 (left/right shift make) and 0xAA / 0xB6 (shift break) and maintain a BDA "shift flag" byte. If I never inject the shift scancode, BIOS shift flag stays 0, translation table picks unshifted character.
+6. Is BDA[0x17] (the keyboard shift-state byte) what the BIOS uses for shift translation? If I set BDA[0x17] directly from the host side when WinForms reports Shift is held, would that work as a shortcut? Or does the BIOS INT 9 ISR re-derive shift state from the port 0x60 scancode stream and ignore BDA[0x17] writes from outside?
+7. What's the right approach in an emulator -- when host says "Shift held", inject:
+   (a) shift make scancode 0x2A FIRST, then digit scancode 0x05, then digit break 0x85, then shift break 0xAA
+   (b) shift make 0x2A once on Shift-down (WinForms KeyDown for Keys.ShiftKey), shift break 0xAA on Shift-up (WinForms KeyUp), and let digit press during shift-held just inject digit scancode
+   (c) something else
+
+========================================================================
+RESPONSE
+========================================================================
+This is a massive breakthrough! Finding 1 completely changes the debugging trajectory—your emulator isn't getting stuck in an infinite loop; it is running at full speed, but you are experiencing a classic **text-mode attribute/state desync**. Finding 2 is a standard keyboard emulation hurdle that is easily fixed.
+
+Here are the answers to your questions, broken down by finding.
+
+---
+
+### FINDING 1: The "Invisible" Text (Attribute 0x00)
+
+Your deduction is spot on. If the characters are pushing old text up, the BIOS `INT 10h` Teletype (`AH=0Eh`) and Scroll (`AH=06h`) routines are successfully executing on the framebuffer you are rendering. The text is there, but the attribute byte is rendering it invisible.
+
+**1. Could there be a "video mode" mismatch where INT 10h writes with attribute 0 (black-on-black)?**
+Yes, absolutely. In text mode, the BIOS Teletype function (`INT 10h, AH=0Eh`) **does not set the attribute byte**. It simply writes the ASCII character to the even address and skips the odd (attribute) address, leaving whatever color was already there. 
+However, when the screen hits the bottom and needs to scroll, the BIOS calls Scroll Up (`INT 10h, AH=06h`). This function *requires* the caller to pass a "fill attribute" in the `BH` register for the newly created blank line at the bottom. If `BH` is `0x00`, the new line is filled with black-on-black spaces. Subsequent Teletype writes will put characters on that line, but since Teletype preserves the existing attribute, the characters remain black-on-black!
+
+**2. What changes after we reach A:\> that flips the attribute to 0x00?**
+When `COMMAND.COM` (FreeCom) loads, it often executes a `CLS` (Clear Screen). To know what color to clear the screen with, DOS calls `INT 10h, AH=08h` (Read Character and Attribute at Cursor). 
+If the cursor happens to be resting on a cell that initialized with `0x00`, DOS will use `0x00` to clear the entire screen. From that point on, every scrolled line and every typed character inherits the `0x00` attribute. 
+
+**3. Could FreeDOS CON/FreeCom write to BDA[0x49] or BDA[0x65]?**
+- `BDA[0x49]` (Current Video Mode): Unlikely to be overwritten by DOS, but DOS *reads* it to decide how to talk to the BIOS.
+- `BDA[0x49]` is Mode 7 for MDA. Mode 3 for CGA.
+- `BDA[0x65]` (Current Video State/CRT Mode register): DOS doesn't usually mess with this, but ANSI.SYS equivalents might.
+
+**4. Is the BDA properly populated for MDA?**
+This is the most likely root cause. The original PC/XT BIOS (`pcxtbios.bin`) **does not auto-detect video cards**. It determines the video mode by reading the motherboard DIP switches via an I/O port (Port `0x62` on the XT, or the 8255 PPI chip on the PC). 
+*If your emulator does not emulate the XT DIP switch port returning the correct bits for MDA, the BIOS POST will assume CGA (Mode 3).*
+If the BIOS initialized for CGA:
+1. It set `BDA[0x49] = 3` (CGA).
+2. It set the active page segment in the BDA to `0xB800`.
+3. The bootloader might have bypassed the BIOS and written directly to `0xB0000`, which is why you saw the boot text.
+4. When DOS loads, it strictly uses BIOS `INT 10h`. If the BIOS thinks it's in CGA mode, the scrolling and cursor math might be calculating offsets incorrectly, or writing to `0xB8000` while your auto-detect is still locked onto `0xB0000`, OR the BIOS scroll routine is defaulting to an attribute of `0x00` because the BDA state is confused.
+
+**How to fix/debug Finding 1:**
+*   **Dump the framebuffer memory:** When the screen goes invisible, pause the emulator and look at `0xB0000`. You will likely see `44 00 49 00 52 00` (D, attr 0, I, attr 0, R, attr 0). This confirms the 0x00 attribute bug.
+*   **Check the BDA:** Look at `RAM[0x0449]`. If it is `0x03`, the BIOS thinks you have a CGA. If it is `0x07`, the BIOS correctly knows you have an MDA.
+*   **Hack fix:** In your `X86CgaRenderer`, temporarily change `Palette[0]` from Black to Dark Gray. If the invisible text suddenly appears as gray text, you have 100% confirmed the issue is the attribute byte being `0x00`.
+
+---
+
+### FINDING 2: Keyboard Shift States
+
+Your emulator is currently acting like a macro-pad that only sends raw keystrokes, completely bypassing the PC keyboard protocol's concept of modifier keys.
+
+**5. What does the real PC XT BIOS INT 9 ISR do?**
+The XT keyboard uses "Set 1" scancodes. It sends a scancode when a key is pressed (Make code), and the same scancode + `0x80` when the key is released (Break code).
+When the `INT 9h` ISR sees `0x2A` (Left Shift Make), it sets Bit 1 of `BDA[0x17]` (Keyboard Shift Flags). It doesn't put anything in the keyboard buffer. 
+When it sees `0x05` ('4'), it checks `BDA[0x17]`. Because the Shift bit is set, it looks up the shifted value ('$') and puts *that* in the circular keyboard buffer at `BDA[0x1E]`.
+When it sees `0xAA` (`0x2A + 0x80`, Left Shift Break), it clears Bit 1 of `BDA[0x17]`.
+Because you only inject `0x05`, `BDA[0x17]` is always 0, so you always get '4'.
+
+**6. Can you just poke BDA[0x17] directly from the host?**
+*Technically yes.* You could intercept `Shift+4` on the host, manually set `RAM[0x0417] |= 0x02`, inject `0x05`, and then clear `RAM[0x0417] &= ~0x02`. 
+*Should you?* No. It's prone to race conditions (if the emulator executes `INT 9h` at the wrong microsecond, or if the BIOS itself is modifying `0x17` due to a Caps Lock toggle). It also won't work for software that reads raw scancodes from port `0x60` directly (like many DOS games).
+
+**7. What's the right approach in an emulator?**
+**Option (b)** is the universal standard for PC emulation. You should map Host `KeyDown` to XT Make codes, and Host `KeyUp` to XT Break codes. The BIOS will naturally maintain the shift states exactly as a real PC would.
+
+Here is the standard way to implement Option (b) in WinForms:
+
+```csharp
+// In your MainForm:
+protected override void OnKeyDown(KeyEventArgs e)
+{
+    byte scanCode = MapKeyToScancode(e.KeyCode);
+    if (scanCode != 0) 
+    {
+        // Inject MAKE code to Port 0x60, trigger IRQ1
+        cpu.Keyboard.InjectScancode(scanCode); 
+    }
+    e.Handled = true;
+}
+
+protected override void OnKeyUp(KeyEventArgs e)
+{
+    byte scanCode = MapKeyToScancode(e.KeyCode);
+    if (scanCode != 0) 
+    {
+        // Inject BREAK code (Make + 0x80)
+        cpu.Keyboard.InjectScancode((byte)(scanCode | 0x80)); 
+    }
+    e.Handled = true;
+}
+
+private byte MapKeyToScancode(Keys key)
+{
+    switch (key)
+    {
+        case Keys.D4: return 0x05;
+        case Keys.ShiftKey: 
+        case Keys.LShiftKey: return 0x2A; // Left Shift Make
+        case Keys.RShiftKey: return 0x36; // Right Shift Make
+        case Keys.Enter: return 0x1C;
+        // ... map all other standard keys ...
+        default: return 0;
+    }
+}
+```
+*Note:* In WinForms, holding a key down relies on Windows KeyRepeat, which fires `KeyDown` repeatedly. Real XT keyboards also repeat the Make code when held. So WinForms' default behavior maps perfectly to XT behavior!
+
+### Next Steps Summary
+1. Change your WinForms keyboard handling to track `KeyDown`/`KeyUp` and send Make/Break scancodes. This will instantly fix the Shift, Ctrl, and Alt keys.
+2. Pause the emulator when text goes invisible and check `RAM[0x0449]` to see if the BIOS thinks it's in MDA (7) or CGA (3) mode.
+3. Check the memory at `0xB0000` to confirm if the attribute bytes are `0x00`. 
+4. If it is `0x00`, investigate how your emulator handles the XT Motherboard DIP Switches (usually read via `IN AL, 62h` on an XT). If the BIOS reads all 0s from your un-emulated port, it defaults to a mode that doesn't match your MDA expectations.
