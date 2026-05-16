@@ -16,6 +16,9 @@
 // Device handlers may serialize their own state internally (Pic8259
 // and friends already have a lock).
 
+using System.IO;
+using System.Text;
+
 namespace AprPc.Cli.Hardware;
 
 public sealed class PcPortBus
@@ -73,8 +76,17 @@ public sealed class PcPortBus
     // MDA and CGA INT 10h init paths.
     private readonly string _video;
 
+    // Number of floppy drives reported via Port 0x62 readback bits 2-3
+    // ((count - 1) encoding). pcxtbios POST reads this and writes the
+    // result into BDA[0x40:0x10] (equipment word) bits 6-7. FreeDOS then
+    // consults the equipment word to decide whether B: is a real second
+    // drive or a "phantom" sharing the single physical drive (= prompts
+    // for diskette swap on each B: access).
+    private readonly int _floppyCount;
+
     public PcPortBus(Pic8259 pic, PcPit pit, bool traceIo = false,
-        Fdc8272? fdc = null, Dma8237? dma = null, string video = "mda")
+        Fdc8272? fdc = null, Dma8237? dma = null, string video = "mda",
+        int floppyCount = 1)
     {
         _pic     = pic ?? throw new ArgumentNullException(nameof(pic));
         _pit     = pit ?? throw new ArgumentNullException(nameof(pit));
@@ -82,6 +94,7 @@ public sealed class PcPortBus
         _dma     = dma;
         _traceIo = traceIo;
         _video   = video;
+        _floppyCount = Math.Clamp(floppyCount, 1, 4);
         // CMOS default: a few legitimate-looking bytes so BIOS POST
         // doesn't fail equipment / mem-size checks.
         _cmos[0x10] = 0x40;   // floppy A: = 1.44 MB
@@ -151,10 +164,20 @@ public sealed class PcPortBus
         //   bit 2 = 1 -> video+floppy in low 4 bits:
         //                bits 0-1 = video (00=EGA, 01=CGA40, 10=CGA80, 11=MDA)
         //                bits 2-3 = floppy count - 1 (00 = 1 drive)
-        bool selectVideoFloppy = (_port61 & 0x04) != 0;
+        // pcxtbios TURBO_ENABLED writes 0xA5 to port 0x61 very early in
+        // POST (line 491 of pcxtbios.asm) which has bit 2 = 1 baked in
+        // as the turbo-mode flag. Then its later OR 0x30 / AND 0xCF
+        // mask sequence at lines 668-671 doesn't touch bit 2. So bit 2
+        // is NOT the SW2 bank selector on pcxtbios — bit 3 is, per the
+        // standard PC/XT 8255 PIA Port B convention. The toggle
+        // diff between pcxtbios's pre-read state (0x85) and its
+        // explicit OUT 0xAD before the second read is bits 3 and 5;
+        // bit 3 matches the 8255 SW2 select line.
+        bool selectVideoFloppy = (_port61 & 0x08) != 0;
         if (!selectVideoFloppy) return 0x03;
-        byte videoBits = _video == "mda" ? (byte)0x03 : (byte)0x02;
-        return videoBits;
+        byte videoBits  = _video == "mda" ? (byte)0x03 : (byte)0x02;
+        byte floppyBits = (byte)(((_floppyCount - 1) & 0x03) << 2);
+        return (byte)(videoBits | floppyBits);
     }
 
     private byte Dequeue60()
@@ -353,9 +376,14 @@ public sealed class PcPortBus
             //            11 = MDA 80x25 monochrome
             //     floppy: 00 = 1 drive
             //
-            // Bit 2 of _port61 toggles between these (closest reasonable
-            // proxy to the actual OUT we can detect; the BIOS writes
-            // 0xAD with bit 2 = 1 to PPI Port B to select).
+            // Bit 3 of _port61 is the standard PC/XT 8255 PIA Port B SW2
+            // select line. pcxtbios writes 0xAD before the 2nd 0x62 read
+            // (bit 3 = 1, selects video+floppy); 0x85 before the 1st
+            // (bit 3 = 0, selects memory). Bit 2 is the pcxtbios TURBO
+            // flag (sticky from boot per asm line 491) and is NOT the
+            // selector — earlier code that used bit 2 worked accidentally
+            // when TURBO_ENABLED happened to leave it clear; with VBIOS
+            // loaded the timing exposed the bug. See Phase 30.14c.
             //
             // Configurable via --video=mda|cga CLI flag (default mda).
             // Tested mda -> BIOS picks MDA, sets BDA[0x49]=0x07, writes
@@ -453,6 +481,18 @@ public sealed class PcPortBus
                 _port80 = value;
                 break;
 
+            // Phase 30.14a — Bochs/QEMU "Port 0xE9 debug-out" hack.
+            // Real PC/XT hardware leaves port 0xE9 unassigned. Both Bochs
+            // and QEMU (and BIRGER's testdev) optionally repurpose it as a
+            // host-side console: every OUT 0xE9, AL writes AL straight to
+            // the host's stdout / a log file. Test programs can signal
+            // results back to the test harness with a 2-instruction stub:
+            //     mov al, '*' ; out 0xE9, al
+            // Avoids screen-scraping the framebuffer for test pass/fail.
+            case 0xE9:
+                WritePortE9(value);
+                break;
+
             // NMI mask
             case 0xA0:
                 _nmiMask = value;
@@ -493,5 +533,83 @@ public sealed class PcPortBus
     {
         Write8(port,                (byte)(value & 0xFF));
         Write8((ushort)(port + 1),  (byte)((value >> 8) & 0xFF));
+    }
+
+    // === Port 0xE9 debug-out hook (Phase 30.14a) ====================
+
+    private static readonly object _e9Lock = new();
+    private static readonly StringBuilder _e9LineBuf = new(256);
+    private static StreamWriter? _e9Writer;
+    private const string E9LogPath = "temp/port-e9.log";
+
+    /// <summary>
+    /// Toggle whether bytes emitted to port 0xE9 are mirrored to the host
+    /// stdout in addition to the per-run log file. Defaults to true — the
+    /// whole point of the hack is real-time visibility while the guest
+    /// runs. Set false for headless / CI runs that want only the log.
+    /// </summary>
+    public static bool PortE9MirrorStdout { get; set; } = true;
+
+    /// <summary>
+    /// Reset the port-0xE9 log (truncate temp/port-e9.log + drop the line
+    /// buffer). Call once per emulator launch from Program.cs so each
+    /// session is self-contained.
+    /// </summary>
+    public static void ResetPortE9Log()
+    {
+        lock (_e9Lock)
+        {
+            _e9LineBuf.Clear();
+            _e9Writer?.Dispose();
+            var dir = Path.GetDirectoryName(E9LogPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            _e9Writer = new StreamWriter(E9LogPath, append: false)
+            {
+                AutoFlush = true,
+            };
+            _e9Writer.WriteLine(
+                $"# port-0xE9 log opened {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss.fff} UTC");
+        }
+    }
+
+    private static void WritePortE9(byte value)
+    {
+        // Flush per newline to keep the log readable while a test runs.
+        // Non-printable bytes are escaped \xNN so binary signals are
+        // visible without breaking the line format.
+        char c = (char)value;
+        string token = value switch
+        {
+            0x0A => "\n",
+            0x0D => "",                    // collapse CRLF
+            >= 0x20 and < 0x7F => c.ToString(),
+            _    => $"\\x{value:X2}",
+        };
+
+        lock (_e9Lock)
+        {
+            if (token == "\n")
+            {
+                var line = _e9LineBuf.ToString();
+                _e9LineBuf.Clear();
+                _e9Writer?.WriteLine(line);
+                if (PortE9MirrorStdout)
+                    Console.Out.WriteLine($"[E9] {line}");
+            }
+            else
+            {
+                _e9LineBuf.Append(token);
+                // Flush partial line if it gets long — caller may not
+                // emit a newline (e.g. printing one char as test signal).
+                if (_e9LineBuf.Length >= 240)
+                {
+                    var line = _e9LineBuf.ToString();
+                    _e9LineBuf.Clear();
+                    _e9Writer?.WriteLine(line + " [no-newline-flush]");
+                    if (PortE9MirrorStdout)
+                        Console.Out.WriteLine($"[E9] {line} [no-newline-flush]");
+                }
+            }
+        }
     }
 }

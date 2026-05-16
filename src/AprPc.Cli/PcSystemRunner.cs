@@ -196,7 +196,7 @@ public sealed class PcSystemRunner : IDisposable
             // MDA framebuffer watch (0xB0000-0xB0F9F) was useful for
             // Phase 30.10 debug but extremely noisy in normal runs --
             // re-enable via --watch-mem=B0000:B1000 only when needed.
-            X86JsonCpu.WriteWatchLo = 0x00418;
+            X86JsonCpu.WriteWatchLo = 0x00410;      // catch BDA[0x10-0x11] equipment word + keyboard
             X86JsonCpu.WriteWatchHi = 0x00440;
             X86JsonCpu.OnWriteWatch = (a, v) =>
                 AprPc.Cli.Diagnostics.KbdTrace.Log(
@@ -219,7 +219,11 @@ public sealed class PcSystemRunner : IDisposable
         // X86JsonCpu delegate handlers (declared in AprX86.Cli, the
         // CPU project; we install them here from AprPc.Cli to keep
         // the cross-project reference one-directional).
-        _ports = new PcPortBus(_pic, _pit, traceIo: _options.TraceIo, fdc: _fdc, dma: _dma, video: _options.Video);
+        int floppyCount = (_options.FloppyAPath is not null ? 1 : 0) +
+                          (_options.FloppyBPath is not null ? 1 : 0);
+        if (floppyCount == 0) floppyCount = 1;   // BIOS expects at least 1
+        _ports = new PcPortBus(_pic, _pit, traceIo: _options.TraceIo,
+            fdc: _fdc, dma: _dma, video: _options.Video, floppyCount: floppyCount);
         PcPortBus.Active = _ports;
         X86JsonCpu.PortRead8Handler   = _ports.Read8;
         X86JsonCpu.PortRead16Handler  = _ports.Read16;

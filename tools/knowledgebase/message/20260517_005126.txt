@@ -1,0 +1,59 @@
+Timestamp: 2026-05-17T00:51:26
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Context: I'm developing AprPc, a .NET-based 8086/186/286 emulator (homemade, JSON-driven CPU framework, similar in spirit to a minimal QEMU). Current state:
+- Runs real `pcxtbios.bin` (Sergey Kiselev XT BIOS, 8KB) and real Tseng ET4000 `videorom.bin` (32KB VGA BIOS) at 0xC0000 (Option ROM signature 55 AA, picked up by pcxtbios POST automatically).
+- Boots FreeDOS 1.3 from `BIOS/freedos-1.3-floppy.img` (1.44MB FAT12) via `--floppy-a=PATH`.
+- Also supports `--hdd=PATH` for a single fixed-disk image.
+- Has working INT 13h (disk read/write), INT 21h DOS services delegated to real FreeDOS kernel, INT 10h via video BIOS.
+- GUI via WinForms, plus a headless mode with `--auto-test=<sequence>` framework (polls framebuffer, injects scancodes).
+
+Question: I want a clean, low-friction workflow to **inject custom test binaries (small .COM / .EXE files I compile externally with NASM or wcl386) into the running FreeDOS environment** so I can write test programs that exercise specific instructions / interrupts and observe their output via the existing autotester / screenshot pipeline. I'm aware of a few options and want your ranking + a recommendation on which to invest in first:
+
+1. **Modify the boot floppy image with mtools** (mcopy/mdir). Re-build the .img each test run. Pro: dead simple, FreeDOS sees A:\MYTEST.COM and runs it. Con: requires mtools or equivalent FAT12 writer; .img modification per-run.
+2. **Generate a fresh small B: floppy on-the-fly** from a directory of test fixtures (so the FreeDOS boot disk stays read-only and unchanged). I'd need to add `--floppy-b=PATH` plumbing + write a tiny .NET FAT12 image builder.
+3. **HLE/INT 2Fh redirector** — implement an emulator-side INT 2Fh hook (à la DOSBox's `MOUNT C: /path/to/host/dir`) so a host directory shows up as a DOS drive without any disk image at all.
+4. **Direct memory injection of a .COM** at PSP+0x100 + simulated CS:IP jump (skip DOS entirely). Pro: zero-disk overhead. Con: bypasses DOS, can't use INT 21h services freely.
+5. **Pre-build a "test fixture" floppy image once** (full of canonical small test programs) and just mount it. Pro: trivial. Con: re-building it requires a one-time mtools setup.
+6. **Custom AUTOEXEC.BAT** edit on the floppy that runs a test then prints "DONE_<status>" for the autotester to pattern-match. Combines well with options 1/2/5.
+
+Question A: which is the most pragmatic combo for an emulator project at this maturity (a working FreeDOS boot but limited DOS API maturity)?
+Question B: any well-known DOSBox/Bochs/QEMU patterns I should copy?
+Question C: any pitfalls with FAT12 writing from a .NET app (sector alignment, FAT mirror copy, dirent timestamps) I should know about?
+
+Please answer in English (clearer / less mojibake). One focused recommendation + brief rationale on each sub-question is fine.
+
+========================================================================
+RESPONSE
+========================================================================
+Here is a pragmatic assessment and recommendation for your AprPc test workflow. 
+
+### Question A: The Most Pragmatic Combo
+**Recommendation:** **Option 2 (Generate B: floppy on-the-fly) combined with Option 6 (AUTOEXEC.BAT polling), utilizing `.NET` libraries rather than `mtools`.**
+
+**Rationale:** 
+Option 3 (INT 2Fh redirector) is a multi-month rabbit hole requiring undocumented DOS structures (SDA/CDS). Option 4 (direct injection) defeats the purpose of integration testing against a real DOS environment. Option 1/5 require external binary dependencies (`mtools`) in your test pipeline, which causes friction for CI/CD or cross-platform .NET development.
+
+**The Workflow:**
+1. Make a **one-time modification** to your pristine FreeDOS A: boot image's `AUTOEXEC.BAT`: add a loop or simple check like `IF EXIST B:\AUTORUN.BAT CALL B:\AUTORUN.BAT`. 
+2. In your .NET test setup, dynamically create a 1.44MB FAT12 image in memory or as a temp file. **Do not write a FAT12 builder from scratch; use the NuGet package `DiscUtils.Fat`.** It takes exactly 5 lines of C# to create a virtual floppy, inject `MYTEST.COM`, write an `AUTORUN.BAT`, and save it.
+3. Mount this temp image as `--floppy-b` and boot the emulator.
+
+### Question B: Well-known Patterns to Copy
+**1. The "Bochs Port 0xE9 Hack" (Crucial for test observation)**
+Do not rely on polling the framebuffer/screen-scraping to read "DONE_PASS". It is slow and prone to race conditions. Instead, implement the Bochs/QEMU Port 0xE9 hack:
+* **Emulator side:** Intercept I/O port `0xE9` (an unused port in the PC/XT architecture). Whenever an `OUT 0xE9, AL` instruction occurs, take the `AL` byte and append it directly to your .NET console or test log.
+* **Guest side:** Write a tiny assembly routine in your test `.COM` files (or a tiny companion utility) that loops through a string and outputs it to Port `0xE9`. Your test can instantly signal `[TEST_PASS]` to the host without screen scraping.
+
+**2. QEMU's `vvfat` (Virtual VFAT)**
+QEMU implements Option 2 transparently at the block-device layer. If you pass `-drive file=fat:rw:/host/directory`, QEMU intercepts sector reads and synthesizes FAT12/FAT16 structures on the fly. Since you are using .NET, generating the actual `.img` file with `DiscUtils` is much easier than synthesizing sectors on the fly, but the concept is the same.
+
+### Question C: FAT12 .NET Pitfalls
+If you decide to write the FAT12 image builder yourself (instead of using `DiscUtils`), beware of these exact pitfalls:
+1. **The 12-bit Math Nightmare:** FAT12 packs two 12-bit cluster pointers into three bytes. Given C#'s 0-indexed byte arrays, the bit-shifting logic for `set_fat_entry(cluster_num)` is notoriously error-prone. 
+   * *Mitigation:* If writing your own generator, **force all files to be contiguous**. That way, you just write `003 004 005 ... 0xFFF` sequentially, avoiding the need to read/modify/write spanning nibbles.
+2. **BPB (BIOS Parameter Block) Rigidity:** FreeDOS's INT 13h kernel driver is strict. If the Media Descriptor byte isn't exactly `0xF0` (for 1.44MB), or the Sectors Per Cluster / Reserved Sectors mismatch standard geometries, DOS will silently fail to read the disk or treat it as unformatted, even if your root directory is perfectly valid.
+3. **Short-Name Padding:** Directory entries must be exactly 11 bytes (`"MYTEST  COM"`), space-padded, with no dot. 
+4. **Boot Sector Signature:** Ensure the boot sector ends with `55 AA`, even for a non-bootable B: drive, or DOS may refuse to mount it depending on the kernel version.

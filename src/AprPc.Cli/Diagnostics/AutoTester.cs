@@ -214,6 +214,35 @@ public sealed class AutoTester : IDisposable
             // 4. Wait for dir to finish + scan a few seconds, then dump + close.
             new(string.Empty, new List<byte>(), IsTerminal: true),
         },
+
+        // Phase 30.14c — exercise the --floppy-b mount + port-0xE9 hook.
+        // After boot, switch to B: and run HELLO.COM which writes a banner
+        // both to DOS stdout (visible on screen) and to port 0xE9 (visible
+        // in temp/port-e9.log and host stdout).
+        "freedos-b-hello" => new List<Step>
+        {
+            new("language", new List<byte> { 0x1C }),     // Enter
+            new("[Y,N]",    new List<byte> { 0x31, 0x1C }),
+            // A:\> -> type "B:" (shift+; for ':') + Enter
+            new("A:\\>", new List<byte>
+            {
+                0x30,                          // 'B'
+                0x2A, 0x27, 0xA7, 0xAA,        // shift-make, ; make, ; break, shift-break (= ':')
+                0x1C,                          // Enter
+            }),
+            // B:\> -> type "HELLO" + Enter (.COM is implicit)
+            new("B:\\>", new List<byte>
+            {
+                0x23,  // 'H'
+                0x12,  // 'E'
+                0x26,  // 'L'
+                0x26,  // 'L'
+                0x18,  // 'O'
+                0x1C,  // Enter
+            }),
+            // Wait for the DOS-stdout banner from HELLO.COM to appear, then dump.
+            new("Hello from B:", new List<byte>(), IsTerminal: true),
+        },
         _ => null,
     };
 }

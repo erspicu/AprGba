@@ -18,6 +18,7 @@ internal static class HeadlessRunner
         Console.WriteLine($"  cpu      = {opts.Cpu}");
         Console.WriteLine($"  backend  = {opts.Backend}");
         Console.WriteLine($"  floppy A = {opts.FloppyAPath ?? "(none)"}");
+        Console.WriteLine($"  floppy B = {opts.FloppyBPath ?? "(none)"}");
         Console.WriteLine($"  hdd      = {opts.HddPath ?? "(none)"}");
 
         // Start() initializes the CPU + bus but leaves the emulator
@@ -46,6 +47,14 @@ internal static class HeadlessRunner
                 runner.LoadTestRom(bytes, segment: 0x0000, offset: 0x7C00);
                 Console.WriteLine($"  loaded:   {bytes.Length} bytes -> 0000:7C00 (legacy --floppy-a as test ROM)");
             }
+        }
+
+        if (opts.FloppyBPath is { } floppyBPath)
+        {
+            var disk = DiskImage.LoadFloppy(floppyBPath);
+            runner.MountDisk(0x01, disk);
+            Console.WriteLine($"  floppy B: {floppyBPath} (mounted at FDC drive 0x01, " +
+                $"{disk.Cylinders}x{disk.Heads}x{disk.Sectors} CHS)");
         }
 
         if (opts.HddPath is { } hddPath)

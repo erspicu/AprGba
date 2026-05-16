@@ -295,6 +295,22 @@ public sealed class MainForm : Form
                 case Keys.X: ascii = (byte)'x'; scan = 0x2D; break;
                 case Keys.Y: ascii = (byte)'y'; scan = 0x15; break;
                 case Keys.Z: ascii = (byte)'z'; scan = 0x2C; break;
+                // Punctuation — PC XT scancode set 1. ASCII column here
+                // is the *unshifted* char; BIOS INT 9 translates to the
+                // shifted char (':' '+' etc.) when Shift make code is in
+                // BDA[0x17] (sent by KeyDown for Shift above).
+                case Keys.OemSemicolon:       ascii = (byte)';';  scan = 0x27; break;  // ; :
+                case Keys.Oemplus:            ascii = (byte)'=';  scan = 0x0D; break;  // = +
+                case Keys.OemMinus:           ascii = (byte)'-';  scan = 0x0C; break;  // - _
+                case Keys.OemPeriod:          ascii = (byte)'.';  scan = 0x34; break;  // . >
+                case Keys.Oemcomma:           ascii = (byte)',';  scan = 0x33; break;  // , <
+                case Keys.OemQuestion:        ascii = (byte)'/';  scan = 0x35; break;  // / ?
+                case Keys.OemPipe:            ascii = (byte)'\\'; scan = 0x2B; break;  // \ |
+                case Keys.OemBackslash:       ascii = (byte)'\\'; scan = 0x2B; break;  // (102-key)
+                case Keys.OemOpenBrackets:    ascii = (byte)'[';  scan = 0x1A; break;  // [ {
+                case Keys.OemCloseBrackets:   ascii = (byte)']';  scan = 0x1B; break;  // ] }
+                case Keys.OemQuotes:          ascii = (byte)'\''; scan = 0x28; break;  // ' "
+                case Keys.Oemtilde:           ascii = (byte)'`';  scan = 0x29; break;  // ` ~
                 default: return;
             }
             KbdTrace.Log(
@@ -547,6 +563,18 @@ public sealed class MainForm : Form
         Keys.Q => 0x10, Keys.R => 0x13, Keys.S => 0x1F, Keys.T => 0x14,
         Keys.U => 0x16, Keys.V => 0x2F, Keys.W => 0x11, Keys.X => 0x2D,
         Keys.Y => 0x15, Keys.Z => 0x2C,
+        Keys.OemSemicolon     => 0x27,
+        Keys.Oemplus          => 0x0D,
+        Keys.OemMinus         => 0x0C,
+        Keys.OemPeriod        => 0x34,
+        Keys.Oemcomma         => 0x33,
+        Keys.OemQuestion      => 0x35,
+        Keys.OemPipe          => 0x2B,
+        Keys.OemBackslash     => 0x2B,
+        Keys.OemOpenBrackets  => 0x1A,
+        Keys.OemCloseBrackets => 0x1B,
+        Keys.OemQuotes        => 0x28,
+        Keys.Oemtilde         => 0x29,
         _ => 0,
     };
 

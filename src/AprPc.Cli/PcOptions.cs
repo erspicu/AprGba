@@ -10,6 +10,12 @@ public sealed class PcOptions
     // Disk inputs (at least one expected once 28.5+ is implemented;
     // empty in scaffolding mode → UI opens with no disk).
     public string? FloppyAPath  { get; set; }
+    /// <summary>
+    /// Phase 30.14b — second floppy image (mounted as B:). Lets you keep
+    /// the FreeDOS boot floppy A: pristine and put custom test programs
+    /// on a separate disk. FDC drive index 0x01.
+    /// </summary>
+    public string? FloppyBPath  { get; set; }
     public string? HddPath      { get; set; }
 
     // Phase 28.5 — test ROM (tiny boot sector binary, < 1 KB) loaded
@@ -163,6 +169,7 @@ public sealed class PcOptions
             else if (arg == "--verbose")     o.Verbose = true;
             // Value flags --key=value.
             else if (arg.StartsWith("--floppy-a="))   o.FloppyAPath = arg["--floppy-a=".Length..];
+            else if (arg.StartsWith("--floppy-b="))   o.FloppyBPath = arg["--floppy-b=".Length..];
             else if (arg.StartsWith("--hdd="))        o.HddPath = arg["--hdd=".Length..];
             else if (arg.StartsWith("--test-rom="))   o.TestRomPath = arg["--test-rom=".Length..];
             else if (arg.StartsWith("--cpu="))        o.Cpu = arg["--cpu=".Length..];
@@ -215,6 +222,12 @@ public sealed class PcOptions
 
         # Disk inputs
           --floppy-a=PATH           A: floppy image (.img, 1.44MB / 720KB / 360KB)
+          --floppy-b=PATH           B: floppy image (.img). Common pattern:
+                                    keep --floppy-a=freedos-boot.img read-only,
+                                    put your test .COM / .EXE on B: built with
+                                    mtools / DiscUtils so each test run picks
+                                    up the latest binaries without touching
+                                    the boot disk.
           --hdd=PATH                C: hard disk image (.img, FAT12/16 partition)
           --test-rom=PATH           tiny boot-sector binary loaded directly
                                     to 0000:7C00 (coexists with --floppy-a)

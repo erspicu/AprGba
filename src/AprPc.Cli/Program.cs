@@ -41,6 +41,7 @@ if (opts.Verbose)
     Console.WriteLine($"  bios     = {opts.BiosPath ?? "(HLE)"}");
     Console.WriteLine($"  bios-mode= {opts.BiosMode}");
     Console.WriteLine($"  floppy A = {opts.FloppyAPath ?? "(none)"}");
+    Console.WriteLine($"  floppy B = {opts.FloppyBPath ?? "(none)"}");
     Console.WriteLine($"  hdd      = {opts.HddPath ?? "(none)"}");
     Console.WriteLine($"  video    = {opts.Video,-3} ({(opts.Video == "mda" ? "MDA mono 80x25, framebuffer 0xB0000, CRTC 0x3B4/0x3B5" : "CGA color 80x25, framebuffer 0xB8000, CRTC 0x3D4/0x3D5")})");
     Console.WriteLine($"  pit      = {opts.PitRateHz} Hz");
@@ -51,6 +52,11 @@ if (opts.Verbose)
 // Always-on keyboard trace -- low volume (only fires on KeyPress + port 0x60
 // read + IRQ 1), so it's safe to leave enabled. Cleared each launch.
 KbdTrace.Init("temp/kbd-trace.log");
+
+// Phase 30.14a — Bochs-style port 0xE9 debug-out hook. Truncates
+// temp/port-e9.log on each launch; OUT 0xE9, AL in the guest is
+// captured there and (by default) mirrored to stdout in real time.
+AprPc.Cli.Hardware.PcPortBus.ResetPortE9Log();
 
 using var runner = new PcSystemRunner(opts);
 
@@ -80,6 +86,12 @@ if (opts.FloppyAPath is { } floppyPath)
         var bytes = File.ReadAllBytes(floppyPath);
         runner.LoadTestRom(bytes, segment: 0x0000, offset: 0x7C00);
     }
+}
+if (opts.FloppyBPath is { } floppyBPath)
+{
+    var disk = DiskImage.LoadFloppy(floppyBPath);
+    runner.MountDisk(0x01, disk);
+    Console.WriteLine($"  floppy B = {floppyBPath} (mounted at FDC drive 0x01)");
 }
 if (opts.HddPath is { } hddPath)
 {
