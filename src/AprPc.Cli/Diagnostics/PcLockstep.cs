@@ -137,6 +137,25 @@ public static class PcLockstep
         var stepA = new X86LockstepStepper(envA);
         var stepB = new X86LockstepStepper(envB);
 
+        // Phase 30.15c — manually advance the BDA tick counter every N
+        // architectural instructions so BIOS POST delay loops that poll
+        // the counter actually progress (without re-introducing the
+        // wall-clock non-determinism of the real timer thread). The
+        // period was chosen empirically — anything between 50 and 5000
+        // tends to work; too small makes the BDA counter race ahead of
+        // POST's expectation, too large makes POST take a long time.
+        int detPit = ParseDetPitEnv(envDefault: 200);
+        if (detPit > 0)
+        {
+            stepA.DeterministicPitPeriod = detPit;
+            stepB.DeterministicPitPeriod = detPit;
+            Console.WriteLine($"  PIT tick: deterministic, 1 BDA tick per {detPit} arch instructions");
+        }
+        else
+        {
+            Console.WriteLine("  PIT tick: fully disabled (APR_LOCKSTEP_PIT_PERIOD=0)");
+        }
+
         long maxSteps = options.MaxCycles ?? 5_000_000;
         Console.WriteLine($"  running lockstep up to {maxSteps:N0} steps...");
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -210,6 +229,12 @@ public static class PcLockstep
 
         var pit = new PcPit(bus, pic);
         pit.Reset();
+        // Phase 30.15c — Reset spins up a System.Threading.Timer that
+        // would fire BDA tick increments on a thread-pool thread,
+        // racing the lockstep stepper. Stop it immediately, even before
+        // the harness's post-build StopForLockstep (which only fires
+        // after both envs build, leaving a ~ms window for spurious ticks).
+        pit.StopForLockstep();
 
         Fdc8272? fdc = null;
         Dma8237? dma = null;
@@ -249,6 +274,18 @@ public static class PcLockstep
     /// On divergence, print 32 bytes around each side's PC so the trail
     /// reader can see what instruction caused it.
     /// </summary>
+    /// <summary>
+    /// Read APR_LOCKSTEP_PIT_PERIOD env var. Lets the user tune
+    /// determinism vs speed without rebuild. 0 = fully disabled,
+    /// missing = default.
+    /// </summary>
+    private static int ParseDetPitEnv(int envDefault)
+    {
+        var s = Environment.GetEnvironmentVariable("APR_LOCKSTEP_PIT_PERIOD");
+        if (s is null) return envDefault;
+        return int.TryParse(s, out var n) ? n : envDefault;
+    }
+
     private static void DumpContext(PcLockstepEnv envA, PcLockstepEnv envB, LockstepResult result)
     {
         Console.WriteLine();
@@ -279,6 +316,18 @@ internal sealed class X86LockstepStepper : ISteppableCpu
 
     public X86LockstepStepper(PcLockstepEnv env) { _env = env; }
 
+    /// <summary>
+    /// When &gt; 0, manually advance the BDA tick counter by 1 every N
+    /// architectural-instruction steps. Both A and B steppers should use
+    /// the same value so the two PITs stay in sync without depending on
+    /// the wall-clock timer (which would fire on a thread-pool thread
+    /// at different moments in A vs B and surface false divergences).
+    /// </summary>
+    public int DeterministicPitPeriod { get; set; } = 0;
+
+    public X86JsonCpu Cpu => _env.Cpu;
+    public PcLockstepEnv Env => _env;
+
     public string Name => _env.Tag;
 
     public ICpuStateSnapshot Snapshot()
@@ -292,6 +341,8 @@ internal sealed class X86LockstepStepper : ISteppableCpu
         _env.Activate();
         _env.Cpu.Step();
         _steps++;
+        if (DeterministicPitPeriod > 0 && (_steps % DeterministicPitPeriod) == 0)
+            _env.Pit.AdvanceTicks(1);
     }
 
     public byte ReadByteFromBus(ulong addr)
