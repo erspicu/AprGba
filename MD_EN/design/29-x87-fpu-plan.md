@@ -2,14 +2,22 @@
 
 > **Status**: ✅ **FUNCTIONALLY COMPLETE** (2026-05-16). All core
 > 8087/80287 ESC opcode categories shipped across 11 sprints with their
-> own verifying test ROMs. The JSON-driven framework supports
-> coprocessor extensions as first-class peers to the base CPU (separate
-> spec files, runtime data model unified). Closure note:
+> own verifying test ROMs, plus the optional **80-bit extended-precision
+> gap-fill (`m80fp`)** + `FST m32` + `FLD ST(i)` (commit `dff7d7e`). The
+> JSON-driven framework supports coprocessor extensions as first-class
+> peers to the base CPU (separate spec files, runtime data model unified).
+> Closure note:
 > [`MD/performance/202605160100-x87-fpu-functional-complete.md`](../../MD/performance/202605160100-x87-fpu-functional-complete.md).
 > Detailed plan + opcode tables + dispatcher design pseudo-code (incl.
 > Gemini consultation summaries) live in the Chinese counterpart
 > [`MD/design/29-x87-fpu-plan.md`](../../MD/design/29-x87-fpu-plan.md);
 > this file is a brief English mirror.
+>
+> **Cross-phase note** (2026-05-16): Phase 29 unblocked the real-BIOS
+> boot path of Phase 28. `pcxtbios.bin` POST executes `FNINIT / FNSTSW`
+> early to detect an 8087; without Phase 29's i8087 extension this would
+> trap to invalid opcode. See [`30-fdc-dma-plan.md`](30-fdc-dma-plan.md)
+> for the full dependency chain.
 
 ## Goals and design
 

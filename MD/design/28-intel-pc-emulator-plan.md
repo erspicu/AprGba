@@ -1,10 +1,28 @@
 # Phase 28 — Intel PC Emulator (DOS / FreeDOS boot target)
 
-> **Status**: ✅ **CLOSED** (2026-05-15). Architectural milestone met:
-> FreeDOS 1.3 boots end-to-end (BIOS → boot sector → kernel.sys →
-> COMMAND.COM → AUTOEXEC.BAT → FreeDOS LOGO printed). Closure note:
-> `MD/performance/202605152200-pc-emulator-freedos-boot.md`. The
-> remaining 28.8f / 28.9 (interactive A:\\> + dir/type/cls/ver) are
+> **Status**: ✅ **CLOSED** (2026-05-15) + **EXCEEDED** (2026-05-16).
+> Original target: FreeDOS 1.3 boots end-to-end via the **HLE BIOS**
+> path (BIOS POST + INT handlers in C#). Achieved 2026-05-15: BIOS
+> → boot sector → kernel.sys → COMMAND.COM → AUTOEXEC.BAT → FreeDOS
+> LOGO printed. Original closure note:
+> `MD/performance/202605152200-pc-emulator-freedos-boot.md`.
+>
+> **2026-05-16 escalation**: real `pcxtbios.bin` ROM (no HLE BIOS)
+> also boots FreeDOS 1.3 end-to-end via:
+> - Phase 28.IO port I/O dispatch (this doc's follow-up below)
+> - Phase 29 i8087 coprocessor extension (`MD/design/29-x87-fpu-plan.md`)
+> - Phase 29-supp port 0x3BA/0x3DA retrace bit + MDA framebuffer
+>   auto-detect (lets BIOS POST text print to MDA)
+> - **Phase 30 8272 FDC + 8237 DMA** (`MD/design/30-fdc-dma-plan.md`)
+> - Phase 30.6c CPU `ROL r/m16, CL` count>1 fix (was stubbed; uncovered
+>   while debugging real BIOS INT 13h DMA address computation)
+>
+> End test now passes with: `apr-pc --bios=BIOS/firmware/pcxtbios.bin
+> --floppy-a=BIOS/freedos-1.3-floppy.img`. Visible output:
+> `FreeCom version 0.85a - WATCOMC - XMS_Swap` banner on the MDA
+> framebuffer. Screenshot: `result/pc/30-rolfix-realbios.png`.
+>
+> The remaining 28.8f / 28.9 (interactive A:\\> + dir/type/cls/ver) are
 > deferred polish — blocked on the LOGO program waiting for a key
 > that our `--keys=` script can't reach at runtime; needs a stdin
 > pump (mechanical, not framework). 28.10 (mouse) and 28.11 (sound)
@@ -29,15 +47,22 @@
 > regression: HLE path still booted (2839 HLE INT calls, kernel.sys +
 > COMMAND.COM + AUTOEXEC.BAT all firing).
 >
-> **Phase 29 design captured** (also 2026-05-15): full x87 FPU plan
-> consulted with Gemini knowledgebase, saved to
-> `MD/design/29-x87-fpu-plan.md`. Decision: separate JSON spec
-> (`spec/coprocessors/x87/i8087.json`) merged into the CPU spec at
-> load time via a machine-level `"extensions"` array. Internal
-> registers as f64 (not x86_fp80) for ARM64 portability;
-> transcendentals via C# Math.* externs; masked exceptions only
-> (skip #MF delivery). Phase 28.IO's no-op FPU stub is the seed that
-> Phase 29 will replace.
+> **Phase 29** (2026-05-15/16): full x87 FPU shipped as a separate
+> JSON extension (`spec/coprocessors/x87/i8087/cpu.json`) merged into
+> the CPU spec at load time via a machine-level `"extensions"` array.
+> ~30 FPU opcodes including FNINIT/FNCLEX, m32fp/m64fp/m80fp load/store,
+> arithmetic, compares, transcendentals, control. Real BIOS POST FPU
+> detection now succeeds (was the original reason 28.IO needed the
+> no-op stub). See `MD/design/29-x87-fpu-plan.md` + closure note
+> `MD/performance/202605160100-x87-fpu-functional-complete.md`.
+>
+> **Phase 30** (2026-05-16): 8272 FDC + 8237 DMA channel 2 emulation
+> implemented (per Gemini consultation) so real BIOS POST's INT 19h
+> can load boot sectors via real-FDC-emulated disk I/O. After
+> implementing the FDC/DMA + fixing a separate CPU bug
+> (`ROL r/m16, CL` count>1 was stubbed → BIOS computed wrong DMA
+> physical address), real BIOS + FreeDOS boots through to COMMAND.COM
+> end-to-end. See `MD/design/30-fdc-dma-plan.md`.
 >
 > **Original status** (2026-05-11): 📋 **PLANNED**. Sub-project / 延伸 phase。
 > 目的：用既有的 AprX86 (i8086 / i80186 / i80286) 把一台**最小可運行

@@ -7,10 +7,17 @@
 > arithmetic FADD/FMUL/FSUB/FDIV±R (29.4), compares FCOM/FCOMP + FNSTSW
 > AX (29.5), transcendentals F2XM1/FYL2X/FPTAN/FPATAN via Math externs
 > + FDECSTP/FINCSTP (29.7), misc FCHS/FABS/FSQRT/FTST/FRNDINT + FFREE
-> (29.8), control FLDCW/FSTCW/FNCLEX (29.9), end-to-end integration
+> (29.8), control FLDCW/FSTCW/FNCLEX (29.9), m80fp pack/unpack + FST m32
+> + FLD ST(i) gap-fill (29.10 + 29.3c/d-supp), end-to-end integration
 > test hypotenuse `√(3²+4²) = 5.0` (29.11). Each sprint shipped its own
-> verifying test ROM; all 7 test ROMs pass bit-exact f32/f64 results
+> verifying test ROM; ~8 test ROMs pass bit-exact f32/f64 results
 > matching .NET Math.* / glibc.
+>
+> **Phase 29 unblocked the real-BIOS path of Phase 28** (2026-05-16):
+> pcxtbios.bin's FPU detection sequence (FNINIT → FSTCW [SI] → CMP)
+> now sees correct power-on FPU state and proceeds past video init.
+> Combined with Phase 28.IO port retrace fix + Phase 30 FDC/DMA, real
+> BIOS + FreeDOS boots end-to-end.
 >
 > **Deferred (truly optional)**:
 > - DC/DA/DE arithmetic family (f64 reg arith + i32/i16 integer arith +

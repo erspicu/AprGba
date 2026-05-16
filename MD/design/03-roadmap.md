@@ -1352,3 +1352,71 @@ Phase 24-26 證明 single-CPU JSON dispatch 動。Phase 27 證明 spec inheritan
 **全部 7 個 test ROM 通過 bit-exact f32/f64 verification**（vs .NET Math.*）。
 FreeDOS HLE regression 整段保持綠（每個 sprint ~2839 INT calls）。Gemini 諮詢 logs
 保留在 `tools/knowledgebase/message/20260515_*.txt`。
+
+---
+
+## 30 系列：8272 FDC + 8237 DMA controller — Real BIOS boots FreeDOS ✅ 完成（2026-05-16，~1 天）
+
+Phase 29 完工後，user 提議測試 real BIOS + FreeDOS 雙跑 — Phase 28.IO + Phase 29
+鋪好的基礎讓 pcxtbios.bin POST 走得到 `Insert BOOT disk` 提示，但 INT 19h 嘗試讀
+disk 時撞 FDC 全 open-bus 0xFF 卡死。Phase 30 補完 8272 FDC + 8237 DMA channel 2
+仿真，讓 real BIOS INT 13h 真的能透過 FDC 讀 sector。
+
+完整 phase plan 在 [`MD/design/30-fdc-dma-plan.md`](/MD/design/30-fdc-dma-plan.md)。
+Gemini 諮詢 log 在 `tools/knowledgebase/message/20260516_004919.txt`。
+
+### Sprint 進度
+
+| Sprint | 內容 | Commit |
+|---|---|---|
+| **30.1-30.5** | `Fdc8272` + `Dma8237` MVP — 7 commands (SPECIFY/SENSE INT/RECALIBRATE/SEEK/READ DATA/READ ID/SENSE DRIVE STATUS) + 同步 burst DMA channel 2 + IRQ 6 wiring | ✅ `12ae222` |
+| **30.6a** | IRQ deassert fix — result-phase read 不再 re-fire ISR | ✅ `0ab519d` |
+| **30.6b** | 調試工具：`--trace-cpu-cs=` CS filter、`--watch-mem`/`--watch-read` 讀寫範圍 logger、HeadlessRunner wider memory dump + boot-sector orig-vs-copy diff | ✅ `c18bcb4` |
+| **30.6c** | **CPU `ROL r/m16, CL` count > 1 fix** — `X86ShiftRotateW16CountClEmitter` 之前對 count > 1 委派給 count=1 stub，pcxtbios.bin INT 13h handler 用 `MOV CL, 4; ROL AX, CL` 算 DMA address 因此錯位 → FDC 寫資料到錯位址 → boot sector FAT walker 讀全 0 卡死 | ✅ `e62a462` |
+| **30.6 (整合 milestone)** | pcxtbios.bin + freedos-1.3-floppy.img end-to-end boot 到 COMMAND.COM banner | ✅ `e62a462` |
+| **30.7** | Closure + docs (本次 commit) | ✅ |
+
+### 重大 fix：CPU `ROL r/m16, CL` count > 1
+
+原 `X86ShiftRotateW16CountClEmitter` 的 rol arm 對 count != 1 委派給 count=1 stub
+（comment 寫「99% 程式只 count=1，這夠了」）。pcxtbios.bin INT 13h 的 DMA address
+計算徹底打臉：
+
+```
+F000:ED5F  MOV AX, [BP+0xC]   ; caller's ES = 0x1FE0
+F000:ED62  MOV CL, 4
+F000:ED64  ROL AX, CL         ; 期望 0xFE01；舊 stub 給 0x3FC0
+F000:ED66  ...                ; 後續 base/page 計算
+F000:ED75  OUT 0x04, AL       ; DMA base lo
+```
+
+修法是用 `lhs << n | lhs >> (16 - n)` 做正確 count-based rotation，n = CL & 15。
+
+Standalone test ROM `30-rol-cl-test.com` 驗證 4 個 case 全綠。修 ROL 後，real BIOS
++ FreeDOS 整條 chain 全跑通 — `FreeCom version 0.85a - WATCOMC - XMS_Swap` banner
+印到 MDA framebuffer。
+
+### Real BIOS boot 完整依賴鏈
+
+跑 `apr-pc --bios=BIOS/firmware/pcxtbios.bin --floppy-a=BIOS/freedos-1.3-floppy.img`
+需要 ALL of：
+
+1. Phase 28.0-28.7（HLE BIOS 基礎設施，部分 unhandled INT 還會用）
+2. Phase 28.IO 港 I/O dispatch
+3. Phase 29 i8087 extension（BIOS POST FPU detection）
+4. Phase 29-supp port 0x3BA/0x3DA retrace bit + MDA framebuffer auto-detect
+5. Phase 30 8272 FDC + 8237 DMA
+6. Phase 30.6c CPU ROL fix
+
+少任何一個都會卡。HLE BIOS 路徑（`--bios-mode=hle`）不需要 29/30/30.6c — HLE INT 13h
+直接 talk DiskImage，不走 FDC/DMA/ROL。
+
+### 為何 Phase 30 對 framework 重要
+
+驗證 framework 能跑**未經修改的商用 BIOS ROM**。pcxtbios.bin 是 public test BIOS
+（非 IBM 原版），但用 IBM PC/XT 標準 BIOS 慣例寫 — port I/O sequences、INT
+handler conventions、ROL trick 等等都是 1980s real-world code。能跑這個 ROM
+表示 framework 已經 polished 到能讓 generic x86-16 BIOS 把 POST 走完。
+
+實證：commit `e62a462` 那一刻 real BIOS + real FreeDOS floppy 端到端 boot 成功，
+screenshot `result/pc/30-rolfix-realbios.png` 為證。

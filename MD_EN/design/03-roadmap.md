@@ -1367,3 +1367,58 @@ Estimate: ~3-4 weeks continuous; realistically 1.5–2 months with /loop interru
 Largest uncertainty in 28.8 (FreeDOS real boot flow). Gemini consultation
 pattern (per [`MD_EN/process/02-ai-collaboration-workflow.md`](../process/02-ai-collaboration-workflow.md)
 Pattern B) expected to be more active in this phase than in any previous.
+
+---
+
+## Phase 30 — 8272 FDC + 8237 DMA — Real BIOS boots FreeDOS ✅ COMPLETE (2026-05-16, ~1 day)
+
+Triggered after Phase 29 shipped: user asked to run real BIOS + real
+FreeDOS floppy end-to-end. Phase 28.IO + Phase 29 got `pcxtbios.bin`
+POST as far as the `Insert BOOT disk` prompt, but INT 19h saw all-0xFF
+open-bus from the FDC and hung. Phase 30 fills in the 8272 FDC + 8237
+DMA channel 2 so real BIOS INT 13h can actually pull sectors off disk.
+
+Full plan: [`30-fdc-dma-plan.md`](30-fdc-dma-plan.md). Gemini consult:
+`tools/knowledgebase/message/20260516_004919.txt`.
+
+### Sprint summary
+
+| Sprint | Deliverable | Commit |
+|---|---|---|
+| 30.1-30.5 | `Fdc8272` + `Dma8237` MVP (7 FDC commands, sync burst DMA ch2, IRQ 6) | ✅ `12ae222` |
+| 30.6a | IRQ deassert fix — result-phase read no longer re-fires ISR | ✅ `0ab519d` |
+| 30.6b | Debug tools: `--trace-cpu-cs`, `--watch-mem`, `--watch-read`, wider HeadlessRunner dump | ✅ `c18bcb4` |
+| 30.6c | **CPU `ROL r/m16, CL` count > 1 fix** — old stub used count=1 IR regardless of CL, broke pcxtbios.bin DMA address arithmetic (`MOV CL,4; ROL AX,CL`) | ✅ `e62a462` |
+| 30.6 end-to-end | pcxtbios.bin + freedos-1.3-floppy.img boots to COMMAND.COM banner | ✅ `e62a462` |
+| 30.7 | Closure + docs (this commit) | ✅ |
+
+### The critical bug — CPU `ROL r/m16, CL` with count > 1
+
+`X86ShiftRotateW16CountClEmitter` had a TODO stub that delegated all
+`count != 1` to a count=1 IR (always shift left by 1). pcxtbios.bin INT 13h
+uses `MOV CL, 4; ROL AX, CL` to split caller's segment into the 8237's
+16-bit base + 4-bit page register; the stub gave 0x3FC0 instead of
+0xFE01, FDC wrote sector data to the wrong physical address, the boot
+sector's REP MOVSB then copied zeros, and the FAT12 cluster walker
+followed `cluster 0 < 0x0FF8` forever. Fix: proper count-based ROL
+using `lhs << n | lhs >> (16 - n)` with `n = CL & 15`.
+
+### Cross-phase chain for real-BIOS boot
+
+ALL of these are required: Phase 28.0-28.7 (HLE baseline) + Phase 28.IO
++ Phase 29 (i8087 extension) + Phase 29-supp (0x3BA/0x3DA retrace bit +
+MDA framebuffer detect) + Phase 30 + Phase 30.6c. Remove any one and the
+real-BIOS path breaks. HLE BIOS path (`--bios-mode=hle`) still works
+without 29/30/30.6c because HLE INT 13h skips FDC/DMA/ROL.
+
+### Why Phase 30 matters for the framework
+
+Validates that the framework can run **unmodified production BIOS ROM
+code**. `pcxtbios.bin` is a public test BIOS (not original IBM) but
+follows PC/XT conventions — port I/O sequences, INT handler conventions,
+the ROL trick — all 1980s real-world code. Booting it end-to-end proves
+the framework is polished enough for generic x86-16 BIOS code to
+complete POST + bootstrap a real OS.
+
+Evidence: at commit `e62a462`, real BIOS + real FreeDOS floppy boot
+end-to-end. Screenshot `result/pc/30-rolfix-realbios.png`.

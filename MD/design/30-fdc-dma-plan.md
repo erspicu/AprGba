@@ -1,22 +1,67 @@
 # Phase 30 — 8272 FDC + 8237 DMA controller emulation
 
-> **Goal**: Real-mode PC/XT BIOS (`pcxtbios.bin`) can complete an
-> INT 19h bootstrap from a real .img file, loading the boot sector to
-> 0:7C00 and jumping to it. End test: `apr-pc --bios=pcxtbios.bin
-> --floppy-a=freedos-1.3-floppy.img` boots FreeDOS without HLE BIOS
-> intercepts.
+> **Status**: ✅ **COMPLETE — END-TO-END FreeDOS BOOT VIA REAL BIOS**
+> (2026-05-16).
 >
-> **Status**: 📋 planning (2026-05-16). Phase 29 closed; this is the next
-> integration milestone.
+> **Original goal**: Real-mode PC/XT BIOS (`pcxtbios.bin`) can
+> complete an INT 19h bootstrap from a real .img file, loading the
+> boot sector to 0:7C00 and jumping to it.
 >
-> **Predecessor**:
-> - Phase 28.IO ([port I/O dispatch](../performance/202605152230-pc-emulator-phase-28-io.md))
->   established PcPortBus dispatch. Ports 0x3F0-0x3F7 (FDC) and
->   0x00-0x0F + 0x81-0x8F (DMA) currently return 0xFF (open bus).
-> - Phase 29-supp (port 0x3BA/0x3DA retrace bit + MDA framebuffer
->   auto-detect) shipped real BIOS POST text output. Currently CPU
->   parks at F000:E858 (INT 16h kbd wait) because INT 19h's call to
->   real-FDC INT 13h fails on open-bus FDC ports.
+> **Exceeded**: Not only does INT 19h work, but the boot sector loads
+> FreeDOS kernel.sys + COMMAND.COM end-to-end. Final test output
+> (text preview from MDA framebuffer):
+>
+> ```
+> | FreeCom version 0.85a - WATCOMC - XMS_Swap [Jul 10 2021 19:28:06] |
+> ```
+>
+> End test passes with no HLE BIOS intercept:
+>
+> ```
+> apr-pc --bios=BIOS/firmware/pcxtbios.bin \
+>        --floppy-a=BIOS/freedos-1.3-floppy.img \
+>        --headless --backend=json --max-cycles=100000000 \
+>        --screenshot=result/pc/30-rolfix-realbios.png
+> ```
+>
+> ### Critical sub-fixes uncovered during Phase 30
+>
+> The FDC/DMA emulation itself (shipped in commit `12ae222`) worked
+> from day one. End-to-end boot took two more days because the FDC
+> exposed a CPU emulation bug that hadn't been hit before:
+>
+> - **Phase 30.6a — IRQ deassert** (`0ab519d`): result-phase read no
+>   longer re-asserts IRQ 6 (was spuriously firing the ISR mid-result).
+> - **Phase 30.6b — diagnostic infrastructure** (`c18bcb4`):
+>   `--trace-cpu-cs=` filter, `--watch-mem=` / `--watch-read=` write/
+>   read range trackers, wider memory dump + boot-sector orig-vs-copy
+>   diff in HeadlessRunner. These tools made the next step possible.
+> - **Phase 30.6c — ROL r/m16, CL with count > 1** (`e62a462`): the
+>   real bug. Our `X86ShiftRotateW16CountClEmitter` rol arm was a
+>   count=1 stub. pcxtbios.bin INT 13h uses `MOV CL, 4; ROL AX, CL`
+>   to split caller's ES into the 24-bit DMA base + page register,
+>   so the BIOS was computing a wrong DMA physical address and the
+>   FDC was writing sector data into the wrong memory area. Fix:
+>   proper count-based ROL using `lhs << n | lhs >> (16 - n)`.
+>
+> ### Cross-phase dependencies for real-BIOS boot
+>
+> The pcxtbios.bin → FreeDOS boot path requires ALL of:
+>
+> 1. Phase 28.0-28.7 (HLE BIOS infrastructure — still partially used
+>    for unhandled INTs, but most go through real ROM)
+> 2. Phase 28.IO (port I/O dispatch via `PcPortBus` extern routing)
+> 3. Phase 29 i8087 extension (BIOS POST FPU detection sees correct
+>    state via real FNINIT/FSTCW)
+> 4. Phase 29-supp port 0x3BA/0x3DA retrace bit + MDA framebuffer
+>    auto-detect (BIOS POST text output)
+> 5. Phase 30 8272 FDC + 8237 DMA (this doc)
+> 6. Phase 30.6c CPU ROL fix (uncovered debugging Phase 30)
+>
+> Removing any one breaks the real-BIOS boot. The HLE BIOS path
+> (`--bios-mode=hle`, no `--bios=`) still works without 29/30/30.6c
+> because HLE INT 13h talks to DiskImage directly without going
+> through FDC/DMA/ROL.
 
 ## Scope
 
@@ -118,26 +163,26 @@ during the FDC execution phase. Algorithm when handling READ DATA:
 
 ## Implementation plan (sprints)
 
-| Sprint | Deliverable |
-|---|---|
-| 30.1 | `Fdc8272` skeleton + DOR/MSR ports + SPECIFY/SENSE INT — BIOS POST sees "FDC alive" |
-| 30.2 | RECALIBRATE + SEEK + IRQ 6 wiring (no data transfer yet) |
-| 30.3 | `Dma8237` skeleton + ch2 register file + flip-flop |
-| 30.4 | READ DATA command + synchronous burst transfer + sector read from disk image |
-| 30.5 | READ ID + SENSE DRIVE STATUS + invalid-command 0x80 fallback |
-| 30.6 | End-to-end: pcxtbios.bin INT 19h reads FreeDOS boot sector → boot |
-| 30.7 | Closure + test ROM matrix + screenshot |
+| Sprint | Deliverable | Status |
+|---|---|---|
+| 30.1 | `Fdc8272` skeleton + DOR/MSR ports + SPECIFY/SENSE INT | ✅ `12ae222` |
+| 30.2 | RECALIBRATE + SEEK + IRQ 6 wiring | ✅ `12ae222` |
+| 30.3 | `Dma8237` skeleton + ch2 register file + flip-flop | ✅ `12ae222` |
+| 30.4 | READ DATA + synchronous burst transfer | ✅ `12ae222` |
+| 30.5 | READ ID + SENSE DRIVE STATUS + invalid-command fallback | ✅ `12ae222` |
+| 30.6a | IRQ deassert fix (was re-firing in result phase) | ✅ `0ab519d` |
+| 30.6b | Debug infrastructure (--trace-cpu-cs, --watch-mem/--watch-read, wider memdump) | ✅ `c18bcb4` |
+| 30.6c | CPU ROL r/m16, CL count>1 fix (was stubbed) | ✅ `e62a462` |
+| 30.6 (end-to-end goal) | pcxtbios.bin INT 19h → FreeDOS boot complete | ✅ `e62a462` |
+| 30.7 | Closure + screenshot + EN mirror | (this doc update) |
 
-### Status: 30.1-30.5 ✅ DONE (initial cut, 2026-05-16)
+### Status: ALL PHASES ✅ COMPLETE (2026-05-16)
 
-Functional MVP shipped in one push (`<next commit>`). pcxtbios.bin
-POST completes; INT 19h loads FreeDOS boot sector via real FDC; boot
-sector self-relocates to 1FE0:7C00 and starts reading root dir + FAT
-sectors via real INT 13h → real FDC → real DMA. 24 FDC READ DATA
-commands execute successfully with correct first-byte signatures:
-boot sector starts `EB 3C 90 46 52 44 4F 53` (= "FRDOS5.1" OEM
-signature), root dir first entry shows `46 44 31 33 2D 42 4F 4F 54
-20 20 08` (= volume label "FD13-BOOT" with attribute 0x08).
+End-to-end real BIOS + FreeDOS boot working. Visible MDA framebuffer
+output shows `FreeCom version 0.85a` after ~100M CPU cycles. The
+FDC/DMA MVP (30.1-30.5) shipped from day one and was functionally
+correct; days 2-3 were debugging the CPU-level ROL bug that the
+real BIOS exercised in its DMA address computation.
 
 ### 30.6c — ROL with CL count > 1 was wrong — FIXED (2026-05-16) ✅
 

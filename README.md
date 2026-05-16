@@ -32,6 +32,17 @@ swappable silicon model. Integration capstone test computes
 `√(3² + 4²) = 5.0` via chained FPU ops, bit-exact f32/f64. Closure
 note:
 [`MD/performance/202605160100-x87-fpu-functional-complete.md`](MD/performance/202605160100-x87-fpu-functional-complete.md).
+**Phase 30 (8272 FDC + 8237 DMA + real-BIOS path)** ✅ COMPLETE
+2026-05-16 — `apr-pc --bios=BIOS/firmware/pcxtbios.bin
+--floppy-a=BIOS/freedos-1.3-floppy.img` boots FreeDOS to COMMAND.COM
+with **zero HLE BIOS intercept**. Adds 8272A FDC (7 commands) + 8237
+DMA channel 2 (synchronous burst mode per Gemini 2026-05-16
+consultation) + an `X86ShiftRotateW16CountClEmitter` fix for
+`ROL r/m16, CL` with count > 1 (pcxtbios.bin INT 13h uses
+`MOV CL,4; ROL AX,CL` to split caller's segment into DMA base + page
+register; the prior stub gave wrong rotation and silently corrupted DMA
+target addresses). Real-BIOS chain validates Phase 28.IO + 29 + 30 +
+30.6c hang together. Plan: [`MD/design/30-fdc-dma-plan.md`](MD/design/30-fdc-dma-plan.md).
 
 ---
 
@@ -313,7 +324,7 @@ Look at `spec/cpu/lr35902/cpu.json` + `spec/cpu/lr35902/groups/*.json` for a com
 
 ### 8. Where this could go
 
-- **Phase 28 — Intel PC emulator (FreeDOS boot target).** Planned 2026-05-11; pre-work checklist green; ready to start. Boots FreeDOS 1.3 floppy via existing i8086 backend + minimal HLE-BIOS (INT 10h/13h/16h/19h/1Ah) + 8259/8253/8042 stubs + CGA text-mode UI window (WinForms). Sub-phases 28.0 → 28.12 detailed in [`MD_EN/design/28-intel-pc-emulator-plan.md`](MD_EN/design/28-intel-pc-emulator-plan.md).
+- **Phase 28 — Intel PC emulator (FreeDOS boot target).** ✅ CLOSED 2026-05-15 (HLE-BIOS path) + ✅ EXCEEDED 2026-05-16 (real-BIOS path via Phase 28.IO + 29 + 30 + 30.6c). FreeDOS 1.3 floppy boots end-to-end to COMMAND.COM, either through HLE INT 10h/13h/16h/19h/1Ah handlers or through real `pcxtbios.bin` + emulated 8272 FDC + 8237 DMA. Plan: [`MD_EN/design/28-intel-pc-emulator-plan.md`](MD_EN/design/28-intel-pc-emulator-plan.md). Real-BIOS plan: [`MD_EN/design/30-fdc-dma-plan.md`](MD_EN/design/30-fdc-dma-plan.md).
 - **More CPUs.** Z80 (Master System / GG), 8080 (CP/M), 68000 (Genesis / Neo Geo / early Mac), MIPS R3000 (PS1), MIPS R4300i (N64), 80386 (next x86 family chain) — all expressible in the same JSON model. Variable-width + prefix-decoded + unofficial-opcode ISAs already work (LR35902 0xCB; 2A03 unofficial cc=11; x86 0x0F escape + ModR/M + SIB).
 - **Additional execution backends.** The `EmitContext` routing layer means a future AOT compiler, WebAssembly target, or different IR backend can slot in alongside the LLVM JIT.
 - **Spec-time IR pre-passes.** Dead-flag elimination, micro-op fusion, hot-opcode inlining — all naturally extend the existing AST pre-pass mechanism.
@@ -610,7 +621,7 @@ done
 
 框架設計成下面這些是「加法擴充」、不是「架構重寫」：
 
-- **Phase 28 — Intel PC 模擬器（FreeDOS boot 目標）。** 2026-05-11 規劃完成；開工前 checklist 全綠；可動工。透過既有 i8086 backend + 最小 HLE-BIOS (INT 10h/13h/16h/19h/1Ah) + 8259/8253/8042 stub + CGA text-mode UI 視窗 (WinForms) 來 boot FreeDOS 1.3 floppy。Sub-phase 28.0 → 28.12 詳見 [`MD/design/28-intel-pc-emulator-plan.md`](MD/design/28-intel-pc-emulator-plan.md)。
+- **Phase 28 — Intel PC 模擬器（FreeDOS boot 目標）。** ✅ 2026-05-15 CLOSED（HLE-BIOS path）+ ✅ 2026-05-16 EXCEEDED（real-BIOS path 走 Phase 28.IO + 29 + 30 + 30.6c）。FreeDOS 1.3 floppy 兩條路徑都能 boot 到 COMMAND.COM：HLE INT 10h/13h/16h/19h/1Ah handler 或真實 `pcxtbios.bin` + 仿真 8272 FDC + 8237 DMA。Plan：[`MD/design/28-intel-pc-emulator-plan.md`](MD/design/28-intel-pc-emulator-plan.md)。Real-BIOS plan：[`MD/design/30-fdc-dma-plan.md`](MD/design/30-fdc-dma-plan.md)。
 - **更多 CPU。** Z80 (Master System / GG)、8080 (CP/M)、68000 (Genesis / Neo Geo / 早期 Mac)、MIPS R3000 (PS1)、MIPS R4300i (N64)、80386 (下一條 x86 family chain) — 全都能用同一個 JSON 模型表達。變寬 + prefix-decoded + unofficial-opcode ISA 都已經 work (LR35902 0xCB；2A03 unofficial cc=11；x86 0x0F escape + ModR/M + SIB)。
 - **其他 execution backend。** `EmitContext` routing layer 表示未來 AOT compiler、WebAssembly target、不同的 IR backend 都能跟 LLVM JIT 並列、不用動 emitter。
 - **Spec-time IR pre-pass。** Dead-flag elimination、micro-op fusion、hot-opcode inlining — 全都自然延伸現有的 AST pre-pass 機制。

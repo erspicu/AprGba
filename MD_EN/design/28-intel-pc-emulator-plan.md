@@ -1,7 +1,12 @@
 # Phase 28 — Intel PC Emulator (DOS / FreeDOS boot target)
 
-> **Status**: 📋 **PLANNED** (2026-05-11). Pre-work checklist green
-> 2026-05-11; ready to start at Phase 28.0.
+> **Status**: ✅ **CLOSED** (2026-05-15) + ✅ **EXCEEDED** (2026-05-16).
+> HLE BIOS + FreeDOS boot finished 2026-05-15
+> (`MD/performance/202605152200-pc-emulator-freedos-boot.md`).
+> Real BIOS path (`pcxtbios.bin`) added 2026-05-16 via Phases 28.IO + 29 + 30 +
+> 30.6c — `apr-pc --bios=BIOS/firmware/pcxtbios.bin
+> --floppy-a=BIOS/freedos-1.3-floppy.img` boots FreeDOS to COMMAND.COM
+> with zero HLE BIOS intercept.
 > Sub-project / extension phase. The goal is to take the existing
 > AprX86 (i8086 / i80186 / i80286) and assemble a **minimum viable
 > IBM PC compatible** capable of booting DOS / FreeDOS to a prompt
@@ -14,6 +19,12 @@
 > Note: FreeDOS 1.x runs fine on 8086 real mode, **no protected mode
 > needed**. Protected mode only becomes necessary for Win 3.x
 > standard mode / DOS extenders — that's Phase 29+ territory.
+>
+> **Cross-phase chain for real-BIOS boot**: Phase 28.0-28.7 (HLE
+> baseline) + Phase 28.IO (port dispatch) + Phase 29 (i8087 FPU
+> extension) + Phase 29-supp (port 0x3BA/0x3DA retrace bit) +
+> Phase 30 (8272 FDC + 8237 DMA, [`30-fdc-dma-plan.md`](30-fdc-dma-plan.md))
+> + Phase 30.6c (CPU `ROL r/m16, CL` count > 1 fix).
 
 ---
 
