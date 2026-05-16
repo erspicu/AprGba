@@ -67,14 +67,21 @@ public sealed class PcPortBus
     private bool _kbd60IrqLine;  // true = line currently HIGH (= 8259A saw rising edge)
     private byte _port61Prev;    // previous port 0x61 value, for edge detection
 
+    // 30.7c — video adapter the host wants reported via the PPI port
+    // 0x62 DIP-switch bits ("mda" -> bits 4-5 = 11, "cga" -> bits 4-5
+    // = 10 for 80x25 color). pcxtbios.bin uses this to choose between
+    // MDA and CGA INT 10h init paths.
+    private readonly string _video;
+
     public PcPortBus(Pic8259 pic, PcPit pit, bool traceIo = false,
-        Fdc8272? fdc = null, Dma8237? dma = null)
+        Fdc8272? fdc = null, Dma8237? dma = null, string video = "mda")
     {
         _pic     = pic ?? throw new ArgumentNullException(nameof(pic));
         _pit     = pit ?? throw new ArgumentNullException(nameof(pit));
         _fdc     = fdc;
         _dma     = dma;
         _traceIo = traceIo;
+        _video   = video;
         // CMOS default: a few legitimate-looking bytes so BIOS POST
         // doesn't fail equipment / mem-size checks.
         _cmos[0x10] = 0x40;   // floppy A: = 1.44 MB
@@ -119,6 +126,28 @@ public sealed class PcPortBus
             $"PcPortBus.InjectScancode scan=0x{scancode:X2} fifo_before={fifoBefore} " +
             $"irq_line={_kbd60IrqLine} {(fireIrq ? "-> AssertIrq(1)" : "-> queued, no edge")}");
         if (fireIrq) _pic.AssertIrq(1);
+    }
+
+    private byte Read62()
+    {
+        // Phase 30.7c — per pcxtbios.bin reading pattern (LOW 4 bits both
+        // reads, selector via Port B bit 2 toggling between memory bits
+        // and video+floppy bits).
+        bool selectVideoFloppy = (_port61 & 0x04) != 0;
+        if (!selectVideoFloppy)
+        {
+            // First-read state: memory size in low 4 bits.
+            // 0x03 = 256KB-class planar memory (XT then memory-tests
+            // the rest up to 640KB). High 4 bits are 0; pcxtbios ANDs
+            // with 0x0F anyway so they don't matter.
+            return 0x03;
+        }
+        // Second-read state: video+floppy in low 4 bits.
+        //   bits 0-1: video (00=EGA, 01=CGA40, 10=CGA80, 11=MDA)
+        //   bits 2-3: floppy count - 1 (00 = 1 drive)
+        byte videoBits = _video == "mda" ? (byte)0x03 : (byte)0x02;
+        // floppy = 1 drive = 00 in bits 2-3.
+        return videoBits;
     }
 
     private byte Dequeue60()
@@ -294,15 +323,38 @@ public sealed class PcPortBus
             // make this sticky-on-eject-clear-on-SEEK.
             0x3F7 or 0x377 => 0x7F,
 
-            // XT PPI Port C (0x62) — DIP switch bank readback. Real XT
-            // 8255 PPI Port C selects SW1 vs SW2 banks via Port B bit 3,
-            // returning different 4-bit nibbles depending. Static stub
-            // ATTEMPTED 2026-05-16 (return 0x30 = bits 4-5 = 11 = MDA
-            // 80x25) broke BIOS POST entirely -- text disappears from
-            // boot screen onwards. Reverted to 0xFF (default open-bus).
-            // Proper PPI emulation that respects Port B bit 3 selector
-            // is deferred to Phase 30.x. Note: even with 0xFF,
-            // pcxtbios.bin gets enough info from CMOS reads to boot.
+            // 8255 PPI Port C (0x62) — DIP switch readback. pcxtbios.bin
+            // (Sergey Kiselev/VirtualXT XT BIOS) uses an UNUSUAL pattern
+            // that differs from IBM original PC layout:
+            //
+            //   in al, 62h                ; first read -- memory size in low 4 bits
+            //   and al, 0Fh
+            //   mov ah, al                ;   save
+            //   mov al, 10101101b
+            //   out dx, al                ; toggle PPI selector
+            //   in al, 62h                ; second read -- video+floppy in low 4 bits
+            //   mov cl, 4
+            //   shl al, cl                ;   shift to high nibble
+            //   or al, ah                 ; combine -> equipment flag
+            //
+            // So both reads use LOW 4 bits. The OUT-to-PPI-control between
+            // them toggles which DIP bank is exposed. The pre-OUT state is
+            // memory bits; post-OUT state is video+floppy. Per BIOS source:
+            //   Pre-OUT  low 4: memory (we report 0x03 = 256KB-class)
+            //   Post-OUT low 4: bits 0-1 = video, bits 2-3 = floppy-count
+            //     video: 00 = EGA/VGA, 01 = CGA 40x25, 10 = CGA 80x25,
+            //            11 = MDA 80x25 monochrome
+            //     floppy: 00 = 1 drive
+            //
+            // Bit 2 of _port61 toggles between these (closest reasonable
+            // proxy to the actual OUT we can detect; the BIOS writes
+            // 0xAD with bit 2 = 1 to PPI Port B to select).
+            //
+            // Configurable via --video=mda|cga CLI flag (default mda).
+            // Tested mda -> BIOS picks MDA, sets BDA[0x49]=0x07, writes
+            // to 0xB0000. Tested cga -> BIOS picks CGA, sets BDA[0x49]
+            // based on CRTC probe, writes to 0xB8000.
+            0x62 => Read62(),
 
             // Default — open bus
             _ => 0xFF,

@@ -102,21 +102,6 @@ public static class X86CgaRenderer
             int cellOff = fbBase + (cy * CellsW + cx) * 2;
             byte ch    = mem[cellOff];
             byte attr  = mem[cellOff + 1];
-            // 30.7a workaround for FreeDOS COMMAND.COM black-on-black
-            // bug: when COMMAND.COM CLS / scroll calls INT 10h AH=06
-            // with BH=0, BIOS fills new lines with attr=0 (black fg on
-            // black bg). Subsequent teletype writes preserve that
-            // attribute. Result: all post-scroll text invisible even
-            // though F12 framebuffer dump shows correct chars.
-            //
-            // Real silicon shows nothing in this case (attr=0 IS black-
-            // on-black). For interactive usability in our emulator we
-            // promote attr=0 to attr=0x07 (mono normal = light gray on
-            // black) so the user can actually read the dir / ver output.
-            // Diagnosed via Gemini consultation 2026-05-16 + F12
-            // framebuffer dump showing rows 2-24 all attrs=0/80 but
-            // with valid printable char bytes.
-            if (attr == 0 && ch != 0) attr = 0x07;
             uint fg    = Palette[attr & 0x0F];
             uint bg    = Palette[(attr >> 4) & 0x07];      // bit 7 = blink, ignored
             DrawGlyph(rgb, ch, cx * X86CgaFont.FontW, cy * X86CgaFont.FontH, fg, bg);

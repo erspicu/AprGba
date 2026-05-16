@@ -212,7 +212,7 @@ public sealed class PcSystemRunner : IDisposable
         // X86JsonCpu delegate handlers (declared in AprX86.Cli, the
         // CPU project; we install them here from AprPc.Cli to keep
         // the cross-project reference one-directional).
-        _ports = new PcPortBus(_pic, _pit, traceIo: _options.TraceIo, fdc: _fdc, dma: _dma);
+        _ports = new PcPortBus(_pic, _pit, traceIo: _options.TraceIo, fdc: _fdc, dma: _dma, video: _options.Video);
         PcPortBus.Active = _ports;
         X86JsonCpu.PortRead8Handler   = _ports.Read8;
         X86JsonCpu.PortRead16Handler  = _ports.Read16;

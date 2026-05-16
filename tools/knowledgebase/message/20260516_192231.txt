@@ -1,0 +1,172 @@
+Timestamp: 2026-05-16T19:22:31
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I need the exact specification for emulating the IBM PC/XT 8255 PPI chip's Port C readback at I/O port 0x62, specifically as it interacts with the pcxtbios.bin (Sergey Kiselev XT BIOS) POST code. My static stub broke POST entirely.
+
+CONTEXT:
+- Emulating IBM PC/XT with pcxtbios.bin (https://github.com/skiselev/pcxtbios) as the BIOS ROM
+- Currently my port 0x62 default is open-bus 0xFF
+- Earlier attempt to return static 0x30 (= bits 4-5 = 11 = MDA 80x25) caused BIOS POST to halt -- boot screen disappeared entirely
+- Reverted to 0xFF default; boot now visible but BIOS detects wrong video mode -> doesn't pre-fill MDA framebuffer at 0xB0000 with the default 0x20 0x07 (space + light-gray-on-black) pattern that a real POST would do
+- Symptom: FreeDOS dir output uses INT 10h AH=0E teletype which only writes the char byte, not attribute. Cells that POST never touched still have attr=0 from PcMemoryBus.Reset() -> chars on those rows are invisible (black on black)
+
+GOAL: implement port 0x62 correctly so pcxtbios.bin POST detects MDA video and properly initializes the MDA framebuffer.
+
+EMULATOR DETAILS I HAVE:
+- Port 0x60 = keyboard data (8042-style scancode FIFO via my InjectScancode)
+- Port 0x61 = PPI Port B (system control byte): I currently store it as a single byte _port61, including bit 7 ack pulse handling for keyboard
+- Port 0x62 = PPI Port C (DIP switches, multiplexed)
+- Port 0x63 = PPI control word (init)
+
+DESIRED CONFIG:
+- 1 floppy drive
+- MDA 80x25 mono video
+- 640 KB conventional memory
+- 8087 FPU present (we emulate i8087 extension)
+- No game port
+
+QUESTIONS:
+
+1. What is the EXACT layout of SW1 (8 DIP switches on the IBM PC/XT motherboard)? List each switch position 1-8 and what it encodes for hardware presence/configuration. I need the bit ordering that pcxtbios.bin reads via Port C, not the physical DIP switch labeling.
+
+2. What is the EXACT layout of SW2 (the second bank, when present on early PC; XT may not have SW2 -- if XT has only SW1, say so explicitly)?
+
+3. What is the multiplexer logic on the IBM PC/XT? Specifically: when does Port C read return SW1 bits, vs SW2 bits, vs other status? Is it controlled by Port B bit 3, bit 2, or some other bit? Cite the IBM PC/XT Technical Reference Manual if possible.
+
+4. For my desired config (1 floppy, MDA, 640KB, no game port), what value should Port C return:
+   (a) when Port B selector bit is 0
+   (b) when Port B selector bit is 1
+   Give me the exact 8-bit hex value for each.
+
+5. Does pcxtbios.bin specifically read Port C twice (once per selector position) during POST? If so, what does its video detection algorithm look like?
+
+6. After pcxtbios.bin POST detects MDA from the DIP switches, what does it write to physical memory 0xB0000-0xB0F9F during init? Does it actually pre-fill all 4000 cells with `0x20 0x07` (space + light-gray-on-black) as I expected, or does it only set BDA[0x49] = 7 and leave the framebuffer untouched?
+
+7. If pcxtbios.bin does NOT pre-fill the framebuffer, what's the standard PC convention for the initial framebuffer content the BIOS leaves before handoff to bootloader? Some sources say "always 0x07 spaces", others say "whatever was in VRAM at power-on, undefined". Which is correct for the XT?
+
+8. Is there any reason my static `Port C = 0x30` stub broke POST when 0xFF (default) doesn't? E.g., does pcxtbios.bin treat specific bits differently based on what other bits are set, and 0x30 happens to look like an error condition?
+
+========================================================================
+RESPONSE
+========================================================================
+Here is the exact hardware specification you need to implement Port 0x62 (PPI Port C) readback correctly for an IBM PC/XT and the Sergey Kiselev BIOS. 
+
+I will start by answering your last question first, because it is the "Aha!" moment that explains exactly why your emulator broke.
+
+### 8. Why did the static `0x30` stub break POST?
+Your static `0x30` stub broke the boot because **you told the motherboard to go into an infinite diagnostic loop.**
+In binary, `0x30` is `0011 0000`. 
+Bit 0 of Port C (when the multiplexer selects the DIP switches) represents SW1 Position 1. 
+* A `1` means "Normal POST and Boot". 
+* A `0` means "Manufacturing Test Mode: Loop POST endlessly". 
+Because you returned `0` for Bit 0, `pcxtbios` did exactly what a real XT would do: it ran the POST, skipped the bootloader, and restarted the POST indefinitely. It never got far enough to initialize the MDA VRAM.
+
+---
+
+### 1. EXACT Layout of SW1 (IBM PC/XT)
+The XT has exactly one bank of 8 DIP switches (SW1). Note that a physical switch turned "OFF" (open) pulls the line high (`1`), and "ON" (closed) pulls it low (`0`). 
+
+Here is the exact bit mapping as read by the BIOS on Port C:
+
+*   **SW1-1 (Bit 0):** POST Loop Mode. `1` = Normal Boot, `0` = Loop POST.
+*   **SW1-2 (Bit 1):** Math Coprocessor (8087). `0` = Installed, `1` = Not Installed.
+*   **SW1-3 (Bit 2) & SW1-4 (Bit 3):** Motherboard (Planar) RAM Size. 
+    *   `11` = 256KB (You must use this for 640KB total; the rest is expansion RAM)
+    *   `10` = 128KB
+    *   `01` = 64KB
+*   **SW1-5 (Bit 4) & SW1-6 (Bit 5):** Initial Video Mode.
+    *   `11` = MDA 80x25 (Monochrome)
+    *   `10` = CGA 80x25 (Color)
+    *   `01` = CGA 40x25 (Color)
+    *   `00` = EGA/VGA (BIOS with extension ROM)
+*   **SW1-7 (Bit 6) & SW1-8 (Bit 7):** Number of Floppy Drives (only valid if floppy controller is present).
+    *   `00` = 1 Drive
+    *   `01` = 2 Drives
+    *   `10` = 3 Drives
+    *   `11` = 4 Drives
+
+### 2. EXACT Layout of SW2
+**The IBM PC/XT (5160) does not have SW2.** 
+The original IBM PC (5150) had an SW2 to tell the BIOS how much expansion RAM was installed. The XT does not; the XT BIOS automatically tests memory during POST to find the top of conventional memory up to 640KB. `pcxtbios.bin` is an XT-class BIOS and completely ignores the concept of SW2.
+
+### 3. The Multiplexer Logic (Port B / Port C)
+On the IBM XT, Port C (0x62) is an input port, but the lower 4 bits are multiplexed based on the state of **Port 61h (Port B) Bit 2** (Mask `0x04`).
+
+*   **Bits 4-7** of Port C are *always* SW1 positions 5-8 (Video and Floppy drives). They are never multiplexed.
+*   **When Port 61h Bit 2 == 1 (High):**
+    *   Bits 0-3 read SW1 positions 1-4 (POST loop, FPU, Planar RAM).
+*   **When Port 61h Bit 2 == 0 (Low):**
+    *   Bit 0 = RAM Parity Check 1 (System Board Error). `0` = No Error.
+    *   Bit 1 = RAM Parity Check 2 (I/O Channel Error). `0` = No Error.
+    *   Bit 2 = PIT Timer 2 Output (Used by BIOS to test the timer).
+    *   Bit 3 = Cassette Data In (Leftover from PC, just return `0` for XT).
+
+*(Citation: IBM Personal Computer XT Technical Reference Manual, Page 1-32, "System Board I/O Channel").*
+
+### 4. Exact Port C Hex Values for your Desired Config
+Config: 1 Floppy, MDA, 640KB RAM (256KB Planar + 384K Expansion), 8087 Present, Normal Boot.
+
+**SW1 Configuration:**
+*   SW1-1 (Normal): `1`
+*   SW1-2 (8087): `0`
+*   SW1-3,4 (256K): `11`
+*   SW1-5,6 (MDA): `11`
+*   SW1-7,8 (1 FD): `00`
+
+**Resulting values:**
+**4(a) When Port 61h Bit 2 is `0`:** Return **`0x30`**
+*(Bits 4-7 are `0011` for Video/Floppy. Bits 0-3 are `0000` assuming no parity errors and ignoring PIT Timer 2 pulsing).*
+
+**4(b) When Port 61h Bit 2 is `1`:** Return **`0x3D`**
+*(Bits 4-7 are `0011` for Video/Floppy. Bits 0-3 are `1101` for the switches).*
+
+### 5. BIOS Reading & Video Detection Behavior
+Yes, `pcxtbios.bin` specifically reads Port 0x62 multiple times. Early in POST, it sets Port 0x61 Bit 2 high to read the equipment configuration into memory (eventually populating the BIOS Data Area at `0040:0010`). 
+
+For video detection, it looks at bits 4 and 5. Because you set them to `11`, the BIOS identifies the primary adapter as MDA. It will then initialize the CRTC registers at physical I/O ports `0x3B4` / `0x3B5`.
+
+### 6. Framebuffer Initialization
+Yes, standard XT BIOSes, including Sergey's `pcxtbios.bin`, **do explicitly pre-fill the framebuffer**.
+Once the BIOS determines MDA is present and sets the CRTC modes, it executes an INT 10h AH=00h (Set Video Mode) command internally. The video initialization routine executes a loop that clears the physical MDA VRAM (`0xB0000` to `0xB0F9F`) by writing the 16-bit word **`0x0720`** (`0x20` space character, `0x07` light-gray on black attribute) to all 2,000 character cells. 
+
+### 7. Standard PC Convention
+The standard convention is precisely as you expected: The BIOS leaves the VRAM entirely filled with `0x0720` before issuing INT 19h (bootstrap). If your FreeDOS directory output is writing characters on black-on-black cells, it confirms that `pcxtbios` never ran its video initialization routine (because your `0xFF` default told it the video mode was EGA/VGA, which it relies on an external Option ROM at `0xC0000` to initialize, which you likely aren't emulating).
+
+---
+
+### How to implement this in your emulator
+In your memory/bus controller, update your `IOPortRead` for Port `0x62` to look like this:
+
+```csharp
+// Assuming _port61 holds the last byte written to I/O port 0x61
+byte ReadPort62() 
+{
+    byte portC = 0;
+    
+    // Bits 4-7 are always SW1 positions 5-8
+    // 00 = 1 Floppy, 11 = MDA => 0011xxxx = 0x30
+    portC |= 0x30; 
+
+    // Multiplexer controlled by Port 61h Bit 2
+    if ((_port61 & 0x04) != 0) 
+    {
+        // Return SW1 positions 1-4
+        // 1 = 256K RAM, 1 = 256K RAM, 0 = 8087 Present, 1 = Normal POST => xxxx1101 = 0x0D
+        portC |= 0x0D; 
+    }
+    else 
+    {
+        // Return Parity/Timer status. 
+        // Emulating 0 (No parity error, Cassette 0, PIT Timer 2 low)
+        portC |= 0x00; 
+        
+        // Note: If pcxtbios memory tests hang later, it may be waiting 
+        // for PIT Timer 2 out to toggle on Bit 2 (0x04). If so, you'd 
+        // link Bit 2 to your emulated 8253 PIT channel 2 output.
+    }
+
+    return portC;
+}
+```

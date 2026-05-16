@@ -81,6 +81,20 @@ public sealed class PcOptions
     public int     PitRateHz    { get; set; } = 18;
 
     /// <summary>
+    /// Video adapter to report via the 8255 PPI DIP-switch bits at port
+    /// 0x62. pcxtbios.bin reads these to populate the BIOS equipment
+    /// flag and decides whether to talk to MDA CRTC (port 0x3B4/0x3B5,
+    /// VRAM 0xB0000) or CGA CRTC (port 0x3D4/0x3D5, VRAM 0xB8000).
+    ///
+    /// "mda" -> 80x25 monochrome, attribute 0x07 visible by default
+    /// "cga" -> 80x25 color (mode 3), 16-color palette
+    ///
+    /// Default mda because MDA's stable text mode + light-gray-on-black
+    /// is easier to read in the WinForms framebuffer renderer.
+    /// </summary>
+    public string  Video        { get; set; } = "mda";
+
+    /// <summary>
     /// Parse argv; throws <see cref="ArgumentException"/> for unknown
     /// flags / malformed values. The Program.cs caller catches and
     /// prints a usage block.
@@ -136,6 +150,7 @@ public sealed class PcOptions
             else if (arg.StartsWith("--keys="))        o.KeysScript = arg["--keys=".Length..];
             else if (arg.StartsWith("--headless-timeout=")) o.HeadlessTimeout = int.Parse(arg["--headless-timeout=".Length..]);
             else if (arg.StartsWith("--pit-rate-hz="))      o.PitRateHz = int.Parse(arg["--pit-rate-hz=".Length..]);
+            else if (arg.StartsWith("--video="))            o.Video = arg["--video=".Length..].ToLowerInvariant();
             else throw new ArgumentException($"unknown argument: {arg}");
         }
 
@@ -148,6 +163,9 @@ public sealed class PcOptions
 
         if (o.BiosMode is not ("lle" or "hle"))
             throw new ArgumentException($"--bios-mode={o.BiosMode} not supported; expected hle/lle");
+
+        if (o.Video is not ("mda" or "cga"))
+            throw new ArgumentException($"--video={o.Video} not supported; expected mda/cga");
 
         if (o.WindowScale is < 1 or > 8)
             throw new ArgumentException($"--window-scale={o.WindowScale} out of range (1-8)");

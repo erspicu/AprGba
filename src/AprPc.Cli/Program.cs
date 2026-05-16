@@ -39,8 +39,11 @@ if (opts.Verbose)
     Console.WriteLine($"  backend  = {opts.Backend}");
     Console.WriteLine($"  memory   = {opts.Memory}");
     Console.WriteLine($"  bios     = {opts.BiosPath ?? "(HLE)"}");
+    Console.WriteLine($"  bios-mode= {opts.BiosMode}");
     Console.WriteLine($"  floppy A = {opts.FloppyAPath ?? "(none)"}");
     Console.WriteLine($"  hdd      = {opts.HddPath ?? "(none)"}");
+    Console.WriteLine($"  video    = {opts.Video,-3} ({(opts.Video == "mda" ? "MDA mono 80x25, framebuffer 0xB0000, CRTC 0x3B4/0x3B5" : "CGA color 80x25, framebuffer 0xB8000, CRTC 0x3D4/0x3D5")})");
+    Console.WriteLine($"  pit      = {opts.PitRateHz} Hz");
     Console.WriteLine($"  scale    = {opts.WindowScale}×{(opts.Fullscreen ? " (fullscreen)" : "")}");
     Console.WriteLine($"  mode     = {(opts.Headless ? "headless" : "UI")}");
 }

@@ -77,6 +77,9 @@ goto :eof
 call :ensure_dll
 set FLOPPY=BIOS\freedos-1.3-floppy.img
 set BIOS=BIOS\firmware\pcxtbios.bin
+REM Second positional arg picks video adapter: mda (default) or cga.
+set VIDEO=%2
+if "%VIDEO%"=="" set VIDEO=mda
 if not exist "%FLOPPY%" (
     echo [gui-test] Missing %FLOPPY%.
     exit /b 1
@@ -92,6 +95,6 @@ REM PIT at default 18Hz -- 200Hz caused FreeDOS time computation hangs
 REM (BDA tick counter advances 11x faster than wall clock, hits some
 REM FreeDOS internal conversion corner case). The FDC motor-on hack
 REM + 2ms HLT-wake polling deliver enough responsiveness on their own.
-echo [gui-test] Mode: Real BIOS pcxtbios.bin + FreeDOS  (Phase 30 path, backend=json)
-dotnet "%DLL%" --bios=%BIOS% --floppy-a=%FLOPPY% --backend=json --window-scale=2 --window-title="AprPc - real BIOS pcxtbios.bin" --verbose
+echo [gui-test] Mode: Real BIOS pcxtbios.bin + FreeDOS  (Phase 30 path, backend=json, video=%VIDEO%)
+dotnet "%DLL%" --bios=%BIOS% --floppy-a=%FLOPPY% --backend=json --video=%VIDEO% --window-scale=2 --window-title="AprPc - real BIOS pcxtbios.bin (%VIDEO%)" --verbose
 goto :eof
