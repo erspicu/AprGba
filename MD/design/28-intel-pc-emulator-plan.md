@@ -559,13 +559,10 @@ result/pc/
 | 28.9 | dir/type/cls/ver screenshot matrix | ⏳ deferred — gated on 28.8f. INT 16h + 21h DOS calls already in place; mechanical. |
 | 28.10 | INT 33h mouse HLE | ⏳ deferred (optional in original plan) |
 | 28.11 | PC speaker PCM output | ⏳ deferred (optional in original plan) |
-| 28.12 | Phase 28 closure docs (this `MD/performance/` note + plan doc + roadmap update) | ✅ | (this commit) | 2026-05-15 |
-| 28.8x | block-JIT INT instruction loses HLE trap (use --backend=json for FreeDOS) | ⏳ deferred | — | — |
-| 28.8  | FreeDOS boot | ⏳ pending | — | — |
-| 28.9  | Interactive commands | ⏳ pending | — | — |
-| 28.10 | INT 33h mouse | ⏳ optional | — | — |
-| 28.11 | PC speaker PCM | ⏳ optional | — | — |
-| 28.12 | Closure docs | ⏳ pending | — | — |
+| 28.12 | Phase 28 closure docs (`MD/performance/202605152200-pc-emulator-freedos-boot.md` + plan doc + roadmap) | ✅ | `7a3b8ef` | 2026-05-15 |
+| 28.IO | Port I/O dispatch via `PcPortBus` extern routing (decouple peripherals from CPU) | ✅ | closure `MD/performance/202605152230-pc-emulator-phase-28-io.md` | 2026-05-15 |
+| 28.8x | block-JIT INT instruction loses HLE trap (use --backend=json for FreeDOS) | ⏳ deferred — `--backend=json` workaround used; not blocking |
+| **28.X (exceeded)** | **Real-BIOS path proven** — `pcxtbios.bin` + freedos-1.3-floppy.img boots end-to-end to COMMAND.COM with zero HLE BIOS intercept. Required Phase 29 (i8087) + Phase 30 (FDC/DMA) + Phase 30.6c (CPU ROL fix). See [`30-fdc-dma-plan.md`](30-fdc-dma-plan.md) + closure `MD/performance/202605161800-phase-30-real-bios-freedos-boot.md` | ✅ | `e62a462` | 2026-05-16 |
 
 ---
 
