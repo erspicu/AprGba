@@ -675,20 +675,35 @@ spec descriptions often assume IBM and break here.
   in our emulator (they are — full 1 MB RAM), CGA always wins → BDA[0x49]
   ends up = 3 even when --video=mda requested. (Phase 30.8: force CGA
   CRTC probe fail.)
-- **TELETYPE SCROLL BUG (KNOWN, ACCEPTED)**: `int_10_func_14` (INT 10h
-  AH=0Eh teletype) implicit scroll at end-of-screen uses **BH=0** as the
-  scroll fill attribute in text mode (pcxtbios.asm line 4139). New rows
-  get attr=0x00 (black on black). Subsequent teletype writes preserve the
-  attribute, so any text written after a scroll is invisible. Real IBM
-  5160 BIOS reads the current attribute via AH=08h and uses that as the
-  fill, so this doesn't happen on authentic hardware. SeaBIOS / DOSBox /
-  PCem / 86Box don't hit it (they use their own BIOS or HLE INT 10h).
-  Symptom on our emulator: MDA mode `dir` output mostly invisible past
-  the first screenful. CGA mode (mode 3) cosmetically less affected.
-  Fix options if ever pursued (Phase 30.8):
-  - HLE-intercept INT 10h AH=06h scroll to force BH != 0
-  - Binary-patch the BIOS ROM byte at `pcxtbios.asm:4139` (force `mov bh, 0x07`)
-  - Switch to SeaBIOS (`ref/seabios/` — cloned but not used)
+- **TELETYPE SCROLL BUG (PARTIALLY MITIGATED in Phase 30.10)**:
+  `int_10_func_14` (INT 10h AH=0Eh teletype) implicit scroll at end-of-
+  screen reads scroll-fill attribute via AH=08h. In pcxtbios, the read
+  path goes `mov bh, 0; jb @@scroll_up; mov ah, 8; int 10h; mov bh, ah`
+  (line 4138-4143). The AH=08h call returns the attribute at the
+  current cursor cell — if THAT cell happens to have attr=0 (e.g., from
+  a prior scroll), the read gives 0 → BH=0 → next scroll fills new
+  bottom row with attr=0 → invisible chars.
+  Mitigation in Phase 30.10:
+    - Binary patch `mov bh, ah` (at file offset 0x16BE in pcxtbios.bin =
+      F000:F6BE) → `mov bh, 0x07` so the scroll fill is always normal
+      mono attribute, ignoring the AH=08h result. Checksum filler at
+      last byte adjusted to compensate.
+    - Plus runtime intercept in `PcSystemRunner.EmulatorThreadProc`
+      catches any caller (incl. BIOS-internal) doing AH=06 with BH=0
+      in text mode and force-sets BH=0x07.
+- **DOS DIRECT VRAM WRITES WITH ATTR=0 (Phase 30.10, UNFIXED)**: even
+  with the scroll fix, FreeDOS kernel's CON driver does **direct
+  word-writes to MDA framebuffer** (mov [es:di], ax pattern, both char
+  and attr bytes in one instruction). For some output paths (notably
+  `dir` body rows), DOS uses attr=0x00 for the direct write, making
+  those cells invisible even though chars are present. Symptom: F12
+  framebuffer dump shows complete dir content as char bytes but rows
+  15-22 attrs=0/80. Diagnosed via `MDA_WRITE r16c05 CHAR=0x63 / ATTR=0x00`
+  at same timestamp = single word write. Not a pcxtbios bug — it's a
+  FreeDOS / DOS CON driver quirk for MDA mode specifically. CGA mode
+  works fine (DOS uses different attr for color path). Fix would require
+  either fixing FreeDOS source or HLE-intercepting word-writes to VRAM.
+  Phase 30.x+ ; deferred. **`--video=cga` is the working recommendation.**
 - **No CMOS-based clock by default**; uses tick-counter at BDA[0x6C].
 - **Optional features** controlled by ifdefs at top of source — IBM_PC,
   TURBO_ENABLED, etc. The shipped `pcxtbios.bin` we use is XT-mode with

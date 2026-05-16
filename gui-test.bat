@@ -95,6 +95,10 @@ REM PIT at default 18Hz -- 200Hz caused FreeDOS time computation hangs
 REM (BDA tick counter advances 11x faster than wall clock, hits some
 REM FreeDOS internal conversion corner case). The FDC motor-on hack
 REM + 2ms HLT-wake polling deliver enough responsiveness on their own.
-echo [gui-test] Mode: Real BIOS pcxtbios.bin + FreeDOS  (Phase 30 path, backend=json, video=%VIDEO%)
-dotnet "%DLL%" --bios=%BIOS% --floppy-a=%FLOPPY% --backend=json --video=%VIDEO% --window-scale=2 --window-title="AprPc - real BIOS pcxtbios.bin (%VIDEO%)" --verbose
+REM Third positional arg = "auto" to run scripted bring-up test.
+set AUTO=%3
+set AUTO_ARG=
+if /i "%AUTO%"=="auto" set AUTO_ARG=--auto-test=freedos-mda-dir
+echo [gui-test] Mode: Real BIOS pcxtbios.bin + FreeDOS  (Phase 30 path, backend=json, video=%VIDEO%, auto=%AUTO%)
+dotnet "%DLL%" --bios=%BIOS% --floppy-a=%FLOPPY% --backend=json --video=%VIDEO% %AUTO_ARG% --window-scale=2 --window-title="AprPc - real BIOS pcxtbios.bin (%VIDEO%)" --verbose
 goto :eof

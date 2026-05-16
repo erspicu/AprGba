@@ -189,6 +189,9 @@ public sealed class PcSystemRunner : IDisposable
             // Real-BIOS keyboard debug: auto-watch BDA keyboard region
             // (0x0041A head/tail + 0x0041E-0x0043D ring buffer) so we
             // can see whether BIOS INT 9 ISR is writing scancodes.
+            // MDA framebuffer watch (0xB0000-0xB0F9F) was useful for
+            // Phase 30.10 debug but extremely noisy in normal runs --
+            // re-enable via --watch-mem=B0000:B1000 only when needed.
             X86JsonCpu.WriteWatchLo = 0x00418;
             X86JsonCpu.WriteWatchHi = 0x00440;
             X86JsonCpu.OnWriteWatch = (a, v) =>
@@ -466,6 +469,51 @@ public sealed class PcSystemRunner : IDisposable
                         }
                     }
 
+                    // Phase 30.10 — runtime HLE intercept of INT 10h
+                    // AH=06 (scroll up) with BH=0 in text mode.
+                    // pcxtbios scroll handler is correct (uses caller's
+                    // BH), but FreeDOS COMMAND.COM passes BH=0 when it
+                    // CLS-scrolls the lower screen region during dir
+                    // output. Result: scrolled-in rows get attr=0
+                    // (black on black). Fix: peek next opcode -- if
+                    // CD 10 (INT 10h) is next AND AH=06 AND BH=0 AND
+                    // text mode (BDA[0x49] != 4-6), force BH=0x07
+                    // (normal mono / light gray on black) so the new
+                    // line is visible. Real hardware would render
+                    // invisible -- this is an intentional accuracy
+                    // departure for FreeDOS interactive usability.
+                    // The BIOS-internal scroll (int_10_func_14) was
+                    // already fixed via the binary patch in PcMemoryBus.
+                    if (_options.BiosPath is not null)
+                    {
+                        var stI = _cpu.State;
+                        int linI = ((stI.CS << 4) + stI.IP) & 0xFFFFF;
+                        if (_bus!.Memory.Ram[linI] == 0xCD &&
+                            _bus.Memory.Ram[(linI + 1) & 0xFFFFF] == 0x10)
+                        {
+                            // Phase 30.10 debug — trace every INT 10h
+                            // call so we can see what AH/AL/BX caller
+                            // is passing. KEY: are we picking up
+                            // AH=06 BH=0 from DOS / COMMAND.COM, or
+                            // some other AH leading to attr=0?
+                            byte mode = _bus.Memory.Ram[0x0449];
+                            AprPc.Cli.Diagnostics.KbdTrace.Log(
+                                $"INT_10h caller={stI.CS:X4}:{stI.IP:X4} " +
+                                $"AX=0x{stI.A.X:X4} BX=0x{stI.B.X:X4} " +
+                                $"CX=0x{stI.C.X:X4} DX=0x{stI.D.X:X4} " +
+                                $"BDA[0x49]={mode}");
+                            // Force BH=0x07 for AH=06 scroll with BH=0
+                            // in text mode (workaround per 30.10).
+                            if (stI.A.H == 0x06 && stI.B.H == 0x00 &&
+                                mode is 0 or 1 or 2 or 3 or 7)
+                            {
+                                stI.B.H = 0x07;
+                                _cpu.LoadState(stI);
+                                AprPc.Cli.Diagnostics.KbdTrace.Log(
+                                    "INT_10h FORCED BH=0x00 -> 0x07");
+                            }
+                        }
+                    }
                     _cpu.Step();
                     Interlocked.Increment(ref _instructionsExecuted);
                 }

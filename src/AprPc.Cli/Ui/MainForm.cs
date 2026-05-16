@@ -136,6 +136,16 @@ public sealed class MainForm : Form
         _refreshTimer.Tick += (_, _) => RefreshFromRunner();
         _refreshTimer.Start();
 
+        // Phase 30.11 — optional scripted GUI integration test. When
+        // --auto-test=<seq> is set, spin up an AutoTester that the
+        // refresh timer ticks. AutoTester polls framebuffer every 5s,
+        // matches prompts, injects scancodes, and finally closes the
+        // form after dumping the screen to kbd-trace.log.
+        if (options.AutoTest is { } autoTestSeq)
+        {
+            _autoTester = new AutoTester(_runner, () => BeginInvoke(new Action(Close)), autoTestSeq);
+        }
+
         // === Keyboard plumbing ===
         // Two routes depending on which BIOS path is active:
         //
@@ -329,6 +339,7 @@ public sealed class MainForm : Form
     private DateTime _lastCpuDumpTime = DateTime.UtcNow;
     private long _lastCpuDumpInstr;
     private ushort _lastCpuDumpCs, _lastCpuDumpIp;
+    private AutoTester? _autoTester;
 
     /// <summary>
     /// Snapshot current framebuffer to <c>opts.ScreenshotPath</c>, mirroring
@@ -368,6 +379,11 @@ public sealed class MainForm : Form
             _lastSampleTime  = now;
         }
         _statusState.Text = _runner.State.ToString();
+
+        // === AutoTester tick (Phase 30.11) ===
+        // Internally throttled to once per 5s + cooldown after action;
+        // safe to call every 16ms.
+        _autoTester?.Tick();
 
         // === Periodic CPU dump every 3s to kbd-trace ===
         // Lets post-hoc analysis tell whether CPU is stuck at the same

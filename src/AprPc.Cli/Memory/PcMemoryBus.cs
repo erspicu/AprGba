@@ -155,8 +155,84 @@ public sealed class PcMemoryBus
                     $"BIOS image {biosPath}: {biosBytes.Length} bytes too large for ROM area (>= 256 KB)");
             for (int i = 0; i < biosBytes.Length; i++)
                 _mem.Ram[loadAddr + i] = biosBytes[i];
+
+            // Phase 30.10 — HLE intercept of pcxtbios INT 10h teletype scroll
+            // bug. pcxtbios.asm int_10_func_14 implicit scroll hardcodes
+            // BH=0 in text mode (`mov bh, 0; jb @@scroll_up; mov ah, 8;
+            // int 10h; mov bh, ah`), causing new scrolled rows to get
+            // attr=0 (black on black). The fix: patch the `mov bh, 0`
+            // immediate to `mov bh, 0x07` (= normal mono attribute) at
+            // BIOS load time. Semantically equivalent to runtime intercept
+            // of INT 10h AH=06 with BH=0 but ~free at runtime.
+            //
+            // Pattern to find: B7 00 72 06 B4 08 CD 10 8A FC
+            //                  --  --
+            //                  mov jb +6
+            //                  bh,
+            //                  0
+            // Patch byte at offset +1 from pattern start: 0x00 -> 0x07.
+            //
+            // Documented as known pcxtbios bug in MD/ref/pcxtbios-device-
+            // spec.md §17. The patch is signature-keyed so it only applies
+            // to BIOSes matching this pattern (won't corrupt other ROMs).
+            // See ref/pcxtbios/pcxtbios.asm line 4138-4143 for the source.
+            ApplyPcxtbiosScrollFix(loadAddr, biosBytes.Length);
             return;
         }
+    }
+
+    private void ApplyPcxtbiosScrollFix(int biosBase, int biosLen)
+    {
+        // Pattern signature for the teletype scroll BH=0 bug.
+        Span<byte> pat = stackalloc byte[]
+        {
+            0xB7, 0x00, 0x72, 0x06, 0xB4, 0x08, 0xCD, 0x10, 0x8A, 0xFC,
+        };
+        for (int i = biosBase; i + pat.Length <= biosBase + biosLen; i++)
+        {
+            bool match = true;
+            for (int k = 0; k < pat.Length; k++)
+            {
+                if (_mem.Ram[i + k] != pat[k]) { match = false; break; }
+            }
+            if (match)
+            {
+                // Correct patch (Phase 30.10 v2): the offending instruction
+                // is NOT `mov bh, 0` at offset+0..1 (that just sets the
+                // graphics-path default). It's `mov bh, ah` at offset+8..9
+                // (8A FC, 2 bytes), executed AFTER the text-mode fall-
+                // through reads attribute via AH=08h. AH=08 in our setup
+                // returns 0 (bug we're not fixing here -- works around
+                // a deeper pcxtbios MDA AH=08 quirk Gemini suspects).
+                // `mov bh, ah` then overwrites the BH=0x07 default with
+                // 0, killing scroll fill.
+                //
+                // Replace `8A FC` (mov bh, ah) with `B7 07` (mov bh, 0x07)
+                // -- same length, sets BH to normal mono attribute
+                // unconditionally. Graphics path (jb taken) skips this
+                // sequence anyway, so no behavioural change for graphics.
+                int patchOff = i + 8;           // offset of 8A FC in pattern
+                byte oldB0 = _mem.Ram[patchOff];     // 8A
+                byte oldB1 = _mem.Ram[patchOff + 1]; // FC
+                _mem.Ram[patchOff]     = 0xB7;       // mov bh, ...
+                _mem.Ram[patchOff + 1] = 0x07;       //          0x07
+                // Restore BIOS checksum. Net byte sum change:
+                //   (0xB7 + 0x07) - (0x8A + 0xFC) = 0xBE - 0x186 = -0xC8
+                // Compensate by ADDING 0xC8 to the last byte (= checksum
+                // filler; pcxtbios.asm line 5302 confirms it has no
+                // functional purpose).
+                int lastByte = biosBase + biosLen - 1;
+                _mem.Ram[lastByte] = (byte)((_mem.Ram[lastByte] + 0xC8) & 0xFF);
+                Console.Error.WriteLine(
+                    $"  [BIOS] pcxtbios teletype-scroll patch at phys 0x{patchOff:X5} " +
+                    $"(8A FC -> B7 07: mov bh, ah -> mov bh, 0x07); " +
+                    $"checksum filler 0x{lastByte:X5} adjusted +0xC8");
+                return;
+            }
+        }
+        // No match -- BIOS doesn't have the buggy pattern. Could be a
+        // different BIOS image (SeaBIOS, IBM original, etc.). Silently
+        // skip; the load itself is unchanged.
 
         // === Synthetic BIOS stub: lle or hle ===
         if (_biosMode == "hle")

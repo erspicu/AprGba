@@ -840,14 +840,11 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         _activeMem.WriteByte((int)a, value);
         if (WriteWatchHi > WriteWatchLo && a >= WriteWatchLo && a < WriteWatchHi)
         {
-            // Cap log volume to keep output manageable.
-            if (_writeWatchCount < 600)
-            {
-                Console.Error.WriteLine($"  [WW] write 0x{a:X5} ← 0x{value:X2}");
-                _writeWatchCount++;
-            }
-            // Optional callback for downstream tooling (e.g. AprPc kbd
-            // trace can hook this to log BDA writes into its own file).
+            // Note: stderr [WW] spam removed Phase 30.10 — the auto-
+            // enabled BDA write watch in real-BIOS mode (PcSystemRunner)
+            // generated thousands of lines per launch on terminal. The
+            // OnWriteWatch callback still fires (downstream tooling
+            // logs to temp/kbd-trace.log instead).
             OnWriteWatch?.Invoke(a, value);
         }
     }

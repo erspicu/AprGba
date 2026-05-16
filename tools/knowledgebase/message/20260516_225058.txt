@@ -1,0 +1,116 @@
+Timestamp: 2026-05-16T22:50:58
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Follow-up on the pcxtbios MDA scroll attr=0 issue. I implemented your earlier suggestion B (binary patch the BIOS `mov bh, 0` to `mov bh, 0x07` in int_10_func_14 teletype implicit scroll). This fixed the FIRST ~14 rows of dir output (visible). BUT rows 15-24 of dir output are STILL attr=0 (invisible). The patched BIOS scroll only happens once per teletype overflow; rows 15+ being attr=0 suggests something ELSE is filling those cells with attr=0.
+
+F12 framebuffer dump after typing `dir`:
+- BDA[0x10] = 0x33 (equipment, video=3 = mono via DIP)
+- BDA[0x49] = 7 (mode 7 = MDA mono)
+- BDA[0x4A] = 80 (cols)
+- BDA[0x4C] = 0x4000 (regen size — odd, MDA should be 0x1000)
+- fbBase = 0xB0000
+
+Rows 0-13: attrs=80/80 (visible, all cells have attr 0x07)
+Row 14: attrs=48/80 ("Volume Serial Number..." -- 48 visible chars + 32 attr=0 trailing cells)
+Rows 15-24: attrs=0/80 (chars present in framebuffer but all attr=0)
+
+The user typed `N<Enter>` to abort installer at A:\>, then `dir<Enter>`. Visible output:
+" Volume in drive A is FD13-BOOT"      (row 13)
+" Volume Serial Number is 858E-3E5F"   (row 14, only first part visible per attribute count)
+
+In framebuffer but invisible (rows 15-24):
+" Directory of A:\"
+"FREEDOS              <DIR>  ..."
+"FDAUTO   BAT         1,476  ..."
+... etc., complete file list with totals.
+
+USER'S OBSERVATION: "COMMAND.COM shouldn't pass BH=0 — this would only make sense if something I'M emulating wrong led FreeDOS to think it's doing the right thing."
+
+QUESTIONS:
+
+1. Is there a known FreeCom (FreeDOS COMMAND.COM) behaviour where DIR output uses INT 10h AH=09h (write char+attr) with attr=0 explicitly? Or AH=06 scroll with BH=0?
+
+2. Could the unusual BDA[0x4C] = 0x4000 (regen size) value be the underlying bug? Per pcxtbios.asm regen_len table (offset F000:F0A4):
+       dw 0800h    ; modes 0-1 (40x25)
+       dw 1000h    ; modes 2-3 (80x25)
+       dw 4000h    ; mode 4-5-6 (graphics)
+       dw 4000h    ; mode 6-7 ???
+   The `dw 4000h` at offset 6 is for mode 6/7 -- meaning mode 7 (MDA) uses GRAPHICS regen size (16KB) instead of correct 4KB. Could this make BIOS / DOS calculate wrong addresses for scroll regions in MDA mode, and INT 10h AH=06 with caller's intended BH=0x07 ends up clearing the wrong physical region with attr=0?
+
+3. Could COMMAND.COM be doing direct video memory writes (bypassing INT 10h) using something other than the MDA segment 0xB000? E.g., writing chars at the right MDA offset but somehow zeroing the attribute byte?
+
+4. Is the symptom "first N rows visible, rows N+1 onwards invisible" a well-known emulator bug pattern? It feels like:
+   - Initial mode 7 init filled MDA framebuffer with 0x0720
+   - Welcome banner via teletype: writes chars to row 0-12, attribute preserved
+   - First scroll happens (BIOS patched, BH=0x07): good
+   - At some point a LARGER scroll happens (multi-line) which clears N rows with attr=0
+
+5. Where in the FreeCom source (github.com/FDOS/freecom) is the `dir` command's output code? Specifically what INT 10h / INT 21h sequence does it emit? Does it use ANSI sequences, raw teletype, or direct video?
+
+6. Same question for the volume label printing in dir — is that a separate code path that uses different output method? Could explain why row 13-14 are visible (different output method) but 15+ are invisible (different output method).
+
+7. What's the recommended next investigative step? Trace every INT 10h call by hooking the CPU emitter? Read FreeCom dir source? Ship a HLE INT 10h dispatcher entirely?
+
+========================================================================
+RESPONSE
+========================================================================
+This is fantastic debugging. You’ve hit exactly the kind of deep architectural quirk that makes writing PC emulators both maddening and rewarding. 
+
+What you are seeing is a classic **"mixed-responsibility scrolling bug"** caused by how DOS and BIOS interact. The short answer is: **FreeDOS is likely calling an explicit Scroll Up (INT 10h, AH=06h) and passing `BH=0` because a *different* BIOS function lied to FreeDOS about what the current screen attribute is.**
+
+Here is the breakdown of your questions and the grand theory of what is happening.
+
+### The Grand Unifying Theory: Why rows 15-24 are invisible
+Standard DOS (including FreeCom/FreeDOS) sends output to the `CON` device driver via INT 21h. The `CON` driver relies on the BIOS (INT 10h). 
+1. When printing characters, DOS uses **AH=0Eh** (Teletype). Standard AH=0Eh writes the character but **preserves the existing attribute** in VRAM.
+2. When the cursor hits the bottom of the screen and a Line Feed is issued, DOS does *not* always rely on the BIOS AH=0Eh implicit scroll (which you patched). Instead, the DOS `CON` driver often explicitly scrolls the screen by calling **INT 10h, AH=06h (Scroll Up)**.
+3. When DOS calls AH=06h, it must pass the blanking attribute in `BH`. How does DOS know what attribute to use? It asks the BIOS by calling **INT 10h, AH=08h (Read Character and Attribute at Cursor)**.
+
+**The Suspected Bug:** I strongly suspect `pcxtbios` has a bug in **AH=08h**. When in Mode 7 (MDA), it's probably reading from the CGA segment (`0xB800`) instead of the MDA segment (`0xB000`). Because your emulator's `0xB800` segment is empty/zeroed, AH=08h returns `AH=00h` (attribute 0). 
+FreeDOS thinks the current attribute is 0. It calls AH=06h with `BH=0`. The BIOS scrolls the screen and fills the new bottom row with `attr=0`. DOS then prints characters using AH=0Eh, which *preserves* the `attr=0`, making the text invisible!
+
+Here are the answers to your specific questions based on this theory:
+
+---
+
+### 1. Does FreeCom pass BH=0 explicitly?
+Not intentionally. COMMAND.COM uses standard streams. But the underlying FreeDOS kernel `CON` driver calculates the fill attribute by dynamically reading the screen using INT 10h AH=08h. If the BIOS returns 0, DOS passes 0 to AH=06h. DOS trusts the BIOS.
+
+### 2. Is the BDA[0x4C] = 0x4000 (Regen Size) the underlying bug?
+**Yes, it is a glaring bug in `pcxtbios`, but it is likely a secondary symptom of the root cause.** 
+You are absolutely correct: Mode 7 is 80x25 text (4000 bytes) and requires a 4KB (0x1000) regen buffer. The `4000h` is meant for Mode 6 (Graphics, 16KB). Grouping Mode 6 and 7 together in that BIOS table is flat-out wrong.
+
+*However*, since MDA only has one page (Page 0), the VRAM offset calculation `(PageNum * RegenSize)` evaluates to `(0 * 0x4000) = 0`. So it probably still points to the correct start of VRAM (`0xB000:0000`). This bug *will* cause problems if software tries to write to Page 1, but it's likely not the direct cause of your `attr=0` bug on Page 0.
+
+### 3. Direct VRAM writes by COMMAND.COM?
+Unlikely. Standard `dir` relies purely on DOS standard output so that redirection (`dir > file.txt`) works. Unless you have an ANSI driver loaded (like `NANSI.SYS` or `FDAPM`), FreeDOS is exclusively relying on INT 10h. 
+
+### 4. Is the "N rows visible, the rest invisible" an emulator bug pattern?
+Yes, it is the textbook signature of **"Teletype Scroll vs. Window Scroll mismatch."** 
+When you booted, the initial text was output before the kernel fully took over, triggering your patched BIOS AH=0Eh implicit scroll (`BH=0x07`). It worked perfectly. But once `dir` executed, it dumped multiple lines rapidly, engaging the DOS kernel's explicit AH=06h scroller, which used the broken `BH=0` attribute. 
+
+### 5 & 6. FreeCom `dir` and Volume Label output paths
+`dir` builds the volume string and the file listing using the exact same standard output (C `printf` or DOS INT 21h AH=40h). 
+
+**Why is Row 14 partially visible (48 chars good, 32 bad)?**
+This perfectly matches the theory!
+*   The screen scrolled (clearing the new row 14 to `0x0020` spaces).
+*   DOS printed "Volume Serial Number is 858E-3E5F". 
+*   Wait, if AH=0Eh preserves the 0 attribute, why are those 48 chars visible? Because FreeCom might output the Volume Label using a slightly different DOS function, or an ANSI sequence, that *does* force the attribute to 0x07 for the text itself. But it doesn't print spaces to the end of the line. Therefore, the last 32 cells remain untouched—as the `attr=0` spaces left behind by the bad scroll.
+
+### 7. Recommended Next Steps
+
+You do not need an HLE dispatcher yet. You are incredibly close. Do this:
+
+1.  **Trace INT 10h calls in your emulator.** 
+    Put a hook on your CPU emulator right before it executes the `INT 10h` software interrupt. Log `AH`. 
+    *   Watch for `AH=08h` (Read Char/Attr). Look at what it returns in `AX`. If `AH` (attribute) comes back `00`, you've found the bug.
+    *   Watch for `AH=06h` (Scroll Up). Look at what is passed in `BH`. If it is `00`, the scroll is your culprit.
+2.  **Audit `pcxtbios` AH=08h and AH=06h code.**
+    Look at the assembly for `pcxtbios`'s AH=08h function. I bet you will see it hardcoding the `0xB800` segment, or misreading the CRT base port from BDA[0x63] (which should be 0x3B4 for MDA, but is 0x3D4 for CGA). 
+3.  **Fix the BIOS `regen_len` table.**
+    Since you are already patching `pcxtbios`, fix that table offset F000:F0A4 so Mode 7 uses `1000h`. 
+4.  **Patch AH=06h in the BIOS (Temporary Fix).**
+    If you confirm FreeDOS is calling AH=06h with `BH=0`, you can temporarily binary-patch the BIOS AH=06h handler: check if `BH=0` and mode=7, and if so, force `BH=0x07`. This will immediately prove the theory and get your emulator's console working while you fix the underlying AH=08h read bug.

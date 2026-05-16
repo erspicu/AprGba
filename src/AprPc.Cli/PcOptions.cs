@@ -95,6 +95,19 @@ public sealed class PcOptions
     public string  Video        { get; set; } = "mda";
 
     /// <summary>
+    /// Optional scripted GUI integration test. When set, MainForm spins
+    /// up an AutoTester that polls the framebuffer every 3 seconds,
+    /// matches pre-defined prompts (language menu, installer Y/N, A:\>),
+    /// injects the right scancodes, and finally dumps the screen to
+    /// kbd-trace.log and closes the form. Used for end-to-end real-BIOS
+    /// + FreeDOS bring-up testing without an operator.
+    ///
+    /// Built-in sequences (see Diagnostics/AutoTester.cs):
+    ///   freedos-mda-dir — full FreeDOS boot to A:\> then run dir
+    /// </summary>
+    public string? AutoTest     { get; set; }
+
+    /// <summary>
     /// Parse argv; throws <see cref="ArgumentException"/> for unknown
     /// flags / malformed values. The Program.cs caller catches and
     /// prints a usage block.
@@ -151,6 +164,7 @@ public sealed class PcOptions
             else if (arg.StartsWith("--headless-timeout=")) o.HeadlessTimeout = int.Parse(arg["--headless-timeout=".Length..]);
             else if (arg.StartsWith("--pit-rate-hz="))      o.PitRateHz = int.Parse(arg["--pit-rate-hz=".Length..]);
             else if (arg.StartsWith("--video="))            o.Video = arg["--video=".Length..].ToLowerInvariant();
+            else if (arg.StartsWith("--auto-test="))        o.AutoTest = arg["--auto-test=".Length..];
             else throw new ArgumentException($"unknown argument: {arg}");
         }
 
