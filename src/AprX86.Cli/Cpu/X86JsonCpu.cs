@@ -42,6 +42,25 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
     // wins when multiple X86JsonCpu instances exist; the harness only ever
     // constructs one at a time.
     private static X86Memory? _activeMem;
+    // Phase 30.15 — static back-reference for SMC notify. The JIT-emitted
+    // memory-write extern + DMA / FDC direct VRAM writers go through this
+    // to tell BlockCache that compiled translations at the affected
+    // addresses may be stale. Without this, real-BIOS + block-JIT diverges
+    // when FreeDOS kernel loads via FDC DMA: the first time CPU enters
+    // 1FE0:???? the JIT cached the all-zeros translation, and later code
+    // execution at the same PC re-uses that stale block.
+    private static X86JsonCpu? _activeCpu;
+
+    /// <summary>
+    /// Phase 30.15 — external SMC notify hook. Called by FDC / DMA paths
+    /// in AprPc.Cli that write directly to <c>X86Memory.Ram</c> (i.e.,
+    /// bypass the <c>MemWrite8</c> extern). For each byte that hits the
+    /// shared RAM, invoke this so any block-JIT cached translation
+    /// covering that address is invalidated and re-compiled on the next
+    /// dispatch. No-op when block-JIT is disabled.
+    /// </summary>
+    public static void NotifyExternalMemoryWrite(uint addr)
+        => _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
 
     private readonly X86Memory                  _mem;
     private readonly LoadedSpec                  _spec;
@@ -278,6 +297,7 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         InitSegmentCache("DS", 0x0000, 0xFFFF, 0x93);
 
         _activeMem = _mem;
+        _activeCpu = this;
     }
 
     /// <summary>
@@ -317,6 +337,7 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         // selector. SegmentedLinear in Sprint 27.10c will read CS_BASE.
         InitSegmentCache("CS", segment, 0xFFFF, 0x9B);
         _activeMem = _mem;
+        _activeCpu = this;
     }
 
     public bool Halted => _state[_haltedOff] != 0;
@@ -443,11 +464,13 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         WriteU16(_flagsOff, s.GetFlags());
         _state[_haltedOff] = 0;
         _activeMem = _mem;
+        _activeCpu = this;
     }
 
     public int Step()
     {
         _activeMem = _mem;
+        _activeCpu = this;
 
         if (Halted) return 0;
 
@@ -838,6 +861,12 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         if (_activeMem is null) return;
         uint a = addr & 0xFFFFF;
         _activeMem.WriteByte((int)a, value);
+        // Phase 30.15 — SMC notify. Cheap (single counter read + branch
+        // when no cached block covers the addr) and only fires the slow
+        // scan path when JIT actually has a stale translation for this
+        // byte. Without this, FreeDOS kernel relocation via REP MOVSW
+        // leaves the JIT executing stale zero-translations at the new CS.
+        _activeCpu?._blockCache?.NotifyMemoryWrite(a);
         if (WriteWatchHi > WriteWatchLo && a >= WriteWatchLo && a < WriteWatchHi)
         {
             // Note: stderr [WW] spam removed Phase 30.10 — the auto-

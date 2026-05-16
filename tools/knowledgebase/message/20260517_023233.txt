@@ -1,0 +1,96 @@
+Timestamp: 2026-05-17T02:32:33
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Context: I'm debugging a divergence between two backends in my homemade .NET-based 8086 emulator (AprPc, similar architecture to QEMU's TCG / Bochs). The CPU has:
+- backend "json" = per-instruction interpreter (each x86 inst → one CPU.Step())
+- backend "json-block" = LLVM-block-JIT (compile a basic block into LLVM IR + JIT to native; alloca-shadow for GPRs + status regs + FPU; mem2reg promotes to SSA; one Step() executes a whole compiled block of N x86 instructions)
+
+The setup I'm running:
+- Real pcxtbios.bin (Sergey Kiselev's Turbo XT BIOS, 8KB) at 0xFE000
+- Real FreeDOS 1.3 floppy via 8272 FDC + 8237 DMA channel 2
+- No HLE INT intercepts (--bios=PATH puts real BIOS in charge)
+
+Symptom:
+- --backend=json (per-instr): boots correctly to FreeDOS installer screen / COMMAND.COM prompt
+- --backend=json-block (block-JIT): POST completes ("Testing RAM: 600K OK", "8088 CPU (8087 FPU)", "No ROM BASIC, booting from disk..."), then transitions to FreeDOS but CPU ends up executing zero-filled memory.
+
+Critical evidence from CS:IP trace:
+- Per-instr after 2M architectural instructions: still in BIOS POST, spinning in delay loop at F000:EE20 (LOOP rel8 = E2 FE).
+- Block-JIT after 729K block-steps (each step = one compiled block, equivalent to thousands of x86 instructions): CPU cycles through:
+  F000:FEA5 (STI + INT 8 ISR entry)
+  F000:FEBF (INC WORD [0x40:6C] bump BDA tick count)
+  F000:FEC9 (CMP WORD [0x40:6E], 0)
+  F000:FEE9 (INT 1Ch user timer hook)
+  F000:FF53 (IRET from INT 1Ch)
+  F000:FEEB (MOV AL, 0x20; OUT 0x20, AL — EOI)
+  1FE0:9D0F (zero-filled FreeDOS area — ADD [BX+SI], AL = 00 00 garbage)
+- After PIT IRQ 0 IRET, return CS:IP = 1FE0:XXXX where XXXX varies between traces (9D0F, 9E8F, A00F, A18F, A30F — each ~0x180 apart).
+- DS=1FE0, SS=1FE0, SP=7B9E. So FreeDOS kernel HAS established its data segment.
+- Memory watches on 0:7C00 (boot sector load target) and 0x29D00..0x29E00 (the wild-jump target area) show NO writes — those addresses were never populated.
+
+Block-JIT details that might matter:
+- AllocaSlotProvider creates entry-block allocas for all GPRs (AX..DI) + status regs (FLAGS, IP, FPU_ST0..ST7, FPU_TOP, FPU_TAGS, FPU_CW, FPU_SW). RegisterGpr/RegisterStatus is called from BlockFunctionBuilder. Initial value is loaded from state buffer; final value drained back at single block_exit.
+- BlockDetector follows unconditional JMP/JR within a block (cross-jump follow); intra-block back-edges (LOOP/Jcc/JMP rel) become LLVM CFG inside the same function (alloca + mem2reg → phi nodes).
+- We have a "PcWritten" flag — when an instruction writes IP/CS explicitly (CALL/RET/JMP far/INT/IRET), the emitter sets PcWritten=1 which causes the block to exit at that instruction and dispatcher fetches the next block from updated CS:IP.
+- Phase 28.8x noted "block-JIT INT instruction loses HLE trap" workaround used --backend=json for HLE BIOS mode; but here we're real-BIOS not HLE.
+- Phase 30.10 noted "block-JIT + Phase 29 FPU correctness: i64 alloca slot for FPU_ST0 doesn't match f64 runtime layout; black screen". But our x86 FPU integration test (29.11-fpu-integration.bin: FNINIT/FLD/FMUL/FADD/FSQRT/FXCH/FCOM/FNSTSW/FLDPI/FPATAN computing √(3²+4²)=5.0) PASSES under --backend=json-block in headless smoke test.
+
+Three questions:
+
+Q1 — What's the most likely root cause class for "block-JIT diverges from per-instr around INT 19h boot path", given the symptoms above? Top 3 hypotheses you'd test first?
+
+Q2 — Re: IRET from PIT IRQ landing at zero-filled memory at 1FE0:XXXX — is there a specific block-JIT pattern that causes IRET to compute return CS:IP off the stack incorrectly? E.g. is it common for a JIT to mis-handle the 8086 IRET stack convention (POP IP, POP CS, POP FLAGS) when interleaved with HW interrupt delivery?
+
+Q3 — Best diagnostic strategy given we already have:
+  (a) per-instruction CS:IP trace working for both backends
+  (b) Memory write watch via `--watch-mem=LO:HI`
+  (c) Generic `LockstepDiff` infrastructure in `src/AprCpu.Core/Validation/LockstepDiff.cs` (currently not wired to x86 CPUs but the interface ISteppableCpu is generic)
+
+Which of these would converge fastest on the bug? Or is there a fundamentally different diagnostic angle (LLVM IR dump, alloca-shadow snapshot at block exit, intermediate state at IRET emission) you'd recommend?
+
+Please answer in English. One focused recommendation per Q + brief rationale.
+
+========================================================================
+RESPONSE
+========================================================================
+Based on the excellent diagnostic details you’ve provided, here is the analysis of your JIT vs. Interpreter divergence.
+
+### Q1 — Top 3 Hypotheses for the Divergence Root Cause
+**1. Self-Modifying Code (SMC) / JIT Cache Invalidation Failure** *(Most Likely)*
+*Rationale:* FreeDOS’s boot sector at `0:7C00` relocates itself by copying its code to `1FE0:0000` via `REP MOVSW`, then does a far jump to the new segment. If your block-JIT caches translated LLVM blocks based on physical addresses, and your DMA or CPU memory writes don't invalidate the JIT cache for the `1FE0` page, the CPU will jump to `1FE0:XXXX` and execute the stale `00 00` translation that was cached when that memory was empty. 
+*(Note: Your memory watch likely showed "NO writes" because either your DMA or your JIT-emitted memory store instructions bypass the C# MMU wrapper where the watch is implemented).*
+
+**2. Block-Boundary Device Ticking / Timing Desync**
+*Rationale:* The interpreter likely ticks the PIT/FDC/DMA after every single instruction, whereas the JIT ticks them at block exits. This massive timing difference means a BIOS loop polling the FDC might timeout prematurely in the JIT, or DMA transfers might not finish before the CPU jumps to the loaded code, causing FreeDOS to jump into uninitialized memory.
+
+**3. Miscompiled Segmented Control Flow (Far JMP/CALL/RET)**
+*Rationale:* FreeDOS makes heavy use of Far Calls and Returns to transition between segments during early boot. If your JIT's `PcWritten` logic fails to properly update the base `CS` or miscalculates the physical address for the next block fetch after a far control-flow instruction, execution will resume at a garbage offset (like `9D0F`).
+
+---
+
+### Q2 — Is IRET mishandling the stack?
+**No. Your IRET and stack are almost certainly working perfectly.**
+*Rationale:* The CS:IP progression you observed (`9D0F, 9E8F, A00F, A18F...`) is the "smoking gun." Notice that the difference between these offsets is exactly **`0x180` bytes**. 
+In x86, `00 00` decodes to `ADD [BX+SI], AL`, which is a 2-byte instruction. `0x180` bytes equals exactly **192 instructions**. 
+Your JIT CPU has already crashed into a zero-filled memory region and is executing a "zero-sled". Your LLVM block builder likely has a maximum block size limit (or hits a page boundary) at 192 instructions. 
+The timeline is: 
+1. CPU executes 192 instructions of `00 00`.
+2. Block exits.
+3. Dispatcher ticks devices; IRQ 0 is pending.
+4. Dispatcher pushes the *correct* current CS:IP onto the stack and handles INT 8.
+5. IRET pops the CS:IP and returns to the zero-sled.
+6. CPU executes the next 192 instructions of `00 00`. 
+The bug happened *before* the interrupt; the interrupt is just faithfully taking snapshots of a runaway CPU.
+
+---
+
+### Q3 — Best Diagnostic Strategy
+**Recommendation: Wire up `LockstepDiff` at the Block Exit boundary, but temporarily disable hardware interrupts (PIT/FDC) to ensure deterministic execution.**
+*Rationale:* Because the JIT and Interpreter group instructions differently, hardware interrupts will fire at different architectural instruction counts, causing a false divergence in `LockstepDiff`. 
+1. Hardcode a bypass to disable PIT IRQ 0 and FDC interrupts, forcing the BIOS/FreeDOS to rely on CPU polling or fail deterministically. 
+2. Wire `LockstepDiff` so that the JIT executes *one block*, and the Interpreter executes *N instructions* until its CS:IP matches the JIT's exit CS:IP.
+3. Assert that `AX..DI`, `FLAGS`, `DS, ES, SS` match exactly. 
+
+This will immediately pinpoint the exact basic block where the JIT miscalculates a register, drops a memory write (revealing an MMU bypass), or branches to the wrong target, cutting through the noise of millions of executed instructions.

@@ -1,0 +1,101 @@
+Timestamp: 2026-05-17T02:44:59
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Follow-up to previous consult (log 20260517_023233.txt). I implemented your hypothesis #1 fix and have new evidence narrowing the bug significantly.
+
+The fix I applied:
+- Added a static back-reference `X86JsonCpu._activeCpu` so JIT-emitted memory writes can call into the live BlockCache.
+- `MemWrite8` extern now calls `_activeCpu?._blockCache?.NotifyMemoryWrite(addr)` after the byte write.
+- FDC `Fdc8272.ReadDataExecute` (which writes the disk sectors to RAM via `_mem.Ram[physAddr+i] = buf[i]`) now also calls `X86JsonCpu.NotifyExternalMemoryWrite(addr)` for each byte to invalidate any cached translation covering DMA-loaded memory.
+
+Result: **No change in symptom.** Same divergence, same wild jump to 1FE0:XXXX (zero-sled).
+
+Trace data captured around the divergence point (trace number = `_cpu.Step()` call count, NOT architectural instruction count — under block-JIT each Step executes a whole compiled block):
+
+```
+711430: F000:E634 72 05 EA 00 — last BIOS POST instr (just before INT 19 → boot sector)
+711431: 0000:7C00 EB 3C 90 46 — boot sector FRESH (FreeDOS 1.3 boot sig EB 3C 90 visible) ← boot sector loaded by INT 13 via FDC DMA, with my SMC notify fix
+711432: 0000:7C3E FA FC 31 C0 — `CLI; CLD; XOR AX, AX` (boot sector init)
+711433: 0000:7C53 F3 A5 EA 5E — `REP MOVSW; <next bytes: JMP far>` (CX=0100 just ran REP, SI=DI=7C00→7E00, AX=1FE0, ES=1FE0)
+711434: 0000:7C55 EA 5E 7C E0 — `JMP far 1FE0:7C5E` (CX=0)
+711435: 1FE0:7C5E 8E D8 8E D0 — *** RELOCATED *** `MOV DS, AX; MOV SS, AX` (AX=1FE0, DS still =0000, SS still =0030)
+    -- there is a Step gap here: trace 711436 is not visible (CPU stepped once, took several arch instructions in one block) --
+711437: F000:FEA5 FB 1E 52 50 — *** IRQ 0 (PIT timer) FIRED *** entering INT 08 ISR (STI; PUSH DS; PUSH AX). SP=7B98 SS=1FE0 DS=1FE0 — so the boot sector had finished MOV DS, AX / MOV SS, AX / MOV SP, ... by the time the IRQ delivered.
+711438..711442: INT 08 ISR body (bump BDA tick, INT 1Ch hook, IRET, EOI)
+711443: 1FE0:7B5D 00 00 00 00 — *** IRET RETURNED TO ZERO MEMORY *** stack-popped IP was 0x7B5D
+711445+: another IRQ cycle, lands at 1FE0:798F (0x7B5D-0x180 = 0x79DD; not exact but close); then 1FE0:780F, 768F, 750F, ... drifting downward by 0x180 (= 192 instructions of `00 00 = ADD [BX+SI], AL`, your zero-sled analysis was correct).
+```
+
+The critical question: **the IRET return address came from the stack**. SP=7B92 at IRET entry, so it pops IP from 1FE0:7B92, CS from 7B94, FLAGS from 7B96. SP ends at 7B98 after pop. The popped IP is 0x7B5D.
+
+But trace 711437 shows the IRQ was delivered when SP was already 7B98 (= post-push state of the IRQ delivery). So the IRQ entry pushed `(IP=7B5D, CS=1FE0, FLAGS=...)` onto the stack. That means CPU was AT 1FE0:7B5D when the IRQ was delivered.
+
+How did CPU get to 1FE0:7B5D? Between trace 711435 (CPU at 1FE0:7C5E) and the IRQ delivery, CPU executed boot-sector code that branched/jumped to 1FE0:7B5D. That's 0xA3 bytes BELOW the entry point — clearly a JMP, CALL, or RET inside the boot sector's setup code.
+
+Tracing 1FE0:7B5D in memory: this is the area FreeDOS uses for relocated kernel-load code or BIOS-Parameter-Block-relative tables. But the bytes there are `00 00 00 00` — kernel hasn't been loaded yet at this point in time.
+
+So the question evolves: **the block-JIT executed `JMP 1FE0:7B5D` (or similar) inside the boot sector — but per-instr would have either (a) executed the same JMP correctly to a populated address, or (b) the boot sector's logic depends on a memory state that the per-instr CPU has correctly but block-JIT doesn't.**
+
+Three new questions:
+
+Q1 — Given that my SMC notify fix didn't help (and FDC DMA writes ARE now notifying the cache per-byte), what's the next most likely root cause class? Top 3 hypotheses.
+
+Q2 — Is it plausible that LLVM's mem2reg / SROA / instcombine over the alloca-shadowed CPU state is *re-ordering* the boot sector's instructions in a way that changes observable side-effects between blocks? In particular, the boot sector probably does:
+  ```
+  MOV [es:bp+offset], al    ; STORE (BPB modification)
+  ...
+  MOV bx, [bp+offset]       ; LOAD (BPB read)
+  JMP <computed from bx>    ; INDIRECT JUMP
+  ```
+And if the JIT moves the LOAD before the STORE due to mem2reg promotion treating them as independent (since they go through different alloca shadows), the indirect jump target would be stale.
+
+Q3 — Best minimal-effort diagnostic to confirm Q2:
+  (a) Add a wall-clock-spacing diagnostic: in block-JIT mode, after every memory write through MemWrite8, also DUMP the IR-time order of writes vs reads to a log
+  (b) Force block size = 1 instruction in block-JIT (= effectively per-instr through the JIT compiler), see if divergence disappears — if yes, then it's a multi-instruction reordering bug
+  (c) Disable PIT IRQ delivery via OUT to 8259 mask, see if boot proceeds — if it does, the bug is IRQ-timing-related not control-flow-related
+
+Q4 — Specifically about the JIT block size = 1 idea: in your experience, would that be the right way to bisect "is it a per-block compilation bug or a multi-block dispatcher bug"? Or is there a better technique?
+
+Please answer in English. One focused recommendation per Q + brief rationale.
+
+========================================================================
+RESPONSE
+========================================================================
+Here is an analysis of your new trace data, followed by answers to your four questions. 
+
+**Crucial Trace Insight: The Zero-Sled started at `0000`, not `7B5D`.**
+You asked how the CPU executed a JMP/CALL exactly to `1FE0:7B5D`. It almost certainly didn't. 
+Notice that `0x7B5D` is an odd number, but `00 00` (`ADD [BX+SI], AL`) is a 2-byte instruction. If the CPU jumped to `1FE0:0000` (which is zeroed memory), it would begin a zero-sled. Depending on the JIT's max block size, it compiled a massive block of `00 00`s. The CPU slid from `0000` upwards. The PIT IRQ happens to be delivered asynchronously based on wall-clock or cycle limits. The IRQ simply "caught" the CPU sliding past `7B5D` inside that giant block. This strongly implies a `RET` popped `0000`, or an indirect jump read `0000`.
+
+Here are the answers to your specific questions:
+
+### Q1 — Top 3 Hypotheses for Root Cause
+Given SMC is fixed, the divergence is intra-block logic failing.
+1. **Memory Aliasing / Load-Store Reordering (Your Q2):** The JIT emits memory reads/writes that LLVM assumes do not alias. A value is pushed to the stack (or written to a BPB variable) and immediately read back (via `POP` or load). LLVM uses a cached/stale SSA value (or reorders them), resulting in a `0000` read, causing a jump to `1FE0:0000`.
+2. **Lazy EFLAGS Miscalculation:** Boot sectors heavily rely on flags (`CMP`, `TEST`, `SHR`) to branch. If your block-JIT defers flag calculation (lazy flags) and a specific edge case is incorrectly computed or accidentally optimized out by LLVM, a conditional jump that should have been taken is skipped (or vice versa), dropping execution off the intended path into uninitialized memory.
+3. **`MOV SS` / `STI` Interrupt Window Violation:** x86 requires that interrupts are suppressed for exactly one instruction after `MOV SS, r/m` so that `MOV SP` can complete safely. If your block-JIT mishandles this semantic and allows the PIT IRQ to be delivered exactly between `MOV SS` and `MOV SP`, the IRQ will push state using the *new* segment but the *old* uninitialized SP, corrupting the stack and ensuring an eventual catastrophic `IRET` or `RET`.
+
+### Q2 — Plausibility of LLVM mem2reg / SROA reordering
+**Highly plausible.** This is a notoriously common issue in LLVM-based emulators. 
+If your emulator maps guest registers or memory windows into `alloca`s, LLVM's `mem2reg`, `EarlyCSE`, and `GVN` passes are extremely aggressive. If the boot sector does `MOV [BP+X], AX` followed by `MOV BX, [BP+X]`, and your JIT maps those to external memory calls or pointers without strict `volatile` tags, memory barriers, or correct TBAA (Type Based Alias Analysis) metadata, LLVM will assume the load does not depend on the store (or vice versa) and will reorder them or substitute a stale cached SSA value. The indirect jump then targets `0000`.
+
+### Q3 — Best minimal-effort diagnostic
+**Recommendation: (b) Force block size = 1 instruction.**
+*Rationale:* This is the absolute gold standard for isolating JIT compilation bugs. By forcing block size to 1, you completely defeat intra-block LLVM optimizations (like `mem2reg` aliasing across instructions, GVN, and instruction reordering). Every instruction is forced to load from and commit to memory natively. 
+* If block size = 1 **fixes** the bug: You know 100% you have an LLVM optimization/aliasing bug or intra-block state caching bug.
+* If block size = 1 **does not fix** the bug: Do **(c) Disable PIT IRQ**. If (c) fixes it, you have an interrupt-window timing bug (like Hypothesis 3).
+
+### Q4 — Bisection technique using Block Size = 1
+Using MaxBlockSize=1 is the correct *first step*, but it is not the final bisection tool because it changes two variables at once: it alters LLVM optimizations AND alters IRQ delivery windows (since IRQs usually only deliver at block boundaries).
+
+**Better bisection technique:**
+Once you confirm MaxBlockSize=1 prevents the crash, do a **Binary Search on Block Execution Address**. 
+Keep the JIT enabled with a normal block size (e.g., 100 instructions), but add a hook in your JIT compiler:
+```csharp
+if (blockStartAddress == 0x27C5E) { // physical addr of 1FE0:7C5E
+    return CompileBlock(MaxInstructions = 1);
+}
+```
+Selectively force the block size to 1 *only for specific basic blocks*, starting with the block at `1FE0:7C5E`. If forcing *only* the boot sector's setup block to size=1 fixes the crash, you have successfully isolated the exact compiled block containing the LLVM reordering bug. You can then dump the LLVM IR for just that single block to spot the aliasing flaw.

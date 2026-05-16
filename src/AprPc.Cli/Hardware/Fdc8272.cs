@@ -353,7 +353,20 @@ public sealed class Fdc8272
             var buf = new byte[totalSecs * 512];
             disk.ReadSectors(firstSec, totalSecs, buf);
             for (int i = 0; i < readBytes && physAddr + i < _mem.Ram.Length; i++)
+            {
                 _mem.Ram[physAddr + i] = buf[i];
+                // Phase 30.15 — SMC notify the block-JIT cache.
+                // FDC DMA writes the FreeDOS boot sector and kernel
+                // into RAM; without this notification, block-JIT keeps
+                // executing the all-zeros translation it cached for those
+                // addresses before the load happened, and CPU jumps land
+                // in a stale zero-sled. Per-instr backend is unaffected
+                // (no cache). Cheap when no block covers the addr —
+                // BlockCache.NotifyMemoryWrite uses a per-byte coverage
+                // counter for the fast path.
+                AprX86.Cli.Cpu.X86JsonCpu.NotifyExternalMemoryWrite(
+                    (uint)(physAddr + i));
+            }
             _dma.OnChannel2BurstComplete(readBytes);
             if (_trace)
             {
