@@ -211,7 +211,16 @@ AprGba/
 │   ├── AprGba.Cli/         ← GBA harness (ARM7TDMI + Thumb + bus + PPU + scheduler + screenshot)
 │   ├── AprGb.Cli/          ← Game Boy harness (LR35902 + bus + PPU; legacy interpreter from AprGBemu)
 │   ├── AprNes.Cli/         ← NES harness (Ricoh 2A03 + bus + PPU + Mapper000/001 + screenshot)
-│   └── AprX86.Cli/         ← Intel x86-16 harness (i8086/8088/i80186/80188/i80286 + CGA framebuffer)
+│   ├── AprX86.Cli/         ← Intel x86-16 CPU harness (i8086/8088/i80186/80188/i80286 + CGA/MDA renderer + x87 FPU)
+│   └── AprPc.Cli/          ← Intel PC system harness — runs FreeDOS end-to-end (Phase 28-30):
+│       ├── Bios/           ← HLE INT 10h/13h/16h/19h/21h handlers (used in --bios-mode=hle)
+│       ├── Memory/         ← PcMemoryBus (RAM map + real-BIOS / option-ROM image loader)
+│       ├── Hardware/       ← 8253 PIT, 8259 PIC (master only — XT class), 8042 KBD,
+│       │                     8272 FDC, 8237 DMA, CMOS, MC146818 RTC,
+│       │                     PcPortBus (Port 0x60-0x71 + 0x3F0-0x3F7 + Port 0xE9 debug hook + …)
+│       ├── Ui/             ← WinForms GUI (MainForm, scancode injection, framebuffer redraw)
+│       ├── Diagnostics/    ← KbdTrace (per-launch log), AutoTester (scripted GUI integration tests)
+│       └── PcSystemRunner  ← top-level wiring + emulator thread
 ├── spec/
 │   ├── cpu/                ← All CPU specs (with co-located _schema.json)
 │   │   ├── _schema.json    ← JSON schema for cpu specs
@@ -228,14 +237,38 @@ AprGba/
 │       ├── gba.json
 │       └── gb-dmg.json
 ├── test-roms/              ← Blargg cpu_instrs, jsmolka arm/thumb, blargg NES, Tom Harte 8088 SST, x86 demos
-│   └── x86/src/            ← NASM source for protected-mode fault demos (Phase 27b)
-├── result/                 ← Canonical screenshots (gb / gba / nes / x86-16)
+│   └── x86/
+│       ├── src/            ← NASM source: protected-mode fault demos (Phase 27b),
+│       │                     30.14 Port 0xE9 hello + HELLO.COM (Phase 30.14)
+│       ├── fat12-b/        ← files to be packed into the B: test floppy
+│       └── test-floppy-b.img ← pre-built FAT12 1.44 MB B: image for --floppy-b
+├── BIOS/                   ← Optional firmware blobs — public-domain ones committed:
+│   ├── firmware/
+│   │   ├── pcxtbios.bin    ← Sergey Kiselev's Turbo XT BIOS v2.5 (8 KB, GPL — Phase 30)
+│   │   └── videorom.bin    ← Tseng Labs ET4000 VGA BIOS V8.02X 1992 (32 KB — Phase 30.12)
+│   ├── freedos-1.3-floppy.img ← FreeDOS 1.3 bootable floppy (committed; GPL v2)
+│   └── (gba_bios.bin / gb_bios.bin not committed — copyrighted, drop in for LLE tests)
+├── ref/                    ← Vendor manuals + spec sources (third-party, read-only)
+│   ├── docs/               ← Vendor manuals (ARM ARM, GB CPU manual, Intel iAPX 86/88, …)
+│   ├── pcxtbios/           ← Annotated pcxtbios.asm source (matches BIOS/firmware/pcxtbios.bin)
+│   │                         used as ground truth for INT 10h / PIT / 8255 behaviour
+│   ├── freedos/            ← FreeDOS kernel + FreeCOM sources (Phase 30.11b audit)
+│   ├── seabios/            ← Reference: SeaBIOS source (option for future LLE replacement)
+│   └── docs/               ← Vendor PDFs (kept in-repo for offline reference)
+├── result/                 ← Canonical screenshots (gb / gba / nes / x86-16 / pc)
+│   └── pc/                 ← AprPc end-to-end runs (FreeDOS boot, AutoTester pass screenshots)
 ├── MD/                     ← Traditional Chinese authoring source
+│   ├── design/             ← Per-phase plans (incl. 30-fdc-dma-plan.md)
+│   ├── process/            ← Workflow docs (commit QA, AI collab, DOS test injection, adv testing)
+│   ├── ref/                ← Distilled device handbooks (pcxtbios-device-spec, freedos-mda-analysis)
+│   └── performance/        ← Phase closure / baseline notes
 ├── MD_EN/                  ← English mirror of MD/
-├── tools/                  ← Build helpers (jsmolka/blargg/nasm ROM builders), Gemini knowledgebase
-├── BIOS/                   ← (not in repo) place gba_bios.bin / gb_bios.bin here for LLE tests
-├── ref/                    ← Vendor manuals + datasheets (ARM ARM, GB CPU manual, Intel iAPX 86/88, …)
+├── tools/                  ← Build helpers + tooling
+│   ├── make_fat12_floppy.py ← Pure-Python FAT12 1.44 MB image builder (Phase 30.14)
+│   ├── knowledgebase/      ← Gemini consult tool (gemini_query.py) + reply log
+│   └── (jsmolka/blargg/nasm ROM builders, send_mail.py, …)
 ├── temp/                   ← (gitignored) scratch dir for IR dumps, screenshots, log files
+│                             (Phase 30 emits temp/kbd-trace.log + temp/port-e9.log here)
 ├── etc/                    ← (gitignored) local working notes
 ├── CLAUDE.md               ← Project rules for AI agents (Claude Code et al.)
 └── AprGba.slnx             ← .NET solution file (target framework: net10.0)
