@@ -170,35 +170,185 @@ public static class PcLockstep
 
         long maxSteps = options.MaxCycles ?? 5_000_000;
         Console.WriteLine($"  running lockstep up to {maxSteps:N0} steps...");
+
+        // Phase 30.15c-2 — also compare memory contents periodically.
+        // CPU state can match while a stale memory write silently
+        // diverges; we caught one such case at step 356,358 where a
+        // LES instruction read the same address and got different
+        // values. Default region: 0x00000-0xA0000 (low 640 KB, skips
+        // VRAM at A0000+ and ROM/BIOS at C0000+). APR_LOCKSTEP_MEM_LO /
+        // _HI override; APR_LOCKSTEP_MEM_PERIOD controls check cadence
+        // (default 1000 steps, 0 disables).
+        int memLo = ParseHexEnv("APR_LOCKSTEP_MEM_LO", 0x00000);
+        int memHi = ParseHexEnv("APR_LOCKSTEP_MEM_HI", 0xA0000);
+        int memPeriod = ParseDecEnv("APR_LOCKSTEP_MEM_PERIOD", 1000);
+        Console.WriteLine(memPeriod > 0
+            ? $"  mem diff: every {memPeriod} steps, region 0x{memLo:X5}..0x{memHi:X5}"
+            : "  mem diff: DISABLED (APR_LOCKSTEP_MEM_PERIOD=0)");
+
+        return RunLockstepLoop(stepA, stepB, envA, envB, maxSteps,
+            memLo, memHi, memPeriod);
+    }
+
+    /// <summary>
+    /// Custom lockstep loop (replaces LockstepDiff.Run) that also
+    /// compares memory contents at <paramref name="memPeriod"/> step
+    /// boundaries. On any mismatch (CPU or memory) reports the first
+    /// divergence + context.
+    /// </summary>
+    private static int RunLockstepLoop(
+        X86LockstepStepper stepA,
+        X86LockstepStepper stepB,
+        PcLockstepEnv envA,
+        PcLockstepEnv envB,
+        long maxSteps,
+        int memLo, int memHi, int memPeriod)
+    {
         var sw = System.Diagnostics.Stopwatch.StartNew();
+        var trail = new (long step, string desc)[16];
+        int trailHead = 0;
 
-        // Ignore IP from the comparator? No — we WANT IP divergence to
-        // surface, that's often the most useful early signal. Just compare
-        // everything (PC is linear CS:IP, registers include IP separately
-        // anyway). FLAGS too: but x86 emulators often diverge on
-        // undefined bits (1/3/5/12-15), so we mask those out at compare.
-        var ignore = new HashSet<string>(StringComparer.Ordinal);
-        // (Reserved for future field exclusions; currently empty.)
+        ICpuStateSnapshot? lastA = null, lastB = null;
+        for (long i = 0; i < maxSteps; i++)
+        {
+            var sa = stepA.Snapshot();
+            var sb = stepB.Snapshot();
+            lastA = sa; lastB = sb;
 
-        LockstepResult result = LockstepDiff.Run(
-            stepA, stepB,
-            maxSteps: maxSteps,
-            haltConditionA: null,
-            trailDepth: 16,
-            ignoreFields: ignore,
-            cycleSensitive: false);
+            // CPU compare.
+            var cpuDiffs = CompareCpu(sa, sb);
+            if (cpuDiffs.Count > 0)
+            {
+                sw.Stop();
+                Console.WriteLine();
+                Console.WriteLine($"  elapsed:  {sw.Elapsed}");
+                Console.WriteLine($"  status:   Diverged (CPU)");
+                Console.WriteLine($"  steps:    {i}");
+                PrintTrail(trail, trailHead);
+                Console.WriteLine($"  divergence in: {string.Join(", ", cpuDiffs)}");
+                Console.WriteLine($"    A: {FormatSnap(sa)}");
+                Console.WriteLine($"    B: {FormatSnap(sb)}");
+                DumpContext(envA, envB,
+                    new LockstepResult(LockstepStatus.Diverged, i, sa, sb,
+                        System.Array.Empty<LockstepTrailEntry>(), cpuDiffs));
+                return 5;
+            }
 
+            // Memory diff every memPeriod steps. Quick xor-fold check
+            // first; if it differs, byte-walk to find the first
+            // mismatching address.
+            if (memPeriod > 0 && (i % memPeriod == 0) && i > 0)
+            {
+                int diffAt = FirstMemDiff(envA.Bus.Memory.Ram, envB.Bus.Memory.Ram, memLo, memHi);
+                if (diffAt >= 0)
+                {
+                    sw.Stop();
+                    Console.WriteLine();
+                    Console.WriteLine($"  elapsed:  {sw.Elapsed}");
+                    Console.WriteLine($"  status:   Diverged (MEMORY)");
+                    Console.WriteLine($"  steps:    {i}");
+                    Console.WriteLine($"  first diff byte at phys 0x{diffAt:X5}:");
+                    Console.WriteLine($"    A: 0x{envA.Bus.Memory.Ram[diffAt]:X2}");
+                    Console.WriteLine($"    B: 0x{envB.Bus.Memory.Ram[diffAt]:X2}");
+                    PrintTrail(trail, trailHead);
+                    Console.WriteLine($"    last CPU state");
+                    Console.WriteLine($"    A: {FormatSnap(sa)}");
+                    Console.WriteLine($"    B: {FormatSnap(sb)}");
+                    // Show 64 bytes around the divergence in both.
+                    int from = Math.Max(memLo, diffAt - 16);
+                    Console.Write($"    A mem @0x{from:X5}: ");
+                    for (int k = from; k < from + 32 && k < memHi; k++)
+                        Console.Write($"{envA.Bus.Memory.Ram[k]:X2}{(k == diffAt ? "*" : " ")}");
+                    Console.WriteLine();
+                    Console.Write($"    B mem @0x{from:X5}: ");
+                    for (int k = from; k < from + 32 && k < memHi; k++)
+                        Console.Write($"{envB.Bus.Memory.Ram[k]:X2}{(k == diffAt ? "*" : " ")}");
+                    Console.WriteLine();
+                    return 5;
+                }
+            }
+
+            // Trail bookkeeping for context dump. Include the 4-byte
+            // opcode prefix so the reader can see WHICH instruction
+            // ran at each matched step (matters for narrowing the
+            // bug to a specific opcode).
+            var ram = envA.Bus.Memory.Ram;
+            int linPc = (int)sa.Pc & 0xFFFFF;
+            string bytes = $"{ram[linPc]:X2} {ram[(linPc + 1) & 0xFFFFF]:X2} " +
+                           $"{ram[(linPc + 2) & 0xFFFFF]:X2} {ram[(linPc + 3) & 0xFFFFF]:X2}";
+            trail[trailHead] = (i, $"{bytes}  {FormatSnap(sa)}");
+            trailHead = (trailHead + 1) % trail.Length;
+
+            stepA.Step();
+            stepB.Step();
+        }
         sw.Stop();
         Console.WriteLine();
         Console.WriteLine($"  elapsed:  {sw.Elapsed}");
-        Console.Write(result.FormatReport());
+        Console.WriteLine($"  status:   NoDiff");
+        Console.WriteLine($"  steps:    {maxSteps}");
+        return 0;
+    }
 
-        if (result.Status == LockstepStatus.Diverged)
+    private static List<string> CompareCpu(ICpuStateSnapshot a, ICpuStateSnapshot b)
+    {
+        var d = new List<string>();
+        if (a.Pc != b.Pc) d.Add("PC");
+        var keys = new HashSet<string>(a.Registers.Keys);
+        foreach (var k in b.Registers.Keys) keys.Add(k);
+        foreach (var k in keys)
         {
-            DumpContext(envA, envB, result);
-            return 5;   // distinctive exit code so CI can flag
+            a.Registers.TryGetValue(k, out var va);
+            b.Registers.TryGetValue(k, out var vb);
+            if (va != vb) d.Add(k);
         }
-        return result.Status == LockstepStatus.NoDiff ? 0 : 1;
+        return d;
+    }
+
+    private static string FormatSnap(ICpuStateSnapshot s)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"PC=0x{s.Pc:X5}");
+        foreach (var (n, v) in s.Registers)
+            sb.Append($" {n}=0x{v:X4}");
+        return sb.ToString();
+    }
+
+    private static void PrintTrail((long step, string desc)[] trail, int head)
+    {
+        Console.WriteLine($"  trail (last 16 matched):");
+        for (int k = 0; k < trail.Length; k++)
+        {
+            var t = trail[(head + k) % trail.Length];
+            if (t.desc is null) continue;
+            Console.WriteLine($"    i={t.step,7} {t.desc}");
+        }
+    }
+
+    private static int FirstMemDiff(byte[] ramA, byte[] ramB, int lo, int hi)
+    {
+        // Linear byte compare. Fast enough for 640 KB at the lockstep
+        // sample cadence (every 1000 steps = ~once per ms of wall clock
+        // at lockstep speeds, well within the host's memory bandwidth).
+        int n = Math.Min(Math.Min(ramA.Length, ramB.Length), hi);
+        for (int i = lo; i < n; i++)
+        {
+            if (ramA[i] != ramB[i]) return i;
+        }
+        return -1;
+    }
+
+    private static int ParseHexEnv(string name, int def)
+    {
+        var s = Environment.GetEnvironmentVariable(name);
+        if (s is null) return def;
+        return int.TryParse(s, System.Globalization.NumberStyles.HexNumber, null, out var v) ? v : def;
+    }
+    private static int ParseDecEnv(string name, int def)
+    {
+        var s = Environment.GetEnvironmentVariable(name);
+        if (s is null) return def;
+        return int.TryParse(s, out var v) ? v : def;
     }
 
     /// <summary>
