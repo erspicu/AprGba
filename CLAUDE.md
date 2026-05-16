@@ -58,21 +58,49 @@ Commit 前依改動性質跑對應 tier 的 QA — 詳細流程在
 - 強制 `--no-incremental` rebuild 避免 stale DLL
 - 遇 file lock 先 `Stop-Process -Name testhost,dotnet,MSBuild -Force`
 
-## Knowledgebase — Gemini 查詢工具
+## 硬體規格查詢優先順序
 
-碰到瓶頸（卡住的 LLVM/MCJIT 行為、文件查不到的 vendor 細節、ARM ARM
-某個 corner case 的權威解釋等）可呼叫 `tools/knowledgebase/gemini_query.py`
-查詢 Gemini API：
+碰到「不確定某個裝置的 register 行為 / port bit layout / IRQ 規格」時，
+**依下列順序查**，不要跳過：
+
+### 1. (最優先) 該裝置驅動程式 / firmware 的 source code
+
+如果我們有正在 emulate 的 firmware source（如 pcxtbios.bin → `ref/pcxtbios/pcxtbios.asm`、
+GBA BIOS reverse engineering、test ROM source 等），**直接 grep / read
+source 確認實際行為**。
+
+理由：Gemini 多次在這 project 提供「IBM PC 標準說法」但跟 pcxtbios 實際
+behaviour 不符（最痛的是 port 0x61 selector bit 2 vs bit 3，Gemini 兩次
+consult 自我矛盾）。**正在 emulate 的 firmware 才是 ground truth**。
+
+工具：`WebFetch` 抓 GitHub raw URL；本地 source 用 `Grep` / `Read`。
+
+當前有 source 的：
+- `ref/pcxtbios/pcxtbios.asm` — XT BIOS（裝置 spec handbook 在 [`MD/ref/pcxtbios-device-spec.md`](MD/ref/pcxtbios-device-spec.md)）
+- `OldProject/Apr86/` — 早期 8086 emulator 參考
+- `ref/docs/ARM7TDMI.PDF` — ARM 官方手冊
+
+### 2. (次選) Gemini 查詢工具
+
+當 source 沒答案、或需要「設計層面的對照意見」時用
+`tools/knowledgebase/gemini_query.py`：
 
 ```
 python tools/knowledgebase/gemini_query.py "你的問題"
 ```
 
 規則：
-- **一次只問一個問題**，等回答出來再問下一個（避免 spam）
-- 問題盡量具體：附上版本號、錯誤訊息、已試過的做法
+- **一次只問一個問題**（可以一個 question 帶多個 sub-questions），等回
+  答出來再問下一個（避免 spam、避免並發）
+- 問題盡量具體：附上版本號、錯誤訊息、已試過的做法、source 摘要
 - 工具會自動 log 到 `tools/knowledgebase/message/<timestamp>.txt`
-- 用於「找解法」「對照權威說法」，**不取代**自己讀 source / 跑 repro
+- **不取代** source — 拿 Gemini 答案要回頭跟 source 對照才採信
+
+### 3. (背景參考) 第三方 vendor 文件
+
+`ref/docs/` 下的 PDF、網路 spec 站（Wikipedia、osdev.org 等）— 通常描述
+「標準 IBM 行為」，但具體 firmware（教育版 / clone）可能有差異。看 source
+確認後才信。
 
 ## Scratch files — use `/temp/`
 
