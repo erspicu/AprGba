@@ -121,7 +121,7 @@ public static class X86CgaRenderer
             byte ch    = mem[cellOff];
             byte attr  = mem[cellOff + 1];
             uint fg, bg;
-            if (isMda) (fg, bg) = MdaDecodeAttr(attr);
+            if (isMda) (fg, bg) = MdaDecodeAttr(attr, ch);
             else
             {
                 fg = Palette[attr & 0x0F];
@@ -157,21 +157,57 @@ public static class X86CgaRenderer
     /// get this workaround (its mode 3 init pre-fill is enough most of
     /// the time; user-confirmed at pic/5.png 30.7c).
     /// </summary>
-    private static (uint fg, uint bg) MdaDecodeAttr(byte attr)
+    private static (uint fg, uint bg) MdaDecodeAttr(byte attr, byte ch)
     {
-        int fgBits = attr & 0x07;
-        int bgBits = (attr >> 4) & 0x07;
+        // MDA / IBM 5151 attribute decoding — matches real 1981 hardware
+        // behaviour plus a defensive heuristic for "FreeDOS-on-MDA".
+        //
+        // Real MDA hardware (per IBM Hardware Reference Library + the
+        // pcxtbios + MDA-on-FreeDOS write-up we keep in
+        // MD/ref/freedos-mda-analysis.md):
+        //   attr = 0x07          → normal (dim green text on black)
+        //   attr = 0x0F          → bright text on black
+        //   attr = 0x70          → reverse (black text on green)
+        //   attr = 0x01          → underline (we render as normal text;
+        //                          underline drawing is future work)
+        //   attr = 0x00 / 0x08   → display off / non-display
+        //   any other combo     → undefined; clones tended to "round up"
+        //                          to one of the above
+        //
+        // FreeDOS (kernel + installer) was written for CGA/EGA/VGA where
+        // bg=1 means blue, etc. On MDA those values aren't honoured by
+        // the spec, but real hardware (and most users' eyes) get along
+        // with treating any (fg|bg) non-zero combination as visible. We
+        // implement that forgiving rule below.
+        //
+        // The attr=0 + printable-char heuristic catches the third bucket
+        // we saw in trace: cells where some program wrote a char via
+        // direct VRAM byte-write or AH=0A "write char only" but left the
+        // attr byte un-touched (= 0 from boot). On a real PC the attr
+        // would have been the previous cell's attr (=0x07 from POST
+        // clear_screen). For an attr-byte we know is 0 but the char is
+        // genuinely printable, treat it as the implicit 0x07 the author
+        // almost certainly meant.
+        bool fgOn   = (attr & 0x07) != 0;
+        bool bgOn   = (attr & 0x70) != 0;
         bool intense = (attr & 0x08) != 0;
-        if (fgBits == 0 && bgBits == 0)
+        bool printable = ch >= 0x20 && ch < 0x7F;
+
+        if (!fgOn && !bgOn)
         {
-            // True attr=0. Render INVISIBLE (real hardware).
-            // Workaround handled at caller for printable chars.
+            // attr=0x00 or 0x08. Strictly "display off" on real MDA, but
+            // if there's a printable char in this cell it was written by
+            // software that forgot to set the attr — render it visibly.
+            if (printable)
+                return (MdaDimGreen, MdaBlack);
             return (MdaBlack, MdaBlack);
         }
-        if (fgBits == 0 && bgBits == 7)
-            return (MdaBlack, MdaDimGreen);                    // reverse video
-        // Normal text (incl. underline path which we draw as plain text
-        // for now). Intensity bit brightens the foreground.
+        if (bgOn)
+        {
+            // Reverse video. The bg "on" gate dominates fg.
+            return (MdaBlack, MdaDimGreen);
+        }
+        // Normal: fg on, bg off. Intensity bit brightens the green.
         return (intense ? MdaBright : MdaDimGreen, MdaBlack);
     }
 

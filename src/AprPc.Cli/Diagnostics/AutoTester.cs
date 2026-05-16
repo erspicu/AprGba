@@ -71,6 +71,7 @@ public sealed class AutoTester : IDisposable
         {
             KbdTrace.Log($"AutoTester step {_stateIdx} TERMINAL — dumping screen + closing");
             DumpScreen(mem, fbBase, screen);
+            SaveScreenshot(mem);
             _closeForm();
             _stateIdx++;
             return;
@@ -115,6 +116,23 @@ public sealed class AutoTester : IDisposable
 
     private static void DumpScreen(byte[] mem, int fbBase, string screen)
     {
+        // Dump char bytes regardless of attr (= what's actually IN the
+        // framebuffer memory, ignoring whether it would render visibly).
+        KbdTrace.Log($"=== AutoTester CHAR-ONLY DUMP (ignoring attr) ===");
+        for (int row = 0; row < 25; row++)
+        {
+            var sb = new StringBuilder(82);
+            sb.Append($"r{row:D2}|");
+            for (int col = 0; col < 80; col++)
+            {
+                byte ch = mem[fbBase + (row * 80 + col) * 2];
+                sb.Append(ch >= 0x20 && ch < 0x7F ? (char)ch : '·');
+            }
+            sb.Append('|');
+            KbdTrace.Log("  " + sb.ToString());
+        }
+        KbdTrace.Log($"=== END CHAR-ONLY DUMP ===");
+
         KbdTrace.Log($"=== AutoTester FINAL SCREEN (fbBase=0x{fbBase:X5}) ===");
         foreach (var line in screen.Split('\n'))
         {
@@ -123,6 +141,51 @@ public sealed class AutoTester : IDisposable
                 KbdTrace.Log($"  | {trimmed}");
         }
         KbdTrace.Log($"=== END AutoTester FINAL SCREEN ===");
+
+        // Attribute byte dump per row — flags rows whose char dump is
+        // non-empty but attrs are mostly 0 (= written-then-invisible cells).
+        KbdTrace.Log($"=== AutoTester ATTR HISTOGRAM (per row) ===");
+        for (int row = 0; row < 25; row++)
+        {
+            var hist = new Dictionary<byte, int>();
+            int nonZeroChars = 0;
+            for (int col = 0; col < 80; col++)
+            {
+                int off = fbBase + (row * 80 + col) * 2;
+                byte ch = mem[off];
+                byte at = mem[off + 1];
+                if (ch != 0x00 && ch != 0x20) nonZeroChars++;
+                hist[at] = hist.GetValueOrDefault(at) + 1;
+            }
+            var sorted = hist.OrderByDescending(kv => kv.Value).Take(3);
+            var attrSummary = string.Join(",", sorted.Select(kv => $"0x{kv.Key:X2}={kv.Value}"));
+            KbdTrace.Log($"  row {row:D2} chars={nonZeroChars,3} attrs={attrSummary}");
+        }
+        KbdTrace.Log($"=== END AutoTester ATTR HISTOGRAM ===");
+    }
+
+    /// <summary>
+    /// Save the current framebuffer to a PNG so we have a visual record
+    /// of what the user would have seen. Output goes to
+    /// result/pc/auto-test-&lt;UTC timestamp&gt;.png so multiple runs don't
+    /// overwrite each other. Failures are logged but non-fatal — the
+    /// text dump in the trace is still the primary record.
+    /// </summary>
+    private static void SaveScreenshot(byte[] mem)
+    {
+        try
+        {
+            var dir = "result/pc";
+            Directory.CreateDirectory(dir);
+            var path = Path.Combine(dir,
+                $"auto-test-{DateTime.UtcNow:yyyyMMdd-HHmmss}.png");
+            X86CgaRenderer.Render(mem, path);
+            KbdTrace.Log($"AutoTester screenshot saved: {path}");
+        }
+        catch (Exception ex)
+        {
+            KbdTrace.Log($"AutoTester screenshot FAILED: {ex.Message}");
+        }
     }
 
     private record struct Step(string Pattern, List<byte> Scancodes, bool IsTerminal = false);
