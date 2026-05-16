@@ -42,6 +42,16 @@ public sealed class PcPit : IDisposable
     private byte _midnightRolled;
     private bool _speakerGate;
 
+    /// <summary>
+    /// Override the wall-clock interval per tick. Default 55ms = 18.2Hz
+    /// (IBM PC standard). Lower values fire IRQ 0 faster and let BIOS
+    /// HLT-wait loops unblock sooner -- big interactive responsiveness
+    /// win on real-BIOS path. BDA tick counter drifts faster than wall
+    /// clock as the trade-off; INT 1Ah time-of-day reads will be wrong
+    /// in proportion. Caller passes the desired Hz rate (e.g. 100).
+    /// </summary>
+    public int TickIntervalMsOverride { get; set; } = TickIntervalMs;
+
     public PcPit(PcMemoryBus bus, Pic8259? pic = null)
     {
         _bus = bus ?? throw new ArgumentNullException(nameof(bus));
@@ -81,9 +91,10 @@ public sealed class PcPit : IDisposable
             _bus.WriteByte (BdaMidnightRolled,  0);
         }
         // Start the wall-clock timer; first tick after one interval.
+        int interval = Math.Max(1, TickIntervalMsOverride);
         _timer = new System.Threading.Timer(_ => OnTick(), null,
-            dueTime: TickIntervalMs,
-            period:  TickIntervalMs);
+            dueTime: interval,
+            period:  interval);
     }
 
     /// <summary>

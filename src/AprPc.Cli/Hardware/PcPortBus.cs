@@ -49,6 +49,24 @@ public sealed class PcPortBus
     // a checkpoint indicator). We just store it.
     private byte _port80;
 
+    // Phase 28.IO-kbd / Phase 30.x — proper edge-triggered IRQ 1 model
+    // per Gemini consultation 2026-05-16. Real XT keyboard interface:
+    //   1. Scancode arrives -> push into FIFO
+    //   2. If IRQ 1 line is currently LOW, pop to port 0x60 buffer,
+    //      pull line HIGH (= new low->high edge -> 8259A registers IRQ).
+    //   3. BIOS INT 9 reads port 0x60, then ACKs via port 0x61 bit 7
+    //      pulse (high then low).
+    //   4. On bit 7 HIGH->LOW transition (= ack pulse end), check FIFO;
+    //      if non-empty, pop next + re-pull line HIGH (= fresh edge,
+    //      another INT 9 will fire). Empty FIFO -> line stays LOW.
+    // This eliminates the "first scancode latches but rest stranded"
+    // bug a simple "AssertIrq per InjectScancode" model has when the
+    // PIC's pending bit is already set from a prior assert.
+    private readonly Queue<byte> _kbd60Fifo = new(capacity: 8);
+    private readonly object _kbd60Lock = new();
+    private bool _kbd60IrqLine;  // true = line currently HIGH (= 8259A saw rising edge)
+    private byte _port61Prev;    // previous port 0x61 value, for edge detection
+
     public PcPortBus(Pic8259 pic, PcPit pit, bool traceIo = false,
         Fdc8272? fdc = null, Dma8237? dma = null)
     {
@@ -67,6 +85,110 @@ public sealed class PcPortBus
         _cmos[0x18] = 0x00;   // ext mem high
     }
 
+    /// <summary>
+    /// Host-side keystroke injection for real-BIOS mode. Pushes
+    /// <paramref name="scancode"/> into the 8042 FIFO and asserts IRQ 1
+    /// so the real BIOS INT 9 handler runs, reads port 0x60, and writes
+    /// the (ASCII, scancode) pair into the BDA keyboard ring buffer
+    /// itself. Counterpart to <c>PcKeyboard.Enqueue</c> which bypasses
+    /// the 8042 + INT 9 path (only correct for HLE BIOS mode).
+    /// </summary>
+    public void InjectScancode(byte scancode)
+    {
+        int fifoBefore;
+        bool fireIrq;
+        lock (_kbd60Lock)
+        {
+            fifoBefore = _kbd60Fifo.Count;
+            if (_kbd60Fifo.Count < 8)
+                _kbd60Fifo.Enqueue(scancode);
+
+            // Gemini Option C: only pull IRQ line HIGH (= fresh edge)
+            // when the previous scancode was acknowledged via port 0x61.
+            // If line is already HIGH, this scancode just waits in FIFO
+            // until the BIOS ack pulse drains it (see WritePort61).
+            fireIrq = !_kbd60IrqLine && _kbd60Fifo.Count > 0;
+            if (fireIrq)
+            {
+                _kbd60Data = _kbd60Fifo.Dequeue();
+                _kbd60IrqLine = true;
+                _kbd64Status = (byte)(_kbd64Status | 0x01);  // OBF
+            }
+        }
+        AprPc.Cli.Diagnostics.KbdTrace.Log(
+            $"PcPortBus.InjectScancode scan=0x{scancode:X2} fifo_before={fifoBefore} " +
+            $"irq_line={_kbd60IrqLine} {(fireIrq ? "-> AssertIrq(1)" : "-> queued, no edge")}");
+        if (fireIrq) _pic.AssertIrq(1);
+    }
+
+    private byte Dequeue60()
+    {
+        byte result;
+        int fifoCountAfter;
+        lock (_kbd60Lock)
+        {
+            // BIOS read of 0x60 doesn't advance our FIFO; that happens
+            // on the port 0x61 ack pulse. Just return the latched byte.
+            result = _kbd60Data;
+            fifoCountAfter = _kbd60Fifo.Count;
+        }
+        AprPc.Cli.Diagnostics.KbdTrace.Log(
+            $"PcPortBus.Read(0x60) -> 0x{result:X2} (fifo_remaining={fifoCountAfter}, irq_line={_kbd60IrqLine})");
+        return result;
+    }
+
+    /// <summary>
+    /// Hook for port 0x61 writes -- the XT keyboard ack pulse. The
+    /// IBM XT BIOS INT 9 ISR ack sequence is:
+    ///   IN  AL, 61h
+    ///   OR  AL, 80h    ; set bit 7
+    ///   OUT 61h, AL    ; pulse high
+    ///   AND AL, 7Fh    ; clear bit 7
+    ///   OUT 61h, AL    ; pulse low
+    /// Our IRQ 1 line stays HIGH after the BIOS-readable scancode is
+    /// posted; the bit 7 LOW->HIGH transition de-asserts the line; the
+    /// HIGH->LOW transition checks for next scancode and posts it if so.
+    /// Without this, a FIFO with multiple scancodes (auto-repeat / fast
+    /// typing / KeyDown+KeyPress double-fire) strands every entry past
+    /// the first because no new rising edge ever hits the 8259A.
+    /// </summary>
+    private void OnPort61Edge(byte oldVal, byte newVal)
+    {
+        bool oldBit7 = (oldVal & 0x80) != 0;
+        bool newBit7 = (newVal & 0x80) != 0;
+        if (!oldBit7 && newBit7)
+        {
+            // ACK pulse rising edge -- BIOS acknowledged the scancode.
+            // De-assert IRQ 1 line.
+            lock (_kbd60Lock) { _kbd60IrqLine = false; }
+        }
+        else if (oldBit7 && !newBit7)
+        {
+            // ACK pulse falling edge -- check FIFO and post next.
+            bool fireIrq;
+            lock (_kbd60Lock)
+            {
+                fireIrq = _kbd60Fifo.Count > 0;
+                if (fireIrq)
+                {
+                    _kbd60Data = _kbd60Fifo.Dequeue();
+                    _kbd60IrqLine = true;
+                    _kbd64Status = (byte)(_kbd64Status | 0x01);
+                }
+                else
+                {
+                    _kbd64Status = (byte)(_kbd64Status & ~0x01);  // clear OBF
+                }
+            }
+            if (fireIrq)
+            {
+                AprPc.Cli.Diagnostics.KbdTrace.Log(
+                    $"PcPortBus.OnPort61Edge ack_done, FIFO has more -> AssertIrq(1) scan=0x{_kbd60Data:X2}");
+                _pic.AssertIrq(1);
+            }
+        }
+    }
+
     public byte Read8(ushort port)
     {
         byte v = port switch
@@ -82,8 +204,11 @@ public sealed class PcPortBus
             0x40 or 0x41 or 0x42 => 0,
             0x43 => 0,                  // control word is write-only
 
-            // 8042 keyboard
-            0x60 => _kbd60Data,
+            // 8042 keyboard. Port 0x60 is the data port (scancode from
+            // the keyboard). When the BIOS INT 9 ISR reads it, we pop
+            // the next scancode off the host-side FIFO. Returns 0 when
+            // FIFO is empty (real silicon undefined — works for FreeDOS).
+            0x60 => Dequeue60(),
             0x64 => _kbd64Status,
 
             // Speaker gate / system control
@@ -200,10 +325,16 @@ public sealed class PcPortBus
                 // Ignore for now.
                 break;
 
-            // Speaker gate / sys ctrl
+            // Speaker gate / sys ctrl + keyboard ACK (XT only — port 0x61 bit 7
+            // pulse is what de-asserts the keyboard IRQ line and posts the
+            // next scancode from our FIFO).
             case 0x61:
-                _port61 = value;
-                _pit.SpeakerGate = (value & 0x02) != 0;
+                {
+                    byte old = _port61;
+                    _port61 = value;
+                    _pit.SpeakerGate = (value & 0x02) != 0;
+                    OnPort61Edge(old, value);
+                }
                 break;
 
             // POST diagnostic

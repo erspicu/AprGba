@@ -169,6 +169,9 @@ public sealed class AllocaSlotProvider : IStateSlotProvider
             8 => LLVMTypeRef.Int8,
             16 => LLVMTypeRef.Int16,
             32 => LLVMTypeRef.Int32,
+            // Phase 29 added 64-bit FPU stack regs (FPU_ST0..ST7 store f64 bit-pattern).
+            // State struct stores them as i64; alloca matches that width.
+            64 => LLVMTypeRef.Int64,
             _ => throw new NotSupportedException(
                 $"AllocaSlotProvider: status reg {name} width {def.WidthBits} unsupported.")
         };

@@ -59,6 +59,7 @@ public static class X86_16Emitters
         // + modrm_store ops, no new emitter needed.
         reg.Register(new X86MovAccMoffsLoad8Emitter());
         reg.Register(new X86MovAccMoffsLoad16Emitter());
+        reg.Register(new X86XlatEmitter());
         reg.Register(new X86MovAccMoffsStore8Emitter());
         reg.Register(new X86MovAccMoffsStore16Emitter());
         reg.Register(new X86ReadSregFieldEmitter());
@@ -1794,6 +1795,34 @@ internal sealed class X86MovAccMoffsStore16Emitter : IMicroOpEmitter
         var seg  = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "moffs_seg");
         var data = X86_16Emitters.ReadGpr16(ctx, 0, "moffs_ax");
         X86_16Emitters.SegmentedWrite16(ctx, seg, disp, data, "moffs_w");
+    }
+}
+
+// ============================================================================
+// 0xD7 XLAT / XLATB — translate byte.
+//
+//   AL := byte at [seg:(BX + ZeroExt(AL))]
+//
+// Default segment is DS; segment override prefix applies (real-world
+// pcxtbios.bin uses 2E D7 = "XLAT CS:" to translate scancode to ASCII via
+// the in-ROM scan table). 8086 cycles = 11.
+//
+// JSON shape (no args): { "op": "x86_xlat" }
+// ============================================================================
+
+internal sealed class X86XlatEmitter : IMicroOpEmitter
+{
+    public string OpName => "x86_xlat";
+    public void Emit(EmitContext ctx, MicroOpStep step)
+    {
+        var i16 = LLVMTypeRef.Int16;
+        var al   = X86_16Emitters.ReadGpr8 (ctx, 0, "xlat_al");      // GPR[0]=AX, byteIdx 0 = AL
+        var bx   = X86_16Emitters.ReadGpr16(ctx, 3, "xlat_bx");      // GPR[3] = BX
+        var al16 = ctx.Builder.BuildZExt(al, i16, "xlat_al16");
+        var addr = ctx.Builder.BuildAdd (bx, al16, "xlat_addr");     // 16-bit wrap on overflow
+        var seg  = X86_16Emitters.LoadDefaultOrOverrideSegment(ctx, "DS", "xlat_seg");
+        var data = X86_16Emitters.SegmentedRead8(ctx, seg, addr, "xlat_v");
+        X86_16Emitters.WriteGpr8(ctx, 0, data);                       // AL <- byte
     }
 }
 

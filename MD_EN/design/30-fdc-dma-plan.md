@@ -74,6 +74,9 @@ state, assert IRQ 6.
 | 30.6b | Debug tools: `--trace-cpu-cs`, `--watch-mem`, `--watch-read`, wider memory dump | `c18bcb4` |
 | 30.6c | **CPU `ROL r/m16, CL` count > 1 fix** | `e62a462` |
 | 30.6 (end-to-end) | pcxtbios.bin + FreeDOS boot to COMMAND.COM | `e62a462` |
+| **30.7a** | **GUI + real-BIOS keyboard end-to-end interactive A:\\>** (16 sub-bugs: XLAT opcode missing, HLT wake-on-IRQ, FDC motor stall hack, edge-triggered IRQ 1 + port 0x61 ack pulse Option C, etc.) See [`MD_EN/performance/202605161900-realbios-keyboard-gui-end-to-end.md`](../performance/202605161900-realbios-keyboard-gui-end-to-end.md). | ✅ this commit |
+| 30.8 | Speed up real-BIOS interactive (`dir` is 5-10 min on per-instr backend) | ⏳ deferred |
+| 30.9 | block-JIT + Phase 29 FPU correctness — biggest interactive-speed win | ⏳ deferred |
 
 ## The critical bug — CPU `ROL r/m16, CL` with count > 1
 

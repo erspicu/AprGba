@@ -59,11 +59,21 @@ public sealed class Pic8259
     /// </summary>
     public void AssertIrq(byte irq)
     {
+        bool masked, alreadyPending;
         lock (_lock)
         {
             int bit = 1 << (irq & 7);
-            if ((_imr & bit) != 0) return;   // masked → ignored
+            masked = (_imr & bit) != 0;
+            alreadyPending = (_pending & bit) != 0;
+            if (masked) goto done;            // masked → ignored
             _pending |= (byte)bit;
+        }
+        done:
+        if (irq == 1)
+        {
+            AprPc.Cli.Diagnostics.KbdTrace.Log(
+                $"Pic8259.AssertIrq(1) masked={masked} already_pending={alreadyPending}" +
+                (masked ? " [IGNORED — masked]" : ""));
         }
     }
 
@@ -74,19 +84,29 @@ public sealed class Pic8259
     /// </summary>
     public byte? DequeueNextVector()
     {
+        byte? result = null;
+        int irqLine = -1;
         lock (_lock)
         {
-            if (_pending == 0) return null;
+            if (_pending == 0) goto done;
             for (int i = 0; i < 8; i++)
             {
                 int bit = 1 << i;
                 if ((_pending & bit) == 0) continue;
                 if ((_imr & bit) != 0)   continue;
                 _pending &= (byte)~bit;
-                return (byte)(VectorBase + i);
+                irqLine = i;
+                result = (byte)(VectorBase + i);
+                break;
             }
-            return null;
         }
+        done:
+        if (irqLine == 1)
+        {
+            AprPc.Cli.Diagnostics.KbdTrace.Log(
+                $"Pic8259.DequeueNextVector -> IRQ 1 vector=0x{result:X2}");
+        }
+        return result;
     }
 
     /// <summary>Reset to power-on state: nothing masked, nothing pending.</summary>

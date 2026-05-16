@@ -68,6 +68,19 @@ public sealed class PcOptions
     public bool    Verbose      { get; set; }
 
     /// <summary>
+    /// PIT channel 0 tick rate in Hz. Real IBM PC default is 18.2 Hz
+    /// (= 1.193182 MHz / 65536, 55ms per tick). For interactive demo
+    /// use with real BIOS, the 55ms tick floor dominates because BIOS
+    /// INT 13h / 16h wait loops HLT until the next tick. Bumping to
+    /// 100-200 Hz (5-10ms per tick) makes the system feel responsive
+    /// at the cost of time-of-day drift -- BDA tick counter advances
+    /// faster than wall clock so INT 1Ah AH=00 will report wrong time.
+    /// Acceptable for interactive development; pin to 18 for time-
+    /// sensitive workloads.
+    /// </summary>
+    public int     PitRateHz    { get; set; } = 18;
+
+    /// <summary>
     /// Parse argv; throws <see cref="ArgumentException"/> for unknown
     /// flags / malformed values. The Program.cs caller catches and
     /// prints a usage block.
@@ -122,6 +135,7 @@ public sealed class PcOptions
             else if (arg.StartsWith("--frames="))      o.Frames = long.Parse(arg["--frames=".Length..]);
             else if (arg.StartsWith("--keys="))        o.KeysScript = arg["--keys=".Length..];
             else if (arg.StartsWith("--headless-timeout=")) o.HeadlessTimeout = int.Parse(arg["--headless-timeout=".Length..]);
+            else if (arg.StartsWith("--pit-rate-hz="))      o.PitRateHz = int.Parse(arg["--pit-rate-hz=".Length..]);
             else throw new ArgumentException($"unknown argument: {arg}");
         }
 

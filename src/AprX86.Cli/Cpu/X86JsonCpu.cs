@@ -322,6 +322,15 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
     public bool Halted => _state[_haltedOff] != 0;
 
     /// <summary>
+    /// Clear the HALTED flag. Called by the dispatch loop when an
+    /// IRQ wakes the CPU from HLT — real silicon does this automatically
+    /// as part of the interrupt-acknowledge sequence; in our model the
+    /// host loop must explicitly clear before delivering the vector
+    /// (otherwise we stay parked).
+    /// </summary>
+    public void ClearHalted() { _state[_haltedOff] = 0; }
+
+    /// <summary>
     /// Sprint 27.11b — try to look up a status-register offset; return -1
     /// when the loaded spec doesn't declare it. Used for i80286-only
     /// slots (EXC_PENDING/VECTOR/ERROR, MSW, etc.) that are absent on
@@ -665,6 +674,24 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         var decoded = _mainDecoder.Decode(opcode);
         if (decoded is null)
         {
+            // Unknown opcode -- rewind to pre-prefix IP and return -1.
+            // **Beware: dispatch loop typically just calls Step() again,
+            // so this is an infinite hot loop on the offending byte.**
+            // Log once per (linearPc, opcode) so missing opcodes are
+            // visible instead of silently hanging. The first time we
+            // saw this pattern was pcxtbios.bin INT 9 ISR's XLAT (0xD7);
+            // it took a Gemini round-trip to find -- this log prevents
+            // the next one needing that.
+            uint key = ((uint)(((cs << 4) + (ip - prefixesConsumed)) & 0xFFFFF))
+                       | ((uint)opcode << 24);
+            if (_unknownOpcodeLogged.Add(key))
+            {
+                var msg = $"X86 unknown opcode 0x{opcode:X2} at {cs:X4}:{(ushort)(ip - prefixesConsumed):X4} " +
+                          $"(linear 0x{((cs << 4) + (ip - prefixesConsumed)) & 0xFFFFF:X5}, " +
+                          $"prefixes={prefixesConsumed}) -- CPU will loop here until implemented";
+                Console.Error.WriteLine($"  [UNK] {msg}");
+                OnUnknownOpcode?.Invoke(cs, (ushort)(ip - prefixesConsumed), opcode);
+            }
             WriteU16(_ipOff, (ushort)(ip - prefixesConsumed));
             _state[_segOverrideOff] = 0xFF;
             return -1;
@@ -789,6 +816,22 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
     public static uint WriteWatchHi;
     private static int _writeWatchCount;
 
+    /// <summary>
+    /// Optional callback fired on every write inside the WriteWatch range.
+    /// Lets downstream tooling (AprPc kbd trace, etc.) route the data into
+    /// its own log without AprX86.Cli having to know about it.
+    /// </summary>
+    public static Action<uint, byte>? OnWriteWatch;
+
+    /// <summary>
+    /// Optional callback fired once per unique (CS:IP, opcode) tuple that
+    /// the main decoder can't decode. Downstream tooling can route this to
+    /// a dedicated log; without a hook, only stderr gets the warning.
+    /// </summary>
+    public static Action<ushort, ushort, byte>? OnUnknownOpcode;
+
+    private static readonly HashSet<uint> _unknownOpcodeLogged = new();
+
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     private static void MemWrite8(uint addr, byte value)
     {
@@ -803,6 +846,9 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
                 Console.Error.WriteLine($"  [WW] write 0x{a:X5} ← 0x{value:X2}");
                 _writeWatchCount++;
             }
+            // Optional callback for downstream tooling (e.g. AprPc kbd
+            // trace can hook this to log BDA writes into its own file).
+            OnWriteWatch?.Invoke(a, value);
         }
     }
 

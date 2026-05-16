@@ -134,13 +134,30 @@ public sealed class Fdc8272
         }
 
         if (_cmdLen < _cmdBuf.Length) _cmdBuf[_cmdLen++] = v;
-        if (_cmdLen >= _cmdExpected) ExecuteCommand();
+        if (_cmdLen >= _cmdExpected)
+        {
+            AprPc.Cli.Diagnostics.KbdTrace.Log(
+                $"FDC.Exec opcode=0x{_cmdBuf[0]:X2} op&0x1F=0x{_cmdBuf[0] & 0x1F:X2} " +
+                $"bytes=[{string.Join(" ", _cmdBuf.Take(_cmdLen).Select(b => b.ToString("X2")))}]");
+            ExecuteCommand();
+        }
     }
 
     public void WriteDor(byte v)   // port 0x3F2
     {
         bool wasReset = (_dor & 0x04) == 0;
         bool nowReset = (v   & 0x04) == 0;
+        // Phase 30.x speed hack — force all motor-on bits (4-7) to 1
+        // regardless of what BIOS asked. Real IBM XT BIOS INT 13h does
+        // a 500ms wall-clock stall on each disk read where the motor
+        // bit is OFF, waiting for physical 300 RPM spin-up. We have no
+        // physical motor; reads complete instantly. Keeping all motor
+        // bits forced-on tricks the BIOS into thinking the motor is
+        // already spinning, skipping the stall. Net effect on the user:
+        // dir/ver/etc respond in milliseconds instead of multiple
+        // minutes (840 reads * 500ms = 7 minutes saved per `dir`).
+        // Confirmed via Gemini 2026-05-16 consultation.
+        v = (byte)(v | 0xF0);
         _dor = v;
         if (wasReset && !nowReset)
         {
@@ -323,6 +340,10 @@ public sealed class Fdc8272
         int headsPerCyl     = disk.Heads;
         int lba             = ((c * headsPerCyl) + h) * sectorsPerTrack + (r - 1);
 
+        AprPc.Cli.Diagnostics.KbdTrace.Log(
+            $"FDC.ExecReadData drv={drive} CHS={c}/{h}/{r} EOT={eot} N={n} secSize={sectorSize} " +
+            $"-> LBA={lba} dmaPhys=0x{physAddr:X5} dmaBytes={dmaBytes}");
+
         // Read up to dmaBytes from disk image; clamp at end-of-image.
         int readBytes = Math.Min(dmaBytes, (disk.TotalSectors - lba) * 512);
         if (readBytes > 0)
@@ -365,6 +386,8 @@ public sealed class Fdc8272
 
     private void ExecInvalid()
     {
+        AprPc.Cli.Diagnostics.KbdTrace.Log(
+            $"FDC.INVALID_COMMAND opcode=0x{_cmdBuf[0]:X2} bytes=[{string.Join(" ", _cmdBuf.Take(_cmdLen).Select(b => b.ToString("X2")))}]");
         _resBuf[0] = 0x80;  // ST0 = invalid command
         _resLen = 1;
         _phase = Phase.Result;

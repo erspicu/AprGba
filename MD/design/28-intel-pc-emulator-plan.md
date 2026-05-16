@@ -555,8 +555,8 @@ result/pc/
 | 28.8c | FreeDOS blockers #3-4 — add 0xCB/0xCA RETF + 0x9A CALL far + pre-install all 256 IVT defaults | ✅ | `7d7bda3` | 2026-05-15 |
 | 28.8d | FreeDOS kernel full banner (3 lines + WATCOMC + FAT32 + Copyright) printed | ✅ | `837ede2` | 2026-05-15 |
 | 28.8e | FreeDOS COMMAND.COM (FreeCom 0.85a) loads + executes AUTOEXEC.BAT → FreeDOS ASCII logo | ✅ | `7a3b8ef` | 2026-05-15 |
-| 28.8f | Interactive `A:\\>` prompt | ⏳ deferred — LOGO program (run by AUTOEXEC.BAT) blocks waiting for key; current `--keys=` script only injects at boot. Needs run-time stdin pump OR image with no LOGO. Mechanical, not framework. |
-| 28.9 | dir/type/cls/ver screenshot matrix | ⏳ deferred — gated on 28.8f. INT 16h + 21h DOS calls already in place; mechanical. |
+| 28.8f | Interactive `A:\\>` prompt | ✅ unblocked 2026-05-16 via real-BIOS path + Phase 30.7 GUI/keyboard end-to-end (see `MD/performance/202605161900-realbios-keyboard-gui-end-to-end.md`). HLE path's `--keys=` LOGO issue still exists but is bypassed by real-BIOS route. |
+| 28.9 | dir/type/cls/ver screenshot matrix | ⚠️ partial — dir/ver functionally complete via real-BIOS path but unusably slow (5-10 min per command, see closure note). Will revisit after Phase 30.9 block-JIT speedup. |
 | 28.10 | INT 33h mouse HLE | ⏳ deferred (optional in original plan) |
 | 28.11 | PC speaker PCM output | ⏳ deferred (optional in original plan) |
 | 28.12 | Phase 28 closure docs (`MD/performance/202605152200-pc-emulator-freedos-boot.md` + plan doc + roadmap) | ✅ | `7a3b8ef` | 2026-05-15 |

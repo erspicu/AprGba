@@ -1,0 +1,88 @@
+Timestamp: 2026-05-16T13:51:10
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Following up on my custom x86-16 emulator running real pcxtbios.bin + FreeDOS 1.3 floppy. Got past the keyboard / INT 9 / XLAT issues -- BIOS INT 9 ISR now writes BDA correctly, FreeDOS reaches A:\> prompt, can type commands. But two new problems hit at the interactive shell:
+
+PROBLEM 1: ver / dir take minutes
+- Typing "ver<Enter>" at A:\> prompt -> waited several minutes, no output appeared.
+- Typing "dir<Enter>" produced first line "Volume in drive A is FD13-BOOT" then froze. FDC trace shows 840 READ DATA commands over 4.5 minutes, average ~320ms per read. All FDC commands valid, all DMA programming valid, all read targets within 640KB. dmaPhys values shift each call (DOS using normal cluster buffer rotation).
+- PIT channel 0 runs at real wall-clock 18.2 Hz (55ms per tick) like real hardware. My HLT-wake on IRQ in the emulator thread sleeps for 2ms between checks, so HLT itself isn't the bottleneck. The 320ms-per-read figure aligns roughly with ~5 timer-tick waits per FDC operation.
+- I bumped PIT to 200Hz (5ms per tick) hoping BIOS HLT loops would unblock faster. NO IMPROVEMENT -- ver still took multiple minutes with no output.
+
+Question 1: What else in a real PC BIOS / FreeDOS DOS would cause command-level slowness independent of timer rate? Maybe FreeDOS / FreeCom has its own polling loops that don't HLT? Or is there a specific BIOS timeout (FDC motor settle, INT 13h verify-after-write) that uses an instruction-count delay loop rather than timer waits?
+
+PROBLEM 2: 1-key keyboard lag, classic FIFO-off-by-one symptom
+- User press 'a' -> screen shows nothing
+- User press 'b' -> screen shows 'a'
+- User press 'c' -> screen shows 'b'
+
+I diagnosed this as: WinForms fires both KeyDown AND KeyPress events for character keys; each event calls InjectScancode (which pushes scancode to FIFO behind port 0x60 + asserts IRQ 1). Edge-triggered PIC -- two AssertIrq calls only register one pending bit; BIOS INT 9 only reads one scancode per IRQ; the second scancode is stranded in FIFO until the NEXT key press triggers a fresh IRQ. Just-fixed by suppressing KeyPress in real-BIOS mode and using KeyDown as the sole source with a full virtual-key-to-scancode map.
+
+Question 2: Is my edge-triggered IRQ 1 model with a separate scancode FIFO the right approach, or should I be using a level-triggered IRQ semantics where IRQ 1 stays asserted as long as the FIFO has any scancodes, and BIOS port 0x61 ack (the "bit 7 high then low" pulse) is what truly de-asserts it? Real PC/XT 8255A-5 keyboard interface vs my 8259A model -- am I mixing semantics?
+
+Question 3: Even with my one-event-per-physical-key fix, if user types fast enough to put two scancodes in the FIFO between IRQ deliveries (e.g., key auto-repeat), they'd see the same lag. Is the right fix to:
+  (a) Keep asserting IRQ 1 as long as FIFO is non-empty (= my dispatcher polls FIFO depth after each BIOS port 0x60 read, re-asserts IRQ if more data)
+  (b) Level-triggered IRQ 1 with port 0x61 ack de-asserting
+  (c) Something else entirely
+
+========================================================================
+RESPONSE
+========================================================================
+Congratulations on getting to the FreeDOS `A:\>` prompt! That is a massive milestone in x86 emulator development. Getting the BIOS, DOS kernel, FAT driver, and command interpreter to all agree on the state of the machine is notoriously difficult.
+
+Here are the answers to your issues, starting with the keyboard architecture (as it's a definitive hardware implementation detail), followed by the floppy slowness.
+
+---
+
+### Question 2 & 3: Keyboard Lag and IRQ Semantics
+
+**Question 2:** *Am I mixing semantics?*
+Yes, slightly. You are right that the PC/XT 8259A PIC is **edge-triggered**. However, the keyboard hardware itself (the 8255 PPI in an XT, or the 8042 controller in an AT) acts like a latch. 
+
+When a scancode arrives, the keyboard hardware pulls the IRQ line **HIGH** and *holds it there indefinitely*. Because the 8259A is edge-triggered, it registers the interrupt exactly once on that low-to-high transition. If your emulator pushes a second key into the FIFO while the line is technically already high (or if you just pulse the IRQ instantly and rely on the PIC's internal pending bit), the second key generates no new edge, and the BIOS misses it. 
+
+**Question 3:** *What is the right fix for the FIFO?*
+**(c) Something else entirely (The Hardware-Accurate Approach).**
+
+To perfectly handle fast typing and auto-repeat, you must emulate the interaction between the Keyboard Controller (Port 0x60), the Keyboard Control Port (Port 0x61), and the edge-triggered PIC.
+
+Here is the exact cycle a real XT uses, and how you should model your FIFO:
+
+1. **Key Pressed:** A scancode goes into your emulator's FIFO.
+2. **Pop to Buffer:** If the emulated hardware's "IRQ line state" is currently `LOW`, you pop the scancode from the FIFO into your Port 0x60 buffer, and set your internal keyboard IRQ line to `HIGH`. 
+3. **The Edge:** Changing that line from LOW to HIGH triggers the `AssertIrq(1)` to your edge-triggered 8259A.
+4. **BIOS INT 9:** The BIOS reads Port 0x60.
+5. **The Acknowledge (Port 0x61):** The BIOS *must* acknowledge the keyboard. In an XT, it does this by reading Port 0x61, setting Bit 7 high, writing it back, then setting Bit 7 low, and writing it back.
+6. **The Reset:** When your emulator detects Port 0x61 Bit 7 going `HIGH`, you clear your internal keyboard IRQ line to `LOW`.
+7. **The Next Key:** When Port 0x61 Bit 7 goes `LOW` again (the end of the ACK pulse), you check your FIFO. **If the FIFO is not empty, you pop the next byte to 0x60 and pull the IRQ line `HIGH` again.**
+
+This generates the *new low-to-high edge* the 8259A needs, immediately firing INT 9 again for the next key in the FIFO. This completely eliminates the off-by-one bug and handles auto-repeat perfectly without needing to suppress `KeyPress` events (though using `KeyDown`/`KeyUp` strictly for scancode generation is still best practice for emulators).
+
+---
+
+### Question 1: Problem 1 - `ver` / `dir` take minutes
+
+The 320ms-per-read delay you are seeing is almost certainly a **Floppy Motor Spin-up Delay**.
+
+Here is what is happening: 
+When you type `dir`, FreeDOS reads the root directory, but it also reads the *entire FAT* to calculate the "bytes free" at the bottom of the directory listing. A 1.44MB FAT is 9 sectors, but if DOS calculates free space cluster-by-cluster, or if it traverses subdirectories, it can generate hundreds of reads. 840 reads is ~420KB of data, which is perfectly normal for DOS calculating free space.
+
+**Why does it take 320ms per read?**
+In a real PC, floppy drives take time to physically spin up. The BIOS tracks whether the motor is currently running via the BIOS Data Area (BDA) at `0040:003F` (Motor Status) and `0040:0040` (Motor Timeout Counter). 
+
+When DOS asks the BIOS to read a sector (INT 13h), the BIOS checks the BDA. If the motor is off, the BIOS turns on the motor bit in the Digital Output Register (Port `0x3F2`), and then **intentionally stalls for 500ms** to let the physical motor reach 300 RPM. It typically does this stall by waiting for timer ticks (which explains your ~320-500ms timing). 
+
+If your emulator is instantly clearing the motor-on bit in Port `0x3F2`, or if DOS is aggressively turning the motor off after every single sector read to save power, the BIOS will execute that 500ms spin-up delay *on every single FDC command*. 
+
+**Why `ver` takes so long:**
+`ver` is an internal command, but FreeDOS's `COMMAND.COM` is likely searching the `PATH` (which defaults to `A:\`) looking for `VER.EXE` or `VER.COM` before it realizes it's an internal command. Alternatively, `COMMAND.COM` might be reloading its transient portion from the floppy disk. Because your floppy reads are taking 320ms each, checking the directory for an executable brings the whole system to a crawl.
+
+**How to fix it:**
+1. **Check your FDC Emulation of Port `0x3F2` (DOR):** Ensure that when the BIOS writes to `0x3F2` to turn the motor on, you keep that state alive.
+2. **Check IRQ 6 (Floppy Interrupt):** Does your FDC emulation fire IRQ 6 *after* the DMA transfer completes? If your emulator finishes the read instantly but fails to fire IRQ 6 correctly, the XT BIOS will fall back to polling the FDC Main Status Register (MSR) and wait for a safety timeout (usually derived from instruction loops or timer ticks) before assuming success/failure. 
+3. **Cheat the Motor Wait:** If you want floppy reads to be instantly fast, you can patch the BDA. The XT BIOS looks at `0040:0040` (Motor shutoff counter). Every INT 8 timer tick decrements this. When it hits zero, the motor is turned off. If you artificially keep `0040:003F` (Motor running) active, or patch the BIOS spin-up delay loop, the reads will happen at the speed of your emulator's DMA.
+
+**One final note on execution speed:** 
+If you increased the PIT to 200Hz and it *didn't* speed up the 320ms delay, the BIOS might be doing an instruction-counted delay loop instead of a timer-tick delay loop (e.g., `MOV CX, 0xFFFF; LOOP $`). If your emulator executes instructions faithfully but relies purely on real-time wall clocks for syncing, instruction loops will run exactly as fast as your host CPU can churn them out. Make sure your emulator isn't inadvertently throttling raw instruction execution!

@@ -9,6 +9,8 @@
 // (mutually-exclusive flags, recognized CPU/backend values) also there.
 
 using AprPc.Cli;
+using AprPc.Cli.Diagnostics;
+using AprPc.Cli.Hardware;
 using AprPc.Cli.Ui;
 using System.Windows.Forms;
 
@@ -43,6 +45,10 @@ if (opts.Verbose)
     Console.WriteLine($"  mode     = {(opts.Headless ? "headless" : "UI")}");
 }
 
+// Always-on keyboard trace -- low volume (only fires on KeyPress + port 0x60
+// read + IRQ 1), so it's safe to leave enabled. Cleared each launch.
+KbdTrace.Init("temp/kbd-trace.log");
+
 using var runner = new PcSystemRunner(opts);
 
 if (opts.Headless)
@@ -53,6 +59,31 @@ if (opts.Headless)
 // UI mode — standard WinForms message pump on the main thread.
 ApplicationConfiguration.Initialize();
 runner.Start();
-runner.Resume();    // no test-ROM injection path in UI mode yet (Phase 28.5+)
+
+// Mount disk images BEFORE Resume() so real-BIOS INT 19h (which boots
+// the moment Resume() starts the CPU thread) can find the floppy.
+// Mirrors HeadlessRunner's mount sequence; without this real-BIOS POST
+// hits FDC NRDY immediately on boot attempt.
+if (opts.FloppyAPath is { } floppyPath)
+{
+    var size = new FileInfo(floppyPath).Length;
+    if (size >= 64 * 1024)
+    {
+        var disk = DiskImage.LoadFloppy(floppyPath);
+        runner.MountDisk(0x00, disk);
+    }
+    else
+    {
+        var bytes = File.ReadAllBytes(floppyPath);
+        runner.LoadTestRom(bytes, segment: 0x0000, offset: 0x7C00);
+    }
+}
+if (opts.HddPath is { } hddPath)
+{
+    var disk = DiskImage.LoadHardDisk(hddPath);
+    runner.MountDisk(0x80, disk);
+}
+
+runner.Resume();
 Application.Run(new MainForm(opts, runner));
 return 0;

@@ -174,7 +174,10 @@ during the FDC execution phase. Algorithm when handling READ DATA:
 | 30.6b | Debug infrastructure (--trace-cpu-cs, --watch-mem/--watch-read, wider memdump) | ✅ `c18bcb4` |
 | 30.6c | CPU ROL r/m16, CL count>1 fix (was stubbed) | ✅ `e62a462` |
 | 30.6 (end-to-end goal) | pcxtbios.bin INT 19h → FreeDOS boot complete | ✅ `e62a462` |
-| 30.7 | Closure + screenshot + EN mirror | (this doc update) |
+| 30.7 | Closure + screenshot + EN mirror | ✅ `50cff5d` + `d8b54b9` |
+| **30.7a** | **GUI + real-BIOS keyboard end-to-end interactive A:\\>** — 16 sub-bug investigation: MainForm shortcut, FPU AllocaSlotProvider width=64, MDA framebuffer auto-detect, GUI MountDisk, HleBios.Install skip in real-BIOS mode, 8042 OBF status bit, port 0x60 + IRQ 1 instead of direct BDA write, missing XLAT (0xD7) opcode, unknown-opcode logger, HLT wake-on-IRQ, FDC motor-on hack (eliminates BIOS 500ms spin-up stall), edge-triggered IRQ 1 + port 0x61 ack pulse model (Option C from Gemini), KeyPress suppression in real-BIOS mode, full PC XT scancode set 1 map, periodic CPU dump + F11 hotkey, gui-test.bat launcher. Closure: [`MD/performance/202605161900-realbios-keyboard-gui-end-to-end.md`](../performance/202605161900-realbios-keyboard-gui-end-to-end.md) | ✅ (this commit) |
+| 30.8 | Speed up real-BIOS interactive (current ~500K inst/sec → unusably slow `dir` taking 5-10 min). Needs block-JIT + FPU fix (30.9 prerequisite). | ⏳ deferred |
+| 30.9 | block-JIT + Phase 29 FPU correctness — i64 alloca slot for FPU_ST0 doesn't match f64 runtime layout; block-JIT produces black screen even with the slot type fix. Also unblocks Phase 28.8x (block-JIT INT trap loss). Biggest interactive-speed win available. | ⏳ deferred |
 
 ### Status: ALL PHASES ✅ COMPLETE (2026-05-16)
 

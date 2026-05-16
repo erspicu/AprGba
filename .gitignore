@@ -461,3 +461,9 @@ FodyWeavers.xsd
 /BIOS/
 tools/fasmarm/
 tools/wla-dx/
+
+# user debug screenshots (gui-test.bat sessions, etc.)
+pic/
+
+# Claude Code local state
+.claude/

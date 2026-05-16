@@ -148,6 +148,16 @@ public sealed class PcSystemRunner : IDisposable
 
         // Phase 28.4 — PIT 8253 (used by HLE INT 1Ah).
         _pit = new PcPit(_bus, _pic);
+        // Phase 30.x — let CLI override the tick rate. Default 18Hz
+        // (= 55ms per tick, IBM PC stock). For interactive real-BIOS
+        // demos a higher rate (100-200Hz) unblocks BIOS HLT loops
+        // much faster -- BDA time-of-day drifts in exchange but
+        // commands like dir/ver respond in human-scale time instead
+        // of multiple minutes. See PcPit.TickIntervalMsOverride.
+        if (_options.PitRateHz > 0 && _options.PitRateHz != 18)
+        {
+            _pit.TickIntervalMsOverride = Math.Max(1, 1000 / _options.PitRateHz);
+        }
         _pit.Reset();
 
         // Phase 30 — when running with a real BIOS image, construct FDC
@@ -168,6 +178,23 @@ public sealed class PcSystemRunner : IDisposable
             X86JsonCpu.WriteWatchLo = _options.WatchMemLo;
             X86JsonCpu.WriteWatchHi = _options.WatchMemHi;
         }
+        else if (_options.BiosPath is not null)
+        {
+            // Real-BIOS keyboard debug: auto-watch BDA keyboard region
+            // (0x0041A head/tail + 0x0041E-0x0043D ring buffer) so we
+            // can see whether BIOS INT 9 ISR is writing scancodes.
+            X86JsonCpu.WriteWatchLo = 0x00418;
+            X86JsonCpu.WriteWatchHi = 0x00440;
+            X86JsonCpu.OnWriteWatch = (a, v) =>
+                AprPc.Cli.Diagnostics.KbdTrace.Log(
+                    $"BDA_WRITE phys=0x{a:X5} <- 0x{v:X2}");
+        }
+
+        // Pipe unknown-opcode warnings into kbd-trace too so all the
+        // diagnostic noise from one session lands in one place.
+        X86JsonCpu.OnUnknownOpcode = (cs, ip, op) =>
+            AprPc.Cli.Diagnostics.KbdTrace.Log(
+                $"UNKNOWN_OPCODE 0x{op:X2} at {cs:X4}:{ip:X4} (CPU will infinite-loop until implemented)");
         if (_options.ReadWatchHi > _options.ReadWatchLo)
         {
             X86JsonCpu.ReadWatchLo = _options.ReadWatchLo;
@@ -187,8 +214,28 @@ public sealed class PcSystemRunner : IDisposable
         X86JsonCpu.PortWrite16Handler = _ports.Write16;
 
         // Phase 28.2 — install HLE BIOS INT handlers + IVT entries.
+        //
+        // Phase 30.7 — only do this when running in pure HLE mode (no
+        // real BIOS image loaded). When --bios=PATH is in play, real
+        // BIOS POST owns the IVT — it installs its own INT 9 keyboard
+        // ISR, INT 10h video, INT 13h disk handlers, etc. If we pre-
+        // populate IVT with HLE trap pointers (F000:00xx), real BIOS
+        // POST only overrides vectors it explicitly cares about during
+        // POST. INT 9 specifically: real BIOS expects IVT[9] to be zero
+        // at boot, sees our non-zero pointer, may skip its own install,
+        // and then IRQ 1 lands in HleBios.Dispatch(9) which is a
+        // no-op IRET — the scancode is read off port 0x60 but never
+        // makes it into the BDA keyboard buffer, so INT 16h reads
+        // forever-empty.
         _bios = new HleBios(_cpu, _bus, _kbd, _pit, traceInt: _options.TraceInt);
-        _bios.Install();
+        if (_options.BiosPath is null)
+        {
+            _bios.Install();
+        }
+        else if (_options.TraceInt)
+        {
+            Console.Error.WriteLine("  [HLE] real BIOS image loaded — skipping HLE IVT install");
+        }
 
         // Start in Paused so LoadTestRom() / Open Floppy can land
         // before the CPU starts stepping. Avoids a race where the
@@ -287,8 +334,26 @@ public sealed class PcSystemRunner : IDisposable
 
                 if (_cpu is { Halted: true })
                 {
-                    // Park until external Reset/Stop arrives.
-                    Thread.Sleep(50);
+                    // Phase 28.7c — HLT wake-on-IRQ. Real silicon resumes
+                    // the CPU from HLT when an unmasked IRQ arrives;
+                    // without this check our dispatcher just sleeps
+                    // forever and IRQ 1 (keyboard) stays pending while the
+                    // FreeDOS installer's `STI; HLT` INT 16h wait loop
+                    // hangs. If IF=1 + IRQ pending, clear HALTED, deliver
+                    // the vector, fall through to the regular loop.
+                    var stH = _cpu.State;
+                    if (_pic is not null && stH.FlagI
+                        && _pic.DequeueNextVector() is byte vecH)
+                    {
+                        _cpu.ClearHalted();
+                        DeliverInterrupt(vecH, stH);
+                        _cpu.LoadState(stH);
+                        Interlocked.Increment(ref _instructionsExecuted);
+                        continue;
+                    }
+                    // Shorter parking time so a fresh IRQ wakes us within
+                    // a couple ms instead of up to 50 ms.
+                    Thread.Sleep(2);
                     continue;
                 }
 
@@ -397,6 +462,22 @@ public sealed class PcSystemRunner : IDisposable
         ushort newCs = _bus.ReadWord16(slot + 2);
         st.CS = newCs;
         st.IP = newIp;
+
+        // Trace for IRQ 1 / IRQ 0 only (keep volume sane). Records:
+        //   - where CPU was when IRQ hit (caller CS:IP saved on stack)
+        //   - target IVT entry (where real BIOS ISR lives, e.g. F000:E987)
+        //   - BDA keyboard tail BEFORE the ISR runs (so a subsequent
+        //     log line after IRET shows whether ISR wrote anything).
+        if (vec == 0x09)
+        {
+            ushort tailBefore = _bus.ReadWord16(0x0041C);
+            ushort headBefore = _bus.ReadWord16(0x0041A);
+            AprPc.Cli.Diagnostics.KbdTrace.Log(
+                $"DeliverInterrupt vec=0x09 IVT[9]={newCs:X4}:{newIp:X4} " +
+                $"(caller at {_bus.ReadWord16(AprX86.Cli.Memory.X86Memory.LinearAddr(st.SS, (ushort)(st.SP + 2))):X4}:" +
+                $"{_bus.ReadWord16(AprX86.Cli.Memory.X86Memory.LinearAddr(st.SS, st.SP)):X4}) " +
+                $"BDA head=0x{headBefore:X4} tail=0x{tailBefore:X4}");
+        }
     }
 
     public void Dispose()

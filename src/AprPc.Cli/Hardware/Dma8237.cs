@@ -69,6 +69,9 @@ public sealed class Dma8237
             case 0x81: Ch2Page  = value; break;    // ch2 page register (only one we wire)
             default: break;
         }
+        AprPc.Cli.Diagnostics.KbdTrace.Log(
+            $"DMA.Write port=0x{port:X2} val=0x{value:X2} ff={(FlipFlop ? "hi" : "lo")} " +
+            $"-> base=0x{Ch2Base:X4} count=0x{Ch2Count:X4} page=0x{Ch2Page:X2} mask=0x{MaskReg:X2} mode=0x{Ch2Mode:X2}");
     }
 
     private byte ReadFlipFlopByte(ushort src)

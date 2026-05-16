@@ -1,0 +1,164 @@
+Timestamp: 2026-05-16T11:53:34
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I'm emulating an IBM PC/XT and getting stuck on real-BIOS keyboard input. Pipeline appears correct but BDA buffer never gets written. Looking for the missing piece in pcxtbios.bin's INT 9 ISR.
+
+CONTEXT
+- Custom x86-16 emulator (not QEMU/Bochs) with 8086 + 8087 + 8237 DMA + 8272 FDC + 8259A PIC + 8253 PIT.
+- Loading real pcxtbios.bin (Sergey Kiselev's PC-XT BIOS, 8KB at 0xFE000-0xFFFFF, github.com/skiselev/pcxtbios).
+- Boots FreeDOS 1.3 floppy successfully — reaches the language selection menu via real BIOS INT 19h + FDC + DMA. So POST + bootstrap work.
+- Now stuck: keyboard input doesn't make it from my host UI through to the FreeDOS language menu's INT 16h read.
+
+KEYBOARD PLUMBING I IMPLEMENTED
+1. Host KeyPress event captures scancode, calls my PcPortBus.InjectScancode(byte scancode)
+2. InjectScancode pushes scancode into a small FIFO behind port 0x60, sets 8042 status port 0x64 bit 0 (OBF = output buffer full), then asserts PIC IRQ 1
+3. My 8259A model is edge-triggered; pending bit set, cleared when CPU services it
+4. CPU dispatch loop checks: IF=1 && PIC has pending unmasked IRQ → DeliverInterrupt(vec=9): pushes FLAGS/CS/IP, clears IF, jumps to IVT[9]
+5. IVT[9] is left at zero at boot (I don't preinstall HLE entries in real-BIOS mode — BIOS POST owns the IVT)
+
+TRACE EVIDENCE (from kbd-trace.log, one Enter keypress)
+```
+KeyDown code=Enter scan=0x1C route=realBios->port60
+PcPortBus.InjectScancode scan=0x1C fifo_after=1 kbd64=0x15 -> AssertIrq(1)
+Pic8259.AssertIrq(1) masked=False already_pending=False
+Pic8259.DequeueNextVector -> IRQ 1 vector=0x09
+DeliverInterrupt vec=0x09 IVT[9]=F000:E987 (caller at F000:E9CB) BDA head=0x001E tail=0x001E
+PcPortBus.Read(0x60) -> 0x1C (fifo_before=1, kbd64_after=0x14)
+```
+Everything green:
+- IVT[9] points to F000:E987 — real BIOS ISR installed itself ✓
+- Port 0x60 read returns correct scancode 0x1C ✓
+- "caller at F000:E9CB" repeats across all IRQs — that's INSIDE INT 9 ISR at the XLAT instruction
+
+After many keypresses, BDA keyboard buffer (0x0041E-0x0043D) is STILL ALL ZEROS. BDA head/tail (0x0041A/0x0041C) never move from 0x001E (= empty). I'm watching every write to physical 0x00418-0x00440 via a memory watch — only writes I see in that range are BIOS POST init (zero fill + head/tail = 0x001E) and floppy motor flags at 0x0043E/0x0043F. Zero writes to keyboard buffer area.
+
+PCXTBIOS.BIN INT 9 ISR DISASSEMBLY (F000:E987)
+```
+E987  FB              STI
+E988  50 53 51 52 56 57 1E    PUSH AX BX CX DX SI DI DS
+E98F  FC              CLD
+E990  B8 40 00        MOV AX, 0x0040
+E993  8E D8           MOV DS, AX             ; DS = BDA
+E995  E4 60           IN  AL, 0x60           ; read scancode
+E997  50              PUSH AX
+E998  E4 61           IN  AL, 0x61           ; ack port
+E99A  50              PUSH AX
+E99B  0C 80           OR  AL, 0x80
+E99D  E6 61           OUT 0x61, AL           ; set bit 7 (ack pulse)
+E99F  58              POP AX
+E9A0  E6 61           OUT 0x61, AL           ; restore
+E9A2  58              POP AX                 ; AL = scancode
+E9A3  8A E0           MOV AH, AL             ; AH = scancode
+E9A5  8B 1E 96 00     MOV BX, [0x0096]       ; BX = BDA kbd flags ext
+E9A9  E8 B6 FC        CALL E662              ; process scancode
+E9AC  FC              CLD
+E9AD  3C FF           CMP AL, 0xFF
+E9AF  75 0F           JNE +0x0F (to E9BF)
+E9B1  E9 F6 01        JMP +0x01F6 (to EBA9)  ; AL==FF path
+E9B3  B0 20           MOV AL, 0x20
+E9B5  E6 20           OUT 0x20, AL           ; EOI
+E9B7  1F              POP DS
+E9B8-BD               POP DI SI DX CX BX AX
+E9BE  CF              IRET
+E9BF  24 7F           AND AL, 0x7F           ; strip make/break bit
+E9C1  3C 46           CMP AL, 0x46
+E9C3  76 03           JBE +0x03 (to E9C8)
+E9C5  E9 22 01        JMP +0x122 (to EAEA)   ; if scancode > 0x46
+E9C8  BB 85 E8        MOV BX, 0xE885         ; lookup table base
+E9CB  2E D7           XLAT CS:               ; AL = CS:[BX+AL]
+E9CD  0A C0           OR  AL, AL
+E9CF  78 06           JS  +0x06 (to E9D7)
+E9D1  0A E4           OR  AH, AH
+E9D3  78 DE           JS  -0x22 (to E9B3)    ; skip to EOI if AH bit 7 set (break code)
+E9D5  EB 4D           JMP +0x4D (to EA24)
+```
+
+For my Enter scancode 0x1C:
+- CALL E662 falls through to E6CA (= MOV [0x96], BX; RET), AL unchanged = 0x1C
+- E9AD: CMP AL, 0xFF — not equal
+- E9AF: JNE to E9BF (BDA write path)
+- E9BF: AND AL, 0x7F = 0x1C
+- E9C1: CMP 0x1C, 0x46 — below
+- E9C3: JBE to E9C8 (XLAT path)
+- E9C8: BX = 0xE885
+- E9CB: XLAT CS: → AL = byte at F000:[E885 + 0x1C] = F000:E8A1 = 0x3B
+- E9CD: OR AL, AL — SF=0 (0x3B positive)
+- E9CF: JS not taken
+- E9D1: OR AH, AH — SF=0 (0x1C positive)
+- E9D3: JS not taken
+- E9D5: JMP to EA24 (BDA write should happen here)
+
+EA24 dump:
+```
+EA24  F6 06 18 00 08    TEST byte [0x0018], 0x08
+EA29  74 0D             JZ  +0x0D
+EA2B  80 FC 45          CMP AH, 0x45
+EA2E  74 05             JZ  +0x05
+EA30  80 26 18 00 F7    AND byte [0x0018], 0xF7
+EA35  E9 7B FF          JMP -0x85 (to E9B3, EOI)
+EA38  8A 16 17 00       MOV DL, [0x0017]
+EA3C  F6 C2 08          TEST DL, 0x08
+EA3F  75 1D             JNZ +0x1D
+EA41  F6 C2 04          TEST DL, 0x04
+EA44  75 2B             JNZ +0x2B
+EA46  F6 C2 03          TEST DL, 0x03
+EA49  75 7E             JNZ +0x7E
+EA4B  3C 1A             CMP AL, 0x1A
+EA4D  77 05             JA  +0x05
+EA4F  04 60             ADD AL, 0x60
+EA51  E9 16 01          JMP to EB6A (?)
+```
+
+QUESTIONS
+1. The "caller at F000:E9CB" pattern means IRQs are interrupting the ISR right at the XLAT instruction inside the ISR itself. Is this expected? STI at E987 enables nested IRQs — could the ISR be looping on itself somehow, or is XLAT just where it spends most of its time?
+
+2. Is there a known case where pcxtbios.bin's INT 9 ISR runs to completion but doesn't write the BDA keyboard buffer? Maybe a state in BDA[0x18] (shift state byte) or BDA[0x96] (kbd flags ext) that causes the ISR to skip BDA write?
+
+3. Should I be raising IRQ 1 only ONCE per scancode (instead of edge-asserting once per KeyDown), and let the BIOS poll port 0x60 until empty? Or is the 8259A AssertIrq + DequeueNextVector model correct for keyboard?
+
+4. Could the "ack pulse" on port 0x61 (set bit 7, then clear bit 7) need a specific timing or specific bit pattern? Right now I treat port 0x61 as a plain RAM byte — writes update _port61, no side effects.
+
+5. Is there a BIOS-side keyboard initialization phase (like a self-test) where it expects to receive specific scancodes BEFORE accepting any user keystrokes? Could it be in a state where my scancodes are being silently discarded?
+
+========================================================================
+RESPONSE
+========================================================================
+Based on your trace, disassembly, and emulator architecture, the issue is not with the BIOS ignoring the keystroke, but rather an **emulator bug** causing execution to get permanently stuck inside the INT 9 ISR, preventing it from ever reaching the BDA write instructions.
+
+Here are the answers to your questions and the missing pieces to get this working:
+
+### 1. The "caller at F000:E9CB" Pattern (The Root Cause)
+This pattern is **not expected** and is the smoking gun. `F000:E9CB` corresponds to the bytes `2E D7`, which is `XLAT CS:`. 
+If your timer or keyboard IRQs are *always* logging `F000:E9CB` as the interrupted `CS:IP`, it means the CPU is stuck in an infinite loop at that exact instruction. 
+
+**Why is it stuck?** In custom x86 emulators, a very common bug is failing to advance the Instruction Pointer (`IP`) correctly when handling prefixed instructions. If your CPU fetch loop decodes the `2E` (CS override) prefix, fetches the `D7` (XLAT) opcode, executes it, but **fails to increment IP** past the whole 2-byte instruction sequence, the CPU will execute `XLAT CS:` forever.
+Because `XLAT` doesn't change `IF`, interrupts still fire. When IRQ 0 (Timer) fires, it saves `CS:E9CB`, handles the timer, and IRETs back to the infinite loop at `E9CB`. This perfectly explains why execution never reaches the BDA write at `EA24`/`EB6A`, and why FreeDOS seemingly stays alive (timer ticks still process).
+
+*Check your CPU core's implementation of opcode prefixes and ensure `IP` properly skips both the prefix and the opcode.*
+
+### 2. Is there a known case where it skips BDA writes?
+The BIOS will skip writing to the BDA if the buffer is full (head == next tail) or if the keystroke represents an unhandled modifier state. However, for a normal Enter keystroke, it should definitely write. 
+The reason it isn't writing is due to the infinite loop mentioned above. 
+
+Additionally, your trace shows `XLAT CS:` resulting in `AL = 0x3B`. **This is incorrect.** `0x3B` is the ASCII code for `;` (and the scancode for F1). An Enter key (`0x1C`) passed through the unshifted table at `E885` should yield `0x0D` (Carriage Return). 
+You should review your `XLAT` instruction logic (`AL = Memory.Read(Segment, BX + AL)`). It is likely reading from the wrong physical address, failing to cast `AL` as an unsigned 8-bit offset, or adding `AH` by mistake. 
+
+### 3. Edge-triggering and Raising IRQ 1
+Your model of edge-asserting once per KeyDown works for getting the *first* interrupt, but it bypasses XT hardware reality. The BIOS expects ONE hardware IRQ per scancode byte. You should inject the scancode into your port 0x60 FIFO, and assert the IRQ 1 line HIGH. You leave it HIGH until the BIOS acknowledges it (see point 4). 
+
+### 4. The "Ack Pulse" on Port 0x61 (Crucial for XT)
+Treating port 0x61 as a plain RAM byte is a critical missing piece for hardware accuracy. On the PC/XT architecture:
+* When the BIOS writes to port `0x61` with **bit 7 set (1)**, the keyboard controller hardware clears its internal shift register AND forces the IRQ 1 line **LOW** (de-asserting the interrupt).
+* The BIOS then writes to `0x61` with **bit 7 cleared (0)** to allow the keyboard to clock in the next key.
+
+To accurately emulate this: when your emulator detects an `OUT 0x61` where bit 7 transitions to `1`, you should pop/clear your active scancode logic and immediately de-assert your 8259A's IRQ 1 line. Without this, a real BIOS would never receive a second keystroke, as the IRQ line would stay high forever (preventing future rising edges).
+
+### 5. BIOS-side Keyboard Init Phase
+For the PC/XT, there is no bidirectional initialization phase like there is for AT/PS2 (8042) keyboards. The XT keyboard simply sends clock and data lines directly. The POST just zeros out the BDA and expects scancodes to stream in.
+
+### Summary Checklist to Fix:
+1. Fix your CPU core so that instruction prefixes (like `2E CS:`) properly advance `IP` past the underlying opcode.
+2. Debug your `XLAT` instruction logic — `E885 + 0x1C` should yield `0x0D`, not `0x3B`.
+3. Hook `OUT 0x61` so that setting bit 7 explicitly de-asserts IRQ 1.

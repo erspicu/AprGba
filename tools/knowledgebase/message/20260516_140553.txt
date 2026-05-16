@@ -1,0 +1,103 @@
+Timestamp: 2026-05-16T14:05:53
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Follow-up to my emulator FreeDOS 1.3 dir hang investigation. Implemented your two fixes from last consultation:
+
+1. Edge-triggered IRQ 1 with port 0x61 ack pulse driven re-trigger (Option C). FIFO of scancodes, IRQ line state, port 0x61 bit 7 LOW->HIGH de-asserts, HIGH->LOW pops next FIFO entry + new edge. Keyboard 1-key lag GONE.
+
+2. FDC port 0x3F2 (DOR) motor-on bits 4-7 forced to 1 regardless of what BIOS writes. The 500ms-per-INT-13h BIOS spin-up stall is gone. dir reads are now ~30ms each instead of 320ms.
+
+NEW STATE - dir prints PARTIAL output then halts WITHOUT further disk activity
+
+User types "dir<Enter>" at A:\>. Screen now shows:
+  Volume in drive A is FD13-BOOT
+  Volume Serial Number is 858E-3E5F
+Then nothing. No further output.
+
+Disk trace evidence:
+- 1033 FDC READ DATA commands fire in ~3 seconds after Enter (way more than the ~50 a normal dir should need)
+- LBA distribution: heavy reads on LBA 0 (boot sector, 22 times in last 300 reads), LBA 19 (first root dir sector, 16x), LBA 1-9 (FAT1, scattered), LBA 1357-1368 (data area sectors near end of disk)
+- Last FDC.ExecReadData logged at 06:01:19.718
+- User then waited 30+ seconds before closing the window. ZERO FDC activity in that 30s.
+
+So DOS finished its disk reads but stopped producing output. CPU appears to be alive (no UNKNOWN_OPCODE in trace, PIT IRQ 0 still firing at 200Hz). System is just... idle.
+
+Possible scenarios for what DOS is doing at this idle point:
+1. INT 16h AH=00 waiting for user keypress (= dir built output buffer but doesn't print it until user presses something)
+2. Tight CPU loop with no disk I/O (= some processing logic stuck)
+3. Spin-wait on PIT tick for some long delay (would still tick along but produce no output)
+
+Questions:
+1. Does FreeDOS COMMAND.COM's internal dir command have any "press any key to continue" pause that wouldn't show a "More" prompt? Or does it page output silently?
+2. The 1033 reads across boot sector + FAT + root dir + remote LBAs 1357-1368 — does that pattern suggest FreeDOS is doing something specific like calculating bytes free across the entire disk? On a 1.44MB floppy with FAT12, computing free bytes should walk FAT12 once (~9 sectors), not generate hundreds of reads of the same sectors. Could DOS be in an infinite cluster chain (each FAT entry points to next which points to itself) and re-walking the loop?
+3. After "Volume Serial Number is XXXX-XXXX", the next thing real DOS dir prints is " Directory of A:\" and then file listings. What could cause specifically THAT next line to be the hang point? Is there a CHDIR or GetCurrentDirectory INT 21h call between volume info and "Directory of" header that might depend on some BDA / DOS state we haven't initialised correctly?
+
+I'm using pcxtbios.bin (Sergey Kiselev XT BIOS) + FreeDOS 1.3 floppy install image. Boot via real BIOS INT 19h, keyboard via real BIOS INT 9 + 0x60/0x61. PIT at 200Hz, FDC motor forced on.
+
+========================================================================
+RESPONSE
+========================================================================
+This is an excellent, detailed trace report. Getting the keyboard fixed and the 500ms stall eliminated are huge milestones. 
+
+You are now running into a classic emulator development rite of passage: the subtle data corruption/state loop. The fact that the CPU is alive (PIT ticking, no unknown opcodes) but FDC activity has ceased completely after a massive burst of reads points to FreeDOS getting trapped in a logical loop, likely due to bad data returned from the disk.
+
+Here are the answers to your questions and the likely scenarios for what is happening.
+
+### Answers to your Questions
+
+**1. Does FreeDOS `dir` have a hidden "press any key" pause?**
+No. Unless explicitly invoked with `dir /p`, the command will scroll continuously. Furthermore, even if it were paging, it would print the explicit prompt (e.g., "Press any key to continue..."). It would not halt silently.
+
+**2. Do 1033 reads indicate an infinite cluster chain or free-space calculation?**
+1033 reads in 3 seconds is **highly abnormal** and signifies a loop. A standard `dir` of a floppy root directory should require fewer than 30 reads total (Boot sector, 9 FAT sectors, and a few Root Directory sectors). 
+*   *Infinite cluster chain?* Unlikely for the initial `dir`. The Root Directory on FAT12 (A:\) is a contiguous, fixed-size area (LBA 19-32); it does not use cluster chains. 
+*   *What causes 1000+ reads?* It is almost certainly **INT 13h retries or cache thrashing caused by reloading an executable**. When BIOS INT 13h encounters an FDC error (e.g., your emulator returning a bad status register state, or failing a CRC check), the BIOS will automatically issue an FDC Reset and retry the read 3 to 4 times before passing the error back to DOS. If DOS's Critical Error Handler (INT 24h) is invoked, it may automatically retry based on FreeDOS internal state, causing a massive storm of reads.
+
+**3. What happens between "Volume Serial Number" and "Directory of"?**
+This is the crucial clue. Between those two lines, FreeDOS `COMMAND.COM` does a few things:
+*   It queries the Current Working Directory (INT 21h AH=47h).
+*   **The FreeDOS Trap:** FreeDOS supports localized strings (NLS). It may be looking for its message catalog. More importantly, **MS-DOS/FreeDOS `COMMAND.COM` is split into two parts: Resident and Transient.**
+*   When a program runs, it can overwrite the "Transient" portion of `COMMAND.COM` in high memory to save RAM. When the program exits, the Resident portion checks a checksum. If the Transient portion was overwritten, `COMMAND.COM` must reload it from disk.
+*   **LBA 1357-1368 is almost certainly where `COMMAND.COM` or its transient data is stored on that disk.** (LBA 1357 is roughly Track 37, Head 1, Sector 8).
+
+### What is likely happening (The Hypotheses)
+
+**Hypothesis A: The Transient Reload Loop (Data Corruption)**
+After parsing the Boot Sector and Root Dir to get the Volume Label, FreeDOS logic decides it needs to fetch a string, execute a sub-routine, or reload its transient portion from LBA 1357-1368. 
+However, **your emulator is returning incorrect bytes for those sectors.** (Either the DMA transfer is failing, filling RAM with zeroes, or the CHS-to-LBA math is wrong). FreeDOS executes/parses the garbage data, fails an internal checksum, and loops back to retry loading it, repeatedly reading LBA 0 (Boot), LBA 19 (Root), and LBA 1357. Eventually, it gives up, but because its transient portion is corrupt, it has no code left to print the error to the screen, so it just sits in an idle infinite loop ( `jmp $` or similar).
+
+**Hypothesis B: The "Head 1" CHS Translation Bug**
+Look at the LBAs you mentioned:
+*   LBA 0 = Track 0, **Head 0**, Sector 1. (Works: Volume Serial Number printed).
+*   LBA 1-9 = Track 0, **Head 0**, Sectors 2-10. (Works).
+*   LBA 19 = Track 0, **Head 1**, Sector 2. (Root Dir).
+*   LBA 1357 = Track 37, **Head 1**, Sector 8.
+
+*Notice how the heavy, repetitive reads are happening on Head 1?* 
+A very common bug in floppy emulators is failing to properly parse the "Head" bit in the FDC command byte, or a bug in the formula that translates the FDC's C, H, S parameters into your image file's LBA offset. If your emulator ignores Head 1 and reads Head 0 instead, DOS asks for the Root Directory (LBA 19) but your emulator feeds it LBA 1. DOS asks for `COMMAND.COM` (LBA 1357) and gets LBA 1339. DOS gets entirely wrong data, gets confused, retries furiously, and halts.
+
+---
+
+### Your Next Debugging Steps
+
+To isolate exactly why it hangs, implement these specific checks:
+
+**1. Pause the CPU and look at CS:IP**
+Since the emulator is in a stable idle state, add a debug hotkey to your emulator to dump the CPU registers. Where is `CS:IP` pointing?
+*   If it's in the BIOS ROM (`F000:XXXX`), it's stuck in a BIOS hardware polling loop (maybe waiting for an FDC interrupt that never came after the last read).
+*   If it's in the `0070:XXXX` to `0100:XXXX` range, it's stuck inside DOS/COMMAND.COM. Disassembling the instruction at `CS:IP` will usually show something like `EB FE` (jmp short $) or a loop polling a memory address.
+
+**2. Verify the DMA Memory Writes**
+Pick one FDC READ DATA command for LBA 19. Log the exact bytes your emulator places into host memory via DMA. Then, open your FreeDOS floppy `.img` file in a hex editor, go to offset `19 * 512 = 0x2600`. Do the bytes in your emulator's RAM exactly match the bytes in the image file? If they are all zeroes, or off by an offset, your 8237 DMA controller logic has a bug.
+
+**3. Check INT 13h Return Status**
+Add a temporary hook/log at the very end of your CPU's `IRET` instruction. If `CS:IP` matches the BIOS INT 13h exit point, log the value of the `AH` register. 
+If `AH` is returning `00h`, BIOS thinks the disk reads are perfect. If `AH` is returning something like `04h` (Sector not found), `08h` (DMA overrun), or `10h` (CRC error), your FDC status registers are incorrectly set, causing the BIOS to trigger the retry storm.
+
+**4. Check your CHS-to-LBA Formula**
+Verify your math inside the FDC `READ DATA` command execution. 
+For a 1.44MB floppy (80 tracks, 2 heads, 18 sectors/track):
+`LBA = (Cylinder * 2 * 18) + (Head * 18) + (Sector - 1)`
+Ensure the `Head` variable is extracted correctly from the FDC command parameters, not just assumed to be 0.

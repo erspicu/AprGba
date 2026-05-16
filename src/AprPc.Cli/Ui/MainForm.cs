@@ -11,6 +11,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using AprPc.Cli.Diagnostics;
 using AprX86.Cli.Video;
 
 namespace AprPc.Cli.Ui;
@@ -58,7 +59,9 @@ public sealed class MainForm : Form
         emPau.Click += (_, _) => TogglePause();
         var emSt1 = new ToolStripMenuItem("Step One &Instruction") { ShortcutKeys = Keys.F10 };
         emSt1.Click += (_, _) => Todo("Emulation: Step Instruction");
-        var emStF = new ToolStripMenuItem("Step One &Frame")     { ShortcutKeys = Keys.F11 };
+        // F11 NOT bound to menu so it can be used as a debug-dump hotkey
+        // for catching CPU state when the guest hangs.
+        var emStF = new ToolStripMenuItem("Step One &Frame");
         emStF.Click += (_, _) => Todo("Emulation: Step Frame");
         emulMenu.DropDownItems.AddRange(new ToolStripItem[] { emRst, emPau, emSt1, emStF });
 
@@ -80,7 +83,10 @@ public sealed class MainForm : Form
         viewMenu.DropDownItems.Add(new ToolStripMenuItem("Show CPU MIPS") { Checked = true, CheckOnClick = true });
         viewMenu.DropDownItems.Add(new ToolStripMenuItem("Show Disk LED") { Checked = true, CheckOnClick = true });
         viewMenu.DropDownItems.Add(new ToolStripSeparator());
-        var ssItem = new ToolStripMenuItem("Take &Screenshot...") { ShortcutKeys = Keys.PrintScreen };
+        // F12 instead of Keys.PrintScreen: ToolStripMenuItem.ShortcutKeys validates
+        // against the Shortcut enum (a Keys subset that doesn't include PrintScreen);
+        // assigning PrintScreen throws InvalidEnumArgumentException at ctor.
+        var ssItem = new ToolStripMenuItem("Take &Screenshot...") { ShortcutKeys = Keys.F12 };
         ssItem.Click += (_, _) => Todo("View: Screenshot");
         viewMenu.DropDownItems.Add(ssItem);
 
@@ -131,44 +137,144 @@ public sealed class MainForm : Form
         _refreshTimer.Tick += (_, _) => RefreshFromRunner();
         _refreshTimer.Start();
 
-        // === Keyboard plumbing (Phase 28.3) ===
-        // KeyPress gives the printable ASCII (honours shift); KeyDown
-        // covers non-printable keys (Esc, BackSpace, F-keys). The
-        // emulator thread reads from PcKeyboard via INT 16h HLE.
+        // === Keyboard plumbing ===
+        // Two routes depending on which BIOS path is active:
+        //
+        //   HLE BIOS  (--bios-mode=hle, no --bios=PATH):
+        //     KeyPress / KeyDown → PcKeyboard.Enqueue writes (ASCII, scan)
+        //     straight into the BDA ring buffer at 0040:001E. HLE INT 16h
+        //     reads from there.
+        //
+        //   Real BIOS (--bios=PATH):
+        //     KeyPress / KeyDown → PcPortBus.InjectScancode pushes the
+        //     scancode into the 8042 FIFO and asserts IRQ 1. The real
+        //     BIOS INT 9 ISR then reads port 0x60, translates scancode
+        //     to ASCII via its own table, and populates the BDA buffer
+        //     itself. Real INT 16h reads from BDA same as HLE, but the
+        //     translation + BDA write is done by the BIOS, not by us.
+        bool realBiosKbd = options.BiosPath is not null;
+
+        // Two WinForms events fire per character key: KeyDown (virtual
+        // key code) and KeyPress (ASCII char). For real-BIOS mode we
+        // only want ONE scancode per physical press -- BIOS INT 9 does
+        // the scancode->ASCII translation, so a single make code is
+        // enough. KeyDown is the right hook (fires once per key, covers
+        // letters + digits + arrows + Enter + Esc + Backspace etc.) and
+        // KeyPress is suppressed in real-BIOS mode.
+        //
+        // Without this suppression, KeyDown + KeyPress each call
+        // InjectScancode -> FIFO holds 2 scancodes -> PIC is edge-
+        // triggered so AssertIrq twice only fires once -> BIOS only
+        // reads 1 scancode per IRQ -> the second scancode is stranded
+        // in FIFO until the NEXT key press triggers a fresh IRQ -> user
+        // sees a 1-key lag (press 'a' shows nothing, press 'b' shows
+        // 'a', etc.). Diagnosed 2026-05-16.
+        //
+        // For HLE mode the dual-event behaviour is harmless because
+        // PcKeyboard.Enqueue writes BDA directly (no FIFO/IRQ gating)
+        // and HLE INT 16h reads BDA -- duplicates would print "aa" but
+        // that's preferable to risking missed scancodes for now. Keep
+        // both events firing in HLE.
         KeyPress += (_, e) =>
         {
+            if (realBiosKbd) return;   // suppressed -- KeyDown owns real-BIOS
             byte ascii = (byte)e.KeyChar;
-            byte scan  = e.KeyChar switch
-            {
-                '\r' or '\n' => 0x1C,
-                '\b'         => 0x0E,
-                '\t'         => 0x0F,
-                ' '          => 0x39,
-                (char)0x1B   => 0x01,
-                _            => 0x00,
-            };
-            _runner.Keyboard?.Enqueue(ascii, scan);
+            byte scan  = AsciiToScancode(e.KeyChar);
+            KbdTrace.Log(
+                $"KeyPress char='{(e.KeyChar < 0x20 ? "\\x" + ((int)e.KeyChar).ToString("X2") : e.KeyChar.ToString())}' " +
+                $"ascii=0x{ascii:X2} scan=0x{scan:X2} route=HLE->BDA");
+            bool ok = _runner.Keyboard?.Enqueue(ascii, scan) ?? false;
+            if (!ok) KbdTrace.Log("Enqueue returned false (buffer full or no kbd)");
         };
         KeyDown += (_, e) =>
         {
-            // Catch keys that don't fire KeyPress: Esc / BS / Enter
-            // can be ambiguous depending on platform; ignore those
-            // here since KeyPress already handles them.
+            // Map WinForms virtual key codes to PC XT scancode set 1.
+            // For real-BIOS this is the ONLY path; for HLE it
+            // supplements KeyPress for keys that have no ASCII (arrows,
+            // F-keys).
             byte ascii = 0, scan = 0;
             switch (e.KeyCode)
             {
+                // Special / control keys (covered for both modes)
                 case Keys.Escape:    ascii = 0x1B; scan = 0x01; break;
                 case Keys.Back:      ascii = 0x08; scan = 0x0E; break;
                 case Keys.Enter:     ascii = 0x0D; scan = 0x1C; break;
+                case Keys.Tab:       ascii = 0x09; scan = 0x0F; break;
+                case Keys.Space:     ascii = 0x20; scan = 0x39; break;
                 case Keys.Up:        ascii = 0x00; scan = 0x48; break;
                 case Keys.Down:      ascii = 0x00; scan = 0x50; break;
                 case Keys.Left:      ascii = 0x00; scan = 0x4B; break;
                 case Keys.Right:     ascii = 0x00; scan = 0x4D; break;
                 case Keys.F1:        ascii = 0x00; scan = 0x3B; break;
                 case Keys.F10:       ascii = 0x00; scan = 0x44; break;
+                case Keys.F11:
+                    // Debug hotkey: dump current CPU state to kbd-trace
+                    // instead of injecting a scancode. Useful for "press
+                    // F11 when the guest hangs and tell me where CS:IP
+                    // is" diagnostics.
+                    {
+                        var cs = _runner.Cpu?.State.CS ?? 0;
+                        var ip = _runner.Cpu?.State.IP ?? 0;
+                        var fl = _runner.Cpu?.State.GetFlags() ?? 0;
+                        var st = _runner.Cpu?.State;
+                        KbdTrace.Log($"F11 DUMP: CS={cs:X4}:IP={ip:X4} FLAGS=0x{fl:X4} " +
+                            $"AX={st?.A.X:X4} BX={st?.B.X:X4} CX={st?.C.X:X4} DX={st?.D.X:X4} " +
+                            $"SI={st?.SI:X4} DI={st?.DI:X4} BP={st?.BP:X4} SP={st?.SP:X4} " +
+                            $"DS={st?.DS:X4} ES={st?.ES:X4} SS={st?.SS:X4} " +
+                            $"halted={_runner.Cpu?.Halted}");
+                    }
+                    return;
+                // Digits 0..9 (top row, not numpad)
+                case Keys.D0:        ascii = (byte)'0'; scan = 0x0B; break;
+                case Keys.D1:        ascii = (byte)'1'; scan = 0x02; break;
+                case Keys.D2:        ascii = (byte)'2'; scan = 0x03; break;
+                case Keys.D3:        ascii = (byte)'3'; scan = 0x04; break;
+                case Keys.D4:        ascii = (byte)'4'; scan = 0x05; break;
+                case Keys.D5:        ascii = (byte)'5'; scan = 0x06; break;
+                case Keys.D6:        ascii = (byte)'6'; scan = 0x07; break;
+                case Keys.D7:        ascii = (byte)'7'; scan = 0x08; break;
+                case Keys.D8:        ascii = (byte)'8'; scan = 0x09; break;
+                case Keys.D9:        ascii = (byte)'9'; scan = 0x0A; break;
+                // Letters A..Z (Keys.A is the virtual key, not the char)
+                case Keys.A: ascii = (byte)'a'; scan = 0x1E; break;
+                case Keys.B: ascii = (byte)'b'; scan = 0x30; break;
+                case Keys.C: ascii = (byte)'c'; scan = 0x2E; break;
+                case Keys.D: ascii = (byte)'d'; scan = 0x20; break;
+                case Keys.E: ascii = (byte)'e'; scan = 0x12; break;
+                case Keys.F: ascii = (byte)'f'; scan = 0x21; break;
+                case Keys.G: ascii = (byte)'g'; scan = 0x22; break;
+                case Keys.H: ascii = (byte)'h'; scan = 0x23; break;
+                case Keys.I: ascii = (byte)'i'; scan = 0x17; break;
+                case Keys.J: ascii = (byte)'j'; scan = 0x24; break;
+                case Keys.K: ascii = (byte)'k'; scan = 0x25; break;
+                case Keys.L: ascii = (byte)'l'; scan = 0x26; break;
+                case Keys.M: ascii = (byte)'m'; scan = 0x32; break;
+                case Keys.N: ascii = (byte)'n'; scan = 0x31; break;
+                case Keys.O: ascii = (byte)'o'; scan = 0x18; break;
+                case Keys.P: ascii = (byte)'p'; scan = 0x19; break;
+                case Keys.Q: ascii = (byte)'q'; scan = 0x10; break;
+                case Keys.R: ascii = (byte)'r'; scan = 0x13; break;
+                case Keys.S: ascii = (byte)'s'; scan = 0x1F; break;
+                case Keys.T: ascii = (byte)'t'; scan = 0x14; break;
+                case Keys.U: ascii = (byte)'u'; scan = 0x16; break;
+                case Keys.V: ascii = (byte)'v'; scan = 0x2F; break;
+                case Keys.W: ascii = (byte)'w'; scan = 0x11; break;
+                case Keys.X: ascii = (byte)'x'; scan = 0x2D; break;
+                case Keys.Y: ascii = (byte)'y'; scan = 0x15; break;
+                case Keys.Z: ascii = (byte)'z'; scan = 0x2C; break;
                 default: return;
             }
-            _runner.Keyboard?.Enqueue(ascii, scan);
+            KbdTrace.Log(
+                $"KeyDown code={e.KeyCode} ascii=0x{ascii:X2} scan=0x{scan:X2} " +
+                $"route={(realBiosKbd ? "realBios->port60" : "HLE->BDA")}");
+            if (realBiosKbd)
+            {
+                _runner.Ports?.InjectScancode(scan);
+            }
+            else
+            {
+                _runner.Keyboard?.Enqueue(ascii, scan);
+            }
         };
 
         // Apply fullscreen if requested.
@@ -181,6 +287,33 @@ public sealed class MainForm : Form
 
     private long _lastInstrCount;
     private DateTime _lastSampleTime = DateTime.UtcNow;
+    private bool _autoExitFired;
+    private DateTime _lastCpuDumpTime = DateTime.UtcNow;
+    private long _lastCpuDumpInstr;
+    private ushort _lastCpuDumpCs, _lastCpuDumpIp;
+
+    /// <summary>
+    /// Snapshot current framebuffer to <c>opts.ScreenshotPath</c>, mirroring
+    /// what HeadlessRunner does on max-cycles / timeout. Used by the auto-exit
+    /// path so unattended GUI runs can be inspected after the fact. Caller
+    /// must have already checked <c>_runner.Bus != null</c> at least once
+    /// (otherwise we skip silently).
+    /// </summary>
+    private void TryDumpScreenshot()
+    {
+        if (_options.ScreenshotPath is not { } path) return;
+        if (_runner.Bus is not { } bus) return;
+        try
+        {
+            X86CgaRenderer.Render(bus.Memory.Ram, path);
+        }
+        catch (Exception ex)
+        {
+            // Best-effort — log to stderr so the operator sees it, but
+            // don't crash the auto-exit path itself.
+            Console.Error.WriteLine($"apr-pc: screenshot dump failed: {ex.Message}");
+        }
+    }
 
     private void RefreshFromRunner()
     {
@@ -198,6 +331,44 @@ public sealed class MainForm : Form
         }
         _statusState.Text = _runner.State.ToString();
 
+        // === Periodic CPU dump every 3s to kbd-trace ===
+        // Lets post-hoc analysis tell whether CPU is stuck at the same
+        // CS:IP / not advancing instructions (= true hang) vs running
+        // code at varying IPs (= just slow). Logs delta inst/s too.
+        if ((now - _lastCpuDumpTime).TotalSeconds >= 3.0 && _runner.Cpu is { } cpu)
+        {
+            var st = cpu.State;
+            long curInstr = _runner.InstructionsExecuted;
+            long deltaInstr = curInstr - _lastCpuDumpInstr;
+            bool ipSame = st.CS == _lastCpuDumpCs && st.IP == _lastCpuDumpIp;
+            KbdTrace.Log(
+                $"CPU_TICK CS={st.CS:X4}:IP={st.IP:X4} flags=0x{st.GetFlags():X4} " +
+                $"AX={st.A.X:X4} BX={st.B.X:X4} CX={st.C.X:X4} DX={st.D.X:X4} " +
+                $"halted={cpu.Halted} delta_instr={deltaInstr} same_csip={ipSame}");
+            _lastCpuDumpTime = now;
+            _lastCpuDumpInstr = curInstr;
+            _lastCpuDumpCs = st.CS;
+            _lastCpuDumpIp = st.IP;
+        }
+
+        // === Auto-exit on --max-cycles (GUI parity with HeadlessRunner) ===
+        // Lets unattended GUI runs reach a deterministic snapshot point:
+        // when the requested cycle budget is hit we render the framebuffer
+        // to --screenshot=PATH (if provided) and close the form. Useful
+        // for "launch + take screenshot + analyse" automation that doesn't
+        // need an interactive operator.
+        if (!_autoExitFired
+            && _options.MaxCycles.HasValue
+            && _runner.InstructionsExecuted >= _options.MaxCycles.Value)
+        {
+            _autoExitFired = true;
+            TryDumpScreenshot();
+            // BeginInvoke so the timer tick returns cleanly before Close
+            // tears down the form.
+            BeginInvoke(new Action(Close));
+            return;
+        }
+
         // === Framebuffer blt (Phase 28.2) ===
         // Pull the B800 framebuffer through X86CgaRenderer.RenderToRgbBytes
         // and blit into our PictureBox bitmap. Skipped before the
@@ -206,7 +377,13 @@ public sealed class MainForm : Form
         {
             try
             {
-                var rgb = X86CgaRenderer.RenderToRgbBytes(bus.Memory.Ram);
+                // Auto-detect MDA (0xB0000) vs CGA (0xB8000): real PC/XT BIOS
+                // POST writes to MDA; HLE BIOS path writes to CGA. Without
+                // this the GUI renders black for real-BIOS mode even when
+                // boot text is sitting in memory. Mirrors the headless
+                // X86CgaRenderer.Render() / HeadlessRunner screenshot path.
+                int fbBase = X86CgaRenderer.PickFramebufferBase(bus.Memory.Ram);
+                var rgb = X86CgaRenderer.RenderToRgbBytes(bus.Memory.Ram, fbBase);
                 BltRgbIntoBitmap(rgb, _frameBitmap);
                 _canvas.Invalidate();
             }
@@ -280,5 +457,77 @@ public sealed class MainForm : Form
         _refreshTimer.Stop();
         _runner.Stop();
         base.OnFormClosing(e);
+    }
+
+    /// <summary>
+    /// PC/XT set-1 make-code lookup for a typed ASCII char. Covers
+    /// letters / digits / common punctuation / whitespace / Esc — the
+    /// keys you'd type to drive FreeDOS / DOS application menus. Returns
+    /// 0 for unmapped chars (caller should drop the keystroke).
+    /// </summary>
+    private static byte AsciiToScancode(char c)
+    {
+        // Letters: both upper and lower map to the same make code; the
+        // real BIOS INT 9 ISR applies caps/shift based on the BDA
+        // shift-flags byte, which we don't drive (host typed-case wins
+        // via the BDA buffer for the HLE path, but for the real-BIOS
+        // path the BIOS will see whatever case its shift state suggests).
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        return c switch
+        {
+            (char)0x1B   => 0x01,   // Esc
+            '1' or '!'   => 0x02,
+            '2' or '@'   => 0x03,
+            '3' or '#'   => 0x04,
+            '4' or '$'   => 0x05,
+            '5' or '%'   => 0x06,
+            '6' or '^'   => 0x07,
+            '7' or '&'   => 0x08,
+            '8' or '*'   => 0x09,
+            '9' or '('   => 0x0A,
+            '0' or ')'   => 0x0B,
+            '-' or '_'   => 0x0C,
+            '=' or '+'   => 0x0D,
+            '\b'         => 0x0E,   // Backspace
+            '\t'         => 0x0F,   // Tab
+            'Q'          => 0x10,
+            'W'          => 0x11,
+            'E'          => 0x12,
+            'R'          => 0x13,
+            'T'          => 0x14,
+            'Y'          => 0x15,
+            'U'          => 0x16,
+            'I'          => 0x17,
+            'O'          => 0x18,
+            'P'          => 0x19,
+            '[' or '{'   => 0x1A,
+            ']' or '}'   => 0x1B,
+            '\r' or '\n' => 0x1C,   // Enter
+            'A'          => 0x1E,
+            'S'          => 0x1F,
+            'D'          => 0x20,
+            'F'          => 0x21,
+            'G'          => 0x22,
+            'H'          => 0x23,
+            'J'          => 0x24,
+            'K'          => 0x25,
+            'L'          => 0x26,
+            ';' or ':'   => 0x27,
+            '\'' or '"'  => 0x28,
+            '`' or '~'   => 0x29,
+            '\\' or '|'  => 0x2B,
+            'Z'          => 0x2C,
+            'X'          => 0x2D,
+            'C'          => 0x2E,
+            'V'          => 0x2F,
+            'B'          => 0x30,
+            'N'          => 0x31,
+            'M'          => 0x32,
+            ',' or '<'   => 0x33,
+            '.' or '>'   => 0x34,
+            '/' or '?'   => 0x35,
+            ' '          => 0x39,   // Space
+            _            => 0x00,
+        };
     }
 }

@@ -393,6 +393,30 @@
       ]
     },
     {
+      "name": "Xlat",
+      "comment": "0xD7 XLAT/XLATB — translate byte: AL = byte at [seg:BX + AL] (AL is zero-extended). Default segment DS; honours seg-override prefix (e.g. 2E D7 = XLAT CS:). Needed by real PC/XT BIOS INT 9 keyboard ISR (pcxtbios.bin uses XLAT CS: to translate scancode -> ASCII via in-ROM table).",
+      "fields": {},
+      "mask": "0xFF",
+      "match": "0xD7",
+      "instructions": [
+        {
+          "mnemonic": "XLAT",
+          "since": "Intel8086",
+          "writes_pc": "never",
+          "manual_ref": "Intel SDM Vol.2 §XLAT",
+          "cycles": {
+            "form": "11"
+          },
+          "steps": [
+            {
+              "op": "x86_xlat"
+            }
+          ],
+          "id": "XLAT"
+        }
+      ]
+    },
+    {
       "name": "MovRm16Sreg",
       "comment": "0x8C MOV r/m16, sreg — modrm.reg encodes the SOURCE segment register (000=ES, 001=CS, 010=SS, 011=DS); modrm.rm is the destination r/m16 word.",
       "fields": {},
