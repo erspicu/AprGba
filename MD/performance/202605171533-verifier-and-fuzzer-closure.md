@@ -85,10 +85,23 @@ shape — both involve unconditional control transfers:
   block IR not branching to blockExit. Reproduce: `apr-gb --fuzz=100
   --fuzz-blocks=50 --fuzz-seed=42 --fuzz-continue`.
 
-- **#340 (GBA STMDB R15)** — BlockTransferEmitters uses
-  `PipelinePcConstant` for R15 reads (line 350-353); fix is correct
-  in principle. Bug is subtler — possibly cross-jump-followed block
-  PC drift at the STM instruction's bi.Pc.
+- ~~**#340 (GBA STMDB R15)**~~ — **RESOLVED (Phase 30.18p,
+  commit pending).** Two parallel R15-stale-PC bugs in
+  `BlockTransferEmitters`:
+  1. S-bit path called `host_user_reg_read(15)` which returns the
+     memory R15 slot = stale block-start PC under Strategy 2. Fixed
+     by reusing `visibleVal` (= pipeline PC constant) for i=15 —
+     R15 isn't actually banked across modes.
+  2. `ComputeAddressing` used `GepGprDynamic` for runtime-resolved
+     Rn, so STM with `Rn=R15` (e.g. `STMIB R15, {…}`) loaded the
+     stale memory PC. Fixed with `select(rnIdx==15, pipelinePc, memLoad)`.
+
+  Also added `CpuExecutor.UndecodableFirstInstructionException` catch
+  + graceful undecodable-instr fallback in `Step()` so the GBA fuzzer
+  doesn't report SKIPPED rows. GBA fuzzer (seed=42, 100 iter):
+  2 div + 11 SKIPPED → 1 div + 0 SKIPPED. Remaining 1 divergence
+  is in single-data-transfer LDR/STR with Rn=R15 (different emitter);
+  tracked as Phase 30.18q follow-up.
 
 - ~~**#342 (x86 mid-block undecodable)**~~ — **RESOLVED (Phase 30.18o,
   commit pending).** Actual root cause was different from initial

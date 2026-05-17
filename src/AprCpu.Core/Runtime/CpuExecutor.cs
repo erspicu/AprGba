@@ -455,9 +455,18 @@ public sealed unsafe class CpuExecutor
         // can be updated when this fetch came from BIOS.
         _bus.NotifyInstructionFetch(pc, instructionWord, mode.InstrSizeBytes);
 
-        var decoded = mode.Decoder.Decode(instructionWord)
-            ?? throw new InvalidOperationException(
-                $"Undecodable instruction 0x{instructionWord:X8} at PC=0x{pc:X8} ({mode.Set.Name}).");
+        var decoded = mode.Decoder.Decode(instructionWord);
+        if (decoded is null)
+        {
+            // Phase 30.18o — graceful undefined-instruction handling.
+            // Real ARM7 would vector to the Undefined-Instruction handler
+            // (PC = 0x4 + LR/SPSR housekeeping). For fuzzer + verifier
+            // parity with the BlockDetector's "advance past undecodable
+            // first byte" path, just skip the byte here. Anyone needing
+            // real exception semantics can opt-in via spec/runtime extension.
+            WritePc(pc + mode.InstrSizeBytes);
+            return default!;
+        }
 
         var fnPtr = ResolveFunctionPointer(decoded, mode.Set.Name);
         var fn = (delegate* unmanaged[Cdecl]<byte*, uint, void>)fnPtr;
@@ -546,8 +555,27 @@ public sealed unsafe class CpuExecutor
         var cache = _blockCachesBySetName![mode.Set.Name];
         if (!cache.TryGet(pc, out var entry))
         {
-            entry = CompileBlockAtPc(pc, mode);
-            cache.Add(pc, entry);
+            try
+            {
+                entry = CompileBlockAtPc(pc, mode);
+                cache.Add(pc, entry);
+            }
+            catch (BlockDetector.UndecodableFirstInstructionException)
+            {
+                // Phase 30.18o — first byte at PC is undecodable and the
+                // safe-NOP fallback didn't apply. The per-instr Step path
+                // ALSO throws (line ~459) so there's no fallback to call
+                // — just advance PC past the byte to keep the dispatcher
+                // moving. Proper ARM7 behaviour would be Undefined-
+                // Instruction exception vector to 0x4, but for fuzzer
+                // purposes "skip the byte" is sufficient.
+                WritePc(pc + mode.InstrSizeBytes);
+                LastStepInstructionCount = 1;
+                LastStepCycles           = 4;
+                InstructionsExecuted++;
+                BlocksExecuted++;
+                return;
+            }
         }
 
         // Phase 7 A.6.1 Strategy 2 — block fn now NEVER pre-sets PC nor

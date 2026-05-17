@@ -124,18 +124,41 @@ internal static class BlockTransferImpl
 
         // Base: either compile-time register index or runtime field
         LLVMValueRef basePtr;
+        LLVMValueRef? baseValOverride = null;   // for R15 in block-JIT mode
         if (step.Raw.TryGetProperty("base_index", out var biEl))
         {
             int idx = biEl.GetInt32();
             basePtr = ctx.GepGpr(idx);
+            // Phase 30.18p — if base is R15 in block-JIT mode (Strategy 2),
+            // the memory PC slot holds the block-start PC (stale); use the
+            // pipeline-PC constant instead. Without this, LDM/STM with Rn=R15
+            // (e.g. 0xE98FA9F3 = STMIB R15, {...}) computes the wrong base
+            // address. R15 is a legal base register on ARM7 (writeback is
+            // unpredictable but the addressing is well-defined).
+            if (idx == 15 && ctx.PipelinePcConstant is uint pipelineValueB)
+            {
+                baseValOverride = ctx.ConstU32(pipelineValueB);
+            }
         }
         else
         {
             var baseFieldName = step.Raw.GetProperty("base_field").GetString()!;
             var rnIdx = ctx.Builder.BuildAnd(ctx.Resolve(baseFieldName), ctx.ConstU32(0xF), "blkt_rn_idx");
             basePtr = ctx.Layout.GepGprDynamic(ctx.Builder, ctx.StatePtr, rnIdx);
+            // Phase 30.18p — runtime-resolved Rn: if it happens to be R15
+            // in block-JIT mode, the memory load is stale (Strategy 2).
+            // Use select(rnIdx==15, pipelinePc, memLoad) to fix it without
+            // forcing a branch.
+            if (ctx.PipelinePcConstant is uint pipelineValueB)
+            {
+                var memLoad = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, basePtr, "blkt_base_mem");
+                var rnIs15 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, rnIdx, ctx.ConstU32(15), "blkt_rn_is15");
+                var pipeline = ctx.ConstU32(pipelineValueB);
+                baseValOverride = ctx.Builder.BuildSelect(rnIs15, pipeline, memLoad, "blkt_base_eff");
+            }
         }
-        var baseVal = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, basePtr, "blkt_base");
+        var baseVal = baseValOverride
+            ?? ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, basePtr, "blkt_base");
 
         // ARM7TDMI empty-rlist quirk: when the register list is empty,
         // the instruction behaves as if {R15} were in the list (so PC is
@@ -357,10 +380,27 @@ internal sealed class BlockStoreEmitter : IMicroOpEmitter
                 visibleVal = ctx.Builder.BuildLoad2(LLVMTypeRef.Int32, rPtr, $"blks_r{i}");
             }
             // User-mode R[i] read via host extern (only meaningful when S=1).
-            var userReadFn  = ctx.Builder.BuildLoad2(userReadPtrType, userReadSlot, $"blks_uread_{i}");
-            var userVal     = ctx.Builder.BuildCall2(userReadType, userReadFn,
-                new[] { ctx.StatePtr, ctx.ConstU32((uint)i) }, $"blks_user{i}");
-            var chosen      = ctx.Builder.BuildSelect(sIsSet, userVal, visibleVal, $"blks_chosen{i}");
+            // Phase 30.18p — for i=15 in block-JIT mode, the user-mode read
+            // extern would call ReadGpr(state, 15) which returns the BLOCK
+            // START PC under Strategy 2 (R15 in memory is never pre-set
+            // per-instr). That's stale — userVal must be the same pipeline
+            // value as visibleVal. R15 isn't banked across processor modes
+            // (the "user view" of R15 = the visible view), so we can just
+            // reuse visibleVal directly. Without this fix, S=1 STM with R15
+            // in the list (e.g. 0xE96DF116 = STMDB SP!, {R1,2,4,8,12,13,14,15}^)
+            // stores PC+4 instead of the correct PC+12. Found by GbaFuzzer.
+            LLVMValueRef chosen;
+            if (i == 15 && ctx.PipelinePcConstant is not null)
+            {
+                chosen = visibleVal;   // = pipeline PC constant; user view == visible for R15
+            }
+            else
+            {
+                var userReadFn  = ctx.Builder.BuildLoad2(userReadPtrType, userReadSlot, $"blks_uread_{i}");
+                var userVal     = ctx.Builder.BuildCall2(userReadType, userReadFn,
+                    new[] { ctx.StatePtr, ctx.ConstU32((uint)i) }, $"blks_user{i}");
+                chosen = ctx.Builder.BuildSelect(sIsSet, userVal, visibleVal, $"blks_chosen{i}");
+            }
             // ARM7TDMI quirk: when R15 is in the store list, the stored
             // value is R15 read + instruction_size (= current_pc + 2 ×
             // instr_size). For ARM that's R15 + 4 (= current_pc + 12);

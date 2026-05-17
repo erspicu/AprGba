@@ -95,6 +95,17 @@ public static class GbaFuzzer
                             Console.WriteLine($"    JIT:    {r.CpuStateA}");
                             Console.WriteLine($"    INTERP: {r.CpuStateB}");
                         }
+                        // Print the ARM opcode word at block-start PC for
+                        // diagnostic — random ROMs make the bytes opaque
+                        // without this. 4 bytes LE = one ARM instruction.
+                        uint dpc = (uint)r.BlockStartPc;
+                        if (dpc >= GbaMemoryMap.RomBase
+                            && dpc + 4 <= GbaMemoryMap.RomBase + (uint)rom.Length)
+                        {
+                            int off = (int)(dpc - GbaMemoryMap.RomBase);
+                            uint w = (uint)(rom[off] | (rom[off+1] << 8) | (rom[off+2] << 16) | (rom[off+3] << 24));
+                            Console.WriteLine($"    opcode @ pc=0x{dpc:X8}: 0x{w:X8}");
+                        }
                         iterDiverged = true;
                         break;
                     }
