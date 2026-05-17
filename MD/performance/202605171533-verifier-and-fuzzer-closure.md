@@ -51,10 +51,23 @@ behavior for `RunCycles(1)`).
   - `10-bit ops.gb` — CB-prefix BIT/SET/RES/RL/RR/SLA/SRA/SRL/SWAP
   - `11-op a,(hl).gb` (✓ memory ops including indirect ALU)
 
-**Extended GBA ROM coverage** (all 200k blocks NoDiff):
+**Extended GBA ROM coverage**:
   - `gba-tests/arm/arm.gba` (1M blocks — primary)
-  - `gba-tests/memory/memory.gba`
-  - `gba-tests/bios/bios.gba`
+  - `gba-tests/memory/memory.gba` (200k)
+  - `gba-tests/bios/bios.gba` (200k)
+  - `gba-tests/nes/nes.gba` (100k)
+  - `gba-tests/ppu/hello.gba` (100k)
+  - `gba-tests/ppu/shades.gba` (100k)
+  - `gba-tests/ppu/stripes.gba` (100k)
+
+**Extended NES ROM coverage**:
+  - `blargg_nes_cpu_test5/cpu.nes` (1M blocks — primary)
+  - `nes-test/branch_timing_basics.nes` (100k)
+  - `nes-test/cpu_timing_test6.nes` (100k)
+  - `nes-test/instr_test_v5_basics.nes` (100k)
+  - `nes-test/nestest.nes` (100k) — the canonical NES CPU test ROM
+  - `nes-test/cpu_dummy_reads.nes` (mapper 3 / CNROM not supported by
+    verifier; skipped — not a divergence, an unsupported-feature gap)
 
 **GB fuzzer multi-seed cleanliness** (52+ verified seeds):
   - Original 15-seed group + 37 additional seeds (11-40, 50, 60, 70,
