@@ -41,6 +41,10 @@ public static class NesFuzzer
     public static int Run(int iterations, int blocksPerIter, int? seed = null)
     {
         var rngSeed = seed ?? Environment.TickCount;
+        // Phase 30.17b — disable block-JIT FetchImm fast path so JIT and
+        // INTERP both update _cpubus for immediate fetches (PPU open-bus
+        // reads then agree between modes). Same rationale as NesVerifyBlocks.
+        Environment.SetEnvironmentVariable("APR_MOS6502_NO_FAST_IMM", "1");
         Console.WriteLine("apr-nes fuzz (random PRG-ROM → per-block JIT-vs-interp diff)");
         Console.WriteLine($"  iterations:      {iterations:N0}");
         Console.WriteLine($"  blocks per iter: {blocksPerIter:N0}");

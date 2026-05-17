@@ -327,6 +327,21 @@ namespace AprNes.Cli.Memory
             _pendingCatchUpCycles = 0;
         }
 
+        // === Phase 30.17b — Verifier framework integration ====================
+        //
+        // Expose internal bus state (open-bus latch, OAM-DMA pointer, pending-
+        // cycle counters) so the Verified Block-JIT framework can capture +
+        // restore it between JIT-vs-interp passes. Without these, reads from
+        // PPU/APU/unmapped regions return whichever env's _cpubus happens
+        // to be — causing spurious divergences after block #1 when the two
+        // envs' _cpubus values drift apart (each env updates its own latch
+        // independently after the snapshot restores RAM only).
+
+        public byte InternalCpuBus { get => _cpubus; set => _cpubus = value; }
+        public byte InternalOamDmaWritePtr { get => _oamDmaWritePtr; set => _oamDmaWritePtr = value; }
+        public int  InternalPendingStallCycles { get => _pendingStallCycles; set => _pendingStallCycles = value; }
+        public int  InternalPendingCatchUpCycles { get => _pendingCatchUpCycles; set => _pendingCatchUpCycles = value; }
+
         /// <summary>2KB internal WRAM. Exposed so the AprCpu IR pipeline can
         /// inline zero-page / stack writes directly without going through the
         /// switch dispatcher.</summary>

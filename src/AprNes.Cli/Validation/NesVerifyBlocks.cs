@@ -24,6 +24,12 @@ public static class NesVerifyBlocks
         Console.WriteLine($"  ROM:    {romPath}");
         Console.WriteLine($"  blocks: up to {maxBlocks:N0}");
 
+        // Phase 30.17b — gate off the block-JIT FetchImm8/16 fast path so
+        // both backends go through the same bus extern path. Without this,
+        // block-JIT skips _cpubus updates for immediate fetches; per-instr
+        // does them, and PPU-IO open-bus reads diverge spuriously.
+        Environment.SetEnvironmentVariable("APR_MOS6502_NO_FAST_IMM", "1");
+
         var (cpuJit,    busJit)    = BuildEnv(romPath);
         var (cpuInterp, busInterp) = BuildEnv(romPath);
 

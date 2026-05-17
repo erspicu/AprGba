@@ -225,9 +225,18 @@ public static class Mos6502Emitters
         var pc16 = ctx.Builder.BuildLoad2(i16, pcPtr, $"{label}_pc");
 
         LLVMValueRef b;
+        // Phase 30.17b — Verifier framework gate: when APR_MOS6502_NO_FAST_IMM
+        // is set, fall through to the bus-extern path even in block-JIT mode.
+        // The fast path bakes immediates from ctx.Instruction without going
+        // through CallRead8, which means the bus's open-bus latch (NES
+        // _cpubus) isn't updated. Per-instr mode DOES update _cpubus via
+        // CallRead8, so reads from PPU-IO write-only registers (which
+        // return open-bus) diverge between the two modes. Verifier sets
+        // this env var so both backends share the same bus behaviour.
+        bool noFastImm = Environment.GetEnvironmentVariable("APR_MOS6502_NO_FAST_IMM") is not null;
         // Block-JIT fast path — extract from instruction word constant
         // instead of calling memory_read_8 extern.
-        if (ctx.CurrentInstructionBaseAddress is not null)
+        if (ctx.CurrentInstructionBaseAddress is not null && !noFastImm)
         {
             // 6502 layout: opcode at byte 0, imm8 at byte 1.
             var shifted = ctx.Builder.BuildLShr(ctx.Instruction,
@@ -262,7 +271,8 @@ public static class Mos6502Emitters
         var pc16 = ctx.Builder.BuildLoad2(i16, pcPtr, $"{label}_pc");
 
         LLVMValueRef word;
-        if (ctx.CurrentInstructionBaseAddress is not null)
+        bool noFastImm = Environment.GetEnvironmentVariable("APR_MOS6502_NO_FAST_IMM") is not null;
+        if (ctx.CurrentInstructionBaseAddress is not null && !noFastImm)
         {
             // 6502 layout: opcode at byte 0, imm16 little-endian at bytes 1-2.
             var shifted = ctx.Builder.BuildLShr(ctx.Instruction,

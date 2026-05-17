@@ -113,6 +113,10 @@ public sealed class NesSteppableCpu : IBlockBoundedSteppableCpu
             Vram       = (byte[])_bus.Vram.Clone(),
             Oam        = (byte[])_bus.Oam.Clone(),
             PaletteRam = (byte[])_bus.PaletteRam.Clone(),
+            CpuBus     = _bus.InternalCpuBus,
+            OamDmaWritePtr = _bus.InternalOamDmaWritePtr,
+            PendingStallCycles   = _bus.InternalPendingStallCycles,
+            PendingCatchUpCycles = _bus.InternalPendingCatchUpCycles,
         };
         var cpuBlob = _cpu.SnapshotState();
         var hwBlob  = AdditionalSnapshot?.Invoke();
@@ -127,16 +131,25 @@ public sealed class NesSteppableCpu : IBlockBoundedSteppableCpu
         Array.Copy(busBlob.Vram,       _bus.Vram,       busBlob.Vram.Length);
         Array.Copy(busBlob.Oam,        _bus.Oam,        busBlob.Oam.Length);
         Array.Copy(busBlob.PaletteRam, _bus.PaletteRam, busBlob.PaletteRam.Length);
+        _bus.InternalCpuBus              = busBlob.CpuBus;
+        _bus.InternalOamDmaWritePtr      = busBlob.OamDmaWritePtr;
+        _bus.InternalPendingStallCycles  = busBlob.PendingStallCycles;
+        _bus.InternalPendingCatchUpCycles = busBlob.PendingCatchUpCycles;
         _cpu.LoadState(cpuBlob);
         AdditionalRestore?.Invoke(hwBlob);
     }
 }
 
-/// <summary>Snapshot blob for NesMemoryBus regions (Phase 30.16 sprint 5.6).</summary>
+/// <summary>Snapshot blob for NesMemoryBus regions (Phase 30.16 sprint 5.6,
+/// extended in Phase 30.17b to include internal bus state).</summary>
 public sealed class NesBusStateBlob
 {
     public byte[] Wram       = System.Array.Empty<byte>();
     public byte[] Vram       = System.Array.Empty<byte>();
     public byte[] Oam        = System.Array.Empty<byte>();
     public byte[] PaletteRam = System.Array.Empty<byte>();
+    public byte   CpuBus;
+    public byte   OamDmaWritePtr;
+    public int    PendingStallCycles;
+    public int    PendingCatchUpCycles;
 }
