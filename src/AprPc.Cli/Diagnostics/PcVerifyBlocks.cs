@@ -68,6 +68,15 @@ public static class PcVerifyBlocks
             if (portSnap is PcPortBusSnapshot pbs) envInterp.Ports.RestoreSnapshot(pbs);
         };
 
+        // Phase 30.15d sprint 5.4d — switch the JIT-extern static handlers
+        // (PortRead8/16, PortWrite8/16, etc. — set by env.Activate()) to
+        // the stepper's OWN env before each Step. Without this, INTERP's
+        // IN/OUT would route through envJit's PortBus (the last
+        // Activate-d), reading post-JIT counter state and producing
+        // false-positive divergences.
+        jitStepper.OnBeforeStep    = () => envJit.Activate();
+        interpStepper.OnBeforeStep = () => envInterp.Activate();
+
         // Activate JIT env once at start so JIT-emitted code routes correctly.
         envJit.Activate();
         var runner = new VerifiedBlockJitRunner(jitStepper, interpStepper);

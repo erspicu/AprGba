@@ -96,6 +96,7 @@ public sealed class X86SteppableCpu : IBlockBoundedSteppableCpu
 
     public void Step()
     {
+        OnBeforeStep?.Invoke();
         _cpu.SetActiveForLockstep();
         _cpu.Step();
         _steps++;
@@ -110,6 +111,7 @@ public sealed class X86SteppableCpu : IBlockBoundedSteppableCpu
 
     public void StepOneArchitecturalInstruction()
     {
+        OnBeforeStep?.Invoke();
         _cpu.SetActiveForLockstep();
         _cpu.StepOnePerInstr();
         _steps++;
@@ -138,6 +140,18 @@ public sealed class X86SteppableCpu : IBlockBoundedSteppableCpu
     /// </summary>
     public Func<object?>?     AdditionalSnapshot { get; set; }
     public Action<object?>?  AdditionalRestore  { get; set; }
+
+    /// <summary>
+    /// Phase 30.15d sprint 5.4d — env-activation hook fired BEFORE every
+    /// Step / StepOneArchitecturalInstruction. The verifier framework
+    /// alternates JIT-stepper.Step() and INTERP-stepper.Step() calls; the
+    /// JIT-emitted code uses STATIC port/memory handler delegates
+    /// (PcPortBus.Active and similar singletons) that must reflect the
+    /// CURRENT stepper's env. Without this hook, INTERP would route its
+    /// IN/OUT through whichever env was activated last — usually JIT's
+    /// post-step state — producing spurious port-read divergences.
+    /// </summary>
+    public Action? OnBeforeStep { get; set; }
 
     public object SnapshotMemoryState()
     {
