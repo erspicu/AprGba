@@ -166,6 +166,17 @@ public static class GbFuzzer
         bus.LoadRom(rom);
         var cpu = new JsonCpu(enableBlockJit: true);
         cpu.Reset(bus);
+        // Phase 30.18m — APR_GB_FORCE_BUDGET=N caps block-JIT cycle budget
+        // to N (N=1 → effectively single-instruction blocks since each
+        // instr deducts ≥1 cycle). Used to isolate per-instr vs multi-instr
+        // bugs without changing the IR emission path (which APR_GB_BLOCK_MAX
+        // would). Verifier-friendly diagnostic; production usage keeps the
+        // default 256-cycle budget for performance.
+        if (Environment.GetEnvironmentVariable("APR_GB_FORCE_BUDGET") is string fb &&
+            int.TryParse(fb, out var fbInt) && fbInt > 0)
+        {
+            cpu.BlockBudgetOverride = fbInt;
+        }
         return (cpu, bus);
     }
 }
