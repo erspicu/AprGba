@@ -21,14 +21,16 @@ Four sub-phases delivered across one session:
 | CPU | Test ROM | Blocks NoDiff | Instructions | Runtime |
 |---|---|---|---|---|
 | x86-16 (i8086) | pcxtbios + FreeDOS boot | **1,000,000** | 4.38M | 2:54 |
-| LR35902 (GB) | cpu_instrs.gb | 278,872 (IRQ-asym limit) | 1.48M | 4.6s |
+| LR35902 (GB) | cpu_instrs.gb | **1,000,000** (Phase 30.18ab fix) | 8.10M | 58s |
 | Ricoh 2A03 (NES) | blargg cpu_test5/cpu.nes | **1,000,000** | 2.00M | 6.2s |
 | ARM7TDMI (GBA) | gba-tests/arm/arm.gba | **1,000,000** | 1.00M | 1:06 |
 
-Three of four CPUs hit the 1M-block target without divergence. GB
-hits an IRQ-delivery-cadence asymmetry between JIT (block-boundary)
-and per-instr (instruction-boundary) at block #278,872; this is a
-known semantic gap, not an emitter bug.
+**All four CPUs now hit the 1M-block target without divergence**
+(Phase 30.18ab — the prior 278k-block IRQ-cadence asymmetry was
+fixed by mirroring JIT's HALT-spin tick in the verifier's INTERP
+poll: `PollPendingIrqsAtBlockBoundary` ticks bus by 4 cycles when
+HALTed with no pending IRQ, matching JIT.RunCycles' one-iteration
+behavior for `RunCycles(1)`).
 
 ## Fuzzer results across all 4 CPUs
 
