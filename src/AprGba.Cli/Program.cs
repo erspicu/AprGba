@@ -31,6 +31,12 @@ using AprGba.Cli.Video;
 var opts = ParseArgs(args);
 if (opts is null) { PrintUsage(); return 1; }
 
+// Phase 30.16 sprint 5.6b — per-block JIT-vs-interp verifier early-return.
+if (opts.VerifyBlocks > 0 && opts.RomPath is not null)
+{
+    return AprGba.Cli.Validation.GbaVerifyBlocks.Run(opts.RomPath, opts.BiosPath, opts.VerifyBlocks);
+}
+
 Console.WriteLine("apr-gba — GBA harness (json-llvm CPU + headless screenshot)");
 Console.WriteLine($"  ROM:        {opts.RomPath}");
 Console.WriteLine($"  BIOS:       {opts.BiosPath ?? "(none — using minimal vector stubs)"}");
@@ -377,6 +383,7 @@ static Options? ParseArgs(string[] args)
         else if (arg == "--no-obj")               opts.DisableObj = true;
         else if (arg == "--no-bg")                opts.DisableBg  = true;
         else if (arg.StartsWith("--only-obj="))   opts.OnlyObjIndex = int.Parse(arg.Substring("--only-obj=".Length));
+        else if (arg.StartsWith("--verify-blocks=")) opts.VerifyBlocks = long.Parse(arg.Substring("--verify-blocks=".Length));
         else if (arg == "--block-jit")            opts.BlockJit = true;
         else                                      return null;
     }
@@ -425,4 +432,5 @@ internal sealed class Options
     public bool     DisableBg;
     public int      OnlyObjIndex = -1;
     public bool     BlockJit;
+    public long     VerifyBlocks;
 }

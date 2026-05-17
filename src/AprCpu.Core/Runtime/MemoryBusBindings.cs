@@ -55,6 +55,21 @@ public static unsafe class MemoryBusBindings
         return new RestoreOnDispose(prior, priorGba);
     }
 
+    /// <summary>
+    /// Phase 30.16 sprint 5.6b — switch the active bus that the
+    /// Read/Write trampolines route through, WITHOUT re-binding any
+    /// externs. Use this when two CpuExecutor envs each have their
+    /// own GbaMemoryBus and Install was called once per env at
+    /// construction; the Verified Block-JIT framework alternates
+    /// SetActive(envJit.Bus) and SetActive(envInterp.Bus) before each
+    /// Step so writes / reads land in the right env's memory.
+    /// </summary>
+    public static void SetActive(IMemoryBus bus)
+    {
+        _current = bus;
+        _currentGba = bus as GbaMemoryBus;
+    }
+
     // ---------------- Phase 7 E.b GBA fast-path helpers ----------------
     //
     // Inline region check + direct array index for GBA's ROM / IWRAM /
