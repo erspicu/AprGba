@@ -1,134 +1,119 @@
-# Advanced PC-emulator testing tools (reference notes)
+# 進階 PC-emulator 測試工具（reference notes）
 
-When the basic test path (NASM `.COM` + Port 0xE9 + AutoTester, see
-[`03-dos-test-injection-workflow.md`](03-dos-test-injection-workflow.md))
-isn't enough — i.e. we're trying to verify **non-deterministic** or
-**hardware-state-machine** behaviour like the x87 FPU, PIT/PIC/DMA
-chips, or 80186-specific PCB registers — these are the field-tested
-tools and strategies. Kept as a reference so we don't re-derive them
-under pressure when the time comes.
+當基本 test path（NASM `.COM` + Port 0xE9 + AutoTester，看
+[`03-dos-test-injection-workflow.md`](03-dos-test-injection-workflow.md)）
+不夠時 — 即我們想驗 **non-deterministic** 或 **hardware-state-machine**
+行為，像 x87 FPU、PIT/PIC/DMA chip 或 80186-specific PCB register —
+這些是 field-tested 工具跟策略。當作參考留著、之後時間到了不用再壓力下
+重推。
 
-> **Status**: not yet adopted in AprPc. This document is a forward-
-> looking shopping list. Sections are tagged 🟢 ready-to-pull-in,
-> 🟡 partially blocked (needs other plumbing first), or 🔴 long-term.
+> **狀態**：AprPc 還沒採用。本文件是 forward-looking shopping list。
+> 章節 tag 為 🟢 ready-to-pull-in、🟡 partially blocked（需要其他
+> plumbing 先）、或 🔴 long-term。
 
-## 1. x87 (8087) FPU verification
+## 1. x87 (8087) FPU 驗證
 
-The 8087 is awkward to test because it has its own 80-bit stack
-register file (ST0..ST7), independent rounding modes (RC bits in
-control word), exception flags in the status word, and instructions
-(`FPTAN`, `FYL2X`, `FSIN`) whose precision is hard to eyeball at
-extreme values.
+8087 難測因為它有自己的 80-bit stack register file (ST0..ST7)、獨立的
+rounding mode（control word 的 RC bit）、status word 的 exception flag、
+精度極值下難用眼判斷的 instruction（`FPTAN`、`FYL2X`、`FSIN`）。
 
-### 1.1 🟢 `x87-test-suite` (Intel test vectors, community-maintained)
+### 1.1 🟢 `x87-test-suite`（Intel test vector、社群維護）
 
-- **Where to find**: GitHub search for `x87-test-suite`; MAME's
-  `src/devices/cpu/i86/` test fixtures sometimes embed similar vectors.
-- **Shape of the data**: massive JSON / binary files where each row is
+- **哪裡找**：GitHub 搜 `x87-test-suite`；MAME 的 `src/devices/cpu/i86/`
+  test fixture 有時也 embed 類似 vector。
+- **資料形狀**：巨大 JSON / binary file，每 row 是
   `[initial stack, control word, status word] → [instruction]
-  → [expected ST0..ST7, status word, exception flags]`.
-- **What it catches**: corner cases in `FPTAN`, `FYL2X`, `F2XM1` and
-  the transcendental family; round-to-nearest-even ties; subnormal
-  / NaN / ±∞ propagation.
-- **AprPc integration cost**: low — same harness shape as the Tom
-  Harte 8088 SST loader we already use for 8086 integer tests
-  (`X86TomHarteTests.cs`). New xUnit class `X87TomHarteTests.cs`
-  parses the JSON and drives the FPU through `X86JsonCpu`. No
-  Windows / DOS dependency — purely unit-test layer.
-- **Recommended trigger**: when we add a new x87 instruction or
-  touch `X86Fpu` rounding logic. Currently x87 functional baseline
-  closed in [`MD/performance/202605160100-x87-fpu-functional-complete.md`](../performance/202605160100-x87-fpu-functional-complete.md),
-  so this is the *next* layer up.
+  → [expected ST0..ST7, status word, exception flag]`。
+- **抓什麼**：`FPTAN`、`FYL2X`、`F2XM1` 跟超越家族的 corner case；
+  round-to-nearest-even tie；subnormal / NaN / ±∞ 傳播。
+- **AprPc 整合成本**：低 — 跟我們已經用來測 8086 整數的 Tom Harte
+  8088 SST loader（`X86TomHarteTests.cs`）一樣的 harness 形狀。
+  新 xUnit class `X87TomHarteTests.cs` parse JSON、透過 `X86JsonCpu`
+  驅動 FPU。無 Windows / DOS 依賴 — 純 unit-test 層。
+- **建議觸發時機**：加新 x87 instruction 或碰 `X86Fpu` rounding logic
+  時。目前 x87 functional baseline 在
+  [`MD/performance/202605160100-x87-fpu-functional-complete.md`](../performance/202605160100-x87-fpu-functional-complete.md)
+  收尾，這是 *下一* 層 up。
 
 ### 1.2 🟡 IBM PC/XT 8087 Diagnostic Disk
 
-- **Where to find**: Vetusware / Internet Archive — search
-  `"IBM PC/XT 8087 Diagnostic"`. Usually a `.IMG` floppy image.
-- **How it works**: bootable DOS-era diagnostic that runs an
-  end-to-end stress test of every 8087 instruction, prints results
-  to screen, halts on failure with a specific error number.
-- **AprPc integration**: mount as `--floppy-a=...`, no special
-  flags. Output goes through whatever video adapter is active.
-- **What it catches**: integration bugs (FPU + IRQ wiring on
-  XT — 8087 raises IRQ 13 via NMI, which we don't currently
-  emulate); NaN / infinity handling under interrupt; control-word
-  exception masking.
-- **Blocker today**: the diagnostic likely expects 8087 IRQ wiring
-  through NMI (XT-specific); our current FPU integrates without IRQ
-  generation. Reading the diagnostic source / disassembly first to
-  see what it actually probes is worth the hour before downloading.
+- **哪裡找**：Vetusware / Internet Archive — 搜
+  `"IBM PC/XT 8087 Diagnostic"`。通常是 `.IMG` floppy image。
+- **怎麼 work**：可開機 DOS 時代 diagnostic、端到端 stress 每個 8087
+  instruction、印結果到螢幕、失敗時帶特定 error number halt。
+- **AprPc 整合**：mount 為 `--floppy-a=...`、無特殊 flag。Output 透過
+  active 的 video adapter。
+- **抓什麼**：整合 bug（FPU + IRQ wiring on XT — 8087 透過 NMI raise
+  IRQ 13，我們目前不 emulate）；interrupt 下的 NaN / infinity 處理；
+  control-word exception masking。
+- **今天的 blocker**：diagnostic 可能期待透過 NMI 的 8087 IRQ wiring
+  （XT-specific）；我們現在 FPU 整合不產 IRQ。下載前花一小時先讀
+  diagnostic source / disassembly 看實際 probe 什麼值得。
 
-## 2. I/O bus + peripheral chip testing
+## 2. I/O bus + 周邊 chip 測試
 
-Verifying `Read8(port)` / `Write8(port, val)` for the support chips
-(8253 PIT, 8259 PIC, 8237 DMA, MC146818 RTC, 8042 keyboard) by hand
-gets old fast. These DOS-era diagnostics do it for us.
+手動驗 support chip（8253 PIT、8259 PIC、8237 DMA、MC146818 RTC、
+8042 keyboard）的 `Read8(port)` / `Write8(port, val)` 很快累。
+這些 DOS 時代 diagnostic 幫我們做。
 
-### 2.1 🟢 Landmark System Speed Test (v2.0 – v6.0)
+### 2.1 🟢 Landmark System Speed Test（v2.0 – v6.0）
 
-- **Where to find**: My Abandonware, various DOS shareware archives.
-- **What it does**: bypasses DOS, probes hardware directly from a
-  ring-0 driver. The famous "MHz score" is computed by programming
-  PIT channel 2 with a known divisor, busy-looping a known
-  instruction count, then reading the latched counter.
-- **Strongest signal value for us**:
-  - **PIT 8253**: if `OUT 0x43` mode-set / latch + `IN 0x40`
-    counter-read isn't bit-exact, the MHz score comes out 0 or
-    the test hangs.
-  - **VRAM bandwidth**: hammers `0xB8000` / `0xA0000` with `rep
-    stosw` and times. Will surface FDC/DMA / CGA-status-port
-    coupling bugs that single-instruction tests don't.
-- **AprPc integration**: mount on B: (`--floppy-b`) once we have
-  a quick way to push a `.COM` + a small AUTOEXEC.BAT wrapper to
-  the existing FreeDOS A: floppy that does `B:\LANDMARK.COM`.
-- **First-pass success criterion**: not the *correctness* of the
-  reported MHz — that's tied to host wall-clock anyway — but
-  **completing the run without crash / hang / "?MISMATCH"**.
+- **哪裡找**：My Abandonware、各種 DOS shareware archive。
+- **做什麼**：繞過 DOS、從 ring-0 driver 直接 probe 硬體。著名的
+  「MHz score」是用已知 divisor 程式化 PIT channel 2、busy-loop 已知
+  instruction count、然後讀 latched counter 算出來。
+- **對我們最強信號值**：
+  - **PIT 8253**：如果 `OUT 0x43` mode-set / latch + `IN 0x40`
+    counter-read 不 bit-exact、MHz score 出 0 或 test hang。
+  - **VRAM bandwidth**：用 `rep stosw` 猛打 `0xB8000` / `0xA0000`、
+    計時。會浮現 single-instruction test 看不到的 FDC/DMA / CGA-status-port
+    耦合 bug。
+- **AprPc 整合**：等我們有快速辦法把 `.COM` + 小的 AUTOEXEC.BAT
+  wrapper 推到既有 FreeDOS A: floppy 跑 `B:\LANDMARK.COM` 之後，
+  mount 到 B:（`--floppy-b`）。
+- **First-pass 成功標準**：不是報告 MHz 的 *正確性* — 那反正綁 host
+  wall-clock — 而是 **跑完沒 crash / hang / "?MISMATCH"**。
 
 ### 2.2 🟢 CheckIt 3.0 / 4.0 for DOS
 
-- **Where to find**: same archives as Landmark. (Original publisher
-  was TouchStone; long since abandoned.)
-- **Why it's the heaviest hitter for our use case**:
-  - **System Evaluation → Interrupt Test**: actively triggers
-    each IRQ line and verifies the PIC routes it to the right
-    INT vector at the right priority. Tests IMR (`OUT 0x21`)
-    masking, in-service register (`ISR`), end-of-interrupt
-    (`OCW2 0x20`) handshakes. **This is the one tool that will
-    say "your PIC has bug X" instead of "something didn't work."**
-  - **DMA test**: programs ch1 / ch2 / ch3 transfers and verifies
-    page-register + count-register + transfer-mode behaviour.
-    Catches the kind of mis-wired flip-flop we hit in 30.3-30.5.
-  - **CMOS / RTC test**: actually reads back day / hour / minute
-    and verifies they advance. The `ver` time-display hang we
-    chased in Phase 30.7 (BCD-vs-binary CMOS read) would have
-    been a single CheckIt run.
-- **AprPc integration**: same as Landmark.
-- **🟡 Blocker for full pass**: needs **slave PIC at 0xA0** (we're
-  master-only today — `src/AprPc.Cli/Hardware/Pic8259.cs:27` is
-  XT-class single PIC). CheckIt's interrupt cascade test will
-  refuse to proceed if IRQ8-15 don't route. See §4 below.
+- **哪裡找**：跟 Landmark 同 archive。（原 publisher 是 TouchStone；
+  早就 abandon 了。）
+- **為什麼是我們 use case 最重的**：
+  - **System Evaluation → Interrupt Test**：主動觸發每條 IRQ line、
+    驗 PIC 在對的 priority 把它 route 到對的 INT vector。測 IMR
+    （`OUT 0x21`）masking、in-service register (`ISR`)、end-of-interrupt
+    (`OCW2 0x20`) handshake。**這是唯一會說「你 PIC 有 bug X」、
+    不只是「something didn't work」的工具**。
+  - **DMA test**：程式化 ch1 / ch2 / ch3 transfer、驗 page-register +
+    count-register + transfer-mode 行為。會抓我們在 30.3-30.5 撞到那種
+    mis-wired flip-flop。
+  - **CMOS / RTC test**：真的讀 day / hour / minute back 並驗推進。
+    我們 Phase 30.7 追的 `ver` time-display hang（BCD-vs-binary CMOS
+    read）跑一次 CheckIt 就抓到了。
+- **AprPc 整合**：跟 Landmark 一樣。
+- **🟡 Full pass 的 blocker**：需要 **slave PIC at 0xA0**（我們今天
+  master-only — `src/AprPc.Cli/Hardware/Pic8259.cs:27` 是 XT-class
+  single PIC）。CheckIt 的 interrupt cascade test 如果 IRQ8-15 不 route
+  會拒絕進行。看下面 §4。
 
-## 3. 80186-specific testing — MAME PCB model
+## 3. 80186-specific 測試 — MAME PCB model
 
-The 80186 / 80188 integrate the PIT + PIC + DMA *inside the CPU* as
-the **Peripheral Control Block (PCB)**, mapped at I/O `0xFF00`
-by default (relocatable via the RELREG register at `0xFFFE`). This
-is *not* the IBM PC layout and won't be exercised by anything DOS-era
-on standard XT hardware. The 80186 was used in arcade boards.
+80186 / 80188 把 PIT + PIC + DMA 整進 *CPU 內*，當 **Peripheral Control
+Block (PCB)**，預設 map 到 I/O `0xFF00`（透過 `0xFFFE` 的 RELREG
+register 可重定位）。這 *不是* IBM PC layout、標準 XT 硬體上 DOS 時代
+任何東西都不會 exercise。80186 用在街機板。
 
-### 3.1 🟢 MAME `i186.cpp` PCB unit tests
+### 3.1 🟢 MAME `i186.cpp` PCB unit test
 
-- **Where**: <https://github.com/mamedev/mame/tree/master/src/devices/cpu/i86>,
-  specifically `i186.cpp` + the test harness that exercises it.
-- **Why**: MAME drives 80186-based arcade boards (90s fighters,
-  shmups) in production. Their PCB model is the closest thing to
-  a reference implementation, and the unit tests document the
-  expected I/O sequences (timer reload, IRQ priority,
-  DMA chain mode) one PCB register at a time.
-- **Integration path**: don't re-port their C++ — just **mine the
-  test vectors**. Each test is `OUT <pcb_reg>, <val>; expect <side
-  effect>`. Translate to xUnit:
+- **哪裡**：<https://github.com/mamedev/mame/tree/master/src/devices/cpu/i86>、
+  特別是 `i186.cpp` + exercise 它的 test harness。
+- **為什麼**：MAME 生產上跑 80186-based 街機板（90 年代 fighter、shmup）。
+  他們的 PCB model 最接近 reference 實作、unit test 把預期 I/O 序列
+  （timer reload、IRQ priority、DMA chain mode）一個 PCB register 一個
+  地文件化。
+- **整合 path**：不要 re-port 他們的 C++ — 就 **挖 test vector**。
+  每個 test 都是 `OUT <pcb_reg>, <val>; expect <side effect>`。
+  翻譯到 xUnit：
   ```csharp
   [Fact]
   public void Pcb_Timer0_ReloadOnZero()
@@ -140,15 +125,14 @@ on standard XT hardware. The 80186 was used in arcade boards.
       Assert.True(pcb.Timer0Wrapped);
   }
   ```
-- **Status here**: AprPc currently runs i80186 / i80188 as i8086 +
-  26 new instructions. PCB isn't implemented yet — i80186 binaries
-  that talk to PCB will read 0xFF. Adopt this when we want to run
-  an actual 80186 board ROM.
+- **這裡的狀態**：AprPc 目前跑 i80186 / i80188 為 i8086 + 26 個新
+  instruction。PCB 還沒實作 — 跟 PCB 對話的 i80186 binary 會讀到 0xFF。
+  之後要跑真的 80186 board ROM 時採用。
 
-## 4. The "minimum-cost in-house mock" pattern
+## 4.「最小成本 in-house mock」pattern
 
-For the cases where pulling in a DOS-era diagnostic is overkill,
-write an xUnit test that drives the device class directly:
+對於拉進 DOS 時代 diagnostic 太 overkill 的情況、寫 xUnit test 直接
+驅動 device class：
 
 ```csharp
 // PIT 8253 latch-command shape (Phase 28.IO regression net)
@@ -162,10 +146,10 @@ public void Pit8253_LatchCommand_PreservesCounter()
     pit.WriteIO(0x40, 0xFF);          // count lo
     pit.WriteIO(0x40, 0xFF);          // count hi
 
-    pit.Tick(50);                     // 50 host cycles elapse
+    pit.Tick(50);                     // 50 host cycle elapse
 
-    // Latch the live count into a snapshot register
-    pit.WriteIO(0x43, 0x00);          // 0x00 = counter0 latch (no R/W bits)
+    // Latch live count 到 snapshot register
+    pit.WriteIO(0x43, 0x00);          // 0x00 = counter0 latch (no R/W bit)
 
     byte lo = pit.ReadIO(0x40);
     byte hi = pit.ReadIO(0x40);
@@ -175,67 +159,58 @@ public void Pit8253_LatchCommand_PreservesCounter()
 }
 ```
 
-Pros: no DOS dependency, runs in <100 ms, regression-locked into CI.
-Cons: only tests the device in isolation — won't catch the kind of
-**inter-chip** wiring bug (PIT → IRQ 0 → PIC → CPU → INT 8h handler)
-that CheckIt finds.
+Pros：無 DOS 依賴、跑 <100 ms、regression-lock 進 CI。
+Cons：只測獨立 device — 不會抓 CheckIt 找到的 **inter-chip** wiring
+bug（PIT → IRQ 0 → PIC → CPU → INT 8h handler）。
 
-**Rule of thumb**: write the xUnit mock test for every public method
-on the device class as the device matures; reserve CheckIt /
-Landmark for the inter-chip / full-stack confidence pass at
-phase boundaries.
+**Rule of thumb**：device 成熟時對 device class 每個 public method
+寫 xUnit mock test；CheckIt / Landmark 留給 phase 邊界的 inter-chip /
+全 stack confidence pass。
 
-## 5. Prerequisite to running CheckIt: cascade slave PIC at 0xA0
+## 5. 跑 CheckIt 的 prerequisite：0xA0 的 cascade slave PIC
 
-`src/AprPc.Cli/Hardware/Pic8259.cs` is currently **master-only**
-(IRQ 0-7). XT machines have only one PIC, so this matches the
-pcxtbios.bin world. But:
+`src/AprPc.Cli/Hardware/Pic8259.cs` 目前 **master-only**（IRQ 0-7）。
+XT machine 只有一個 PIC、match pcxtbios.bin 世界。但：
 
-- CheckIt's interrupt test exercises IRQ 8-15 (slave PIC routed to
-  master IRQ 2). Will fail / hang without slave plumbing.
-- 80186 PCB IRQ routing is internal and bypasses PIC entirely — so
-  that path *doesn't* need the slave.
-- AT-class BIOSes won't even POST without a slave at 0xA0/0xA1
-  responding.
+- CheckIt 的 interrupt test exercise IRQ 8-15（slave PIC route 到
+  master IRQ 2）。沒 slave plumbing 會 fail / hang。
+- 80186 PCB IRQ routing 是 internal、完全繞 PIC — 所以那條 path
+  *不* 需要 slave。
+- AT-class BIOS 在 0xA0/0xA1 沒 slave response 連 POST 都不會跑。
 
-When we want to run CheckIt or any AT-class ROM, the cascade work
-is the gating prerequisite. Rough scope:
-- `Pic8259.cs` gains an `IsSlave` flag and a `Cascade` reference.
-- Two instances wired: master at 0x20/0x21, slave at 0xA0/0xA1.
-- IRR / ISR / IMR / OCW2 / OCW3 / ICW1-4 handshake.
-- IRQ 8-15 from slave bumped via master IRQ 2.
-- Spurious IRQ 7 / IRQ 15 handling.
+我們想跑 CheckIt 或任何 AT-class ROM 時，cascade 工作是 gating
+prerequisite。粗略 scope：
+- `Pic8259.cs` 加 `IsSlave` flag + `Cascade` reference。
+- 接兩個 instance：master at 0x20/0x21、slave at 0xA0/0xA1。
+- IRR / ISR / IMR / OCW2 / OCW3 / ICW1-4 handshake。
+- Slave 的 IRQ 8-15 透過 master IRQ 2 bump。
+- 處理 spurious IRQ 7 / IRQ 15。
 
-Estimated effort: 2-3 days. Not blocking any current Phase 30
-deliverable, so deferred until a Phase 30.x sprint specifically
-targets AT-class compatibility or runs CheckIt as bring-up test.
+估時：2-3 天。不擋目前任何 Phase 30 deliverable、延後到 Phase 30.x
+sprint 明確 target AT-class 相容或跑 CheckIt 作為 bring-up test 時做。
 
-## 6. Recommended adoption order
+## 6. 建議採用順序
 
-1. **🟢 x87 test vectors** (§1.1) — drop-in xUnit; biggest precision-
-   bug-catching value per hour invested. Do this next time we touch
-   FPU code.
-2. **🟢 PIT 8253 / PIC / DMA xUnit mocks** (§4) — backfill while
-   the implementation is fresh. Cheap insurance against future
-   refactors.
-3. **🟡 Landmark Speed Test on B: floppy** (§2.1) — fun smoke test,
-   confirms the test-injection pipeline reaches a real piece of
-   DOS-era software. No new emulator work needed.
-4. **🟡 Slave PIC cascade** (§5) — required for CheckIt and AT
-   ROMs. Plan as Phase 30.x.
-5. **🟡 CheckIt full pass** (§2.2) — depends on (4). The "your PIC
-   is 90% correct" headline test.
-6. **🔴 80186 PCB via MAME vectors** (§3) — only if/when we want
-   to run an 80186 arcade board ROM. No business case yet.
+1. **🟢 x87 test vector**（§1.1）— Drop-in xUnit；每 hour 投入抓
+   precision bug value 最大。下次碰 FPU code 時做。
+2. **🟢 PIT 8253 / PIC / DMA xUnit mock**（§4）— 趁實作還新 backfill。
+   對未來 refactor 的便宜保險。
+3. **🟡 B: floppy 上的 Landmark Speed Test**（§2.1）— 好玩的 smoke
+   test、確認 test-injection pipeline 到達真實 DOS 時代軟體。不需要
+   新 emulator 工作。
+4. **🟡 Slave PIC cascade**（§5）— CheckIt 跟 AT ROM 必需。當 Phase 30.x 規劃。
+5. **🟡 CheckIt full pass**（§2.2）— 依賴 (4)。「你 PIC 90% 對」的
+   headline test。
+6. **🔴 透過 MAME vector 的 80186 PCB**（§3）— 只在我們要跑 80186
+   街機板 ROM 時。還沒商業案例。
 
-## References
+## 參考
 
 - [`MD/process/03-dos-test-injection-workflow.md`](03-dos-test-injection-workflow.md) —
-  the underlying test-injection plumbing this doc builds on
+  本文件建立其上的底層 test-injection plumbing
 - [`MD/performance/202605160100-x87-fpu-functional-complete.md`](../performance/202605160100-x87-fpu-functional-complete.md) —
-  current FPU baseline; §1.1 picks up from here
-- `src/AprPc.Cli/Hardware/Pic8259.cs` — master-only PIC, slave
-  cascade described in §5
-- `src/AprCpu.Tests/X86TomHarteTests.cs` — existing template for
-  large external-test-vector xUnit harnesses (the x87 suite
-  would follow the same shape)
+  目前 FPU baseline；§1.1 從這裡接續
+- `src/AprPc.Cli/Hardware/Pic8259.cs` — Master-only PIC、slave cascade
+  在 §5 描述
+- `src/AprCpu.Tests/X86TomHarteTests.cs` — 大型 external-test-vector
+  xUnit harness 的既有 template（x87 suite 會循同樣形狀）
