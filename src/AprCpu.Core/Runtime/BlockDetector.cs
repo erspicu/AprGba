@@ -321,13 +321,27 @@ public sealed class BlockDetector
                     endReason = BlockEndReason.Undecodable;
                     break;
                 }
+                // Phase 30.18f — fuzzer found that the "synthesize 0x00 as
+                // silent NOP" fallback below was unsafe for x86 because 0x00
+                // is ADD r/m8, r8 (2-byte with ModR/M + bus access), NOT
+                // NOP. Running ADD semantics with the wrong opcode byte's
+                // length causes JIT to advance PC + run side effects that
+                // per-instr's [UNK] handler (rewinds PC, returns -1) won't
+                // do. Fix: end the block here regardless of position so
+                // the per-instr fallback takes over for the undecodable
+                // byte. For ISAs where 0x00 IS truly NOP (GB / NES), only
+                // do the fallback when 0x00 has no operand steps and the
+                // length matches.
                 var nopDecoded = _decoder.Decode(0x00u);
-                if (nopDecoded is null)
+                bool safeNopFallback = nopDecoded is not null
+                    && nopDecoded.Instruction.Steps?.Count == 0
+                    && thisLength == 1u;
+                if (!safeNopFallback)
                 {
-                    throw new InvalidOperationException(
-                        $"BlockDetector: undecodable opcode at startPc=0x{startPc:X4} (pc=0x{pc:X4}) and spec has no NOP fallback (decode of 0x00 returned null).");
+                    endReason = BlockEndReason.Undecodable;
+                    break;
                 }
-                instrs.Add(new DecodedBlockInstruction(pc, 0u, nopDecoded, (byte)thisLength,
+                instrs.Add(new DecodedBlockInstruction(pc, 0u, nopDecoded!, (byte)thisLength,
                     IsFollowedBranch: false));
                 pc += thisLength;
                 endReason = BlockEndReason.Capped;
