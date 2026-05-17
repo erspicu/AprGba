@@ -20,6 +20,14 @@ public static class GbFuzzer
     public static int Run(int iterations, int blocksPerIter, int? seed = null)
     {
         var rngSeed = seed ?? Environment.TickCount;
+        // NOTE — unlike GbVerifyBlocks, the fuzzer does NOT set
+        // APR_GB_NO_INLINE_RAM. Empirically setting it makes block-JIT
+        // lose the sync-exit at IRQ-relevant writes (the gated fall-
+        // through doesn't preserve the sync flag), so blocks run much
+        // longer than expected and trigger CpuStateMismatch divergences
+        // that have nothing to do with the emitter. Once the inline-RAM
+        // gate is fixed to return the proper sync flag, this env var
+        // can be re-enabled here for trace consistency.
         Console.WriteLine("apr-gb fuzz (random cart ROM → per-block JIT-vs-interp diff)");
         Console.WriteLine($"  iterations:      {iterations:N0}");
         Console.WriteLine($"  blocks per iter: {blocksPerIter:N0}");
