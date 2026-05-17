@@ -198,7 +198,26 @@ public sealed class BlockDetector
         // back-to-block-start (loop body becomes one block per iter).
         var visited = new HashSet<uint> { startPc };
 
-        for (int i = 0; i < maxInstructions; i++)
+        // Phase 30.18l — Gemini-suggested Early Bailout Bisection. If
+        // APR_EARLY_EXIT_BLOCK_PC matches startPc, cap this block at
+        // APR_EARLY_EXIT_INSTR_COUNT instructions so a wrapper script
+        // can bisect: "block of N diverges, run with COUNT=N/2 — if
+        // diverges, bad instr is in first half; if not, it's in the
+        // second half". Preserves JIT optimization context (unlike
+        // forcing block-max=1) so register-alloc / flag-elision bugs
+        // remain visible. PC must be hex without 0x prefix.
+        int earlyExitCap = int.MaxValue;
+        if (Environment.GetEnvironmentVariable("APR_EARLY_EXIT_BLOCK_PC") is string bpcStr &&
+            uint.TryParse(bpcStr, System.Globalization.NumberStyles.HexNumber, null, out var bpc) &&
+            bpc == startPc &&
+            Environment.GetEnvironmentVariable("APR_EARLY_EXIT_INSTR_COUNT") is string countStr &&
+            int.TryParse(countStr, out var count) &&
+            count > 0)
+        {
+            earlyExitCap = count;
+        }
+
+        for (int i = 0; i < maxInstructions && i < earlyExitCap; i++)
         {
             // 1. Determine this instruction's byte length + decode result.
             //    - Fixed-width: constant length from spec.
