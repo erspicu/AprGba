@@ -144,7 +144,7 @@ public sealed class RingBufferTraceSink : IBlockTraceSink
     public bool PortWriteTruncated { get; private set; }
     public bool IrqAssertTruncated { get; private set; }
 
-    public RingBufferTraceSink(int memCapacity = 256, int portCapacity = 32, int irqCapacity = 16)
+    public RingBufferTraceSink(int memCapacity = 65536, int portCapacity = 256, int irqCapacity = 64)
     {
         _mem = new MemWriteRecord[memCapacity];
         _ports = new PortWriteRecord[portCapacity];

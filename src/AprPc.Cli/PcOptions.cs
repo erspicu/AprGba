@@ -71,6 +71,19 @@ public sealed class PcOptions
     /// investigation.md.
     /// </summary>
     public bool    LockstepBjit { get; set; }
+
+    /// <summary>
+    /// Phase 30.15d sprint 5.4 — `--verify-blocks` runs the per-block
+    /// VerifiedBlockJitRunner instead of CPU-state-only lockstep.
+    /// For each JIT-compiled block, the framework re-runs the same
+    /// instruction count through an interp CPU starting from the
+    /// captured pre-block snapshot, then 3-axis diffs:
+    ///   - CPU state at block exit
+    ///   - Per-block memory write trace
+    ///   - Per-block port-write + IRQ-assert log
+    /// Reports FIRST divergence with block linearPc + instr count.
+    /// </summary>
+    public bool    VerifyBlocks { get; set; }
     public string? ScreenshotPath { get; set; }
     public long?   MaxCycles    { get; set; }
     public long?   Frames       { get; set; }
@@ -153,6 +166,7 @@ public sealed class PcOptions
             if      (arg == "--fullscreen")  o.Fullscreen = true;
             else if (arg == "--headless")    o.Headless = true;
             else if (arg == "--lockstep-bjit") o.LockstepBjit = true;
+            else if (arg == "--verify-blocks") o.VerifyBlocks = true;
             else if (arg == "--trace-int")   o.TraceInt = true;
             else if (arg == "--trace-io")    o.TraceIo = true;
             else if (arg == "--trace-irq")   o.TraceIrq = true;

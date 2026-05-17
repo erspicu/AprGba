@@ -61,9 +61,11 @@ public sealed class X86CpuStateSnapshot : ICpuStateSnapshot
 
 /// <summary>
 /// ISteppableCpu adapter for X86JsonCpu. Wraps one CPU + its memory so
-/// LockstepDiff can drive two of them in parallel.
+/// LockstepDiff can drive two of them in parallel. Also implements
+/// IBlockBoundedSteppableCpu (Phase 30.15d) so the VerifiedBlockJitRunner
+/// can use it for per-block verification.
 /// </summary>
-public sealed class X86SteppableCpu : ISteppableCpu
+public sealed class X86SteppableCpu : IBlockBoundedSteppableCpu
 {
     public string Name { get; }
 
@@ -101,4 +103,42 @@ public sealed class X86SteppableCpu : ISteppableCpu
 
     public byte ReadByteFromBus(ulong addr)
         => _mem.ReadByte((int)(addr & 0xFFFFF));
+
+    // === IBlockBoundedSteppableCpu (Phase 30.15d sprint 5.3) ============
+
+    public int LastBlockInstructionCount => _cpu.LastBlockInstructionCount;
+
+    public void StepOneArchitecturalInstruction()
+    {
+        _cpu.SetActiveForLockstep();
+        _cpu.StepOnePerInstr();
+        _steps++;
+    }
+
+    public object BeginTrace(IBlockTraceSink sink)
+    {
+        var prior = X86JsonCpu.ActiveTraceSink;
+        X86JsonCpu.ActiveTraceSink = sink;
+        return prior!;   // token = previous sink (nullable, but we boxed)
+    }
+
+    public void EndTrace(object token)
+    {
+        X86JsonCpu.ActiveTraceSink = token as IBlockTraceSink;
+    }
+
+    public object SnapshotMemoryState()
+    {
+        // V1: full 1MB memcpy + CPU state clone.
+        var ramCopy = (byte[])_mem.Ram.Clone();
+        var cpuCopy = _cpu.State;  // X86State.Clone-equivalent via getter
+        return (ramCopy, cpuCopy);
+    }
+
+    public void LoadMemoryState(object snapshot)
+    {
+        var (ramCopy, cpuCopy) = ((byte[], AprX86.Cli.Cpu.X86State))snapshot;
+        Array.Copy(ramCopy, _mem.Ram, ramCopy.Length);
+        _cpu.LoadState(cpuCopy);
+    }
 }

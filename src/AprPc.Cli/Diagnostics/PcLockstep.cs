@@ -418,6 +418,10 @@ public static class PcLockstep
     /// to what the headless lockstep needs (no GUI, no emulator thread,
     /// no HLE BIOS install when BiosPath is set).
     /// </summary>
+    /// <summary>Phase 30.15d sprint 5.4 — re-exposed as internal for PcVerifyBlocks.</summary>
+    internal static PcLockstepEnv BuildEnvForVerify(string tag, bool blockJit, PcOptions options)
+        => BuildEnv(tag, blockJit, options);
+
     private static PcLockstepEnv BuildEnv(string tag, bool blockJit, PcOptions options)
     {
         var machineSpecPath = PcMemoryBus.LocateMachineSpec();

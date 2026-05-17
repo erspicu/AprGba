@@ -64,6 +64,12 @@ AprPc.Cli.Hardware.PcPortBus.ResetPortE9Log();
 if (opts.LockstepBjit)
     return AprPc.Cli.Diagnostics.PcLockstep.Run(opts);
 
+// Phase 30.15d sprint 5.4 — `--verify-blocks` runs the per-block JIT-vs-
+// interp diff via VerifiedBlockJitRunner. Per-block, not per-step;
+// finds emitter bugs at the moment the bad block runs.
+if (opts.VerifyBlocks)
+    return AprPc.Cli.Diagnostics.PcVerifyBlocks.Run(opts);
+
 using var runner = new PcSystemRunner(opts);
 
 if (opts.Headless)

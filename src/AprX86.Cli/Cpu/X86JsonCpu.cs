@@ -77,6 +77,38 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         _activeCpu = this;
     }
 
+    /// <summary>
+    /// Phase 30.15d sprint 5.3 — active trace sink for the Verified
+    /// Block-JIT framework. When non-null, MemWrite8 / PortWrite8 also
+    /// append to the sink so the framework can compare JIT-vs-interp
+    /// at block boundaries. Null = no overhead.
+    /// </summary>
+    public static AprCpu.Core.Validation.IBlockTraceSink? ActiveTraceSink { get; set; }
+
+    /// <summary>
+    /// Phase 30.15d sprint 5.3 — most-recent block size (architectural
+    /// instructions executed). For per-instr mode this is always 1.
+    /// For block-JIT this is the block.Instructions.Count of the
+    /// most-recently-run block. -1 if no block has ever run.
+    /// </summary>
+    public int LastBlockInstructionCount { get; private set; } = -1;
+
+    /// <summary>
+    /// Phase 30.15d sprint 5.3 — force a single per-instruction step,
+    /// bypassing block-JIT regardless of <see cref="_blockJitEnabled"/>.
+    /// Used by VerifiedBlockJitRunner to drive the interp side N times
+    /// to mirror the JIT's block.
+    /// </summary>
+    public int StepOnePerInstr()
+    {
+        _activeMem = _mem;
+        _activeCpu = this;
+        if (Halted) { LastBlockInstructionCount = 0; return 0; }
+        var rc = StepOne();
+        LastBlockInstructionCount = 1;   // per-instr = 1 arch instruction
+        return rc;
+    }
+
     private readonly X86Memory                  _mem;
     private readonly LoadedSpec                  _spec;
     private readonly HostRuntime                 _rt;
@@ -580,6 +612,11 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
 
         var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
         fn(_statePtr);
+        // Phase 30.15d sprint 5.3 — record actual block size from the
+        // cache entry (BlockCache stores the per-block instruction
+        // count). Lets the verifier framework drive the interp side
+        // for exactly the same number of architectural instructions.
+        LastBlockInstructionCount = entry.InstructionCount;
         return 1;
     }
 
@@ -928,6 +965,10 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         // byte. Without this, FreeDOS kernel relocation via REP MOVSW
         // leaves the JIT executing stale zero-translations at the new CS.
         _activeCpu?._blockCache?.NotifyMemoryWrite(a);
+        // Phase 30.15d sprint 5.3 — record into verified-block trace
+        // sink when active. instrIndexWithinBlock=0 placeholder; per-
+        // instruction granularity needs IR-level counter (future).
+        ActiveTraceSink?.RecordMemWrite(0, a, value, 1);
         if (WriteWatchHi > WriteWatchLo && a >= WriteWatchLo && a < WriteWatchHi)
         {
             // Note: stderr [WW] spam removed Phase 30.10 — the auto-
