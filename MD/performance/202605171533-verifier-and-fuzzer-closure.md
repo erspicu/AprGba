@@ -127,9 +127,10 @@ shape — both involve unconditional control transfers:
   seed=831377771 dropped 11 → 0; verified-block coverage jumped
   14 → 564 (40×).
 
-All three follow-ups RESOLVED in the Phase 30.18o..w sprint series
+All three follow-ups RESOLVED in the Phase 30.18o..z sprint series
 (see commit log). After resolution, all 4 CPU fuzzers report **0
-divergences across all tested seeds** (42, 100, 999, 2026, 0, 1234):
+divergences across all tested seeds** (15-seed sweep: 1-9 + 42, 100,
+999, 2026, 0, 1234):
 
 | CPU | Fuzzer status | Verifier (real ROM) status |
 |---|---|---|
