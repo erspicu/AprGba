@@ -172,6 +172,45 @@ public sealed unsafe class CpuExecutor
         if (_stateHandle.IsAllocated) _stateHandle.Free();
     }
 
+    // === Phase 30.16 sprint 5.6b — Verified Block-JIT framework support ====
+
+    /// <summary>
+    /// Phase 30.16 sprint 5.6b — force a single per-instruction step
+    /// regardless of block-JIT enablement. Used by the Verified Block-JIT
+    /// framework's interpreter side to mirror exactly the same number of
+    /// architectural instructions as the JIT block just ran.
+    /// </summary>
+    public void StepOnePerInstr()
+    {
+        // Save compile-result to bypass block-JIT for one call.
+        var saved = _compileResult;
+        _compileResult = null;
+        try
+        {
+            Step();
+        }
+        finally
+        {
+            _compileResult = saved;
+        }
+        LastStepInstructionCount = 1;
+    }
+
+    /// <summary>
+    /// Phase 30.16 sprint 5.6b — clone the CPU state buffer for the
+    /// verifier framework's pre-block snapshot. Memory bus is snapshotted
+    /// separately by the harness.
+    /// </summary>
+    public byte[] SnapshotState() => (byte[])_state.Clone();
+
+    public void LoadState(byte[] state)
+    {
+        if (state.Length != _state.Length)
+            throw new InvalidOperationException(
+                $"CpuExecutor.LoadState: state size mismatch ({state.Length} vs {_state.Length}).");
+        Array.Copy(state, _state, _state.Length);
+    }
+
     /// <summary>
     /// Multi-set constructor — for ARM/Thumb-style chips. The
     /// <paramref name="dispatch"/> tells us which selector to read
