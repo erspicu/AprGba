@@ -101,6 +101,36 @@ reliably surfaces. Each is its own focused investigation sprint;
 none unblocks the existing real-ROM verifier workload (cpu_instrs.gb
 278k blocks NoDiff, pcxtbios+FreeDOS 1M blocks NoDiff).
 
+## Diagnostic + framework-prevention tools added (Phase 30.18l/m/n)
+
+After the immediate verifier+fuzzer work, this session added several
+tools to make future bug investigation faster and to push more
+authoring-mistake detection into the framework:
+
+1. **Early Bailout Bisection** (`APR_EARLY_EXIT_BLOCK_PC` +
+   `APR_EARLY_EXIT_INSTR_COUNT`): cap a specific block at K
+   instructions to bisect which instruction is buggy. Preserves
+   JIT optimization context (register-alloc, flag-elision) so bugs
+   don't disappear under observation. Gemini-recommended Strategy 1.
+
+2. **Force Budget** (`APR_GB_FORCE_BUDGET=N`): set GB block-JIT cycle
+   budget globally to N. Distinguish per-instruction vs multi-
+   instruction-state bugs. (Caveat: budget-exit fires AFTER first
+   instruction's cycle deduct, so N=1 doesn't truly force 1 instr.)
+
+3. **SpecLinter** (`AprCpu.Core.JsonSpec.SpecLinter`): proactive
+   JSON-spec authoring check, runs at spec-load time. Catches
+   patterns that historically led to fuzzer-found block-JIT bugs:
+   - **PostStoreRegisterUpdate**: `store_byte` followed by
+     `write_reg_pair_named` to the source pair (LDI/LDD bug)
+   - **HaltStopMetadata**: `op:"halt"/"stop"` step without
+     `changes_mode:true` or `writes_pc:"always"`
+   - **EmptyStepsNonNop**: empty Steps on a non-trivial mnemonic
+
+   CLI: `apr-{nes,gb,x86,gba} --lint-spec`. All 4 CPU specs report
+   0 warnings after this session's fixes. New rules trivially
+   extensible as the fuzzer surfaces more patterns.
+
 ## CLI surface added
 
 ```bash

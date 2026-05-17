@@ -260,6 +260,31 @@ The fuzzer is the production tool for finding the *next* emitter
 bug; the verifier is the production tool for proving a known-good
 workload stays bit-identical across emitter changes.
 
+## 7.4 Spec linter (Phase 30.18n)
+
+`SpecLinter` walks the loaded `CpuSpec.InstructionDef` entries and
+warns on patterns that historically caused fuzzer-found block-JIT
+bugs. Run it whenever you edit a CPU spec or add a new CPU:
+
+```bash
+apr-nes --lint-spec     # NES (2A03)
+apr-gb  --lint-spec     # GB (LR35902)
+apr-x86 --lint-spec     # x86-16 (i8086)
+apr-gba --lint-spec     # GBA (ARM7TDMI)
+```
+
+Exit code 0 = clean; 4 = warnings. Current rule set:
+
+| Rule | Catches |
+|---|---|
+| `PostStoreRegisterUpdate` | LDI/LDD-style step-order bugs where a `store_byte` precedes a `write_reg_pair_named` to the same pair — sync-exit inside the store would lose the pair update |
+| `HaltStopMetadata` | HALT/STOP without `changes_mode:true` or `writes_pc:"always"` — block-detector might not end the block at this instruction |
+| `EmptyStepsNonNop` | Empty `Steps` on a non-trivial mnemonic — usually a typo or in-progress spec entry |
+
+New rules added as the fuzzer surfaces more patterns. Pattern is in
+`src/AprCpu.Core/JsonSpec/SpecLinter.cs` — copy an existing rule and
+adapt.
+
 ## 7.5 Bisection tools (Phase 30.18l/m)
 
 When the fuzzer reports a divergence in a multi-instruction block,
