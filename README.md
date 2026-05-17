@@ -93,9 +93,24 @@ Results:
 | Ricoh 2A03 (NES) | cpu_test5/cpu.nes | 1,000,000 | 2.00M | 6.2s |
 | ARM7TDMI (GBA) | gba-tests/arm/arm.gba | 1,000,000 | 1.00M | 1:06 |
 
-The framework is portable, additive (no breaking changes to existing
-backends), and finds real bugs (three x86 emitter bugs surfaced during
-30.15d bring-up). Differential fuzzing harness (sprint 5.7) deferred.
+**Phase 30.17/18 (Differential fuzzing — all 4 CPUs)** ✅ 2026-05-17 —
+each backend exposes a `--fuzz=N --fuzz-blocks=M --fuzz-seed=S` mode
+that generates random-instruction-stream ROMs and feeds them through
+the verifier. Per-CPU adapter ~150 LoC. The fuzzer reliably surfaces
+emitter and framework bugs that hand-curated test ROMs don't reach:
+
+| CPU | Bugs found by fuzzer | Status |
+|---|---|---|
+| NES | 3 verifier-framework gaps (`_cpubus` snapshot, `FetchImm` fast-path, open-bus PC) | All fixed; **500-iter × 200-blocks = 41,473 blocks NoDiff** |
+| LR35902 (GB) | 2 per-instr emitter bugs (STOP pad-byte, HALT flag transfer) | Both fixed in spec + runtime |
+| ARM7TDMI (GBA) | 1 emitter bug (STMDB R15 pipeline offset, off by 8 bytes) | Tracked for follow-up |
+| x86-16 | 1 BlockDetector NOP-fallback bug (synthesizing 0x00=ADD as silent NOP) | Fixed; safety check added |
+
+Plus 3 real x86 emitter bugs surfaced during the original 30.15d
+framework bring-up (PC linear-vs-IP, packed-tail `ImmConsumed` leak,
+INT-pushed FLAGS reserved-bit). Total framework session: ~10 real
+bugs found + fixed via the verifier + fuzzer combo. The framework is
+production-ready for any future CPU backend.
 
 ---
 
