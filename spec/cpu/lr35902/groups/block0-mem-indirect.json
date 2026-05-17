@@ -38,7 +38,7 @@
     },
     {
       "name": "LdInd_HLi_A",
-      "comment": "0x22 — LD (HL+), A (post-increment HL)",
+      "comment": "0x22 — LD (HL+), A (post-increment HL). Phase 30.18k — HL increment must happen BEFORE store_byte. If the store targets an IRQ-relevant IO address ($FF00+ / $FFFF), block-JIT's sync-exit fires inside store_byte and the subsequent HL update is lost. Reordered so HL gets incremented first using a snapshot of the original HL for the store address.",
       "pattern": "00100010",
       "fields": {},
       "mask": "0xFF",
@@ -48,17 +48,16 @@
         "writes_memory": ["A"], "cycles": { "form": "2m" },
         "steps": [
           { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
+          { "op": "add",                   "in": ["addr", { "const": 1 }], "out": "hl_new" },
+          { "op": "write_reg_pair_named",  "name": "HL", "value": "hl_new" },
           { "op": "read_reg_named", "name": "A", "out": "v" },
-          { "op": "store_byte", "address": "addr", "value": "v" },
-          { "op": "read_reg_pair_named",  "name": "HL", "out": "hl_pre" },
-          { "op": "add",                   "in": ["hl_pre", { "const": 1 }], "out": "hl_new" },
-          { "op": "write_reg_pair_named",  "name": "HL", "value": "hl_new" }
+          { "op": "store_byte", "address": "addr", "value": "v" }
         ]
       }]
     },
     {
       "name": "LdInd_HLd_A",
-      "comment": "0x32 — LD (HL-), A (post-decrement HL)",
+      "comment": "0x32 — LD (HL-), A (post-decrement HL). Same reorder as 0x22 — HL update first to survive store_byte sync-exit.",
       "pattern": "00110010",
       "fields": {},
       "mask": "0xFF",
@@ -68,11 +67,10 @@
         "writes_memory": ["A"], "cycles": { "form": "2m" },
         "steps": [
           { "op": "read_reg_pair_named", "name": "HL", "out": "addr" },
+          { "op": "sub",                   "in": ["addr", { "const": 1 }], "out": "hl_new" },
+          { "op": "write_reg_pair_named",  "name": "HL", "value": "hl_new" },
           { "op": "read_reg_named", "name": "A", "out": "v" },
-          { "op": "store_byte", "address": "addr", "value": "v" },
-          { "op": "read_reg_pair_named",  "name": "HL", "out": "hl_pre" },
-          { "op": "sub",                   "in": ["hl_pre", { "const": 1 }], "out": "hl_new" },
-          { "op": "write_reg_pair_named",  "name": "HL", "value": "hl_new" }
+          { "op": "store_byte", "address": "addr", "value": "v" }
         ]
       }]
     },
