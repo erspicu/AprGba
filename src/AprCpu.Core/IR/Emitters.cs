@@ -331,10 +331,35 @@ internal sealed class WriteReg : IMicroOpEmitter
         if (ctx.Format.Fields.TryGetValue(name, out var range))
         {
             var instrConst = LLVM.IsAConstantInt(ctx.Instruction);
-            if (instrConst == null) return;
-            var instrWord = (uint)LLVM.ConstIntGetZExtValue(instrConst);
-            var idxValue = ((instrWord >> range.Low) & range.LowMask) & maskBits;
-            if (idxValue == (uint)pc) MarkPcWritten(ctx);
+            if (instrConst != null)
+            {
+                var instrWord = (uint)LLVM.ConstIntGetZExtValue(instrConst);
+                var idxValue = ((instrWord >> range.Low) & range.LowMask) & maskBits;
+                if (idxValue == (uint)pc) MarkPcWritten(ctx);
+                return;
+            }
+            // Phase 30.18q — per-instr mode: instruction word is a runtime
+            // function parameter (not const). Emit a runtime check that
+            // sets _pcWrittenOffset when the extracted index equals PC.
+            // Without this, write_reg(idx, value) with idx resolving to
+            // R15 at runtime — e.g. LDR/STR post-indexed with Rn=R15 —
+            // writes PC but the executor's backup `postR15 != pcReadValue`
+            // check misfires when the written value happens to equal the
+            // pre-set pipeline value (== pcReadValue). Found by GbaFuzzer
+            // on opcode 0x36DF2966 (LDRB CC R2, [R15], R6 ROR 18).
+            var instrShifted = ctx.Builder.BuildLShr(ctx.Instruction,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (uint)range.Low, false),
+                "wr_idx_shr");
+            var idxRuntime = ctx.Builder.BuildAnd(instrShifted,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (range.LowMask & maskBits), false),
+                "wr_idx_mask");
+            var isPc = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, idxRuntime,
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (uint)pc, false), "wr_idx_is_pc");
+            var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            var oldFlag = ctx.Builder.BuildLoad2(LLVMTypeRef.Int8, flagSlot, "wr_pcw_old");
+            var one = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false);
+            var newFlag = ctx.Builder.BuildSelect(isPc, one, oldFlag, "wr_pcw_new");
+            ctx.Builder.BuildStore(newFlag, flagSlot);
             return;
         }
 

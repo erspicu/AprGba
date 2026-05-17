@@ -98,10 +98,21 @@ shape — both involve unconditional control transfers:
 
   Also added `CpuExecutor.UndecodableFirstInstructionException` catch
   + graceful undecodable-instr fallback in `Step()` so the GBA fuzzer
-  doesn't report SKIPPED rows. GBA fuzzer (seed=42, 100 iter):
-  2 div + 11 SKIPPED → 1 div + 0 SKIPPED. Remaining 1 divergence
-  is in single-data-transfer LDR/STR with Rn=R15 (different emitter);
-  tracked as Phase 30.18q follow-up.
+  doesn't report SKIPPED rows.
+
+  Phase 30.18q follow-up — third R15-related bug: per-instr
+  `WriteReg` with runtime-resolved index didn't mark `_pcWrittenOffset`
+  when the index happened to be 15. Executor's backup
+  `postR15 != pcReadValue` check misfires when the LDR/STR
+  post-indexed writeback target == pre-set pipeline value (`pcReadValue`).
+  Fix: emit a runtime "if idx==pc then PcWritten:=1" check in
+  `WriteReg.StaticallyMarkPcWrittenIfNeeded`'s Path A.
+
+  Combined impact (GBA fuzzer seed=42, 100 iter × 50 blocks):
+  - Before all fixes:  17 verified, 1 div + early-stop
+  - After 30.18p:     403 verified, 1 div, 0 skipped
+  - After 30.18q:     405 verified, **0 div, 0 skipped** (24× coverage)
+  T1 unit-tests: 894/894 still pass.
 
 - ~~**#342 (x86 mid-block undecodable)**~~ — **RESOLVED (Phase 30.18o,
   commit pending).** Actual root cause was different from initial
