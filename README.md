@@ -79,17 +79,23 @@ NoDiff (4.38M architectural instructions, ~3 min runtime)** against
 [`MD/process/05-verified-blockjit-howto.md`](MD/process/05-verified-blockjit-howto.md).
 Design: [`MD/design/30.15d-verified-blockjit-framework-design.md`](MD/design/30.15d-verified-blockjit-framework-design.md).
 
-**Phase 30.16 (Verifier across 3 CPUs)** ✅ 2026-05-17 — extended
-Phase 30.15d to GB (`apr-gb --verify-blocks=N` on
-`cpu_instrs.gb` — 278k blocks NoDiff before hitting an IRQ-delivery
-boundary asymmetry deferred to a follow-up) and NES
-(`apr-nes --verify-blocks=N` on `blargg cpu_test5/cpu.nes` —
-**1,000,000 blocks NoDiff, 2.0M instructions, 6.2s runtime**). Per-CPU
-adapter is ~200 LoC including snapshot blob + bus-region cloning;
-demonstrates the verifier framework's portability across 3 ISAs
-(x86-16, LR35902, MOS 6502) with the same generic
-`VerifiedBlockJitRunner`. GBA adapter + differential fuzzing harness
-deferred to a future sprint.
+**Phase 30.16 (Verifier across all 4 framework CPUs)** ✅ 2026-05-17
+— extended Phase 30.15d to GB (`apr-gb --verify-blocks`), NES
+(`apr-nes --verify-blocks`), and GBA (`apr-gba --verify-blocks`).
+**Every framework-target CPU now runs through the same generic
+`VerifiedBlockJitRunner`** with per-CPU adapter at ~150-200 LoC each.
+Results:
+
+| CPU | Test ROM | Blocks NoDiff | Instructions | Runtime |
+|---|---|---|---|---|
+| x86-16 (i8086) | pcxtbios + FreeDOS | 1,000,000 | 4.38M | 2:54 |
+| LR35902 (GB) | cpu_instrs.gb | 278,872 (IRQ asymmetry) | 1.48M | 4.6s |
+| Ricoh 2A03 (NES) | cpu_test5/cpu.nes | 1,000,000 | 2.00M | 6.2s |
+| ARM7TDMI (GBA) | gba-tests/arm/arm.gba | 1,000,000 | 1.00M | 1:06 |
+
+The framework is portable, additive (no breaking changes to existing
+backends), and finds real bugs (three x86 emitter bugs surfaced during
+30.15d bring-up). Differential fuzzing harness (sprint 5.7) deferred.
 
 ---
 
