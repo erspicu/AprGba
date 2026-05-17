@@ -1,24 +1,24 @@
-# `defer` micro-op — generic delayed-effect mechanism
+# `defer` micro-op — 通用 delayed-effect 機制
 
-> **Status**: design doc (2026-05-03). Implementation tracked as Phase 7
-> GB block-JIT P0.6 (see [`MD/design/12-gb-block-jit-roadmap.md`](/MD/design/12-gb-block-jit-roadmap.md)).
+> **狀態**：設計文件（2026-05-03）。實作追蹤為 Phase 7 GB block-JIT P0.6
+> （看 [`MD/design/12-gb-block-jit-roadmap.md`](/MD/design/12-gb-block-jit-roadmap.md)）。
 >
-> **Origin**: Gemini consultation ([`tools/knowledgebase/message/20260503_220938.txt`](/tools/knowledgebase/message/20260503_220938.txt))
-> on industry patterns for handling delayed-effect CPU quirks (LR35902 EI,
-> Z80 STI, x86 STI, SH-2 branch delay, RISC-V fence.i, MIPS load-use, etc.)
-> in a generic way — without hand-coding per-CPU logic in `BlockDetector`.
+> **起源**：Gemini consult
+> ([`tools/knowledgebase/message/20260503_220938.txt`](/tools/knowledgebase/message/20260503_220938.txt))
+> 關於業界處理 delayed-effect CPU quirk（LR35902 EI、Z80 STI、x86 STI、
+> SH-2 branch delay、RISC-V fence.i、MIPS load-use 等）的 generic 做法 —
+> 不在 `BlockDetector` 手刻 per-CPU logic。
 >
-> **Goal**: replace the current hardcoded `HasEiDelayStep` patch in
-> `BlockDetector` with a JSON-spec-driven mechanism that any future CPU
-> can reuse for its own delayed quirks. Zero block-JIT runtime cost in
-> the common case.
+> **目標**：用 JSON-spec-driven 機制取代 `BlockDetector` 目前 hardcode
+> 的 `HasEiDelayStep` patch，讓任何未來 CPU 可以 reuse 它自己的 delayed
+> quirk。Common case 下 block-JIT runtime cost 為零。
 
 ---
 
-## 1. Problem statement
+## 1. 問題陳述
 
-Several CPUs have instructions whose effect takes place AFTER the next
-instruction completes (instruction-grained delay):
+幾個 CPU 有 instruction 的 effect 在下個 instruction 完成 *之後* 發生
+（instruction-grained delay）：
 
 | CPU | Instruction | Delay | Effect |
 |---|---|---|---|
@@ -26,28 +26,28 @@ instruction completes (instruction-grained delay):
 | x86 | `STI` | 1 instr | IF=1 |
 | SH-2 | branch (delay slot) | 1 instr | PC = target after delay-slot instr |
 | RISC-V | `fence.i` | until next fetch | I-cache invalidation |
-| 6502 | NMI sample | 1 instr boundary | NMI vector |
-| 65816 | `XCE` mode swap | next instr | width register changes |
+| 6502 | NMI sample | 1 instr 邊界 | NMI vector |
+| 65816 | `XCE` mode swap | next instr | width register 改變 |
 
-Per-instruction backend handles these via host-side counters (`_eiDelay`)
-because the outer loop checks counters once per instruction. Block-JIT
-runs N instructions per call, breaking instruction-grained granularity.
+Per-instruction backend 透過 host-side counter（`_eiDelay`）處理這些
+因為 outer loop 每個 instruction 檢查一次 counter。Block-JIT 一次 call
+跑 N instruction、打破 instruction-grained 粒度。
 
-Current band-aid in our codebase (P0.5b commit `771d170`):
-hardcoded `BlockDetector.HasEiDelayStep` checks for LR35902-specific
-`lr35902_ime_delayed` step name and forces block to end at EI+1. This is:
-- LR35902-specific (doesn't generalise to Z80 / x86)
-- Doesn't fully fix EI test (Block 2 still has wrong IME state for instr
-  2..N — see P0.5b commit limitations)
-- Sacrifices perf (block split at EI = no amortization across the EI region)
+我們 codebase 目前的 band-aid（P0.5b commit `771d170`）：
+`BlockDetector.HasEiDelayStep` hardcode 檢查 LR35902-specific
+`lr35902_ime_delayed` step name、強迫 block 在 EI+1 結束。這個做法：
+- LR35902-specific（不通用到 Z80 / x86）
+- 沒完全修 EI test（Block 2 instr 2..N 的 IME state 還是錯 —
+  看 P0.5b commit 限制）
+- 犧牲 perf（EI 處 block 切開 = EI 區內無 amortization）
 
 ---
 
-## 2. Generic solution: `defer` micro-op
+## 2. Generic 解：`defer` micro-op
 
 ### 2.1 JSON spec syntax
 
-Wrap the delayed body in a `defer` step:
+把 delayed body 包在 `defer` step：
 
 ```json
 {
@@ -66,201 +66,192 @@ Wrap the delayed body in a `defer` step:
 }
 ```
 
-Fields:
-- `op: "defer"` — control-flow wrapper, not lowered to direct IR
-- `delay_type` — `"instruction_count"` (V1); future: `"branch_taken"`,
-  `"cycle_count"`, `"until_condition"`
-- `delay_value` — integer N (for instruction_count, fires after N more
-  instructions)
-- `body` — array of micro-op steps, run when delay expires
+欄位：
+- `op: "defer"` — control-flow wrapper、不 lower 到直接 IR
+- `delay_type` — `"instruction_count"`（V1）；未來：`"branch_taken"`、
+  `"cycle_count"`、`"until_condition"`
+- `delay_value` — 整數 N（instruction_count 時、在 N 個 instruction 之後 fire）
+- `body` — micro-op step array、delay 到期時跑
 
-Multiple defer steps in the same instruction are allowed (each tracks
-independently). Multiple instructions in a row with defer is also fine
-(multiple pending actions tracked in parallel).
+同個 instruction 多個 defer step 可以（各自獨立追蹤）。連續多個 instruction
+都有 defer 也 fine（多個 pending action 平行追蹤）。
 
 ### 2.2 Block-JIT lowering — Phantom Instruction Injection
 
-The block builder gets a list of `block.Instructions`. **Before** emitting
-LLVM IR, run an AST pre-pass:
+Block builder 拿到 `block.Instructions` list。**Emit LLVM IR 之前**，
+跑一個 AST pre-pass：
 
 ```
 pending = []   // list of (remaining_delay, body_steps)
 for each instruction in block.Instructions:
-    // Decrement all pending delays.
+    // Decrement 全部 pending delay。
     for p in pending:
         p.remaining_delay -= 1
-    // Find delays that fire NOW (= 0) and inject body at front of this instr's steps.
+    // 找 NOW (= 0) fire 的 delay、把 body 注到這 instr step 前面。
     fired = pending.filter(p.remaining_delay == 0)
     pending = pending.filter(p.remaining_delay > 0)
     instruction.steps = [s for f in fired for s in f.body] + instruction.steps
-    // Strip defer wrappers from this instruction's own steps (don't re-emit).
+    // 從這 instruction 自己的 step 剝掉 defer wrapper（不重 emit）。
     instruction.steps = instruction.steps.map(unwrap_defer_to_register)
-    // For each defer in this instruction's steps, push body onto pending.
+    // 這 instruction step 裡的每個 defer、把 body push 到 pending。
     for s in instruction.steps where s.op == "defer":
         pending.append((s.delay_value, s.body))
 ```
 
-After pre-pass, hand the mutated instruction list to the regular IR
-emitter. The emitter sees plain micro-ops with no `defer` wrapper — fully
-generic, no awareness of delay semantics.
+Pre-pass 之後、把 mutate 過的 instruction list 交給正規 IR emitter。
+Emitter 看到 plain micro-op 無 `defer` wrapper — 完全 generic、不知道
+delay semantics。
 
-### 2.3 Cross-block fallback
+### 2.3 跨 block fallback
 
-If `defer` is in the LAST instruction of a block (or the delay extends
-beyond block end), the compile-time pending list still has entries. Two
-fallback options:
+如果 `defer` 在 block 的 LAST instruction（或 delay 延伸超過 block end），
+compile-time pending list 還有 entry。兩個 fallback option：
 
-**(A) Block epilogue serialization**: emit IR that writes pending action
-info into `cpu_state.pending_bitmap` slot. Block exit finishes normally.
+**(A) Block epilogue serialization**：emit IR 把 pending action info 寫到
+`cpu_state.pending_bitmap` slot。Block exit 正常結束。
 
-**(B) Block preamble check**: every block's entry IR checks
-`pending_bitmap != 0`; if non-zero, fast-path-jumps to a small handler
-that fires expired actions before normal block flow.
+**(B) Block preamble check**：每個 block 的 entry IR 檢查
+`pending_bitmap != 0`；非零、fast-path-jump 到一個小 handler、在正常
+block flow 之前 fire 過期 action。
 
-This pair handles the rare cases (defer at end of block) at the cost of
-one load + branch per block start. Block linking ensures hot-path stays
-mostly non-pending → fast-path triggers rarely.
+這對 handle 罕見 case（block 結尾的 defer）、代價是每個 block start 一個
+load + branch。Block linking 確保 hot-path 大多 non-pending → fast-path
+很少觸發。
 
 ### 2.4 Per-instr backend
 
-`JsonCpu.StepOne` per-instruction path doesn't have the compile-time
-opportunity. Implement defer at runtime:
+`JsonCpu.StepOne` per-instruction path 沒有 compile-time 機會。Runtime
+實作 defer：
 
-- New emitter `DeferEmitter` (per-instr mode): writes (action_id,
-  delay_value, body_id) into `pending_actions[]` state slot
-- `JsonCpu.RunCycles` outer loop after each StepOne: decrement counters
-  in `pending_actions[]`, fire any that hit 0 (call body's host extern,
-  or call back into JIT'd body fn)
+- 新 emitter `DeferEmitter`（per-instr mode）：寫 (action_id, delay_value,
+  body_id) 到 `pending_actions[]` state slot
+- `JsonCpu.RunCycles` outer loop 每個 StepOne 之後：decrement
+  `pending_actions[]` counter、fire 任何 hit 0 的（呼叫 body 的 host
+  extern、或 callback 進 JIT'd body fn）
 
-Cleaner alternative for V1: keep per-instr's existing `_eiDelay` /
-`lr35902_arm_ime_delayed` host extern flow for now (unchanged). Apply
-generic defer mechanism only to block-JIT. This means EI spec carries
-BOTH paths (per-instr extern + block-JIT defer body) which is ugly. V2
-unifies.
-
----
-
-## 3. State changes
-
-`CpuStateLayout` adds:
-
-- `PendingActionsBitmapOffset` — i32 (or i64 if more than 32 actions
-  expected)
-- `PendingActionsCounters[N]` — i8[N] for per-action countdown (N small,
-  e.g. 8)
-
-Or simpler V1:
-- `PendingDeferredFlags` — i32 bitmap; bit set = action pending; bits
-  defined per CPU spec
-
-For LR35902 EI specifically: bit 0 = IME-pending. Cross-block fallback
-sets bit 0; preamble check fires `set_flag IME=1` then clears bit 0.
+V1 比較乾淨的 alternative：per-instr 既有的 `_eiDelay` /
+`lr35902_arm_ime_delayed` host extern flow 先留著（不變）。Generic defer
+機制只給 block-JIT。意思是 EI spec 同時帶兩條 path（per-instr extern +
+block-JIT defer body）、醜。V2 統一。
 
 ---
 
-## 4. Implementation steps (P0.6)
+## 3. State 改動
 
-### 4.1 Step 1 — Spec schema + parser (~0.5 day)
+`CpuStateLayout` 加：
 
-- `SpecModel.cs`: keep `MicroOpStep` generic; defer parsing happens
-  lazily in the AST pre-pass via JsonElement
-- `SpecLoader.cs`: ensure `body` array is loaded as nested step list
-- Add validation: `op:"defer"` requires `delay_type`, `delay_value`,
-  `body`; allowed delay_type values: `"instruction_count"` (V1)
+- `PendingActionsBitmapOffset` — i32（或 i64 如果預期超過 32 個 action）
+- `PendingActionsCounters[N]` — i8[N] for per-action countdown（N 小、
+  例如 8）
 
-### 4.2 Step 2 — AST pre-pass in BlockFunctionBuilder (~1 day)
+或 V1 比較簡單：
+- `PendingDeferredFlags` — i32 bitmap；bit set = action pending；
+  per CPU spec 定義 bit
 
-- New helper `DeferLowering.PreprocessBlock(IReadOnlyList<DecodedBlockInstruction>)`
-  returns mutated list with phantoms injected + defers stripped
-- Track pending list, decrement per instruction, inject expired bodies
-- For un-expired defers at block end: emit "serialize" wrapper steps
-  that write to `pending_bitmap` slot
-- BlockFunctionBuilder.Build calls the pre-pass before its main loop
+LR35902 EI 具體：bit 0 = IME-pending。跨 block fallback set bit 0；
+preamble check fire `set_flag IME=1` 然後清 bit 0。
 
-### 4.3 Step 3 — `pending_bitmap` state slot + preamble check (~0.5 day)
+---
 
-- `CpuStateLayout`: add `PendingDeferredFlagsFieldIndex` like other
-  emulator-suffix fields
-- BlockFunctionBuilder block preamble: emit
+## 4. 實作步驟（P0.6）
+
+### 4.1 Step 1 — Spec schema + parser（~0.5 day）
+
+- `SpecModel.cs`：`MicroOpStep` 維持 generic；defer parsing 在 AST
+  pre-pass 透過 JsonElement lazily 發生
+- `SpecLoader.cs`：確保 `body` array load 為 nested step list
+- 加 validation：`op:"defer"` 需要 `delay_type`、`delay_value`、
+  `body`；允許的 delay_type value：`"instruction_count"`（V1）
+
+### 4.2 Step 2 — BlockFunctionBuilder 的 AST pre-pass（~1 day）
+
+- 新 helper `DeferLowering.PreprocessBlock(IReadOnlyList<DecodedBlockInstruction>)`
+  回 mutate 過、phantom 注入過、defer strip 過的 list
+- 追蹤 pending list、per instruction decrement、注入過期 body
+- Block end 還沒過期的 defer：emit「serialize」wrapper step 寫到
+  `pending_bitmap` slot
+- BlockFunctionBuilder.Build 在 main loop 之前呼叫 pre-pass
+
+### 4.3 Step 3 — `pending_bitmap` state slot + preamble check（~0.5 day）
+
+- `CpuStateLayout`：加 `PendingDeferredFlagsFieldIndex`、像其他
+  emulator-suffix field
+- BlockFunctionBuilder block preamble：emit
   `if (pending_bitmap != 0) { handle_pending_then_jump_to_first_instr; }`
-- Handler executes pending bodies (by action ID) and clears bits
+- Handler 執行 pending body（by action ID）並清 bit
 
-### 4.4 Step 4 — Per-instr fallback (~0.5 day)
+### 4.4 Step 4 — Per-instr fallback（~0.5 day）
 
-V1: keep existing `lr35902_arm_ime_delayed` extern unchanged. Don't
-touch per-instr.
+V1：既有的 `lr35902_arm_ime_delayed` extern 不動。不碰 per-instr。
 
-V2 (deferred): implement DeferEmitter for per-instr backend that writes
-to state's pending counter table; JsonCpu.RunCycles outer loop ticks
-counters per instr.
+V2（延後）：對 per-instr backend 實作 DeferEmitter、寫到 state 的
+pending counter table；JsonCpu.RunCycles outer loop per instr tick counter。
 
-### 4.5 Step 5 — Migrate LR35902 EI spec (~0.5 day)
+### 4.5 Step 5 — 遷移 LR35902 EI spec（~0.5 day）
 
-- `spec/cpu/lr35902/groups/block3-di-ei.json`: change EI's step from
-  `[{ "op": "lr35902_ime_delayed" }]` to
+- `spec/cpu/lr35902/groups/block3-di-ei.json`：EI step 從
+  `[{ "op": "lr35902_ime_delayed" }]` 改成
   `[{ "op": "defer", "delay_type": "instruction_count", "delay_value": 1, "body": [...] }]`
-- For V1, keep `lr35902_ime_delayed` as alternative — per-instr uses old,
-  block-JIT uses new. Schema validator accepts both.
+- V1 留 `lr35902_ime_delayed` 為 alternative — per-instr 用舊、
+  block-JIT 用新。Schema validator 接受兩個。
 
-### 4.6 Step 6 — Remove hardcoded `HasEiDelayStep` from BlockDetector (~0.5 day)
+### 4.6 Step 6 — 從 BlockDetector 移除 hardcode 的 `HasEiDelayStep`（~0.5 day）
 
-- Remove the band-aid added in P0.5b
-- Verify block detector no longer terminates at EI
-- T1 + T2 + Blargg 02-interrupts/EI test should still pass
+- 移除 P0.5b 加的 band-aid
+- 驗 block detector 不再在 EI 結束
+- T1 + T2 + Blargg 02-interrupts/EI test 應該還是 pass
 
-### 4.7 Step 7 — Verify (~0.5 day)
+### 4.7 Step 7 — 驗證（~0.5 day）
 
-- T1 unit tests (need new tests covering defer pre-pass + cross-block
-  serialization + preamble fast-path)
-- T2 GBA matrix (regression — ARM doesn't use defer, should be no-op)
-- T3 GB Blargg 01-special + 02-interrupts (now should pass) +
-  bench (compare perf before/after)
+- T1 unit test（需要新 test cover defer pre-pass + 跨 block serialization
+  + preamble fast-path）
+- T2 GBA matrix（regression — ARM 不用 defer、應該 no-op）
+- T3 GB Blargg 01-special + 02-interrupts（現在應該 pass）+
+  bench（比較 perf 前後）
 
-**Total**: ~3-4 days work, V1 scope.
+**Total**：~3-4 day 工作、V1 scope。
 
 ---
 
-## 5. Future extensions (not P0.6)
+## 5. 未來擴充（不是 P0.6）
 
-### 5.1 Other delay_type values
+### 5.1 其他 delay_type 值
 
-- `"branch_taken"`: fire body when next branch is taken (SH-2 delay slot)
-- `"cycle_count"`: fire after N cycles (cycle-grained, not instr-grained)
-- `"until_condition"`: fire when a runtime condition holds
+- `"branch_taken"`：下個 branch 採時 fire body（SH-2 delay slot）
+- `"cycle_count"`：N cycle 之後 fire（cycle-grained、不是 instr-grained）
+- `"until_condition"`：某 runtime condition 成立時 fire
 
-### 5.2 HALT / STOP via defer
+### 5.2 HALT / STOP 透過 defer
 
-HALT semantically is "stop execution until IRQ" — not a delayed effect.
-Could be modeled as `defer { delay_type: "until_irq", body: [resume] }`
-but that's a bigger refactor. Keep hardcoded HasHaltOrStopStep for now.
+HALT 語意是「停執行直到 IRQ」— 不是 delayed effect。可以 model 為
+`defer { delay_type: "until_irq", body: [resume] }` 但那是更大的 refactor。
+目前 HasHaltOrStopStep 維持 hardcode。
 
 ### 5.3 Conditional defer
 
-Some delayed effects only fire if some flag is set during the delay
-window. Add `condition` field:
+某些 delayed effect 只在 delay 期間某 flag set 時 fire。加 `condition`
+field：
 ```json
 { "op": "defer", "delay_value": 1, "condition": "F.Z == 1", "body": [...] }
 ```
 
 ### 5.4 Per-CPU action ID registry
 
-If multiple CPUs use defer with their own action IDs, the framework
-needs to allocate bits in the global pending_bitmap. Per-CPU ID registry
-in spec.
+多個 CPU 用 defer + 自己的 action ID 時，framework 需要在 global
+pending_bitmap 分配 bit。Per-CPU ID registry 在 spec。
 
 ---
 
-## 6. Decision points before implementation
+## 6. 實作前的決策點
 
-1. **Scope V1 or V2**: V1 = block-JIT only, per-instr keeps old extern.
-   V2 = both backends use spec-driven defer. **V1 recommended** — gets
-   the generic mechanism in fast, validates the design, cleanup later.
+1. **Scope V1 或 V2**：V1 = block-JIT only、per-instr 留舊 extern。
+   V2 = 兩個 backend 都用 spec-driven defer。**建議 V1** — 先把 generic
+   機制裝進去、驗證設計、之後再 cleanup。
 
-2. **pending_bitmap or per-action counter table**: V1 = single bitmap
-   (each bit = pending action ID). Simpler. Limits: max 32 simultaneous
-   actions per CPU.
+2. **pending_bitmap 或 per-action counter table**：V1 = 單一 bitmap
+   （每 bit = pending action ID）。簡單。限制：每 CPU 最多 32 個同時
+   action。
 
-3. **AST pre-pass location**: in `BlockFunctionBuilder.Build` (most
-   integrated) or in a separate `DeferLowering` pass run between
-   detector and builder (more reusable). **Separate pass recommended**
-   for testability + future flexibility.
+3. **AST pre-pass 位置**：在 `BlockFunctionBuilder.Build`（最整合）或
+   在 detector 跟 builder 之間跑的獨立 `DeferLowering` pass（更 reusable）。
+   **建議獨立 pass**、為 testability + 未來彈性。
