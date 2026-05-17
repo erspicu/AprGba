@@ -14,6 +14,30 @@ using AprGb.Cli.Video;
 //   --seconds=N   DMG-emulated wall-time seconds; converted via the
 //                 4,194,304 t-cycles/sec DMG clock.
 
+// Phase 30.18n — `--lint-spec` runs SpecLinter on the LR35902 spec
+// and reports warnings. Pure diagnostic; no run. Checked BEFORE
+// ParseArgs to avoid the --rom requirement.
+if (args.Length == 1 && args[0] == "--lint-spec")
+{
+    string? specPath = null;
+    for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
+    {
+        var probe = Path.Combine(d.FullName, "spec", "cpu", "lr35902", "cpu.json");
+        if (File.Exists(probe)) { specPath = probe; break; }
+    }
+    if (specPath is null) { Console.Error.WriteLine("spec/cpu/lr35902/cpu.json not found"); return 3; }
+    var loaded = AprCpu.Core.JsonSpec.SpecLoader.LoadCpuSpec(specPath);
+    var warnings = AprCpu.Core.JsonSpec.SpecLinter.Lint(loaded);
+    Console.WriteLine($"apr-gb spec-lint: {specPath}");
+    Console.WriteLine($"  warnings: {warnings.Count}");
+    foreach (var w in warnings)
+    {
+        Console.WriteLine($"  [{w.Rule}] {w.Where}");
+        Console.WriteLine($"    {w.Message}");
+    }
+    return warnings.Count == 0 ? 0 : 4;
+}
+
 var opts = ParseArgs(args);
 if (opts is null) { PrintUsage(); return 1; }
 
