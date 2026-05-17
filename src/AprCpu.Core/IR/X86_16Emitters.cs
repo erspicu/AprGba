@@ -6642,10 +6642,25 @@ internal static class X86InterruptHelpers
         var i16 = LLVMTypeRef.Int16;
         var i32 = LLVMTypeRef.Int32;
 
-        // Push FLAGS as-is (NOT the masked-reserved-bit version PUSHF
-        // applies — silicon pushes raw on INT entry).
+        // Phase 30.15c-C — push FLAGS with reserved-bit invariants
+        // applied, matching PUSHF and matching silicon. The previous
+        // comment "silicon pushes raw on INT entry" was incorrect:
+        // 8086 forces reserved bit 1 = 1 and the upper nibble = 1111
+        // on every FLAGS-read regardless of source (PUSHF, INT, IRET-
+        // captured frame, hardware-IRQ entry). Per-instr backend gets
+        // this for free via X86State.GetFlags() which initialises f =
+        // 0xF002. Block-JIT was loading the raw FLAGS slot which may
+        // not have bit 1 set (because individual flag-update micro-
+        // ops set/clear specific positions without OR'ing 0x0002).
+        // Symptom: FreeDOS boot under block-JIT eventually mismatched
+        // a pushed-FLAGS byte by 0x02 (verifier found this at block
+        // #25,302 of pcxtbios POST + early kernel-load INT 10h call).
         var fPtr = ctx.GepStatusRegister("FLAGS");
-        var flags = ctx.Builder.BuildLoad2(i16, fPtr, $"{label}_flags");
+        var rawFlags = ctx.Builder.BuildLoad2(i16, fPtr, $"{label}_flags_raw");
+        var keepFlags = ctx.Builder.BuildAnd(rawFlags,
+            LLVMValueRef.CreateConstInt(i16, 0x0FD7, false), $"{label}_flags_keep");
+        var flags = ctx.Builder.BuildOr(keepFlags,
+            LLVMValueRef.CreateConstInt(i16, 0xF002, false), $"{label}_flags");
         X86StackHelpers.PushW16(ctx, flags, $"{label}_psh_f");
 
         // Clear IF (bit 9) and TF (bit 8) AFTER pushing the original FLAGS.
