@@ -260,6 +260,50 @@ The fuzzer is the production tool for finding the *next* emitter
 bug; the verifier is the production tool for proving a known-good
 workload stays bit-identical across emitter changes.
 
+## 7.5 Bisection tools (Phase 30.18l/m)
+
+When the fuzzer reports a divergence in a multi-instruction block,
+narrowing down which instruction is buggy used to require manually
+inspecting the LLVM IR or adding println traces inside each emitter.
+Two env-var-driven bisection tools (per Gemini-recommended Strategy 1)
+make this fast and non-invasive:
+
+### Early Bailout Bisection (`APR_EARLY_EXIT_*`)
+
+Cap a SPECIFIC block (matched by start-PC) to N instructions, recompile
+just that block, run verifier again. Preserves JIT optimization
+context (register allocation, flag elision, dead-store elimination
+across instructions) for ALL OTHER blocks — bugs in those don't get
+hidden by the cap.
+
+```bash
+APR_EARLY_EXIT_BLOCK_PC=4DF5 \
+APR_EARLY_EXIT_INSTR_COUNT=8 \
+apr-gb --rom=... --fuzz=80 --fuzz-blocks=5 --fuzz-seed=42
+```
+
+Workflow: binary search to find K where cap=K diverges but cap=K-1
+doesn't → instruction K is the buggy one. Implemented in
+`BlockDetector.cs` at the instruction-loop entry.
+
+### Force Budget (`APR_GB_FORCE_BUDGET`)
+
+Cap GB block-JIT cycle budget globally to N cycles. Useful for
+distinguishing per-instruction vs multi-instruction-state bugs: if
+divergence persists with `APR_GB_FORCE_BUDGET=1` (≈ single-instruction
+blocks), the bug is in a single-instruction emitter; otherwise it's
+in multi-instruction block state.
+
+```bash
+APR_GB_FORCE_BUDGET=1 \
+apr-gb --rom=... --fuzz=80 --fuzz-blocks=50 --fuzz-seed=42 --fuzz-continue
+```
+
+NOTE: GB block-JIT budget-exit fires AFTER instruction N's cycle
+deduct (not before), so the first instruction always runs regardless
+of budget=1. To truly force single-instruction blocks, use early-
+bailout with `APR_EARLY_EXIT_INSTR_COUNT=1` and the matching block PC.
+
 ## 8. Related docs
 
 - Design: `MD/design/30.15d-verified-blockjit-framework-design.md`
