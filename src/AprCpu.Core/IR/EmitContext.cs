@@ -204,6 +204,21 @@ public sealed unsafe class EmitContext
     }
 
     /// <summary>
+    /// Phase 30.15c-B — explicit setter for use by emitters that have
+    /// CONDITIONAL switch arms each containing FetchImm calls. Those
+    /// emitters save the baseline before each arm, do the emit, then
+    /// after the switch end set the counter to the runtime-actual
+    /// consumption (= baseline + bytes-the-taken-arm-will-consume).
+    /// Without this, IR-emit-order bumps shared by all arms cause
+    /// later FetchImm calls to read wrong offsets into packed-tail.
+    /// See X86ModRmComputeEaEmitter.
+    /// </summary>
+    public void SetImmediateConsumed(int value)
+    {
+        CurrentInstructionImmConsumed = value;
+    }
+
+    /// <summary>
     /// Phase 7 GB block-JIT P0.7 — when set (block-JIT mode), the t-cycle
     /// cost of the current instruction (parsed from spec cycles.form).
     /// Used by sync-exit IR (Lr35902StoreByteEmitter etc.) to decrement

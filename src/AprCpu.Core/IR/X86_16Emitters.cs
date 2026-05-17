@@ -1227,6 +1227,20 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
 
         // Phase 2 — switch on mod to produce final ea_off (and possibly
         // override seg/base for the mod=00 rm=110 special case).
+        //
+        // Phase 30.15c-B fix: EmitContext.CurrentInstructionImmConsumed
+        // is a SINGLE LINEAR COUNTER that gets bumped by every emitted
+        // FetchImm8/16 (when packed-tail is in use). The mod=00 / mod=01
+        // / mod=10 arms each contain FetchImm calls that pre-bump this
+        // counter at IR-emit time, even though only ONE arm actually
+        // executes at runtime. Without compensation, mod=01's FetchImm8
+        // would see offset = (1 from modrm + 2 from mod=00's disp16
+        // pre-bump) = 3 instead of 1, producing a stale disp8 byte.
+        //
+        // Fix: snapshot ImmConsumed before each arm, restore between,
+        // then AFTER the switch end set ImmConsumed to the runtime-
+        // actual consumption (computed from the modrm byte if available
+        // in packed-tail — that tells us which arm will run).
         var endModBB = ctx.Function.AppendBasicBlock("ea_mod_end");
         var mod00BB  = ctx.Function.AppendBasicBlock("ea_mod_00");
         var mod01BB  = ctx.Function.AppendBasicBlock("ea_mod_01");
@@ -1238,7 +1252,10 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
         modSw.AddCase(LLVMValueRef.CreateConstInt(i32, 2, false), mod10BB);
         modSw.AddCase(LLVMValueRef.CreateConstInt(i32, 3, false), mod11BB);
 
+        int immBaseline = ctx.CurrentInstructionImmConsumed;
+
         // mod=00: disp = 0, EXCEPT rm=110 means direct disp16 (no base, seg=DS).
+        ctx.SetImmediateConsumed(immBaseline);
         ctx.Builder.PositionAtEnd(mod00BB);
         var rmIs6 = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ, rm,
             LLVMValueRef.CreateConstInt(i32, 6, false), "ea_rm_is_6");
@@ -1252,6 +1269,8 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
         var directDisp = X86_16Emitters.FetchImm16(ctx, "ea_disp16_direct");
         var dsSeg00 = X86_16Emitters.LoadSeg16(ctx, "DS", "ea_seg_direct_ds");
         ctx.Builder.BuildBr(mod00JoinBB);
+        // After mod=00 rm=6: ImmConsumed may have advanced by 2.
+        // Other rm in mod=00 don't consume bytes.
 
         // mod=00 other rm: ea_off = base; seg = segPhi (already loaded)
         ctx.Builder.PositionAtEnd(mod00NoDispBB);
@@ -1272,6 +1291,7 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
 
         // mod=01: disp = sext(fetch_imm8); ea_off = base + disp; seg = segPhi.
         // For rm=110, base was BP and seg was SS — that's correct here.
+        ctx.SetImmediateConsumed(immBaseline);  // restore baseline for this arm
         ctx.Builder.PositionAtEnd(mod01BB);
         var disp8raw = X86_16Emitters.FetchImm8(ctx, "ea_disp8");
         var disp8sx  = ctx.Builder.BuildSExt(disp8raw, i16, "ea_disp8_sx");
@@ -1279,6 +1299,7 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
         ctx.Builder.BuildBr(endModBB);
 
         // mod=10: disp = fetch_imm16; ea_off = base + disp; seg = segPhi.
+        ctx.SetImmediateConsumed(immBaseline);  // restore baseline for this arm
         ctx.Builder.PositionAtEnd(mod10BB);
         var disp16 = X86_16Emitters.FetchImm16(ctx, "ea_disp16");
         var mod10Off = ctx.Builder.BuildAdd(basePhi, disp16, "ea_mod10_off");
@@ -1287,8 +1308,45 @@ internal sealed class X86ModRmComputeEaEmitter : IMicroOpEmitter
         // mod=11 (register-direct): EA values are unused; emit zero
         // placeholders that fold into the join phi. Load/store emitters
         // detect mod=11 at runtime and bypass the EA path.
+        ctx.SetImmediateConsumed(immBaseline);  // restore baseline for this arm
         ctx.Builder.PositionAtEnd(mod11BB);
         ctx.Builder.BuildBr(endModBB);
+
+        // After all arms emitted: set ImmConsumed to the RUNTIME arm's
+        // actual consumption so subsequent FetchImm in the spec's later
+        // steps (e.g. x86_fetch_imm16 for MOV r/m16, imm16) sees the
+        // correct offset. We can determine the runtime arm from the
+        // packed-tail's modrm byte if available; otherwise we have to
+        // leave ImmConsumed at baseline + the WORST CASE (which would
+        // mean fetch_imm16 sees a too-high offset). Per current spec
+        // shapes (MOV imm16 / arith imm to mem) this matters only when
+        // packed-tail IS available — slow path doesn't bump.
+        if (ctx.CurrentInstructionPackedTailBytes is ulong eaTail
+            && immBaseline >= 1)
+        {
+            // The modrm byte was the first packed-tail byte fetched (offset 0).
+            // Re-extract it from the constant tail to determine mod at compile time.
+            byte modrmByte = (byte)(eaTail & 0xFF);
+            int modVal = (modrmByte >> 6) & 3;
+            int rmVal  = modrmByte & 7;
+            int runtimeConsumed;
+            switch (modVal)
+            {
+                case 0:
+                    runtimeConsumed = (rmVal == 6) ? 2 : 0;  // direct disp16 only when rm=6
+                    break;
+                case 1: runtimeConsumed = 1; break;          // disp8
+                case 2: runtimeConsumed = 2; break;          // disp16
+                default: runtimeConsumed = 0; break;          // mod=11 reg-reg
+            }
+            ctx.SetImmediateConsumed(immBaseline + runtimeConsumed);
+        }
+        else
+        {
+            // No packed-tail (slow path) — no bumps happened in any
+            // arm anyway. Keep ImmConsumed at baseline.
+            ctx.SetImmediateConsumed(immBaseline);
+        }
 
         // Final join — ea_off + ea_seg merge from the 4 mod arms.
         ctx.Builder.PositionAtEnd(endModBB);
