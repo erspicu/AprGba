@@ -1,25 +1,25 @@
-# Phase 30 closure — real BIOS + FreeDOS end-to-end boot
+# Phase 30 收尾 — real BIOS + FreeDOS 端到端 boot
 
-**Date**: 2026-05-16  
-**Phase**: 30 (8272 FDC + 8237 DMA + CPU ROL fix)  
-**Status**: ✅ Functional — pcxtbios.bin + freedos-1.3-floppy.img boots to COMMAND.COM banner with zero HLE BIOS intercept.  
-**Plan**: [`MD/design/30-fdc-dma-plan.md`](../design/30-fdc-dma-plan.md)  
-**Predecessor closure notes**:
-- Phase 28 HLE: [`202605152200-pc-emulator-freedos-boot.md`](202605152200-pc-emulator-freedos-boot.md)
-- Phase 28.IO: [`202605152230-pc-emulator-phase-28-io.md`](202605152230-pc-emulator-phase-28-io.md)
-- Phase 29 FPU: [`202605160100-x87-fpu-functional-complete.md`](202605160100-x87-fpu-functional-complete.md)
+**日期**：2026-05-16  
+**Phase**：30（8272 FDC + 8237 DMA + CPU ROL 修補）  
+**狀態**：✅ 可用 — pcxtbios.bin + freedos-1.3-floppy.img 啟動到 COMMAND.COM banner、零 HLE BIOS intercept。  
+**Plan**：[`MD/design/30-fdc-dma-plan.md`](../design/30-fdc-dma-plan.md)  
+**前置收尾文件**：
+- Phase 28 HLE：[`202605152200-pc-emulator-freedos-boot.md`](202605152200-pc-emulator-freedos-boot.md)
+- Phase 28.IO：[`202605152230-pc-emulator-phase-28-io.md`](202605152230-pc-emulator-phase-28-io.md)
+- Phase 29 FPU：[`202605160100-x87-fpu-functional-complete.md`](202605160100-x87-fpu-functional-complete.md)
 
-## Deliverables
+## 出貨內容
 
-| Item | Commit | Notes |
+| 項目 | Commit | 備註 |
 |---|---|---|
-| `Fdc8272` + `Dma8237` MVP | `12ae222` | 7 commands (SPECIFY/SENSE INT/RECALIBRATE/SEEK/READ DATA/READ ID/SENSE DRIVE STATUS), synchronous burst DMA ch2 per Gemini consultation, IRQ 6 wiring through existing PIC8259A |
-| IRQ deassert fix | `0ab519d` | Result-phase FIFO read no longer re-fires ISR (was causing double-entry into BIOS INT 0Eh handler) |
-| Debug tools | `c18bcb4` | `--trace-cpu-cs=`, `--watch-mem=LO:HI`, `--watch-read=LO:HI`, wider HeadlessRunner memory dump (±32 bytes around IP, 8-row orig-vs-copy diff of boot sector) |
-| **CPU ROL r/m16, CL count > 1 fix** | `e62a462` | `X86ShiftRotateW16CountClEmitter` now properly count-rotates via `lhs << n \| lhs >> (16 - n)` instead of forwarding to count=1 stub |
-| End-to-end boot | `e62a462` | Screenshot `result/pc/30-rolfix-realbios.png` |
+| `Fdc8272` + `Dma8237` MVP | `12ae222` | 7 個 command（SPECIFY/SENSE INT/RECALIBRATE/SEEK/READ DATA/READ ID/SENSE DRIVE STATUS）、同步 burst DMA ch2（per Gemini consultation）、IRQ 6 走既有 PIC8259A |
+| IRQ deassert 修補 | `0ab519d` | result-phase FIFO read 不再 re-fire ISR（之前會 double-entry 到 BIOS INT 0Eh handler）|
+| Debug 工具 | `c18bcb4` | `--trace-cpu-cs=`、`--watch-mem=LO:HI`、`--watch-read=LO:HI`，HeadlessRunner 加大 memory dump（IP ±32 byte、boot sector orig-vs-copy 8-row diff）|
+| **CPU ROL r/m16, CL count > 1 修補** | `e62a462` | `X86ShiftRotateW16CountClEmitter` 改用 `lhs << n \| lhs >> (16 - n)` 做正確的 count rotation，不再 forward 到 count=1 stub |
+| 端到端 boot | `e62a462` | Screenshot `result/pc/30-rolfix-realbios.png` |
 
-## Run command
+## 執行 command
 
 ```
 dotnet run --project src/AprPc.Cli -- \
@@ -28,74 +28,68 @@ dotnet run --project src/AprPc.Cli -- \
   --headless --seconds=12
 ```
 
-Visible on the MDA framebuffer after ~100M CPU cycles:
+~100M CPU cycle 後在 MDA framebuffer 看到：
 
 ```
 | FreeCom version 0.85a - WATCOMC - XMS_Swap [Jul 10 2021 19:28:06] |
 ```
 
-## The bug that took the longest — `ROL r/m16, CL` with count > 1
+## 最費時的 bug — `ROL r/m16, CL` count > 1
 
-The FDC + DMA emulation (`12ae222`) was functionally correct from day one.
-Three days of debugging followed because pcxtbios.bin exposes a CPU bug none
-of the earlier test ROMs hit.
+FDC + DMA 模擬（`12ae222`）從第一天就 functional 正確。後面三天的 debug 是
+因為 pcxtbios.bin 暴露了一個 CPU bug，之前的 test ROM 都沒踩到。
 
-### Symptom
+### 症狀
 
-After `12ae222`, BIOS POST printed `Insert BOOT disk in A:` and INT 19h
-read the boot sector. The boot sector was supposed to:
+`12ae222` 之後 BIOS POST 印出 `Insert BOOT disk in A:`、INT 19h 讀 boot
+sector。Boot sector 應該：
 
-1. Self-relocate from 0000:7C00 to 1FE0:7C00 (REP MOVSW).
-2. Far-jump to 1FE0:7C00 + small offset.
-3. Read root dir + FAT from disk.
-4. Walk FAT12 cluster chain to find KERNEL.SYS.
-5. Load KERNEL.SYS at 0060:0000.
-6. Far-jump into kernel.
+1. 從 0000:7C00 自我搬移到 1FE0:7C00（REP MOVSW）。
+2. Far-jump 到 1FE0:7C00 + 一個小 offset。
+3. 從 disk 讀 root dir + FAT。
+4. 走 FAT12 cluster chain 找 KERNEL.SYS。
+5. KERNEL.SYS 載到 0060:0000。
+6. Far-jump 進 kernel。
 
-Instead it spun at step 4 reading all-zero cluster entries.
+實際在第 4 步卡住，所有讀到的 cluster entry 都是 0。
 
-### False leads
+### 走錯的方向
 
-1. **REP MOVSW broken** — forensic dump of the relocated boot sector at
-   0x27A00 showed 224 of 512 bytes differing from the original at 0x07C00.
-   A standalone `30-rep-movsw-test.com` ROM disproved this — REP MOVSW
-   emitter is correct. The differences turned out to be downstream
-   corruption from the FAT walker writing back zeros via STOSW.
+1. **REP MOVSW 壞了** — 對 0x27A00 relocated boot sector 做 forensic dump，
+   發現對比原本 0x07C00，512 byte 中有 224 byte 不同。但 standalone
+   `30-rep-movsw-test.com` ROM 排除這個 — REP MOVSW emitter 正確。差異
+   其實是 downstream 的 FAT walker 用 STOSW 寫回零造成的 corruption。
 
-2. **ES register not incrementing** — initial trace comparison between HLE
-   and real-BIOS paths read as if ES was pinned at 0x0060. Closer reading
-   showed ES evolved identically in both paths (0x60 → 0x80 → 0xA0 ...) —
-   misread on my part.
+2. **ES register 沒在加** — 一開始比對 HLE 跟 real-BIOS path 的 trace，看起來
+   ES 卡在 0x0060。仔細讀才發現兩條 path 的 ES 演化一樣（0x60 → 0x80 →
+   0xA0 ...）— 我自己看錯。
 
-### Real cause (found via `--watch-mem` + `--trace-cpu-cs=F000`)
+### 真正原因（透過 `--watch-mem` + `--trace-cpu-cs=F000` 找到）
 
-`X86ShiftRotateW16CountClEmitter` had a TODO stub that, for ROL with
-count != 1, just emitted the count=1 IR (single left rotate regardless of
-CL). The original comment claimed `count=1 covers 99% of real code`.
+`X86ShiftRotateW16CountClEmitter` 有個 TODO stub：count != 1 的 ROL，直接
+emit count=1 的 IR（無論 CL 是多少都做一次左 rotate）。原本 comment 說
+`count=1 涵蓋 99% real code`。
 
-pcxtbios.bin INT 13h handler at F000:ED5F-ED75 disagrees. It uses
-`MOV CL, 4; ROL AX, CL` to split the caller's 16-bit segment value into
-the 8237 DMA controller's 16-bit base register (lo + hi bytes) + 4-bit
-page register:
+pcxtbios.bin 的 INT 13h handler 在 F000:ED5F-ED75 不同意。它用
+`MOV CL, 4; ROL AX, CL` 把 caller 16-bit segment 拆成 8237 DMA controller 的
+16-bit base register（lo + hi byte）+ 4-bit page register：
 
 ```
-F000:ED5F  MOV  AX, [BP+0xC]   ; AX = caller's ES, e.g. 0x1FE0
+F000:ED5F  MOV  AX, [BP+0xC]   ; AX = caller's ES，例如 0x1FE0
 F000:ED62  MOV  CL, 4
-F000:ED64  ROL  AX, CL         ; expected 0xFE01; old stub gave 0x3FC0
-F000:ED66  ...                 ; subsequent base/page arithmetic
+F000:ED64  ROL  AX, CL         ; 預期 0xFE01；舊 stub 給 0x3FC0
+F000:ED66  ...                 ; 後續 base/page 算術
 F000:ED75  OUT  0x04, AL       ; DMA base lo
 ```
 
-With the broken ROL, the BIOS programmed DMA base 0xA360 instead of the
-correct 0x251A0. The FDC dutifully transferred sector data to physical
-address 0xA360 (right in the middle of MDA video memory). Boot sector
-REP MOVSB then expected sectors at the original ES:BX (0x251A0) and
-copied uninitialised RAM. FAT12 cluster walker followed `cluster 0 < 0x0FF8`
-and looped forever.
+ROL 壞掉，BIOS 把 DMA base 設成 0xA360 而不是正確的 0x251A0。FDC 乖乖把
+sector data 送到 physical address 0xA360（正好是 MDA video memory 中間）。
+Boot sector REP MOVSB 從原本的 ES:BX（0x251A0）讀 sector、複製的其實是
+未初始化的 RAM。FAT12 cluster walker 走 `cluster 0 < 0x0FF8`、無限 loop。
 
-### Fix
+### 修法
 
-Proper count-based rotation in IR:
+IR 改成正確的 count-based rotation：
 
 ```csharp
 var nWide  = builder.BuildAnd(clClamp, const_i8(15), "rolc16_n");
@@ -107,55 +101,50 @@ result     = builder.BuildOr(left, right, "rolc16_r");
 // CF = result LSB; OF = result MSB XOR CF
 ```
 
-Standalone `30-rol-cl-test.com` verifies 4 cases (0x1FE0 ROL 4 = 0xFE01,
-0xC123 ROL 8 = 0x23C1, 0x0001 ROL 15 = 0x8000, 0xFFFF ROL 4 = 0xFFFF).
-All pass after the fix.
+Standalone `30-rol-cl-test.com` 驗 4 個 case（0x1FE0 ROL 4 = 0xFE01、
+0xC123 ROL 8 = 0x23C1、0x0001 ROL 15 = 0x8000、0xFFFF ROL 4 = 0xFFFF），
+修完全 pass。
 
-## Cross-phase dependencies — real-BIOS chain
+## Cross-phase 相依鏈 — real-BIOS chain
 
-Real-BIOS path requires ALL of the following six pieces. Removing any one
-breaks boot:
+Real-BIOS path 需要下面六個都到位。少一個 boot 就壞：
 
-1. **Phase 28.0-28.7** — HLE BIOS infrastructure (still partially used for
-   INT 1Ah time-of-day even when real BIOS is loaded).
-2. **Phase 28.IO** — port I/O dispatch via `PcPortBus` extern routing,
-   without which pcxtbios.bin POST can't talk to PIC/PIT/PPI/MDA at all.
-3. **Phase 29** — i8087 extension. BIOS POST executes `FNINIT / FNSTSW`
-   early to detect an 8087; without Phase 29 this is invalid opcode.
+1. **Phase 28.0-28.7** — HLE BIOS 基礎建設（even when real BIOS loaded，
+   INT 1Ah time-of-day 還是部份走 HLE）。
+2. **Phase 28.IO** — port I/O dispatch via `PcPortBus` extern routing，
+   沒這個 pcxtbios.bin POST 根本無法跟 PIC/PIT/PPI/MDA 通訊。
+3. **Phase 29** — i8087 extension。BIOS POST 早期會跑 `FNINIT / FNSTSW`
+   去 detect 8087；沒 Phase 29 這是 invalid opcode。
 4. **Phase 29-supp** — port 0x3BA/0x3DA retrace bit + MDA framebuffer
-   auto-detect, needed by BIOS POST text output.
-5. **Phase 30** — 8272 FDC + 8237 DMA (this phase).
-6. **Phase 30.6c** — CPU `ROL r/m16, CL` count > 1 fix (uncovered during
-   this phase, not predictable from spec inspection).
+   auto-detect，BIOS POST text output 需要。
+5. **Phase 30** — 8272 FDC + 8237 DMA（本 phase）。
+6. **Phase 30.6c** — CPU `ROL r/m16, CL` count > 1 修補（本 phase 才挖到，
+   靠 spec inspection 看不出來）。
 
-The HLE BIOS path (`--bios-mode=hle`, no `--bios=`) still works without
-29/30/30.6c because HLE INT 13h talks to DiskImage directly and doesn't
-go through FDC/DMA/ROL.
+HLE BIOS path（`--bios-mode=hle`、沒 `--bios=`）沒 29/30/30.6c 也能跑，
+因為 HLE INT 13h 直接 talk DiskImage，不走 FDC/DMA/ROL。
 
-## Why this matters for the framework
+## 為何這對 framework 重要
 
-This is the first time the framework has run **unmodified production BIOS
-ROM code**. `pcxtbios.bin` is a public test BIOS (not original IBM) but
-follows IBM PC/XT conventions — port I/O sequences, INT handler
-conventions, the ROL trick. All 1980s real-world code, none of it written
-to suit emulator quirks. Booting it end-to-end proves the framework is
-polished enough that generic x86-16 BIOS code completes POST + bootstraps
-a real OS without per-quirk patches.
+這是 framework 第一次跑**未經修改的 production BIOS ROM code**。pcxtbios.bin
+是 public test BIOS（不是原版 IBM），但遵循 IBM PC/XT 慣例 — port I/O
+sequence、INT handler convention、ROL trick。全部都是 1980s real-world code，
+沒一個是為了 emulator 量身設計。能端到端 boot 起來代表 framework 已經磨到
+generic x86-16 BIOS code 不需要 per-quirk patch 就能 POST 完 + 啟動 real OS。
 
 ## Deferred
 
-- W8 (8-bit) `ROL r/m8, CL` with count > 1 still uses the same stub
-  pattern (`X86_16Emitters.cs` ~line 7181). DOS code rarely uses 8-bit
-  variable-count ROL but it should be fixed for completeness.
-- ROR / RCL / RCR variants in both W8 and W16 paths still stubbed. ROR
-  follows the same pattern as ROL. RCL / RCR need carry-bit handling
-  inside the 9-bit / 17-bit rotation ring.
-- None of these are hit by FreeDOS or pcxtbios.bin POST.
+- W8（8-bit）`ROL r/m8, CL` count > 1 還是用同樣 stub pattern
+  （`X86_16Emitters.cs` ~line 7181）。DOS code 很少用 8-bit variable-count
+  ROL，但完整性還是該修。
+- ROR / RCL / RCR 在 W8 跟 W16 都還 stub 著。ROR 跟 ROL 同樣 pattern。
+  RCL / RCR 需要在 9-bit / 17-bit rotation ring 內處理 carry-bit。
+- FreeDOS 跟 pcxtbios.bin POST 都不會打到上面這些。
 
-## References
+## 參考
 
-- Plan doc: [`MD/design/30-fdc-dma-plan.md`](../design/30-fdc-dma-plan.md)
-- Gemini consultation: `tools/knowledgebase/message/20260516_004919.txt`
-- Screenshot: `result/pc/30-rolfix-realbios.png`
-- Standalone test ROMs: `test-roms/x86/src/30-rep-movsw-test.asm`,
+- Plan 文件：[`MD/design/30-fdc-dma-plan.md`](../design/30-fdc-dma-plan.md)
+- Gemini consultation：`tools/knowledgebase/message/20260516_004919.txt`
+- Screenshot：`result/pc/30-rolfix-realbios.png`
+- Standalone test ROM：`test-roms/x86/src/30-rep-movsw-test.asm`、
   `test-roms/x86/src/30-rol-cl-test.asm`
