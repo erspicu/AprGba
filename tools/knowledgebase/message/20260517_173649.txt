@@ -1,0 +1,95 @@
+Timestamp: 2026-05-17T17:36:49
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Follow-up on the Verified Block-JIT framework GB (LR35902) divergence. Despite several rounds of investigation + the Early Bailout Bisection tool you suggested, I cannot pin down the bug. Want fresh perspective.
+
+OBSERVED PATTERN:
+GB fuzzer (apr-gb --fuzz=100 --fuzz-blocks=50 --fuzz-seed=42 --fuzz-continue) reports ~2 divergences out of 100 random ROMs. Each divergence shows JIT and INTERP ending at different PCs after running 'same N instructions' from same pre-state. Sample divergence with bisection results:
+
+PRE PC=$4DF5, A=$4F, F=$00, HL=$014D. Block contains 18 instructions:
+  $4DF5: 85 ADD A,L         | After this: A=$9C F=$20 (correct)
+  $4DF6: 6F LD L,A          | After this: L=$9C  (correct)
+  $4DF7: 83 ADD A,E         | After this: A=$E9 F=$20 (correct, both agree at $4DF8)
+  $4DF8: FE imm CP A,n
+  $4DFA: 56 LD D,(HL)
+  ... etc
+  $4E08: 55 LD D,L          | last instruction
+
+POST after running 18 instructions:
+  JIT:    PC=$4E09 A=$4D F=$80 ← Z=1, A=$4D = pre L=$4D (suspicious)
+  INTERP: PC=$003A A=$60 F=$20 ← INTERP took control transfer to $003A
+
+BISECTION RESULTS using APR_EARLY_EXIT_BLOCK_PC:
+  Cap=1 at $4DF5: NO divergence at $4DF5; divergence moves to next block at $4DF6
+  Cap=2 at $4DF5: NO divergence at $4DF5; divergence moves to next block at $4DF7
+  Cap=3 at $4DF5: divergence at next block $4DF8
+  Cap=N at $4DF5 for any N <= 17: divergence keeps moving to next block
+  
+PATTERN: Per-instruction correctness IS verified for the first K instructions (both JIT and INTERP agree at the END of capped block). But the NEXT block (still 18-N instructions) inevitably diverges with similar JIT-stays-linear vs INTERP-takes-control-transfer pattern.
+
+KEY DATA:
+- Real-ROM cpu_instrs.gb runs 278,872 blocks NoDiff (so block-JIT is correct on REAL code).
+- Random ROMs fail in this specific pattern.
+- After all the cleanup fixes (STOP pad, HALT signal transfer, 0x08 length, LDI/LDD reorder, cross-jump-follow gated), divergence persists.
+- BlockDetector + WritesPc parsing both proven SOUND via APR_TRACE_BLOCKEND diagnostic.
+- All 4 CPU specs lint clean.
+- INTERP per-instr always lands on the correct (real-hardware) PC; JIT linearly executes until block end.
+- Issue is specifically: 'JIT misses control-flow transfers that INTERP correctly takes'.
+
+MY CURRENT HYPOTHESES:
+  H1: BlockDetector and decoder DISAGREE on which opcodes the random ROM contains. Random byte $38 = JR C, e8 (conditional, writes_pc=conditional). Block-detector treats conditional as NOT block-ending. JIT runs through the conditional 'as if not taken' regardless of actual flag state.
+  H2: When block contains a conditional Jcc whose flag state at runtime IS in the take-branch direction, JIT's branch_cc emitter doesn't correctly transfer PC.
+  H3: Block-JIT exits at first PcWritten=1 but the IR's PcWritten flag isn't being set by some control-transfer emitter (e.g. JR C taken path).
+
+QUESTION:
+What's the most likely failure mode here? Should I:
+  (a) Add a per-instruction trace-buffer (your Strategy 2) to confirm WHICH instruction in the JIT block produces a different result than per-instr?
+  (b) Inspect the LLVM IR for the conditional-branch emitter (branch_cc op) to see if PcWritten flag is set on take path?
+  (c) Add diagnostic to the block-JIT to log each instruction's PRE-COMPUTE state from the alloca shadows, so we can compare instruction-by-instruction what JIT thinks the state is?
+
+The Early Bailout tool you suggested helped prove correctness up to K but doesn't help isolate the divergent instruction past K (because divergence then appears in the next block instead).
+
+Looking for the most efficient next investigation step, not full implementation.
+
+========================================================================
+RESPONSE
+========================================================================
+Here is a fresh perspective on your investigation. You are running into a classic cognitive trap with Block-JIT debugging, but your hypotheses are extremely sharp. 
+
+### Why the bug seems to "move"
+You noted: *"Cap=N at $4DF5 for any N <= 17: divergence keeps moving to next block"*. 
+
+The divergence isn't actually moving. The bisection tool is splitting your 18-instruction block into two chunks:
+1. **Chunk 1 (Capped):** Instructions `1` to `N`.
+2. **Chunk 2 (Uncapped):** Instructions `N+1` to `18`.
+
+When you cap at `N`, Chunk 1 runs and perfectly matches INTERP. But the bisection tool then lets Chunk 2 run as a single **uncapped** block. Because the actual buggy instruction lives somewhere inside Chunk 2, the block executes all the way to the end (Instruction 18), and the divergence only manifests at the final exit PC ($4E09). 
+
+The tool successfully proved that **instructions 1 through 17 can execute perfectly**, which means the actual desync is isolated to **Instruction 18**. But because Instruction 18 is part of the uncapped remainder, it looks like the bug is "running away" to the next block boundary.
+
+### Evaluating your Hypotheses
+Your hypotheses are completely coherent with the symptoms (`JIT PC=$4E09` vs `INTERP PC=$003A`):
+* **H1 (Decoder Desync):** If the block-detector missed a length correctly, JIT might be linearly compiling trailing garbage (e.g., parsing an opcode as `55 LD D,L`), while INTERP correctly parses a `JR C` or `RST 38h` and branches.
+* **H3 (Missing PcWritten flag):** This is an **incredibly common** JIT bug. If your `branch_cc` emitter correctly writes `cpu->PC = target` but forgets to set the IR's `PcWritten=1` flag, the JIT loop won't bail out. It will just fetch the next linear instruction, compile it, and eventually overwrite the `cpu->PC` at the end of the block with `$4E09`. The branch is effectively erased.
+* **Hidden Hypothesis (Mid-block Interrupt):** Since this is a fuzzer, `IME` might be 1. If an interrupt fires during the block, INTERP takes it immediately (jumping to an ISR, eventually landing at `$003A`). JIT, however, defers the interrupt check until block exit, executing all 18 instructions linearly.
+
+### The Most Efficient Next Step
+You should absolutely go with **Option (A): Add a per-instruction trace-buffer.** 
+
+Since block-bisection leaves you staring at a multi-instruction "black box" (the uncapped remainder), you need X-ray vision into the JIT's execution. 
+
+**Why Option A is the silver bullet:**
+1. If **H3** is true, the trace will show JIT's PC failing to update after a `JR` instruction, falling right through while INTERP's PC jumps.
+2. If **H1** is true, the trace will show JIT executing a completely different mnemonic/opcode than INTERP at step `K`.
+3. If it's a **mid-block interrupt**, the trace will show INTERP's PC magically changing to an interrupt vector (`$0040`, `$0048`, etc.) without a branch instruction, while JIT blindly continues.
+
+### How to implement Option (A) quickly (Don't over-engineer it):
+1. Add a simple fixed array to your CPU state struct: `struct { uint16_t pc, a, f, bc, de, hl; } trace[64];` and an `uint8_t trace_idx`.
+2. In your JIT's instruction-compile loop, right after emitting the logic for an instruction, emit a quick routine that stores the current shadowed state into `trace[trace_idx++]`.
+3. Run the fuzzer. When the block ends and triggers the divergence, loop through the `trace` array and print it side-by-side with INTERP's per-instruction step data. 
+
+**Skip (B) and (C) for now.** (B) assumes H3 is the only answer and sends you hunting in LLVM IR, which wastes time if the issue is actually H1 or an interrupt. (C) is just a more complicated version of (A). 
+
+Implement the trace buffer. The side-by-side diff will literally point an arrow at the exact instruction and root cause within minutes.

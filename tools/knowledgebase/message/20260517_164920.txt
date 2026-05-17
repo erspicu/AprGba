@@ -1,0 +1,90 @@
+Timestamp: 2026-05-17T16:49:20
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+I'm building a 'Verified Block-JIT' framework for a JSON-driven CPU emulator. The verifier runs both block-JIT and per-instr interpreter side-by-side on the same pre-block state, then 3-axis compares (CPU state + memory-write trace + side-effect log). It's working well — found 12+ real emitter bugs across x86 / GB / NES / GBA backends. A companion fuzzer generates random ROMs and feeds them through the verifier.
+
+Current pain point: after a divergence is reported (e.g. 'block at PC=$4DF5, JIT post A=$4D INTERP post A=$60'), bisecting which of the N instructions in the block actually diverged is slow. My current approach:
+  1. Run with APR_GB_BLOCK_MAX=1 to force single-instr blocks (so divergence pinpoints the bad instr).
+  2. Add temporary println traces inside emitters.
+  3. Read the LLVM IR dump (APR_X86_IR_DUMP=1) for the suspect block.
+
+This is iterative + slow. What better debugging strategies exist for this kind of differential-execution divergence-localisation? Specifically interested in:
+  - Are there standard JIT-vs-interp diff bisection techniques used by mGBA, Dolphin, QEMU, or similar projects?
+  - Worth building a per-instruction snapshot mode where the verifier reports CPU state + mem-writes after EACH instruction (currently only at block exit)?
+  - Worth integrating with LLDB / GDB at the LLVM IR level somehow?
+  - Any other tricks for narrowing 'block of N instructions diverged' to 'instruction i diverged because ALU emitter X computed wrong flag Y'?
+
+Constraint: I'm trying to avoid building heavyweight new infrastructure if there's a well-known lightweight pattern. The verifier framework itself is ~300 LoC + 4 per-CPU adapters at ~150 LoC each.
+
+========================================================================
+RESPONSE
+========================================================================
+Your current setup (fuzzer + 3-axis JIT vs. Interpreter comparison) is already the gold standard for emulator development. Finding 12+ bugs means your methodology is sound. 
+
+The pain point you are hitting—narrowing down block divergence to a specific instruction—is a universal hurdle in JIT development. Your current approach (`APR_GB_BLOCK_MAX=1`) has a dangerous blind spot: **it alters the JIT's optimization context.** If a bug is caused by LLVM register allocation spilling, peephole optimizations across instructions, or lazy flag evaluation, forcing single-instruction blocks will magically "fix" the bug, leaving you chasing ghosts.
+
+Here are the standard, lightweight strategies used by projects like Dolphin, QEMU, and mGBA to solve this, tailored to your ~300 LoC framework constraint.
+
+---
+
+### 1. The "Early Bailout" Bisection (Highly Recommended)
+Instead of forcing the block size to 1 *before* compilation, dynamically truncate the execution *during* or *after* compilation. This reuses your existing block-exit 3-axis comparison without building new infrastructure.
+
+When your verifier detects a divergence in a block of $N$ instructions:
+1. Re-compile the *exact same block* of $N$ instructions.
+2. But, instruct your emitter to insert an "early exit to interpreter" after instruction $K$ (where $K = N/2$).
+3. Run the block. If it diverges, the bug is in the first half. If it matches, the bug is in the second half. 
+
+**Why it's lightweight:** You don't need a per-instruction diffing engine. You just need a variable `APR_EARLY_EXIT_PC` in your emitter. If `current_pc == APR_EARLY_EXIT_PC`, emit the block epilogue (flush registers to memory, update PC, and return) right there. You can script the bisection in Python or Rust/C++ in about 20 lines of code to automatically pinpoint the bad PC in milliseconds.
+
+### 2. The Trace-Buffer Differential (How Dolphin/mGBA do it)
+If you want to go the "per-instruction snapshot" route, do **not** call out to C/C++ to do a full state comparison after every instruction. It will destroy LLVM's ability to optimize the block, again masking bugs.
+
+Instead, allocate a simple fixed-size array in memory (e.g., `uint32_t trace_buffer[1024]`).
+Pass a pointer to this buffer into your JIT. Modify your emitter so that *only when `APR_DEBUG_TRACE=1`*, it emits LLVM IR to do this after every instruction:
+```llvm
+; Conceptual LLVM IR
+%trace_ptr = getelementptr %trace_buffer, %instr_index
+store %cpu_state_hash, %trace_ptr
+```
+**The workflow:**
+1. Block diverges.
+2. Rerun block with `APR_DEBUG_TRACE=1`.
+3. The interpreter fills `interp_trace_buffer`.
+4. The JIT fills `jit_trace_buffer`.
+5. A simple loop compares the two buffers. The first index where they differ is your culprit.
+
+Because writing to a pre-allocated buffer has no side effects other than memory writes, LLVM will still heavily optimize the ALU/register operations, preserving your bugs while giving you exact instruction-level granularity.
+
+### 3. Dealing with LLDB / GDB and LLVM IR
+**Direct answer:** Do not try to integrate LLDB/GDB JIT debugging (via LLVM's `GDBRegistrationListener` and DWARF generation). It is incredibly heavyweight, notoriously brittle, and completely violates your 300 LoC constraint.
+
+**The lightweight trick:** If you need to drop into a debugger exactly when a divergence happens, use LLVM's debug trap intrinsic.
+When you narrow down the failing block/instruction using the bisection above, rerun the JIT, but have your emitter inject `llvm.debugtrap()` (which emits `int 3` on x86) right before the offending instruction.
+```c
+// In your emitter:
+if (current_pc == getenv("APR_TRAP_PC")) {
+    builder.CreateCall(Intrinsic::getDeclaration(module, Intrinsic::debugtrap));
+}
+```
+Run your fuzzer under LLDB. It will run at full speed and instantly halt exactly at the LLVM IR / machine code sequence that is about to compute the wrong value.
+
+### 4. The "Delayed Manifestation" Problem (Flag Bugs)
+You specifically asked about: *"instruction $i$ diverged because ALU emitter $X$ computed wrong flag $Y$"*.
+
+The nastiest bugs in block JITs are when Instruction 1 computes a wrong Zero/Carry flag, but the JIT doesn't flush it to architectural state because Instruction 2 doesn't use it, and Instruction 3 finally diverges on a branch. Your verifier will blame Instruction 3.
+
+**The lightweight trick ("Flag Poisoning"):**
+If you suspect a flag bug, force your JIT to write back ALL flags to the CPU context structure after *every* instruction, but **poison the unused bits**.
+If the x86 backend uses an 8-bit flag register, and an instruction only legally modifies Z and C, have your emitter explicitly set the other 6 bits to a garbage value (e.g., `0xAA`). 
+Do the same in your interpreter. If an emitter is lazily relying on a flag from two instructions ago that it shouldn't be, the poisoning will force the divergence to happen *immediately* at the instruction that improperly computed (or failed to compute) the flag, rather than at the branch that consumes it.
+
+### Summary of what to build next:
+Given your constraints, I highly recommend building **The Early Bailout Bisection** (Strategy 1). 
+1. It requires almost zero new infrastructure (just an `if` statement in your emitter loop to jump to the epilogue).
+2. It re-uses your existing, heavily-tested 3-axis exit comparison.
+3. It keeps LLVM's block-level optimizations intact so bugs don't disappear when you try to observe them. 
+
+Once the fuzzer reports a block failure, a tiny automated wrapper can bisect the block by setting the early-exit PC, running the verifier, and spitting out: `Divergence isolated to PC=$4DF5 (SUB A, B)`. Then you just read the LLVM IR for that single instruction.

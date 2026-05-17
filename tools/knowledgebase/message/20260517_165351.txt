@@ -1,0 +1,99 @@
+Timestamp: 2026-05-17T16:53:51
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Follow-up to previous question (same Verified Block-JIT framework). My GB fuzzer found a divergence I want your second opinion on.
+
+DIVERGENCE (per-block diff at PC=$4DF5, GB / LR35902):
+  pre   A=$4F F=$00 (all flags clear) HL=$014D
+  ROM bytes from $4DF5: 85 6F 83 FE ... 18 instructions of straight-line ALU/LD
+  JIT post:    A=$4D F=$80 (Z=1 only)
+  INTERP post: A=$60 F=$20 (H=1 only)
+
+First instruction is 0x85 = 'ADD A, L'. Pre A=$4F, pre L=$4D.
+Expected: A' = $4F + $4D = $9C, F = N=0, Z=0, H=1 (bit-3 carry: $F+$D=$1C), C=0 → F=$20.
+
+INTERP's post-block F=$20 matches the expected F immediately after this first instruction. So INTERP is correctly computing the half-carry for ADD A,L.
+
+JIT's post-block F=$80 (Z=1) means JIT *eventually* computed a zero result with no other flags set. This isn't consistent with a simple ADD A,L going wrong by itself — Z=1 means A=0 at some point.
+
+I run on Windows x64 .NET 10 with LLVMSharp.Interop 20.x + ORC LLJIT. Block-JIT uses 'alloca + mem2reg' state shadowing per Phase 7 design.
+
+THE ADD/ADC EMITTER (src/AprCpu.Core/IR/Lr35902Emitters.cs alu generic dispatch):
+```csharp
+case 'add':
+case 'adc':
+{
+    // aZ/sZ are i32 zero-extends of A and source operand; cZ is i32 zero-extend of input C flag
+    result32 = ctx.Builder.BuildAdd(ctx.Builder.BuildAdd(aZ, sZ, 'a_s'), cZ, 'a_s_c');
+    // H = ((A & 0xF) + (s & 0xF) + cin) > 0xF
+    var aLo = ctx.Builder.BuildAnd(aZ, ctx.ConstU32(0xF), 'a_lo');
+    var sLo = ctx.Builder.BuildAnd(sZ, ctx.ConstU32(0xF), 's_lo');
+    var loSum = ctx.Builder.BuildAdd(ctx.Builder.BuildAdd(aLo, sLo, 'lo_sum'), cZ, 'lo_sum_c');
+    h = BoolToI8(ctx, ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, loSum, ctx.ConstU32(0xF), 'h_cmp'));
+    c = BoolToI8(ctx, ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntUGT, result32, ctx.ConstU32(0xFF), 'c_cmp'));
+    n = LLVMValueRef.CreateConstInt(i8, 0, false);
+    break;
+}
+```
+
+For 0x85 = ADD A, L (no carry-in), the dispatch passes the SAME aluOp='add' for both ADD and ADC, differentiated only by whether cZ comes from input C flag or constant 0. Let me check the calling convention.
+
+MY HYPOTHESIS:
+  - For ADD r/m (not ADC), cZ should be constant 0. If the emitter is incorrectly using F.C as cin for ADD too, you'd get a stale-cin bug that ONLY manifests when prior F.C is non-zero. Pre F=$00 in our case, so C=0, so no cin contribution. Should be the same as if cZ=0 constant.
+  - More likely: A or L is being read from the wrong location in block-JIT mode. The 'alloca + mem2reg' shadowing pattern relies on per-instruction load/store happening to the right slot. If GB JsonCpu's StepBlock is leaving A/L stale in the alloca, the first instruction would read pre-block A=$4F correctly but subsequent ones might see stale shadow values.
+
+Can you spot anything in the emitter snippet that would cause divergence on ADD A,L with A=$4F L=$4D C=0 only when running in block-JIT mode (not per-instr)?
+
+Also: is the 'eventually computed zero, set Z, cleared all other flags' pattern (F=$80) consistent with any well-known JIT bug class — register aliasing, dead-store elimination of flag writes, etc?
+
+Looking for actionable hypotheses to bisect, not full implementation.
+
+========================================================================
+RESPONSE
+========================================================================
+Here is a second opinion on your divergence. Your analysis is sharp, and you are right to suspect block-specific state shadowing. 
+
+Here is the breakdown of what is likely happening based on the emitted IR, the Game Boy flag layout, and the `A=$4D, F=$80` footprint.
+
+### 1. The Emitter Snippet is Mathematically Sound
+First, your generic ALU IR generation for `ADD/ADC` is correct. 
+* `loSum > 0xF` correctly computes the Game Boy Half-Carry (`H`).
+* `result32 > 0xFF` correctly computes Carry (`C`).
+* `n = 0` correctly clears the Subtract flag. 
+* *As you noted:* Since `Pre F=$00`, `C` is 0. Passing `F.C` as `cZ` for `ADD` instead of a constant 0 is a bug, but it is **dormant** here because `C` was already 0.
+
+Because the snippet is mathematically sound, and because it works in `INTERP` (and likely per-instr mode), the issue is almost certainly in **how the JIT routes data into/out of `aZ`, `sZ`, and the resulting assignments** via allocas.
+
+### 2. The "Stale L Shadow" Hypothesis (Why JIT A=$4D)
+The most glaring clue in your JIT output is **`A = $4D`**. 
+Notice that `$4D` is the **exact pre-block value of `L`**.
+
+If you trace the first two instructions of the block:
+1. `0x85` (ADD A, L): Expected to compute `A = $9C` (from $4F + $4D).
+2. `0x6F` (LD L, A): Expected to copy that `$9C` into `L`.
+
+If your block-JIT has an alloca shadowing bug where **`LD` instructions fail to update the local alloca**, `L` will be left stale. 
+* What if `LD L, A` bypasses the local `alloca` and writes directly to the CPU context memory pointer?
+* What if you have separate allocas for 16-bit `HL` and 8-bit `L` that `mem2reg` doesn't sync? 
+
+If `L`'s alloca is never updated by `0x6F`, it remains `$4D`. If later in those 18 instructions an instruction moves `L` into `A` (e.g., `LD A, L` or an ALU operation that writes to A), it will read the stale alloca and inject `$4D` back into `A`. 
+
+### 3. The "Eventually Zero" Pattern (Why JIT F=$80)
+In the Game Boy, the flag register is laid out as `Z N H C` (bits 7, 6, 5, 4).
+`F = $80` perfectly translates to **`Z=1, N=0, H=0, C=0`**. 
+
+This is the exact footprint of an operation resulting in zero that *also* clears the subtract flag (`N=0`). 
+* It **cannot** be `CP` (0xFE), because `CP` unconditionally sets `N=1` (which would yield `F=$C0` or similar). 
+* It **cannot** be `SUB`, because that also sets `N=1`.
+* It **can** be a bitwise operation like `XOR`, `OR` (which clear N, H, C), or an `ADD` that wrapped exactly to 0. 
+
+If `A` was populated with the stale `$4D`, and a later instruction happened to be `XOR L` (where the stale `L` is also `$4D`), it would compute `$4D ^ $4D = 0`. This sets `Z=1, N=0, H=0, C=0` (F=$80). 
+
+### Actionable Bisecting Steps
+To hunt this down, look for these specific well-known JIT bug classes in your `alloca + mem2reg` Phase 7 setup:
+
+1. **Dump the Pre-Optimized LLVM IR**: Look at the block right before `mem2reg` runs. Trace the `store` instructions for `0x6F (LD L, A)`. I highly suspect you will find that it is either storing to the wrong pointer (e.g., the backing context pointer instead of the local alloca) or it was completely optimized away (Dead Store Elimination) due to pointer casting.
+2. **Check 16-bit vs 8-bit Type Punning**: LLVM's `mem2reg` pass **will completely ignore** allocas if they are accessed via pointer casts. If you allocate a 16-bit `i16` for `AF` or `HL`, but then cast to `i8*` to write to `A` or `L`, LLVM drops SSA promotion for those registers. You end up reading stale stack garbage or the initial prologue values.
+3. **Verify the Epilogue (Block Exit)**: Ensure your block exit doesn't accidentally write the initial, unmodified `alloca` captures back into the CPU Context, overwriting the valid work done in memory.
