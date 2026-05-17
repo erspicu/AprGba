@@ -925,8 +925,11 @@ internal sealed class Branch : IMicroOpEmitter
         // BCond +0) from "no branch happened". See PcWrittenFieldIndex.
         // Harmless for non-ARM CPUs (the byte slot exists but the executor
         // for those CPUs doesn't gate on it).
-        var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
-        ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
+        //
+        // Phase 30.18s — use MarkPcWritten so subsequent emitters in the
+        // same instruction (e.g. sync from deferred EI body) can see that
+        // PC was already written and skip their own PC overwrite.
+        WriteReg.MarkPcWritten(ctx);
     }
 }
 
@@ -1046,7 +1049,15 @@ internal sealed class SyncEmitter : IMicroOpEmitter
         // PipelinePcConstant is pc+8 (architectural pipeline value),
         // not the next-instruction PC; this op currently shouldn't be
         // used in fixed-width specs (no use case yet).
-        if (ctx.PipelinePcConstant is uint nextPc)
+        //
+        // Phase 30.18s — DO NOT overwrite PC if the current instruction
+        // already wrote it (e.g. EI deferred onto JP — JP's `branch`
+        // emitter writes PC=target first, then sync runs and would
+        // CLOBBER the target with bi.Pc+length=next-instr-PC). Found by
+        // GbFuzzer iter 79 seed 74172009 ($0150 block ending in JP $DBC9
+        // after EI). IME=1 + cycle deduct + ret still needed, just not
+        // the PC overwrite.
+        if (ctx.PipelinePcConstant is uint nextPc && !ctx.PcWriteEmittedInCurrentInstruction)
         {
             var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
             ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(pcType, nextPc, false), pcPtr);

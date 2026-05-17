@@ -136,6 +136,9 @@ public sealed unsafe class JsonCpu : ICpuBackend
     /// </summary>
     public int LastBlockInstructionCount { get; private set; } = -1;
 
+    // Phase 30.18r — IR dump unique sequence counter.
+    private static int _irDumpCounter;
+
     /// <summary>
     /// Phase 30.16 sprint 5.5 — force a single per-instruction step
     /// regardless of block-JIT enablement. Used by VerifiedBlockJitRunner
@@ -585,6 +588,35 @@ public sealed unsafe class JsonCpu : ICpuBackend
             _compileResult.EmitterRegistry, _compileResult.ResolverRegistry);
         var mainSetSpec = _spec.InstructionSets["Main"];
         bfb.Build(mainSetSpec, block, generation);
+
+        // Phase 30.18r — dump LLVM IR for blocks matching APR_GB_IR_DUMP=ADDR
+        // (hex, within ±0x40 bytes). Used to inspect a specific block's IR
+        // when bug-hunting (e.g. iter 79 seed 74172009 at PC=0x0150).
+        if (Environment.GetEnvironmentVariable("APR_GB_IR_DUMP") is string irAddr
+            && int.TryParse(irAddr, System.Globalization.NumberStyles.HexNumber, null, out var irA)
+            && System.Math.Abs((long)pc - irA) <= 0x40)
+        {
+            try
+            {
+                var irText = module.PrintToString();
+                // Unique per-call sequence number so multiple compiles
+                // across fuzzer iterations don't overwrite each other.
+                int seq = System.Threading.Interlocked.Increment(ref _irDumpCounter);
+                var path = $"temp/gb-ir-dump-pc{pc:X4}-g{generation}-seq{seq:D4}.ll";
+                System.IO.Directory.CreateDirectory("temp");
+                System.IO.File.WriteAllText(path, irText);
+                Console.Error.WriteLine($"  [IR-DUMP] gb pc=0x{pc:X4} g={generation} seq={seq} → {path} ({block.Instructions.Count} instrs)");
+                for (int i = 0; i < block.Instructions.Count; i++)
+                {
+                    var bi = block.Instructions[i];
+                    Console.Error.WriteLine($"    instr[{i}] pc=0x{bi.Pc:X4} len={bi.LengthBytes} word=0x{bi.InstructionWord:X6} mnem={bi.Decoded.Instruction.Mnemonic} writes_pc={bi.Decoded.Instruction.WritesPc} followed={bi.IsFollowedBranch}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Console.Error.WriteLine($"  [IR-DUMP] failed: {ex.Message}");
+            }
+        }
 
         _rt.AddModule(module);
         var fnName = BlockFunctionBuilder.BlockFunctionName("Main", pc, generation);

@@ -403,8 +403,10 @@ internal static class StackOps
             // "no branch → advance PC by block size" path would overwrite
             // it). Harmless in per-instr mode (executor checks the same
             // flag for the same reason).
-            var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
-            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
+            // Phase 30.18s — use MarkPcWritten so subsequent emitters
+            // (e.g. sync from deferred EI body) see PC was already written
+            // and skip their own PC overwrite.
+            WriteReg.MarkPcWritten(ctx);
         }
     }
 
@@ -437,8 +439,9 @@ internal static class StackOps
             // PC by block size. (RET is `writes_pc:"always"` in spec so
             // BlockDetector ends the block here, but the PcWritten signal
             // is still required.)
-            var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
-            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
+            // Phase 30.18s — use MarkPcWritten so subsequent emitters
+            // see PC was already written.
+            WriteReg.MarkPcWritten(ctx);
         }
     }
 
