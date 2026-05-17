@@ -1232,19 +1232,19 @@ internal sealed class Lr35902StoreByteEmitter : IMicroOpEmitter
 
     internal static void EmitWriteByteWithSyncAndRamFastPath(EmitContext ctx, LLVMValueRef addr32, LLVMValueRef v8)
     {
-        // Phase 30.16 sprint 5.5 — verifier framework needs every RAM
-        // write to flow through the MemWrite8 extern so ActiveTraceSink
-        // sees it. The inline fast path below stores directly into
-        // pinned WRAM/HRAM byte arrays and bypasses the extern entirely.
-        // When APR_GB_NO_INLINE_RAM is set (by GbVerifyBlocks.Run), fall
-        // through to the slow-path extern call so the trace is complete.
+        // Phase 30.16 sprint 5.5 + 30.18 fix — verifier framework needs every
+        // RAM write to flow through the MemWrite8 extern so ActiveTraceSink
+        // sees it. The inline fast path below stores directly into pinned
+        // WRAM/HRAM byte arrays and bypasses the extern entirely. When
+        // APR_GB_NO_INLINE_RAM is set (by GbVerifyBlocks.Run), fall through
+        // to the slow-path EmitWriteByteWithSync — which correctly handles
+        // the IRQ-relevant sync-exit (Phase 30.18 GbFuzzer found that just
+        // calling the extern without acting on its sync flag made block-JIT
+        // run far past intended sync points, breaking CpuStateMismatch
+        // comparison).
         if (Environment.GetEnvironmentVariable("APR_GB_NO_INLINE_RAM") is not null)
         {
-            var (slot, fnType, ptrType) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
-                ctx.Module, MemoryEmitters.ExternFunctionNames.Write8WithSync,
-                LLVMTypeRef.Int8, LLVMTypeRef.Int32, LLVMTypeRef.Int8);
-            var fnPtr = ctx.Builder.BuildLoad2(ptrType, slot, "w8_extern_fn");
-            ctx.Builder.BuildCall2(fnType, fnPtr, new[] { addr32, v8 }, "w8_sync_extern_rc");
+            EmitWriteByteWithSync(ctx, addr32, v8);
             return;
         }
         var fn = ctx.Function;
