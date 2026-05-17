@@ -70,20 +70,21 @@ fix), the GB fuzzer divergence rate dropped from 15 → 2 in 100 iter
 × 50 blocks/iter (seed=42). The two remaining have a different
 shape — both involve unconditional control transfers:
 
-- **#339 (GB JP/RST)** — When the LAST instruction in a block is JP nn
-  (0xC3) or RST $tt (0xC7/CF/D7/DF/E7/EF/F7/FF), JIT block-JIT runs
-  past the control transfer instead of taking it. INTERP per-instr
-  correctly jumps to the target. Looks like the block-detector +
-  branch/call emitter chain isn't ending the block at the writes_pc=
-  "always" instruction in some path. iter 78 (all 0xFF bytes) shows
-  JIT running 20× RST sequentially while INTERP takes the first one
-  to vector $38; iter 79 (random with JP) shows JIT advancing past
-  JP while INTERP takes JP target. Investigation: BlockDetector
-  line 570 `def.WritesPc == "always"` check looks right; suspect
-  is either `WritesPc` not being populated for selector-based
-  RST/JP entries, or the emitter setting PcWritten=1 but the
-  block IR not branching to blockExit. Reproduce: `apr-gb --fuzz=100
-  --fuzz-blocks=50 --fuzz-seed=42 --fuzz-continue`.
+- ~~**#339 (GB JP/RST)**~~ — **RESOLVED (Phase 30.18s/u/w, commits
+  8d376da, fa88eaf, be351c5).** Original framing was misleading.
+  Three distinct sub-bugs:
+  1. SyncEmitter from EI's deferred body clobbered JP/CALL/RET PC
+     with next-instruction PC (Phase 30.18s)
+  2. MBC1 ROM bank-switch interaction: random `LD (HL),A` writes
+     to $4000-$5FFF trigger bank switch, JIT runs stale pre-compiled
+     IR while INTERP fetches fresh bytes from new bank (returned as
+     0xFF = RST 38h for 32KB cart). Fixed via `bus.SuppressMbcWrites`
+     in fuzzer (Phase 30.18u).
+  3. SyncEmitter PC overwrite logic used compile-time
+     `PcWriteEmittedInCurrentInstruction` flag which fires for
+     conditional branches even when cond was false at runtime,
+     leaving PC stale. Fixed by using a runtime PcWritten check
+     (Phase 30.18w).
 
 - ~~**#340 (GBA STMDB R15)**~~ — **RESOLVED (Phase 30.18p,
   commit pending).** Two parallel R15-stale-PC bugs in
@@ -126,10 +127,23 @@ shape — both involve unconditional control transfers:
   seed=831377771 dropped 11 → 0; verified-block coverage jumped
   14 → 564 (40×).
 
-All three are real emitter / block-detector bugs that the fuzzer
-reliably surfaces. Each is its own focused investigation sprint;
-none unblocks the existing real-ROM verifier workload (cpu_instrs.gb
-278k blocks NoDiff, pcxtbios+FreeDOS 1M blocks NoDiff).
+All three follow-ups RESOLVED in the Phase 30.18o..w sprint series
+(see commit log). After resolution, all 4 CPU fuzzers report **0
+divergences across all tested seeds** (42, 100, 999, 2026, 0, 1234):
+
+| CPU | Fuzzer status | Verifier (real ROM) status |
+|---|---|---|
+| x86 (i8086) | 0 div, 0 skip (multi-seed) | 1M blocks NoDiff on pcxtbios+FreeDOS |
+| LR35902 (GB) | **0 div, 0 skip (multi-seed)** | 278k blocks NoDiff on cpu_instrs (IRQ-cadence limit) |
+| Ricoh 2A03 (NES) | 0 div, 0 skip (multi-seed) | 1M blocks NoDiff on cpu_test5 |
+| ARM7TDMI (GBA) | 0 div, 0 skip (multi-seed) | 1M blocks NoDiff on arm.gba |
+
+This closes the bug-hunting arc started in Phase 30.18. The fuzzer
+proved its value — surfaced ~10 real bugs that hand-curated test
+ROMs hadn't caught (mostly subtle JIT-vs-INTERP cadence asymmetries
+around defer/sync/MBC interactions).
+
+T1 unit-tests: 895/895 pass throughout the bug-fix series.
 
 ## Diagnostic + framework-prevention tools added (Phase 30.18l/m/n)
 
