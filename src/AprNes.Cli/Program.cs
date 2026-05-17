@@ -35,6 +35,7 @@ ushort? expectPc = null;
 string backend = "legacy";
 bool diffMode = false;
 bool diffBlockMode = false;
+long verifyBlocks = 0;
 foreach (var arg in args)
 {
     if      (arg == "--info")            { /* default — still prints info */ }
@@ -56,7 +57,17 @@ foreach (var arg in args)
             return 2;
         }
     }
+    else if (arg.StartsWith("--verify-blocks="))
+    {
+        verifyBlocks = long.Parse(arg.Substring("--verify-blocks=".Length));
+    }
     else { Console.Error.WriteLine($"unknown arg: {arg}"); PrintUsage(); return 2; }
+}
+
+// Phase 30.16 sprint 5.6 — per-block JIT-vs-interp verifier early-return.
+if (verifyBlocks > 0 && romPath is not null)
+{
+    return AprNes.Cli.Validation.NesVerifyBlocks.Run(romPath, verifyBlocks);
 }
 
 // Load 2A03 spec — locate spec/cpu/2a03/cpu.json relative to repo root.

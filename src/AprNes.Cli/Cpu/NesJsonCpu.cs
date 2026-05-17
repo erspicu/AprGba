@@ -411,11 +411,18 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
         Marshal.WriteInt32((IntPtr)(_statePtr + _cyclesLeftOff), budgetInit);
         _statePtr[_pcWrittenOff] = 0;
 
+        // Phase 30.16 sprint 5.6 — clear LastInstrIndex slot so block IR's
+        // per-preBB write gives accurate count on return (matches x86/GB).
+        int lastIdxOff = (int)_rt.LastInstrIndexOffset;
+        Marshal.WriteInt32((IntPtr)(_statePtr + lastIdxOff), 0);
+
         var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
         fn(_statePtr);
 
         int residual = Marshal.ReadInt32((IntPtr)(_statePtr + _cyclesLeftOff));
         int consumedIr = budgetInit - residual;
+        int actualCount = Marshal.ReadInt32((IntPtr)(_statePtr + lastIdxOff));
+        LastBlockInstructionCount = actualCount > 0 ? actualCount : entry.InstructionCount;
         if (consumedIr < 0) consumedIr = 0;   // defensive — shouldn't happen with budgetInit=1024
 
         // PcWritten=0 fall-through path: the IR-driven cycles_left walked
@@ -632,5 +639,70 @@ public sealed unsafe class NesJsonCpu : INesCpuBackend
     {
         if (_activeBus is null) return;
         _activeBus.WriteByte((ushort)addr, value);
+        ActiveTraceSink?.RecordMemWrite(0, addr, value, 1);
     }
+
+    // === Phase 30.16 sprint 5.6 — Verifier framework integration ===========
+
+    /// <summary>
+    /// Phase 30.16 sprint 5.6 — Active trace sink for the Verified
+    /// Block-JIT framework. When non-null, MemWrite8 also appends every
+    /// write to the sink so the framework can 3-axis-compare JIT vs interp
+    /// at block boundaries. Null = no overhead.
+    /// </summary>
+    public static AprCpu.Core.Validation.IBlockTraceSink? ActiveTraceSink { get; set; }
+
+    /// <summary>
+    /// Phase 30.16 sprint 5.6 — most-recent block size (actual instructions
+    /// executed; read from the LastInstrIndex slot the IR writes per
+    /// preBB[i]). For per-instr mode this is always 1. -1 if no block has
+    /// ever run yet.
+    /// </summary>
+    public int LastBlockInstructionCount { get; private set; } = -1;
+
+    /// <summary>
+    /// Phase 30.16 sprint 5.6 — force a single per-instruction step
+    /// regardless of block-JIT enablement. Used by VerifiedBlockJitRunner
+    /// to drive the interp side N times.
+    /// </summary>
+    public int StepOnePerInstr()
+    {
+        _activeBus = _bus;
+        StepOne();
+        LastBlockInstructionCount = 1;
+        return 1;
+    }
+
+    /// <summary>
+    /// Phase 30.16 sprint 5.6 — make this CPU the active singleton for
+    /// extern bus calls. Pairs with the verifier's per-stepper env
+    /// activation pattern (X86 / GB / GBA all have the same shape).
+    /// </summary>
+    public void SetActiveForLockstep()
+    {
+        _activeBus = _bus;
+    }
+
+    /// <summary>Snapshot CPU state buffer for the verifier framework.</summary>
+    public NesCpuStateBlob SnapshotState() => new()
+    {
+        StateCopy = (byte[])_state.Clone(),
+        InterruptCycle = _interruptCycle,
+    };
+
+    public void LoadState(NesCpuStateBlob blob)
+    {
+        if (blob.StateCopy.Length != _state.Length)
+            throw new InvalidOperationException(
+                $"NES JsonCpu.LoadState: state buffer size mismatch ({blob.StateCopy.Length} vs {_state.Length}).");
+        Array.Copy(blob.StateCopy, _state, _state.Length);
+        _interruptCycle = blob.InterruptCycle;
+    }
+}
+
+/// <summary>Snapshot blob for NesJsonCpu (Phase 30.16 sprint 5.6).</summary>
+public sealed class NesCpuStateBlob
+{
+    public byte[] StateCopy = System.Array.Empty<byte>();
+    public int    InterruptCycle;
 }
