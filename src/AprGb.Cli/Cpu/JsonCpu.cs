@@ -163,6 +163,18 @@ public sealed unsafe class JsonCpu : ICpuBackend
     {
         _activeBus = _bus;
         _activeCpu = this;
+        // Phase 30.18z — wake from HALT when an IRQ becomes pending,
+        // mirroring RunCycles' HALT branch behavior. Without this,
+        // INTERP-side verifier stays HALTed while JIT-side wakes from
+        // RunCycles → consumes an IRQ wake → resumes execution. Found
+        // by GbVerifyBlocks at block #280289 on cpu_instrs.gb. Pending
+        // wakes regardless of IME (HALT-wake is IF&IE based, IRQ
+        // vectoring is the IME-gated step).
+        if (_halted)
+        {
+            var pending = (byte)(_bus.InterruptEnable & _bus.InterruptFlag & 0x1F);
+            if (pending != 0) _halted = false;
+        }
         if (_halted)
         {
             LastBlockInstructionCount = 0;
