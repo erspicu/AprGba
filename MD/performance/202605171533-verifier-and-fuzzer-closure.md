@@ -134,7 +134,7 @@ divergences across all tested seeds** (42, 100, 999, 2026, 0, 1234):
 | CPU | Fuzzer status | Verifier (real ROM) status |
 |---|---|---|
 | x86 (i8086) | 0 div, 0 skip (multi-seed) | 1M blocks NoDiff on pcxtbios+FreeDOS |
-| LR35902 (GB) | **0 div, 0 skip (multi-seed)** | 278k blocks NoDiff on cpu_instrs (IRQ-cadence limit) |
+| LR35902 (GB) | **0 div, 0 skip (16 seeds verified)** | 278k blocks NoDiff on cpu_instrs (IRQ-cadence limit) |
 | Ricoh 2A03 (NES) | 0 div, 0 skip (multi-seed) | 1M blocks NoDiff on cpu_test5 |
 | ARM7TDMI (GBA) | 0 div, 0 skip (multi-seed) | 1M blocks NoDiff on arm.gba |
 
