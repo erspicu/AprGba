@@ -32,6 +32,11 @@ if (opts.DiffMaxSteps > 0 && opts.RomPath is not null)
     return 1;
 }
 
+if (opts.VerifyBlocks > 0 && opts.RomPath is not null)
+{
+    return GbVerifyBlocks.Run(opts.RomPath, opts.BiosPath, opts.VerifyBlocks);
+}
+
 if (opts.DiffBjitMaxBlocks > 0 && opts.RomPath is not null)
 {
     Console.WriteLine($"apr-gb — diff mode: per-instr vs block-JIT");
@@ -150,6 +155,7 @@ static Options? ParseArgs(string[] args)
         else if (arg == "--bench")                opts.Bench = true;
         else if (arg == "--block-jit")            opts.BlockJit = true;
         else if (arg.StartsWith("--diff-bjit=")) opts.DiffBjitMaxBlocks = long.Parse(arg.Substring("--diff-bjit=".Length));
+        else if (arg.StartsWith("--verify-blocks=")) opts.VerifyBlocks = long.Parse(arg.Substring("--verify-blocks=".Length));
         else                                      return null;
     }
     return opts.RomPath is null ? null : opts;
@@ -237,6 +243,7 @@ internal sealed class Options
     public bool     Bench;               // when true, run both backends and report MIPS
     public bool     BlockJit;            // --block-jit: enable Phase 7 GB block-JIT path on json-llvm
     public long     DiffBjitMaxBlocks;   // --diff-bjit=N: lockstep per-instr vs block-JIT
+    public long     VerifyBlocks;        // --verify-blocks=N: Phase 30.16 per-block JIT-vs-interp verifier
 }
 
 /// <summary>

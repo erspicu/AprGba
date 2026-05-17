@@ -1232,6 +1232,21 @@ internal sealed class Lr35902StoreByteEmitter : IMicroOpEmitter
 
     internal static void EmitWriteByteWithSyncAndRamFastPath(EmitContext ctx, LLVMValueRef addr32, LLVMValueRef v8)
     {
+        // Phase 30.16 sprint 5.5 — verifier framework needs every RAM
+        // write to flow through the MemWrite8 extern so ActiveTraceSink
+        // sees it. The inline fast path below stores directly into
+        // pinned WRAM/HRAM byte arrays and bypasses the extern entirely.
+        // When APR_GB_NO_INLINE_RAM is set (by GbVerifyBlocks.Run), fall
+        // through to the slow-path extern call so the trace is complete.
+        if (Environment.GetEnvironmentVariable("APR_GB_NO_INLINE_RAM") is not null)
+        {
+            var (slot, fnType, ptrType) = MemoryEmitters.GetOrDeclareMemoryFunctionPointer(
+                ctx.Module, MemoryEmitters.ExternFunctionNames.Write8WithSync,
+                LLVMTypeRef.Int8, LLVMTypeRef.Int32, LLVMTypeRef.Int8);
+            var fnPtr = ctx.Builder.BuildLoad2(ptrType, slot, "w8_extern_fn");
+            ctx.Builder.BuildCall2(fnType, fnPtr, new[] { addr32, v8 }, "w8_sync_extern_rc");
+            return;
+        }
         var fn = ctx.Function;
         var i32 = LLVMTypeRef.Int32;
         var fastWramBB  = fn.AppendBasicBlock("w8_fast_wram");

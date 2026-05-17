@@ -860,7 +860,13 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _activeBus.WriteByte((ushort)(addr + 1),  (byte)(value >> 8));
         _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
         _activeCpu?._blockCache?.NotifyMemoryWrite(addr + 1);
-        ActiveTraceSink?.RecordMemWrite(0, addr, value, 2);
+        // Record as TWO separate byte writes — matches what the per-instr
+        // backend records (decomposed-into-bytes via MemWrite8 calls) AND
+        // matches the actual bus interaction shape. A single u16 trace
+        // entry would mismatch any per-instr path that goes through
+        // MemWrite8 twice.
+        ActiveTraceSink?.RecordMemWrite(0, addr,     (byte)(value & 0xFF), 1);
+        ActiveTraceSink?.RecordMemWrite(0, addr + 1, (byte)(value >> 8),   1);
     }
 
     /// <summary>
@@ -894,7 +900,9 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _activeBus.WriteByte((ushort)(addr + 1),  (byte)(value >> 8));
         _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
         _activeCpu?._blockCache?.NotifyMemoryWrite(addr + 1);
-        ActiveTraceSink?.RecordMemWrite(0, addr, value, 2);
+        // Two byte writes per the same reasoning as MemWrite16 above.
+        ActiveTraceSink?.RecordMemWrite(0, addr,     (byte)(value & 0xFF), 1);
+        ActiveTraceSink?.RecordMemWrite(0, addr + 1, (byte)(value >> 8),   1);
         return (IsIrqRelevantAddress((ushort)addr) || IsIrqRelevantAddress((ushort)(addr + 1)))
             ? (byte)1 : (byte)0;
     }
