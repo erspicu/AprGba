@@ -152,6 +152,13 @@ public sealed unsafe class JsonCpu : ICpuBackend
         }
         // StepOne returns cycles consumed; we don't care here.
         StepOne();
+        // Phase 30.18c — pick up "halt signalled by emitter this step".
+        // The RunCycles loop normally does this transfer at line 475,
+        // but StepOnePerInstr is called by the Verified Block-JIT
+        // framework outside RunCycles, so without this HALT and STOP
+        // instructions wouldn't actually set _halted in per-instr mode.
+        // Found by GbFuzzer (HALT flag mismatch with JIT, task #338).
+        if (_haltSignal) { _halted = true; _haltSignal = false; }
         LastBlockInstructionCount = 1;
         return 1;
     }
