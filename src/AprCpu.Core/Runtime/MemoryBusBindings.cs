@@ -163,17 +163,45 @@ public static unsafe class MemoryBusBindings
     private static uint   Read32(uint addr) =>
         TryGbaFastReadWord(addr) ?? _current!.ReadWord(addr);
 
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void   Write8 (uint addr, byte v)     => _current!.WriteByte(addr, v);
+    /// <summary>
+    /// Phase 30.16 sprint 5.6 — Active trace sink for the Verified
+    /// Block-JIT framework. When non-null, every Write8/16/32 trampoline
+    /// also appends to the sink so the framework can compare JIT vs interp
+    /// at block boundaries. Null = no overhead.
+    /// </summary>
+    public static AprCpu.Core.Validation.IBlockTraceSink? ActiveTraceSink { get; set; }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void   Write16(uint addr, ushort v)   => _current!.WriteHalfword(addr, v);
+    private static void   Write8 (uint addr, byte v)
+    {
+        _current!.WriteByte(addr, v);
+        ActiveTraceSink?.RecordMemWrite(0, addr, v, 1);
+    }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void   Write32(uint addr, uint v)     => _current!.WriteWord(addr, v);
+    private static void   Write16(uint addr, ushort v)
+    {
+        _current!.WriteHalfword(addr, v);
+        // Match GB pattern: decompose into two byte writes so trace
+        // shape is consistent with per-instr backends that may do
+        // two MemWrite8 calls.
+        ActiveTraceSink?.RecordMemWrite(0, addr,     (byte)(v & 0xFF), 1);
+        ActiveTraceSink?.RecordMemWrite(0, addr + 1, (byte)(v >> 8),   1);
+    }
+
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void   Write32(uint addr, uint v)
+    {
+        _current!.WriteWord(addr, v);
+        // Decompose into 4 byte writes for consistent trace shape (see Write16).
+        ActiveTraceSink?.RecordMemWrite(0, addr,     (byte)(v        & 0xFF), 1);
+        ActiveTraceSink?.RecordMemWrite(0, addr + 1, (byte)((v >> 8)  & 0xFF), 1);
+        ActiveTraceSink?.RecordMemWrite(0, addr + 2, (byte)((v >> 16) & 0xFF), 1);
+        ActiveTraceSink?.RecordMemWrite(0, addr + 3, (byte)((v >> 24) & 0xFF), 1);
+    }
 
     private sealed class RestoreOnDispose : IDisposable
     {

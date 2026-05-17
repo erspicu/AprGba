@@ -525,9 +525,20 @@ public sealed unsafe class CpuExecutor
         // when it hits zero (writing the next-instruction PC + PcWritten=1
         // so the post-block "advance PC" path doesn't overshoot).
         int cyclesBudgetBefore = CyclesLeft;
+        // Phase 30.16 sprint 5.6 — clear LastInstrIndex slot so the
+        // block IR's per-preBB (i+1) write gives exact architectural
+        // instruction count on return. Was previously approximated by
+        // cyclesConsumed/instrCycleCost which over-counts when blocks
+        // exit early via Bcc/BX (the cycle deduct happens per executed
+        // instr, but the approximation didn't differentiate).
+        int lastIdxOff = (int)_rt.LastInstrIndexOffset;
+        System.Runtime.InteropServices.Marshal.WriteInt32(
+            (IntPtr)(_statePtr + lastIdxOff), 0);
         var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
         fn(_statePtr);
         int cyclesConsumed = cyclesBudgetBefore - CyclesLeft;
+        int slotActualCount = System.Runtime.InteropServices.Marshal.ReadInt32(
+            (IntPtr)(_statePtr + lastIdxOff));
         if (_state[_pcWrittenOffset] == 0)
         {
             // No branch fired AND budget didn't exhaust — straight-line
@@ -541,7 +552,13 @@ public sealed unsafe class CpuExecutor
         // Convert back to instruction count for callers that still want
         // it (Scheduler.Tick uses cycles directly via LastStepCycles).
         const int instrCycleCost = 4;
-        int actualInstrCount = cyclesConsumed > 0 ? cyclesConsumed / instrCycleCost : entry.InstructionCount;
+        // Phase 30.16 sprint 5.6 — prefer the exact LastInstrIndex slot
+        // value over the cyclesConsumed/instrCycleCost approximation.
+        // Slot is 1-based; 0 means the block IR didn't execute any
+        // preBB (shouldn't happen for compiled blocks, but be defensive).
+        int actualInstrCount = slotActualCount > 0
+            ? slotActualCount
+            : (cyclesConsumed > 0 ? cyclesConsumed / instrCycleCost : entry.InstructionCount);
         if (actualInstrCount > entry.InstructionCount) actualInstrCount = entry.InstructionCount;
         LastStepInstructionCount = actualInstrCount;
         LastStepCycles           = cyclesConsumed > 0 ? cyclesConsumed : entry.InstructionCount * instrCycleCost;
