@@ -38,10 +38,18 @@ behavior for `RunCycles(1)`).
   - `mem_timing.gb`, `mem_timing-2/mem_timing.gb` (memory timing tests)
   - `interrupt_time.gb` (interrupt timing — validates IRQ-cadence fix)
 
-**Individual cpu_instrs sub-tests** (all 100k blocks NoDiff):
-  - `01-special.gb`, `02-interrupts.gb` (✓ IRQ delivery clean),
-    `03-op sp,hl.gb`, `07-jr,jp,call,ret,rst.gb` (✓ control flow),
-    `11-op a,(hl).gb` (✓ memory ops)
+**Individual cpu_instrs sub-tests** (ALL 11 at 100k blocks NoDiff):
+  - `01-special.gb` — special opcodes
+  - `02-interrupts.gb` (✓ IRQ delivery clean)
+  - `03-op sp,hl.gb` — SP/HL ops
+  - `04-op r,imm.gb` — register/immediate ops
+  - `05-op rp.gb` — register-pair ops
+  - `06-ld r,r.gb` — LD r,r' family
+  - `07-jr,jp,call,ret,rst.gb` (✓ control flow including RST)
+  - `08-misc instrs.gb` — DAA, CPL, SCF, CCF, etc.
+  - `09-op r,r.gb` — ALU op A,r
+  - `10-bit ops.gb` — CB-prefix BIT/SET/RES/RL/RR/SLA/SRA/SRL/SWAP
+  - `11-op a,(hl).gb` (✓ memory ops including indirect ALU)
 
 **Extended GBA ROM coverage** (all 200k blocks NoDiff):
   - `gba-tests/arm/arm.gba` (1M blocks — primary)
