@@ -35,6 +35,7 @@ bool dumpFpuState = false;
 int  fuzzIterations = 0;
 int  fuzzBlocksPerIter = 50;
 int? fuzzSeed = null;
+bool fuzzContinue = false;
 
 foreach (var arg in args)
 {
@@ -59,6 +60,7 @@ foreach (var arg in args)
     else if (arg.StartsWith("--fuzz="))               fuzzIterations = int.Parse(arg.Substring("--fuzz=".Length));
     else if (arg.StartsWith("--fuzz-blocks="))        fuzzBlocksPerIter = int.Parse(arg.Substring("--fuzz-blocks=".Length));
     else if (arg.StartsWith("--fuzz-seed="))          fuzzSeed = int.Parse(arg.Substring("--fuzz-seed=".Length));
+    else if (arg == "--fuzz-continue")                fuzzContinue = true;
     else { Console.Error.WriteLine($"unknown arg: {arg}"); PrintUsage(); return 2; }
 }
 
@@ -105,7 +107,7 @@ if (tomHartePath != null)
 // Phase 30.18d — x86 differential fuzzer.
 if (fuzzIterations > 0)
 {
-    return AprX86.Cli.Validation.X86Fuzzer.Run(fuzzIterations, fuzzBlocksPerIter, fuzzSeed, entrySeg, entryOff);
+    return AprX86.Cli.Validation.X86Fuzzer.Run(fuzzIterations, fuzzBlocksPerIter, fuzzSeed, entrySeg, entryOff, fuzzContinue);
 }
 
 // ============================================================

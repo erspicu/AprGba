@@ -24,7 +24,8 @@ namespace AprGba.Cli.Validation;
 
 public static class GbaFuzzer
 {
-    public static int Run(int iterations, int blocksPerIter, int? seed = null)
+    public static int Run(int iterations, int blocksPerIter, int? seed = null,
+        bool continueOnDivergence = false)
     {
         var rngSeed = seed ?? Environment.TickCount;
         Console.WriteLine("apr-gba fuzz (random ARM ROM → per-block JIT-vs-interp diff)");
@@ -121,7 +122,7 @@ public static class GbaFuzzer
                     + $"elapsed {sw.Elapsed.TotalSeconds:F1}s");
             }
 
-            if (iterDiverged) break;
+            if (iterDiverged && !continueOnDivergence) break;
         }
 
         sw.Stop();

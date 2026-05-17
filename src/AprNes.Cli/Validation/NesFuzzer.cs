@@ -38,7 +38,8 @@ public static class NesFuzzer
     /// random programs, verifies each for up to <paramref name="blocksPerIter"/>
     /// blocks. Returns 0 on all-NoDiff, 5 on first divergence, 2 on host error.
     /// </summary>
-    public static int Run(int iterations, int blocksPerIter, int? seed = null)
+    public static int Run(int iterations, int blocksPerIter, int? seed = null,
+        bool continueOnDivergence = false)
     {
         var rngSeed = seed ?? Environment.TickCount;
         // Phase 30.17b — disable block-JIT FetchImm fast path so JIT and
@@ -164,8 +165,9 @@ public static class NesFuzzer
                     + $"elapsed {sw.Elapsed.TotalSeconds:F1}s");
             }
 
-            // Bail out early on first divergence for quick feedback.
-            if (iterDiverged) break;
+            // Bail out early on first divergence for quick feedback,
+            // unless --fuzz-continue keeps the sweep going.
+            if (iterDiverged && !continueOnDivergence) break;
         }
 
         sw.Stop();

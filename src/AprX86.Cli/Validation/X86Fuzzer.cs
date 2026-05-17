@@ -16,7 +16,8 @@ namespace AprX86.Cli.Validation;
 public static class X86Fuzzer
 {
     public static int Run(int iterations, int blocksPerIter, int? seed = null,
-        ushort entrySeg = 0x1000, ushort entryOff = 0x0000)
+        ushort entrySeg = 0x1000, ushort entryOff = 0x0000,
+        bool continueOnDivergence = false)
     {
         var rngSeed = seed ?? Environment.TickCount;
         Console.WriteLine("apr-x86 fuzz (random .com-style ROM → per-block JIT-vs-interp diff)");
@@ -118,7 +119,7 @@ public static class X86Fuzzer
                     + $"elapsed {sw.Elapsed.TotalSeconds:F1}s");
             }
 
-            if (iterDiverged) break;
+            if (iterDiverged && !continueOnDivergence) break;
         }
 
         sw.Stop();

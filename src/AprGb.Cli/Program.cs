@@ -40,7 +40,7 @@ if (opts.VerifyBlocks > 0 && opts.RomPath is not null)
 // Phase 30.18 — GB differential fuzzer.
 if (opts.FuzzIterations > 0)
 {
-    return AprGb.Cli.Validation.GbFuzzer.Run(opts.FuzzIterations, opts.FuzzBlocksPerIter, opts.FuzzSeed);
+    return AprGb.Cli.Validation.GbFuzzer.Run(opts.FuzzIterations, opts.FuzzBlocksPerIter, opts.FuzzSeed, opts.FuzzContinue);
 }
 
 if (opts.DiffBjitMaxBlocks > 0 && opts.RomPath is not null)
@@ -165,6 +165,7 @@ static Options? ParseArgs(string[] args)
         else if (arg.StartsWith("--fuzz="))           opts.FuzzIterations = int.Parse(arg.Substring("--fuzz=".Length));
         else if (arg.StartsWith("--fuzz-blocks="))    opts.FuzzBlocksPerIter = int.Parse(arg.Substring("--fuzz-blocks=".Length));
         else if (arg.StartsWith("--fuzz-seed="))      opts.FuzzSeed = int.Parse(arg.Substring("--fuzz-seed=".Length));
+        else if (arg == "--fuzz-continue")            opts.FuzzContinue = true;
         else                                      return null;
     }
     return opts.RomPath is null ? null : opts;
@@ -256,6 +257,7 @@ internal sealed class Options
     public int      FuzzIterations;      // --fuzz=N: Phase 30.18 random-cart fuzz mode
     public int      FuzzBlocksPerIter = 100;
     public int?     FuzzSeed;
+    public bool     FuzzContinue;        // --fuzz-continue: don't stop at first divergence
 }
 
 /// <summary>

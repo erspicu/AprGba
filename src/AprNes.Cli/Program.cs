@@ -39,6 +39,7 @@ long verifyBlocks = 0;
 int  fuzzIterations = 0;
 int  fuzzBlocksPerIter = 100;
 int? fuzzSeed = null;
+bool fuzzContinue = false;
 foreach (var arg in args)
 {
     if      (arg == "--info")            { /* default — still prints info */ }
@@ -67,6 +68,7 @@ foreach (var arg in args)
     else if (arg.StartsWith("--fuzz="))           fuzzIterations = int.Parse(arg.Substring("--fuzz=".Length));
     else if (arg.StartsWith("--fuzz-blocks="))    fuzzBlocksPerIter = int.Parse(arg.Substring("--fuzz-blocks=".Length));
     else if (arg.StartsWith("--fuzz-seed="))      fuzzSeed = int.Parse(arg.Substring("--fuzz-seed=".Length));
+    else if (arg == "--fuzz-continue")            fuzzContinue = true;
     else { Console.Error.WriteLine($"unknown arg: {arg}"); PrintUsage(); return 2; }
 }
 
@@ -79,7 +81,7 @@ if (verifyBlocks > 0 && romPath is not null)
 // Phase 30.17 sprint 5.7 — differential fuzzer early-return.
 if (fuzzIterations > 0)
 {
-    return AprNes.Cli.Validation.NesFuzzer.Run(fuzzIterations, fuzzBlocksPerIter, fuzzSeed);
+    return AprNes.Cli.Validation.NesFuzzer.Run(fuzzIterations, fuzzBlocksPerIter, fuzzSeed, fuzzContinue);
 }
 
 // Load 2A03 spec — locate spec/cpu/2a03/cpu.json relative to repo root.

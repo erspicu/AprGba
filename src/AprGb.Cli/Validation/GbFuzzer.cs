@@ -17,7 +17,8 @@ namespace AprGb.Cli.Validation;
 
 public static class GbFuzzer
 {
-    public static int Run(int iterations, int blocksPerIter, int? seed = null)
+    public static int Run(int iterations, int blocksPerIter, int? seed = null,
+        bool continueOnDivergence = false)
     {
         var rngSeed = seed ?? Environment.TickCount;
         // Phase 30.18 — match GbVerifyBlocks: disable inline RAM fast-path
@@ -120,7 +121,7 @@ public static class GbFuzzer
                     + $"elapsed {sw.Elapsed.TotalSeconds:F1}s");
             }
 
-            if (iterDiverged) break;
+            if (iterDiverged && !continueOnDivergence) break;
         }
 
         sw.Stop();
