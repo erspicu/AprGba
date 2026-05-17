@@ -1,12 +1,11 @@
-# Intel 8086 backend MIPS comparison (2026-05-10)
+# Intel 8086 backend MIPS 比較（2026-05-10）
 
-First-cut MIPS measurement across the three Apr-X86 backends after
-fixing the silent block-JIT-degenerates-to-per-instr bug (commit
-`24a7dc8`).
+修完 silent block-JIT-degenerate-to-per-instr bug（commit `24a7dc8`）後，
+對三個 Apr-X86 backend 第一次的 MIPS 量測。
 
 ## Workload
 
-`test-roms/x86/bench-loop.com` — synthetic outer-loop test, 18 bytes:
+`test-roms/x86/bench-loop.com` — 合成的 outer-loop test，18 byte：
 
 ```
 mov bx, 100        BB 64 00       ; outer counter
@@ -21,11 +20,11 @@ inner_top:
 hlt                F4
 ```
 
-Per outer iter: 1 (mov cx) + 65535 × 3 (add/add/loop) + 1 (dec) +
-1 (jnz) = 196,608 architectural instructions × 100 outer = **19,660,801**
-inst total + 1 (final hlt) = **19,660,802 architectural instructions**.
+每個 outer iter：1（mov cx）+ 65535 × 3（add/add/loop）+ 1（dec）+
+1（jnz）= 196,608 個 architectural instruction × 100 outer = **19,660,801**
+inst total + 1（最後 hlt）= **19,660,802 個 architectural instruction**。
 
-## Results (best of 3 runs, Release build)
+## 結果（3 次 run 取最佳，Release build）
 
 | Backend       | Wall ms | Startup ms | Net ms | Net MIPS | vs legacy |
 |---------------|---------|-----------|--------|---------:|----------:|
@@ -33,61 +32,56 @@ inst total + 1 (final hlt) = **19,660,802 architectural instructions**.
 | `json`        |    3872 |      1179 |   2693 |     7.30 |    0.19×  |
 | `json-block`  |    1212 |       489 |    723 |    27.19 |    0.71×  |
 
-## Interpretation
+## 解讀
 
-**Startup baselines** (1-byte HLT-only ROM, just .NET CLR + LLVM init):
+**Startup baseline**（單 byte HLT-only ROM，只有 .NET CLR + LLVM init）：
 - `legacy` 63 ms — dotnet CLR + assembly load
-- `json` 1179 ms — adds LLVMSharp init + SpecCompiler eagerly compiles
-  all ~256 opcode functions through ORC LLJIT
-- `json-block` 489 ms — adds LLVM init but defers compile until first
-  block hits cache miss; cheaper because only the few unique blocks
-  this workload touches get compiled
+- `json` 1179 ms — 加 LLVMSharp init + SpecCompiler 透過 ORC LLJIT eager
+  compile 全部 ~256 個 opcode function
+- `json-block` 489 ms — 加 LLVM init 但 defer compile 到第一個 block
+  cache miss；便宜是因為只有這個 workload 碰到的少數 unique block 才被 compile
 
-**Net throughput**:
-- `legacy` 38 MIPS — hand-coded C# switch dispatch, no JIT overhead
-- `json` 7 MIPS (5.3× slower than legacy) — per-instruction LLVM call
-  overhead dominates. Each Step() = (managed → native fn ptr → managed)
-  trampoline plus state-buffer load/store for every register touch.
-- `json-block` 27 MIPS (1.4× slower than legacy, 3.7× faster than `json`) —
-  alloca + mem2reg promotes register state to LLVM SSA values inside
-  the block; cross-instruction transitions are pure LLVM IR rather
-  than managed-native trampolines.
+**Net throughput**：
+- `legacy` 38 MIPS — 手刻 C# switch dispatch、無 JIT overhead
+- `json` 7 MIPS（比 legacy 慢 5.3×）— per-instruction LLVM call overhead 主導。
+  每個 Step() = (managed → native fn ptr → managed) trampoline 加上每個
+  register touch 的 state-buffer load/store。
+- `json-block` 27 MIPS（比 legacy 慢 1.4×、比 `json` 快 3.7×）— alloca +
+  mem2reg 把 register state 提升到 block 內的 LLVM SSA value；
+  cross-instruction transition 是純 LLVM IR 而不是 managed-native trampoline。
 
-**Block-JIT batching**: the inner loop body (add/add/loop) becomes
-one block. Each Step() runs that 3-instr block once (LOOP iterates
-back, sets PcWritten, exits the block — re-entered on next Step).
-Step-to-instruction ratio: `19,660,802 / 6,553,500 = 3.0 instr/Step`.
+**Block-JIT batching**：inner loop body（add/add/loop）變成一個 block。
+每個 Step() 跑一次那 3-instr block（LOOP iter 回去、set PcWritten、退出
+block — 下個 Step 重新進入）。Step-to-instruction 比例：
+`19,660,802 / 6,553,500 = 3.0 instr/Step`。
 
-## What we'd need to close the legacy gap
+## 要拉近 legacy 差距需要什麼
 
-Per Gemini's 2026-05-10 architectural review (see commit `74d27a4`):
+依 Gemini 2026-05-10 architectural review（見 commit `74d27a4`）：
 
-1. **Bake immediates as IR constants** (24.6.8d future work) —
-   replace the runtime `memory_read_8` calls in `x86_fetch_imm8`/16
-   with `LLVM ConstantInt` literals captured at decode time.
-   Eliminates the per-instruction trampoline + bus dispatch for
-   immediates. Easy ~2× win.
+1. **把 immediate bake 成 IR constant**（24.6.8d 未來工作）—
+   把 `x86_fetch_imm8`/16 裡的 runtime `memory_read_8` 呼叫換成 decode
+   時 capture 的 `LLVM ConstantInt` literal。消除 immediate 的 per-instruction
+   trampoline + bus dispatch。簡單的 ~2× 提升。
 
-2. **Cross-jump follow into back-edges** (already done for LR35902 in
-   `BlockDetector` for JR/JP — port to x86 LOOP/JMP rel8 with
-   constant target). Lets a tight loop body compile into ONE big
-   unrolled block instead of restarting at the LOOP each iteration.
-   Could push block size from 3 to 65535 instructions for our bench.
+2. **Cross-jump follow back-edge**（LR35902 的 `BlockDetector` 對 JR/JP
+   已經做過 — 移植到 x86 LOOP/JMP rel8 with constant target）。讓 tight
+   loop body compile 成一個大 unrolled block，而不是每次 LOOP 從頭。
+   我們 bench 的 block 大小可以從 3 推到 65535 instruction。
 
-3. **CPU state shadow promotion across blocks** (P1 #5 in Phase 7
-   plan). Currently registers are flushed back to the state buffer
-   at every block exit. Keeping them in LLVM SSA across hot paths
-   would close most of the remaining gap.
+3. **CPU state shadow 跨 block promote**（Phase 7 plan 的 P1 #5）。
+   目前 register 在每個 block exit 都 flush 回 state buffer。Hot path
+   上把它們維持在 LLVM SSA 會關掉剩下的大部分差距。
 
-These are framework extensions that benefit ALL CPUs (NES already has
-some), not just x86. Reasonable next-quarter targets.
+這些都是 framework extension、所有 CPU 都受惠（NES 已經有一些）、不只是 x86。
+合理的 next-quarter target。
 
-## Reproduce
+## 重現
 
 ```
 dotnet build -c Release src/AprX86.Cli/AprX86.Cli.csproj
 pwsh tools/bench_x86.ps1
 ```
 
-Bench script writes the `.com` ROM into `test-roms/x86/bench-loop.com`
-and the baseline into `temp/baseline-hlt.com` automatically.
+Bench script 自動把 `.com` ROM 寫進 `test-roms/x86/bench-loop.com`、
+baseline 寫進 `temp/baseline-hlt.com`。
