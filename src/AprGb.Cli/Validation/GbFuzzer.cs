@@ -164,6 +164,15 @@ public static class GbFuzzer
     {
         var bus = new GbMemoryBus();
         bus.LoadRom(rom);
+        // Phase 30.18u — Suppress MBC bank-switch writes. Random ROM bytes
+        // frequently include `LD (HL),A` patterns that write to addresses
+        // in $0000-$7FFF (MBC register range). Real-cart MBC behaviour
+        // is to bank-switch on those writes, which invalidates the JIT's
+        // already-compiled block IR (still operating on old-bank bytes)
+        // while INTERP fetches from the new bank. That asymmetry creates
+        // non-emitter divergences in the fuzzer. Production behaviour is
+        // unchanged (cpu_instrs.gb verifier still uses full MBC semantics).
+        bus.SuppressMbcWrites = true;
         var cpu = new JsonCpu(enableBlockJit: true);
         cpu.Reset(bus);
         // Phase 30.18m — APR_GB_FORCE_BUDGET=N caps block-JIT cycle budget

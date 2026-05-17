@@ -46,6 +46,16 @@ public sealed class GbMemoryBus
     public byte InterruptEnable;     // 0xFFFF
     public byte InterruptFlag;       // 0xFF0F shadowed in Io but exposed for clarity
 
+    /// <summary>
+    /// Phase 30.18u — when true, writes to MBC bank-switch registers
+    /// ($0000-$7FFF) are ignored. Used by GbFuzzer to prevent random
+    /// stores from triggering bank switches that invalidate already-
+    /// compiled JIT blocks (a real-cart feature that creates a JIT vs
+    /// per-instr cadence divergence in the fuzzer, not an emitter bug).
+    /// Default false (production = full MBC1 semantics).
+    /// </summary>
+    public bool SuppressMbcWrites { get; set; }
+
     /// <summary>Captured serial output — Blargg test ROMs use this for pass/fail text.</summary>
     public StringBuilder SerialLog { get; } = new();
 
@@ -138,6 +148,8 @@ public sealed class GbMemoryBus
 
     public void WriteByte(ushort addr, byte v)
     {
+        // Phase 30.18u — fuzzer bypass for MBC bank-switch writes.
+        if (SuppressMbcWrites && addr < 0x8000) return;
         if (addr < 0x2000) { _ramEnable = (v & 0x0F) == 0x0A; return; }
         if (addr < 0x4000)
         {

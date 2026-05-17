@@ -982,6 +982,12 @@ internal sealed class BranchCc : IMicroOpEmitter
         var taken     = LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false);
         var pcWritten = ctx.Builder.BuildSelect(pred, taken, oldFlag, "pc_w_new");
         ctx.Builder.BuildStore(pcWritten, flagSlot);
+        // Phase 30.18u — also set compile-time PcWriteEmittedInCurrentInstruction
+        // so downstream emitters in the same instruction (sync from deferred
+        // EI body) don't clobber the branch-target write. The runtime
+        // select still correctly tracks taken vs not-taken via PcWritten;
+        // this flag is purely a JIT-time hint to subsequent emitters.
+        ctx.PcWriteEmittedInCurrentInstruction = true;
 
         // Phase 7 GB block-JIT P0.7b — taken-branch extra cycle deduct.
         // For LR35902 JR cc / JP cc, taken path costs +4 t-cycles vs

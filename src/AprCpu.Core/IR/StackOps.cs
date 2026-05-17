@@ -479,6 +479,10 @@ internal static class StackOps
             // mark PC-written for the open-bus detector
             var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
             ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
+            // Phase 30.18u — same compile-time hint as BranchCc so
+            // SyncEmitter (from deferred EI body) doesn't clobber the
+            // CALL target with bi.Pc+length.
+            ctx.PcWriteEmittedInCurrentInstruction = true;
             // Phase 7 GB block-JIT P0.7b — taken-branch extra cycle deduct.
             // CALL cc, nn = 3m_or_6m → taken adds 12 t-cycles; for the
             // taken-only thenBB just unconditionally subtract.
@@ -520,6 +524,8 @@ internal static class StackOps
             ctx.Builder.BuildStore(newPc, pcPtr);
             var flagSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
             ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), flagSlot);
+            // Phase 30.18u — same compile-time hint as BranchCc/CallCc.
+            ctx.PcWriteEmittedInCurrentInstruction = true;
             // Phase 7 GB block-JIT P0.7b — RET cc = 2m_or_5m → taken adds
             // 12 t-cycles. Same pattern as call_cc thenBB.
             if (ctx.CurrentInstructionBaseAddress is not null

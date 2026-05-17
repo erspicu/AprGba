@@ -592,9 +592,14 @@ public sealed unsafe class JsonCpu : ICpuBackend
         // Phase 30.18r — dump LLVM IR for blocks matching APR_GB_IR_DUMP=ADDR
         // (hex, within ±0x40 bytes). Used to inspect a specific block's IR
         // when bug-hunting (e.g. iter 79 seed 74172009 at PC=0x0150).
-        if (Environment.GetEnvironmentVariable("APR_GB_IR_DUMP") is string irAddr
-            && int.TryParse(irAddr, System.Globalization.NumberStyles.HexNumber, null, out var irA)
-            && System.Math.Abs((long)pc - irA) <= 0x40)
+        // 30.18t — also accept APR_GB_IR_DUMP=ALL to dump every block.
+        var irEnv = Environment.GetEnvironmentVariable("APR_GB_IR_DUMP");
+        bool wantDump = false;
+        if (irEnv == "ALL") wantDump = true;
+        else if (irEnv is not null
+            && int.TryParse(irEnv, System.Globalization.NumberStyles.HexNumber, null, out var irA)
+            && System.Math.Abs((long)pc - irA) <= 0x40) wantDump = true;
+        if (wantDump)
         {
             try
             {
