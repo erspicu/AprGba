@@ -65,9 +65,41 @@ known semantic gap, not an emitter bug.
 
 ## Open follow-ups (tracked in task list)
 
-- **#339** Bisect remaining GB fuzzer divergences (RST/CALL/etc).
-- **#340** GBA STMDB R15-pipeline bug (BlockTransferEmitters uses `PipelinePcConstant`; bug is subtler — possibly cross-jump-followed block PC drift).
-- **#342** x86 mid-block undecodable BlockDetector edge case.
+After Phase 30.18j (length-table 0x08 fix) + 30.18k (LDI/LDD reorder
+fix), the GB fuzzer divergence rate dropped from 15 → 2 in 100 iter
+× 50 blocks/iter (seed=42). The two remaining have a different
+shape — both involve unconditional control transfers:
+
+- **#339 (GB JP/RST)** — When the LAST instruction in a block is JP nn
+  (0xC3) or RST $tt (0xC7/CF/D7/DF/E7/EF/F7/FF), JIT block-JIT runs
+  past the control transfer instead of taking it. INTERP per-instr
+  correctly jumps to the target. Looks like the block-detector +
+  branch/call emitter chain isn't ending the block at the writes_pc=
+  "always" instruction in some path. iter 78 (all 0xFF bytes) shows
+  JIT running 20× RST sequentially while INTERP takes the first one
+  to vector $38; iter 79 (random with JP) shows JIT advancing past
+  JP while INTERP takes JP target. Investigation: BlockDetector
+  line 570 `def.WritesPc == "always"` check looks right; suspect
+  is either `WritesPc` not being populated for selector-based
+  RST/JP entries, or the emitter setting PcWritten=1 but the
+  block IR not branching to blockExit. Reproduce: `apr-gb --fuzz=100
+  --fuzz-blocks=50 --fuzz-seed=42 --fuzz-continue`.
+
+- **#340 (GBA STMDB R15)** — BlockTransferEmitters uses
+  `PipelinePcConstant` for R15 reads (line 350-353); fix is correct
+  in principle. Bug is subtler — possibly cross-jump-followed block
+  PC drift at the STM instruction's bi.Pc.
+
+- **#342 (x86 mid-block undecodable)** — BlockDetector's "include
+  N decoded instructions, end at undecodable" logic still has an
+  edge case for x86 where the operand bytes of a decoded instruction
+  coincide with what looks like a fresh opcode. Symptom: JIT runs
+  zero blocks for the iteration, INTERP runs many.
+
+All three are real emitter / block-detector bugs that the fuzzer
+reliably surfaces. Each is its own focused investigation sprint;
+none unblocks the existing real-ROM verifier workload (cpu_instrs.gb
+278k blocks NoDiff, pcxtbios+FreeDOS 1M blocks NoDiff).
 
 ## CLI surface added
 
