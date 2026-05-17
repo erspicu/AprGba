@@ -498,6 +498,16 @@ public sealed class BlockDetector
                         tail |= (ulong)bus.ReadByte(pc + opcodeBytes + (uint)b) << (b * 8);
                     }
                     packedTail = tail;
+                    // Phase 30.15c-B — log packed-tail for blocks matching
+                    // APR_X86_TRACE_COMPILE=ADDR (±0x40 bytes).
+                    if (Environment.GetEnvironmentVariable("APR_X86_TRACE_COMPILE") is string sa
+                        && int.TryParse(sa, System.Globalization.NumberStyles.HexNumber, null, out var ta)
+                        && System.Math.Abs((long)pc - ta) <= 0x40)
+                    {
+                        Console.Error.WriteLine(
+                            $"  [DETECT] pc=0x{pc:X5} len={thisLength} opcStart={busOpcodeStartedAt} " +
+                            $"trail={trailingCount} packedTail=0x{tail:X16}");
+                    }
                 }
             }
 

@@ -523,12 +523,38 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         ushort ip = ReadU16(_ipOff);
         uint linearPc = (uint)(((cs << 4) + ip) & 0xFFFFF);
 
-        if (!_blockCache!.TryGet(linearPc, out var entry))
+        // Phase 30.15c-B verification — APR_X86_NO_BLOCK_CACHE=1 forces
+        // a fresh compile on EVERY block entry, bypassing the cache. Used
+        // to test the "stale packed-tail / SMC missed invalidation"
+        // hypothesis: if disabling the cache makes a previously-divergent
+        // workload behave correctly under block-JIT, the bug is in cache
+        // invalidation / packed-tail freshness, not in the IR emitter.
+        bool noCache = Environment.GetEnvironmentVariable("APR_X86_NO_BLOCK_CACHE") == "1";
+        // APR_X86_TRACE_COMPILE=ADDR (hex) — log every fresh compile at
+        // or near ADDR (±0x20 bytes). Lets us see when a particular
+        // block was FIRST compiled vs when the divergent execution
+        // ran, to test the "stale packed-tail" hypothesis.
+        int traceAddr = Environment.GetEnvironmentVariable("APR_X86_TRACE_COMPILE") is string sa
+                        && int.TryParse(sa, System.Globalization.NumberStyles.HexNumber, null, out var v)
+                        ? v : -1;
+        CachedBlock entry;
+        if (noCache || !_blockCache!.TryGet(linearPc, out entry))
         {
             try
             {
                 entry = CompileBlockAtLinearPc(linearPc);
-                _blockCache.Add(linearPc, entry);
+                if (!noCache) _blockCache!.Add(linearPc, entry);
+                if (traceAddr >= 0
+                    && Math.Abs((long)linearPc - traceAddr) <= 0x40)
+                {
+                    Console.Error.WriteLine(
+                        $"  [COMPILE] linearPc=0x{linearPc:X5} bytes: " +
+                        $"{_mem.ReadByte((int)linearPc):X2} " +
+                        $"{_mem.ReadByte((int)(linearPc + 1)):X2} " +
+                        $"{_mem.ReadByte((int)(linearPc + 2)):X2} " +
+                        $"{_mem.ReadByte((int)(linearPc + 3)):X2} " +
+                        $"{_mem.ReadByte((int)(linearPc + 4)):X2}");
+                }
             }
             catch (InvalidOperationException)
             {
@@ -583,6 +609,26 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         var mainSetSpec = _spec.InstructionSets["Main"];
         bfb.Build(mainSetSpec, block, generation);
 
+        // Phase 30.15c-B — dump LLVM IR for blocks matching APR_X86_IR_DUMP=ADDR
+        // (within ±0x40 bytes). Used to spot bugs in the emitted IR for a
+        // specific block where lockstep showed divergence.
+        if (Environment.GetEnvironmentVariable("APR_X86_IR_DUMP") is string irAddr
+            && int.TryParse(irAddr, System.Globalization.NumberStyles.HexNumber, null, out var irA)
+            && Math.Abs((long)linearPc - irA) <= 0x40)
+        {
+            try
+            {
+                var irText = module.PrintToString();
+                var path = $"temp/ir-dump-pc{linearPc:X5}-g{generation}.ll";
+                System.IO.Directory.CreateDirectory("temp");
+                System.IO.File.WriteAllText(path, irText);
+                Console.Error.WriteLine($"  [IR-DUMP] linearPc=0x{linearPc:X5} → {path}");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"  [IR-DUMP] failed: {ex.Message}");
+            }
+        }
         _rt.AddModule(module);
         var fnName = BlockFunctionBuilder.BlockFunctionName("Main", linearPc, generation);
         var fnPtr = _rt.GetFunctionPointer(fnName);

@@ -353,6 +353,15 @@ public static class X86_16Emitters
             var shifted = ctx.Builder.BuildLShr(tailConst,
                 LLVMValueRef.CreateConstInt(i64, shiftBits, false), $"{label}_tail_shr");
             b = ctx.Builder.BuildTrunc(shifted, i8, $"{label}_imm");
+            if (System.Environment.GetEnvironmentVariable("APR_X86_TRACE_FETCHIMM8") == "1")
+            {
+                System.Console.Error.WriteLine(
+                    $"  [FETCHIMM8 packed] label={label} pc=0x{ctx.CurrentInstructionBaseAddress:X5} " +
+                    $"tail=0x{tail:X16} offset={offset} shift={shiftBits} " +
+                    $"ImmConsumed_now={ctx.CurrentInstructionImmConsumed} " +
+                    $"len={ctx.CurrentInstructionLengthBytes} trailing={trailingTotal} " +
+                    $"expected=0x{((tail >> (int)shiftBits) & 0xFF):X2}");
+            }
         }
         else
         {
@@ -362,6 +371,12 @@ public static class X86_16Emitters
             // automatically inside SegmentedLinear.
             var lin32 = SegmentedLinear(ctx, "CS", ip16, $"{label}_lin");
             b = MemoryEmitters.CallRead8(ctx, lin32, label);
+            if (System.Environment.GetEnvironmentVariable("APR_X86_TRACE_FETCHIMM8") == "1")
+            {
+                System.Console.Error.WriteLine(
+                    $"  [FETCHIMM8 slow] label={label} hasPackedTail={ctx.CurrentInstructionPackedTailBytes is not null} " +
+                    $"ImmConsumed={ctx.CurrentInstructionImmConsumed} trailingTotal={trailingTotal}");
+            }
         }
 
         // IP wraps within 16 bits — silicon does not propagate carry into CS.
