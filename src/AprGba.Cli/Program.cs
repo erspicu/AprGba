@@ -37,6 +37,12 @@ if (opts.VerifyBlocks > 0 && opts.RomPath is not null)
     return AprGba.Cli.Validation.GbaVerifyBlocks.Run(opts.RomPath, opts.BiosPath, opts.VerifyBlocks);
 }
 
+// Phase 30.18c — GBA differential fuzzer.
+if (opts.FuzzIterations > 0)
+{
+    return AprGba.Cli.Validation.GbaFuzzer.Run(opts.FuzzIterations, opts.FuzzBlocksPerIter, opts.FuzzSeed);
+}
+
 Console.WriteLine("apr-gba — GBA harness (json-llvm CPU + headless screenshot)");
 Console.WriteLine($"  ROM:        {opts.RomPath}");
 Console.WriteLine($"  BIOS:       {opts.BiosPath ?? "(none — using minimal vector stubs)"}");
@@ -384,9 +390,14 @@ static Options? ParseArgs(string[] args)
         else if (arg == "--no-bg")                opts.DisableBg  = true;
         else if (arg.StartsWith("--only-obj="))   opts.OnlyObjIndex = int.Parse(arg.Substring("--only-obj=".Length));
         else if (arg.StartsWith("--verify-blocks=")) opts.VerifyBlocks = long.Parse(arg.Substring("--verify-blocks=".Length));
+        else if (arg.StartsWith("--fuzz="))           opts.FuzzIterations = int.Parse(arg.Substring("--fuzz=".Length));
+        else if (arg.StartsWith("--fuzz-blocks="))    opts.FuzzBlocksPerIter = int.Parse(arg.Substring("--fuzz-blocks=".Length));
+        else if (arg.StartsWith("--fuzz-seed="))      opts.FuzzSeed = int.Parse(arg.Substring("--fuzz-seed=".Length));
         else if (arg == "--block-jit")            opts.BlockJit = true;
         else                                      return null;
     }
+    // Fuzz mode doesn't need a ROM path (synthesizes one).
+    if (opts.FuzzIterations > 0) return opts;
     return opts.RomPath is null ? null : opts;
 }
 
@@ -433,4 +444,7 @@ internal sealed class Options
     public int      OnlyObjIndex = -1;
     public bool     BlockJit;
     public long     VerifyBlocks;
+    public int      FuzzIterations;
+    public int      FuzzBlocksPerIter = 100;
+    public int?     FuzzSeed;
 }
