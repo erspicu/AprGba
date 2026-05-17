@@ -1,26 +1,26 @@
-# FreeDOS — MDA mode suitability analysis
+# FreeDOS — MDA 模式適用性分析
 
-**Date**: 2026-05-16
-**Question**: 「FreeDOS 設計是否不適合 MDA 模式？」
-**Sources**: github.com/FDOS/kernel + github.com/FDOS/freecom (cloned to `ref/freedos/`)
+**日期**：2026-05-16
+**問題**：「FreeDOS 設計是否不適合 MDA 模式？」
+**Sources**：github.com/FDOS/kernel + github.com/FDOS/freecom（clone 到 `ref/freedos/`）
 
 ## TL;DR
 
-**No — FreeDOS 100% supports MDA**. The "invisible rows" we see on
-`--video=mda` are pcxtbios's INT 10h teletype scroll bug, not FreeDOS.
-Confirmed by source audit of kernel CON driver and FreeCOM output paths.
+**不 — FreeDOS 100% 支援 MDA**。我們在 `--video=mda` 看到的「隱形 row」
+是 pcxtbios INT 10h teletype scroll bug、不是 FreeDOS。透過 source audit
+kernel CON driver 跟 FreeCOM output path 確認。
 
-## Evidence
+## 證據
 
-### 1. FreeDOS kernel never writes video memory directly
+### 1. FreeDOS kernel 從不直接寫 video memory
 
 ```
 $ rg '0xB000|0B000|B000|0xB800|B800' kernel/
-  → only matches: test/ldosboot/multboot.asm, kernel/memdisk.asm
-    (both unrelated to video output)
+  → 只有 match：test/ldosboot/multboot.asm、kernel/memdisk.asm
+    （兩者都跟 video output 無關）
 ```
 
-`kernel/kernel/console.asm` is the entire CON device driver — 它只做：
+`kernel/kernel/console.asm` 是整個 CON device driver — 它只做：
 
 ```asm
 ConWrite:
@@ -33,38 +33,38 @@ ConWr1:
 
 ; _int29_handler:
     mov     ah, 0Eh
-    mov     bx, 7            ; BH=0 (page), BL=7 (graphics attr, ignored in text)
+    mov     bx, 7            ; BH=0 (page), BL=7 (graphics attr, text 下忽略)
     int     10h              ; teletype
 ```
 
-Every character goes through BIOS teletype. No `mov [es:di], ax`,
-no segment 0xB000/0xB800, no scroll/clear shortcut.
+每個 char 都走 BIOS teletype。沒 `mov [es:di], ax`、沒 segment
+0xB000/0xB800、沒 scroll/clear shortcut。
 
-### 2. FreeCOM never writes video memory directly
+### 2. FreeCOM 從不直接寫 video memory
 
 ```
 $ rg '0xB000|MDA|MONO|monochrome' freecom/
-  → zero matches in source code
+  → source code 內零 match
 ```
 
-FreeCOM CVS log:
+FreeCOM CVS log：
 > *Revision 1.7 (2006/06/11): All of FreeCOM now uses `write` instead of
 > `putchar` and `intr` instead of `int86[x]` or `intdos[x]`*
 > *Revision 1.8 (2006/06/12): All CONIO dependencies have now been
 > removed and replaced with size-optimized functions*
 
-FreeCOM output: `outc()` → `write(1, &c, 1)` → INT 21h AH=40h →
-DOS kernel `write_char` → INT 29h → INT 10h AH=0Eh teletype.
+FreeCOM output：`outc()` → `write(1, &c, 1)` → INT 21h AH=40h →
+DOS kernel `write_char` → INT 29h → INT 10h AH=0Eh teletype。
 
-### 3. FreeCOM explicitly initialises attr=0x0700 for text modes
+### 3. FreeCOM 在 text mode 明確 init attr=0x0700
 
-`freecom/cmd/cls.c` 是 source-of-truth on FreeCOM's text-mode awareness:
+`freecom/cmd/cls.c` 是 FreeCOM text-mode awareness 的 source-of-truth：
 
 ```c
 int cmd_cls (char * param) {
     ...
-    if((attr & 0x9f) == 0x93) {                 // stdout is a real console
-        unsigned attr = 0x0700;                 // <<< default light-gray on black
+    if((attr & 0x9f) == 0x93) {                 // stdout 是真 console
+        unsigned attr = 0x0700;                 // <<< 預設 light-gray on black
         IREGS r;
 
         r.r_ax = 0x0f00;                        // get current video mode
@@ -77,49 +77,48 @@ int cmd_cls (char * param) {
         case 0x0a: case 0x0b: case 0x0d:
         case 0x0e: case 0x0f: case 0x10:
         case 0x11: case 0x12: case 0x13: case 0x59:
-            attr = 0;                           // graphics modes use 0
+            attr = 0;                           // graphics mode 用 0
             break;
-        default:                                // <<< text modes (0,1,2,3,7) keep 0x0700
+        default:                                // <<< text mode (0,1,2,3,7) 保持 0x0700
             ;
         }
 
-        r.r_ax = 0x0600;                        // scroll up, full screen
-        r.r_bx = attr;                          // BX=0x0700 in MDA
+        r.r_ax = 0x0600;                        // scroll up、整螢幕
+        r.r_bx = attr;                          // MDA 下 BX=0x0700
         intrpt(0x10, &r);
     }
 }
 ```
 
-If FreeDOS were "broken for MDA", this is exactly where it would
-break — and it doesn't. Mode 7 falls into `default`, keeps `attr=0x0700`,
-passes it to BIOS via BX.
+如果 FreeDOS 真的「對 MDA broken」、這正是該 break 的地方 — 但它沒。
+Mode 7 fall into `default`、保持 `attr=0x0700`、透過 BX 給 BIOS。
 
-### 4. No MDA-specific code path anywhere
+### 4. 任何地方都沒 MDA-specific code path
 
-Zero hits for `MDA`, `MONO`, `MONOCHROME`, `0xB000`, segment `B000:`
-in both kernel and freecom. FreeDOS treats all text modes uniformly —
-it just hands the work to BIOS INT 10h with the right register state.
+kernel 跟 freecom 兩邊 `MDA`、`MONO`、`MONOCHROME`、`0xB000`、segment
+`B000:` 零 hit。FreeDOS 對所有 text mode 一致 — 就把工作交給 BIOS INT
+10h 帶對的 register state。
 
-## Root cause re-confirmed: pcxtbios INT 10h Function 14 (teletype)
+## Root cause 重新確認：pcxtbios INT 10h Function 14 (teletype)
 
-`ref/pcxtbios/pcxtbios.asm` line 4129-4153:
+`ref/pcxtbios/pcxtbios.asm` line 4129-4153：
 
 ```asm
 @@line_feed:
-    cmp     dh, 18h                ; bottom of page?
+    cmp     dh, 18h                ; 頁底?
     jz      @@scroll
     inc     dh
     jnz     @@position
 
 @@scroll:
-    mov     ah, 2                  ; position cursor at row 0
+    mov     ah, 2                  ; 把 cursor 放 row 0
     int     10h
-    call    mode_check             ; CF=0 if text, CF=1 if graphics
-    mov     bh, 0                  ; default BH for graphics
-    jb      @@scroll_up            ; jb (=JC): if graphics, skip
-    ; Text-mode path (MDA falls through here):
+    call    mode_check             ; CF=0 if text、CF=1 if graphics
+    mov     bh, 0                  ; graphics 預設 BH
+    jb      @@scroll_up            ; jb (=JC)：graphics 就 skip
+    ; Text-mode path（MDA fall through 這裡）：
     mov     ah, 8
-    int     10h                    ; read char+attr at cursor
+    int     10h                    ; 在 cursor 讀 char+attr
     mov     bh, ah                 ; <<< BH = read-back attribute
 
 @@scroll_up:
@@ -129,43 +128,43 @@ it just hands the work to BIOS INT 10h with the right register state.
     mov     dh, 18h
     mov     dl, [ds:4Ah]
     dec     dl
-    int     10h                    ; <<< scroll fill uses BH from above
+    int     10h                    ; <<< scroll fill 用上面的 BH
     ret
 ```
 
-The vicious cycle:
-1. Previous scroll filled new bottom row with attr=BH.
-2. teletype overflows again → reads attr at cursor → returns previous BH.
-3. If previous BH was 0 (e.g. on first overflow when cell hasn't been
-   touched yet), all subsequent scrolls inherit attr=0.
-4. New bottom row is "black on black" = invisible.
+惡性循環：
+1. 上次 scroll 用 attr=BH 填新 bottom row。
+2. teletype 又 overflow → 在 cursor 讀 attr → 回上次的 BH。
+3. 如果上次 BH 是 0（例如第一次 overflow 時 cell 還沒被 touch 過）、
+   後續 scroll 全部繼承 attr=0。
+4. 新 bottom row 是「black on black」= 隱形。
 
-### Our fixes (Phase 30.10)
+### 我們的修法（Phase 30.10）
 
-Two-layer defence, both active when `--bios=pcxtbios.bin`:
+`--bios=pcxtbios.bin` 時 active 的雙層防禦：
 
-| Layer | Implementation | What it catches |
+| Layer | 實作 | 抓什麼 |
 |---|---|---|
-| Binary patch | `PcMemoryBus.ApplyPcxtbiosScrollFix` rewrites `8A FC` (mov bh, ah) at line 4143 → `B7 07` (mov bh, 0x07). Checksum filler at last byte compensated. | Text-mode scroll always uses BH=0x07. |
-| Runtime intercept | `PcSystemRunner` peeks each instruction; if next is `CD 10` AND AH=06 AND BH=0 AND mode∈{0,1,2,3,7} → force BH=0x07. | Any other caller (e.g. FreeCOM CLS bug or third-party) that passes BH=0 to scroll up. |
+| Binary patch | `PcMemoryBus.ApplyPcxtbiosScrollFix` 把 line 4143 的 `8A FC` (mov bh, ah) 重寫 → `B7 07` (mov bh, 0x07)。Checksum filler 在最後 byte 補。 | Text-mode scroll 永遠用 BH=0x07。 |
+| Runtime intercept | `PcSystemRunner` 每個 instruction peek；如果下個是 `CD 10` AND AH=06 AND BH=0 AND mode∈{0,1,2,3,7} → 強迫 BH=0x07。 | 任何其他 caller（例如 FreeCOM CLS bug 或 third-party）對 scroll up 傳 BH=0。 |
 
-## Conclusion for Phase 30 plan
+## Phase 30 plan 的結論
 
-### Phase 30.10 patch + intercept actually work (verified 2026-05-16)
+### Phase 30.10 patch + intercept 真的 work（2026-05-16 驗證）
 
-Auto-test run (`--auto-test=freedos-mda-dir`, full kernel boot + N at
-the install prompt + `dir`) recorded 31 887 trace lines; key counters:
+Auto-test 跑（`--auto-test=freedos-mda-dir`、kernel 完整 boot + install
+prompt 按 N + `dir`）紀錄了 31 887 trace line；關鍵 counter：
 
-| Event | Count | Notes |
+| Event | Count | Note |
 |---|---|---|
-| `[BIOS] pcxtbios teletype-scroll patch ... 8A FC -> B7 07` | 1 (at boot) | Patch applied. |
-| INT 10h AH=06 (scroll up) total | 20 | All have `BH ∈ {0x07, 0x70, 0x70xx}` (= normal or reverse video). |
-| INT 10h AH=06 with `BH=0x00` | **0** | Intercept never had to fire — patch caught everything. |
-| INT 10h AH=06 from `F000:F6CE` (= patched teletype scroll) during `dir` | 2 | Both pass `BX=0x0700` (BH=0x07) thanks to the patch. |
-| AH=09 (write char+attr) during dir output (16:01) | 0 | dir output goes through teletype (AH=0E → AH=0A path), not AH=09. |
+| `[BIOS] pcxtbios teletype-scroll patch ... 8A FC -> B7 07` | 1（boot 時） | Patch apply。 |
+| INT 10h AH=06（scroll up）總共 | 20 | 全部 `BH ∈ {0x07, 0x70, 0x70xx}`（= 正常或反白）。 |
+| INT 10h AH=06 with `BH=0x00` | **0** | Intercept 從沒 fire — patch 抓住一切。 |
+| `dir` 期間從 `F000:F6CE`（= patched teletype scroll）來的 INT 10h AH=06 | 2 | 拜 patch 之賜，兩個都過 `BX=0x0700`（BH=0x07）。 |
+| Dir output 期間 AH=09（write char+attr）(16:01) | 0 | Dir output 走 teletype（AH=0E → AH=0A path）、不是 AH=09。 |
 
-`AutoTester FINAL SCREEN` snapshot at end of run captured the *entire*
-dir listing fully visible — no invisible rows, no missing lines:
+跑完時 `AutoTester FINAL SCREEN` snapshot 抓到 *整個* dir listing 完全
+可見 — 無隱形 row、無漏行：
 
 ```
 | A:\>dir
@@ -182,11 +181,11 @@ dir listing fully visible — no invisible rows, no missing lines:
 | A:\>
 ```
 
-### Remaining "invisible" artefact is the FreeDOS installer welcome dialog (not dir)
+### 剩下的「隱形」artifact 是 FreeDOS installer welcome 對話（不是 dir）
 
-Earlier observations of invisible content on MDA were almost certainly
-the **FreeDOS 1.3 install welcome screen**, drawn by `SETUP.BAT` /
-WELCOME via INT 10h AH=09 with attribute values that are **CGA-only**:
+早期在 MDA 看到的隱形內容 observation 幾乎肯定是 **FreeDOS 1.3 install
+welcome screen**、由 `SETUP.BAT` / WELCOME 透過 INT 10h AH=09 帶
+**CGA-only** attribute 值畫：
 
 ```
 15:59:45.500  INT_10h caller=222D:0136 AX=0x0920 BX=0x0010 ... DX=0x0307
@@ -195,102 +194,90 @@ WELCOME via INT 10h AH=09 with attribute values that are **CGA-only**:
                                                 BH=0 page, BL=attr
 ```
 
-- `BL=0x10` → fg=0, bg=1, intensity=0
-- `BL=0x12` → fg=2, bg=1, intensity=0
+- `BL=0x10` → fg=0、bg=1、intensity=0
+- `BL=0x12` → fg=2、bg=1、intensity=0
 
-On CGA, `bg=1` = blue background (the installer is drawing a coloured
-title bar). On real MDA, **`bg=1` is undefined** — only `bg=0` and
-`bg=7` are valid. Real IBM 5151 hardware would render this as garbage
-or as the nearest valid combination depending on revision.
+在 CGA、`bg=1` = blue background（installer 在畫 coloured title bar）。
+真 MDA 上、**`bg=1` 未定義** — 只 `bg=0` 跟 `bg=7` 有效。真 IBM 5151
+硬體會 render 成 garbage 或最近的有效組合，視 revision。
 
-`X86CgaRenderer.MdaDecodeAttr` (`src/AprX86.Cli/Video/X86CgaRenderer.cs:160`)
-defensively returns **black-on-black** for invalid `(fg, bg)` pairs.
-That is faithful to one plausible real-hardware behaviour but causes
-the installer's coloured banner to disappear in MDA.
+`X86CgaRenderer.MdaDecodeAttr`（`src/AprX86.Cli/Video/X86CgaRenderer.cs:160`）
+防禦性對無效 `(fg, bg)` pair 回 **black-on-black**。這對某個合理的真硬體
+行為忠實、但讓 installer coloured banner 在 MDA 消失。
 
-This is **a FreeDOS installer choice, not a kernel bug, not a BIOS
-bug, not an AprPc bug**:
-- The FreeDOS *kernel + FreeCOM* output (every `printf`, `dir`,
-  `prompt`) works because it goes through INT 10h AH=0E teletype
-  which preserves cell attribute = 0x07 (set by `clear_screen` at
-  boot via `mov ax, 7*100h+' ' ; rep stosw` in `int_10_func_0`).
-- The *installer* uses AH=09 with hard-coded colour attributes
-  designed for CGA/EGA. On MDA those attribute values are out of spec.
+這是 **FreeDOS installer 的選擇、不是 kernel bug、不是 BIOS bug、不是
+AprPc bug**：
+- FreeDOS *kernel + FreeCOM* output（每個 `printf`、`dir`、`prompt`）work
+  因為走 INT 10h AH=0E teletype、保留 cell attribute = 0x07（boot 時
+  `int_10_func_0` 透過 `mov ax, 7*100h+' ' ; rep stosw` 由 `clear_screen` set）。
+- *Installer* 用 AH=09 帶為 CGA/EGA 設計的硬寫死 colour attribute。
+  在 MDA 那些 attribute 值 out of spec。
 
-### Renderer fix landed (2026-05-16)
+### Renderer 修法 land（2026-05-16）
 
-After attr-histogram instrumentation of the auto-test framebuffer, the
-final culprit emerged: **rows 15-22 had attr literally = `0x00`** (not
-`0x10` like the installer-welcome cells). That is, *no INT 10h handler
-ever set those cells' attribute byte to a valid value, yet they hold
-printable characters*. Most likely cause: a mix of installer cleanup
-direct-VRAM writes (filling with attr=0) followed by `AH=0A` write-char-
-only calls from FreeCOM (which advance over the attribute byte without
-touching it). Real IBM 5151 hardware would render those cells as
-"display off" — but practically the user wants to see them.
+對 auto-test framebuffer 做 attr-histogram instrumentation 之後、
+最終兇手浮現：**row 15-22 的 attr 字面上 = `0x00`**（不像 installer-welcome
+cell 那樣的 `0x10`）。就是說、*沒 INT 10h handler 把那些 cell 的 attribute
+byte set 成有效值、但它們裝可印字元*。最可能原因：installer cleanup 直寫
+VRAM（用 attr=0 填）後接著 FreeCOM 的 `AH=0A` write-char-only call
+（advance 過 attribute byte 但不碰）混合的結果。真 IBM 5151 硬體會把那些
+cell render 成「display off」— 但實際上 user 想看到它們。
 
-`MdaDecodeAttr` (`src/AprX86.Cli/Video/X86CgaRenderer.cs:160`) now
-implements two layers:
+`MdaDecodeAttr`（`src/AprX86.Cli/Video/X86CgaRenderer.cs:160`）現在實作
+雙層：
 
 | Rule | Behaviour |
 |---|---|
-| `(attr & 0x70) != 0` (any bg bit set) | reverse video — handles installer's `0x10` / `0x12` "blue bg" attrs that aren't valid MDA but visibly are on real clones |
-| `(attr & 0x07) != 0` and not the above | normal text (dim green on black); intensity bit `0x08` brightens |
-| `attr == 0x00` **and char is printable (0x20–0x7E)** | normal text — defensive heuristic for "FreeDOS forgot to set attr" cells |
-| `attr == 0x00` and char is blank/null | true display off (preserves boot screen blank cells) |
+| `(attr & 0x70) != 0`（任何 bg bit set） | 反白 — handle installer 的 `0x10` / `0x12` 「blue bg」attr，不是有效 MDA 但在真 clone 上看得到 |
+| `(attr & 0x07) != 0` 且非上述 | 正常 text（暗綠 on 黑）；intensity bit `0x08` 變亮 |
+| `attr == 0x00` **且 char 可印 (0x20–0x7E)** | 正常 text — 防禦 heuristic for「FreeDOS 忘記 set attr」cell |
+| `attr == 0x00` 且 char 是空白/null | 真 display off（保留 boot screen 空白 cell） |
 
-Visual verification: `result/pc/auto-test-20260516-162448.png` —
-full FreeDOS 1.3 boot + install-abort + `dir` listing, every line
-visible including the file table that was invisible before the fix.
+視覺驗證：`result/pc/auto-test-20260516-162448.png` — 完整 FreeDOS 1.3
+boot + install-abort + `dir` listing，每行可見、含修前隱形的 file table。
 
-### Recommendations (updated)
+### 建議（更新）
 
-1. ✅ pcxtbios scroll patch + runtime intercept work as designed.
-2. ✅ `MdaDecodeAttr` heuristic restores FreeDOS dir output on MDA.
-3. ✅ `--video=mda` now usable end-to-end with `pcxtbios.bin +
-   freedos-1.3-floppy.img`. CGA still recommended for installer
-   welcome banner (its CGA color attrs render more faithfully on CGA).
-4. Trade-off note: the heuristic deviates slightly from strict IBM 5151
-   hardware (which would leave attr=0 cells truly invisible even with
-   chars present). Documented as a deliberate forgiveness rule for
-   "FreeDOS-era software written for color but running on MDA".
+1. ✅ pcxtbios scroll patch + runtime intercept 如設計 work。
+2. ✅ `MdaDecodeAttr` heuristic 還原 FreeDOS dir output on MDA。
+3. ✅ `--video=mda` 現在跟 `pcxtbios.bin + freedos-1.3-floppy.img` 端到端可用。
+   Installer welcome banner 仍建議 CGA（它的 CGA color attr 在 CGA render 更忠實）。
+4. Trade-off note：heuristic 跟嚴格 IBM 5151 硬體有小偏離（真硬體即使有
+   char、attr=0 cell 也會真的隱形）。文件化為對「為 color 寫但跑在 MDA 的
+   FreeDOS 時代軟體」刻意的寬容 rule。
 
-### Postscript (2026-05-16): VBIOS-driven mode 3 is the cleanest answer
+### 後記（2026-05-16）：VBIOS-driven mode 3 是最乾淨的答案
 
-Phase 30.12 (videorom.bin Option ROM loader) — adding
-`--video-bios=BIOS/firmware/videorom.bin` (Tseng Labs ET4000 32 KB VGA
-BIOS, 1992) — turned out to be a much simpler fix for the whole class
-of "FreeDOS-on-MDA" rendering issues than chasing each individual
-attr quirk:
+Phase 30.12（videorom.bin Option ROM loader）— 加
+`--video-bios=BIOS/firmware/videorom.bin`（Tseng Labs ET4000 32 KB VGA
+BIOS、1992）— 結果是比追每個 attr quirk 簡單很多的「FreeDOS-on-MDA」
+render issue 全類別 fix：
 
-1. pcxtbios POST scans 0xC0000-0xFE000 for `0x55 0xAA` and FAR-CALLs
-   offset 3. Loading the Tseng VBIOS at 0xC0000 made this run
-   automatically — `caller=C000` shows up 157 times in the INT 10h
-   trace from a single boot.
-2. The VBIOS init forced the active video mode to **3** (CGA 80x25
-   colour text at 0xB8000) instead of 7 (MDA at 0xB0000). All
-   subsequent FreeDOS output goes through the proper 16-colour CGA
-   attribute path, which our renderer already handles correctly via
-   the standard CGA palette.
-3. Visual result: `result/pc/auto-test-20260516-164332.png` — full
-   FreeDOS installer in colour ("FreeDOS" green, "overwrite" red,
-   "stop NOW!" red, "[Y,N]" green), `dir` listing fully visible, and
-   the ASCII-art banner shows the original blue/green CGA design.
+1. pcxtbios POST 掃 0xC0000-0xFE000 找 `0x55 0xAA` 並 FAR-CALL offset 3。
+   把 Tseng VBIOS load 在 0xC0000 讓這個自動跑 — `caller=C000` 在
+   單次 boot 的 INT 10h trace 出現 157 次。
+2. VBIOS init 強迫 active video mode = **3**（CGA 80x25 colour text 在 0xB8000）
+   而不是 7（MDA 在 0xB0000）。之後所有 FreeDOS output 走正確的 16-colour
+   CGA attribute path，我們的 renderer 已經透過標準 CGA palette 正確 handle。
+3. 視覺結果：`result/pc/auto-test-20260516-164332.png` — colour 的完整
+   FreeDOS installer（「FreeDOS」綠、「overwrite」紅、「stop NOW!」紅、
+   「[Y,N]」綠）、`dir` listing 完整可見、ASCII-art banner 顯示原始的
+   blue/green CGA 設計。
 
-This means MDA-mode work (the `--video=mda` path) is now optional /
-historical; the recommended setup is:
+這意味著 MDA-mode 工作（`--video=mda` path）現在 optional / 歷史；
+建議設置是：
 ```
 --bios=BIOS/firmware/pcxtbios.bin
 --video-bios=BIOS/firmware/videorom.bin
 --floppy-a=BIOS/freedos-1.3-floppy.img
 ```
-The MDA fixes still ship and are still correct for the `pcxtbios.bin`-
-only path, but they are not the user-facing recommendation any more.
+MDA fix 還是出貨、對 `pcxtbios.bin`-only path 還是對的，但不再是
+user-facing 建議。
 
-## References
+## 參考
 
 - `ref/freedos/kernel/kernel/console.asm` — CON device driver
-- `ref/freedos/freecom/cmd/cls.c` — FreeCOM CLS (attr=0x0700 proof)
+- `ref/freedos/freecom/cmd/cls.c` — FreeCOM CLS（attr=0x0700 proof）
 - `ref/pcxtbios/pcxtbios.asm` line 4081-4192 — teletype + mode_check
 - `MD/ref/pcxtbios-device-spec.md` — device handbook digest
 - `src/AprPc.Cli/Memory/PcMemoryBus.cs:184` — binary patch
