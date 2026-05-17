@@ -1,0 +1,158 @@
+Timestamp: 2026-05-17T18:50:47
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Continued investigation of bug #339 (GB block-JIT vs INTERP divergence).
+
+GOOD NEWS: The OTHER divergence (iter 79 at $0150 ending in JP $DBC9 after EI) is now FIXED — found via LLVM IR dump that SyncEmitter (from EI's deferred body) was overwriting JP's branch target with bi.Pc+length=$015D. Fixed by skipping the PC overwrite when ctx.PcWriteEmittedInCurrentInstruction is true. Also made Branch/Call/Ret emitters use WriteReg.MarkPcWritten to set that flag properly.
+
+REMAINING DIVERGENCE: iter 78/seed 1404761655 at PC=$4DF5. After all fixes so far, this still reproduces.
+
+THE BLOCK (18 instructions from IR dump):
+  pc      byte(s)  mnemonic              writes_pc
+  $4DF5: 85       ADD A,L                -
+  $4DF6: 6F       LD L,A                 -
+  $4DF7: 83       ADD A,E                -
+  $4DF8: FE 52    CP A,$52               -
+  $4DFA: 56       LD D,(HL)              -
+  $4DFB: 5C       LD E,H                 -
+  $4DFC: 38 92    JR C, e8=-110          conditional
+  $4DFE: 97       SUB A,A                -
+  $4DFF: 88       ADC A,B                -
+  $4E00: 54       LD D,H                 -
+  $4E01: 7C       LD A,H                 -
+  $4E02: F5       PUSH AF                -
+  $4E03: C5       PUSH BC                -
+  $4E04: 41       LD B,C                 -
+  $4E05: 77       LD (HL),A              -
+  $4E06: 7C       LD A,H                 -
+  $4E07: D5       PUSH DE                -
+  $4E08: 55       LD D,L                 -
+
+None are writes_pc=always. The only branch is JR C at $4DFC (conditional).
+
+PRE STATE:
+  PC=$4DF5 A=$4F F=$00 BC=$0013 DE=$00D8 HL=$014D SP=$FFFD
+
+POST JIT (block-JIT):
+  PC=$4E09 A=$4D F=$80 BC=$1313 DE=$9C4D HL=$4D9C SP=$FFF7
+  (= $4DF5 + 20 bytes = block end. Linear execution, no branch taken.)
+
+POST INTERP (per-instr StepOnePerInstr × 18):
+  PC=$003A A=$60 F=$20 BC=$1313 DE=$4D4D HL=$4D9C SP=$FFF7
+  (PC landed at $003A — INTERP took some control transfer.)
+
+ANALYSIS:
+By hand-tracing the F-flag through the first 6 ALU instructions:
+- ADD A,L: A=$4F+$4D=$9C, F = h=1 (low nibble $F+$D=$1C), c=0 → F=$20
+- LD L,A: F unchanged ($20). L=$9C now.
+- ADD A,E: A=$9C+$D8=$174, F = h=1 ($C+$8=$14), c=1 → F=$30
+- CP A,$52: A-imm = $74-$52=$22. F = z=0, n=1, h=0 ($4 vs $2), c=0 → F=$40
+- LD D,(HL): F unchanged ($40). D = mem[$014D].
+- LD E,H: F unchanged ($40). E = $01.
+- JR C, e8=-110 at $4DFC: cond is C bit. C=0 in F=$40. Branch NOT taken.
+
+So JR C should not fire — both JIT and INTERP should advance linearly through the 18 instructions to $4E09. But INTERP ends at $003A.
+
+Both backends have the same registers AFTER the block in BC/HL/SP. They differ in A (JIT $4D vs INTERP $60), F (JIT $80 vs INTERP $20), D (JIT $9C vs INTERP $4D), and PC ($4E09 vs $003A).
+
+JIT's A=$4D = block-start L value (suspicious — looks like A re-loaded with stale L).
+INTERP's D=$4D = block-start L value (suspicious — looks like D re-loaded with stale L value too).
+
+JR cc IR emitted by block-JIT (verified via LLVM IR dump for this exact block):
+```
+i6_exec:
+  %c_load = load i8, ptr %f_local, align 1
+  %c_shr = lshr i8 %c_load, 4
+  %c_bit = and i8 %c_shr, 1
+  %cond_c = icmp eq i8 %c_bit, 1
+  %branch_cc_chosen = select i1 %cond_c, i16 19856, i16 19966
+  store i16 %branch_cc_chosen, ptr %pc_local
+  ; 19856 = $4D90 (taken target = $4DFE + -110)
+  ; 19966 = $4DFE (not-taken next-instr PC)
+  pc_w_new = select cond_c, 1, oldFlag
+  ...
+```
+F is read from alloca shadow (f_local), so should be fresh.
+
+KEY QUESTIONS:
+
+(1) Why would INTERP-per-instr land at PC=$003A from this straight-line block? There's no instruction here that directly transfers control to $003A. Could the verifier framework be running INTERP differently than block-JIT? Specifically:
+    - JIT runs ONE block (RunCycles) which includes CheckInterrupts at end
+    - INTERP runs N×StepOnePerInstr — does NOT call CheckInterrupts between instructions
+
+(2) Could the "INTERP at $003A" mean the verifier ran INTERP N=18 times but one of the instructions has a SIDE EFFECT that causes PC to change unexpectedly? PUSH AF/BC/DE only modify SP+memory. LD (HL),A only modifies memory at $014D.
+
+(3) Is there ANY LR35902 instruction in this list that could legally end with PC=$003A from PRE state PC=$4DF5? I can't think of one.
+
+(4) Could there be a register-counting mismatch — INTERP runs MORE than 18 because of some bookkeeping issue? blockInstrCount comes from JIT's LastBlockInstructionCount which is the LastInstrIndex slot written per instruction. If JIT exited early (via a budget exit or branch), JIT would report < 18 but verifier would loop only N times.
+
+(5) The JIT POST shows A=$4D F=$80. F=$80 = Z=1 only. What instruction ends with F=$80 (Z=1, no other flags)? XOR A,A produces F=$80 with A=$00 (not $4D). AND with result 0 produces F=$A0 (H=1).
+
+(6) POP AF reads A and F from stack. If SP got corrupted such that POP AF read $4D for A and $80 for F, that'd match. But this block doesn't have POP AF. Unless one of the PUSH operations advanced SP past the block, and a SUBSEQUENT instruction (in iter 78 block #4) does POP AF.
+
+CONCRETE NEXT STEP IDEAS:
+- (A) Add per-instr trace buffer (write A/F/BC/DE/HL/SP after each StepOne to a ring) so the divergent instruction is identifiable
+- (B) Make verifier ALSO call CheckInterrupts after INTERP's N steps to match JIT semantics (currently INTERP skips this)
+- (C) Verify blockInstrCount matches what the BlockDetector reports for this specific block (it should — both = 18)
+- (D) Check if PUSH instructions are somehow over-writing stack into a region that contains PC value
+
+Which of these (A-D) do you think is most likely to find the bug? Or do you have a different hypothesis?
+
+========================================================================
+RESPONSE
+========================================================================
+This is a fantastic divergence to debug. The clues you provided point to an incredibly subtle and beautiful cascade of failures. 
+
+**Both the JIT and INTERP actually share a critical bug**, but this bug triggers a **Memory Bank Switch**, which causes the two execution backends to diverge!
+
+Here is the exact breakdown of what is happening.
+
+### 1. The Root Bug: 8-bit Register Setters (Low Bytes)
+Look closely at the `HL` and `DE` registers in your post-states. 
+You noted that A and D were loaded with `$4D`, which looks suspiciously like the block-start `L` value. You are exactly right, but it's not just a stale read. 
+
+Your `WriteReg8` logic for the **low half** of 16-bit registers (L, E, C, F) has a bitwise shift bug. It is likely doing this:
+```csharp
+// BUGGY Low-byte setter
+HL = (ushort)((HL << 8) | new_L);
+```
+When it should be doing this:
+```csharp
+// CORRECT Low-byte setter
+HL = (ushort)((HL & 0xFF00) | new_L);
+```
+Because of `(HL << 8)`, **the old Low byte is shifted into the High byte**, overwriting it! 
+
+Let's trace what this did to your block:
+* **Pre-state:** `HL = $014D` (H=`$01`, L=`$4D`)
+* **Step 1 (`ADD A,L`):** `$4F + $4D` -> `A=$9C`.
+* **Step 2 (`LD L,A`):** You write `$9C` to L. Due to the bug, `HL = (0x014D << 8) | 0x9C`. `HL` becomes **`$4D9C`**! (`H` is now overwritten with the old `L` value, `$4D`).
+
+This buggy `HL=$4D9C` propagates through the rest of the block:
+* **Step 6 (`LD E,H`):** Reads H (`$4D`). E becomes `$4D`.
+* **Step 10 (`LD D,H`):** Reads H (`$4D`). D becomes `$4D`. (Notice that INTERP's DE is exactly `$4D4D`!).
+* **Step 16 (`LD A,H`):** Reads H (`$4D`). A becomes `$4D`.
+
+### 2. The Bank Switch
+At **Step 15 (`LD (HL),A`)**, the CPU writes the value of A (`$4D`) to the address in `HL`. 
+Because `HL` was corrupted, it doesn't write to RAM at `$019C`. Instead, it writes to **`$4D9C`**.
+
+Address `$4D9C` falls squarely into the MBC ROM area (`$4000-$5FFF`). Writing to this address triggers a **Memory Bank Controller (MBC)** register write (likely switching the active ROM bank!).
+
+### 3. The Divergence
+When the bank switches mid-block, the memory backing `$4000-$7FFF` instantly changes. 
+* **The JIT Backend:** Already translated the whole 18-instruction block reading the *old* memory. It doesn't know the bank switched. It happily natively executes the old Steps 16, 17, and 18 (ending with `LD D,L` which gives JIT its final `DE=$9C4D`), and linearly lands at `PC=$4E09`.
+* **The INTERP Backend:** Fetches dynamically. At Step 16, it fetches instructions from the **NEW ROM bank**. Whatever random bytes are in the newly swapped bank at `$4E06`, `$4E07`, and `$4E08` are executed! 
+   * As a fun theory, the new ROM bank probably happened to have an `ADD A, C` instruction (which mathematically yields exactly `A=$60`, `F=$20` based on `A=$4D` + `C=$13`) followed by a jump or RST instruction that threw INTERP to `PC=$003A`.
+
+### To Answer Your Key Questions:
+1. **Why INTERP landed at $003A:** The bank switch replaced the underlying memory. INTERP dynamically fetched a control-flow instruction (like an `RST` or `JP`) from the new bank that the JIT never saw.
+2. **Side effect from an instruction?** Yes! `LD (HL),A` had the side effect of triggering an MBC Bank Switch, but *only* because `HL` was horribly corrupted by Step 2.
+5. **JIT's F=$80:** Came from Step 8 (`SUB A,A` -> A=0, F=$C0) and Step 9 (`ADC A,B` -> A=0+0, zero flag set -> F=$80). JIT perfectly executed the linear block.
+
+### Concrete Next Steps:
+You don't need (A), (B), (C), or (D) just yet! 
+1. **Fix your 8-bit register setters:** Audit how you write to `C`, `E`, `L`, and `F` in your CPU state representation. Ensure you are masking with `& 0xFF00` instead of shifting `<< 8`. 
+2. *(Future proofing)*: Mid-block bank switches are a notorious edge case in JIT Game Boy emulators. Real games will do this intentionally. If `EmitWriteMem` hits an MBC register and switches the bank, the JIT needs to detect this and early-exit the block to prevent executing stale translated code.
