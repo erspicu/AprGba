@@ -78,6 +78,19 @@ public sealed class GbMemoryBus
     private int _timaAccum;
 
     /// <summary>
+    /// Phase 30.18aa — public accessors for the verifier framework to
+    /// snapshot/restore timer accumulators alongside the byte arrays.
+    /// Without this, JIT and INTERP have independent timer state →
+    /// timer-overflow timing differs → divergent IRQ delivery.
+    /// </summary>
+    public int DivAccumSnapshot { get => _divAccum; set => _divAccum = value; }
+    public int TimaAccumSnapshot { get => _timaAccum; set => _timaAccum = value; }
+    public int RomBankSnapshot { get => _romBank; set => _romBank = value; }
+    public int RamBankSnapshot { get => _ramBank; set => _ramBank = value; }
+    public bool RamEnableSnapshot { get => _ramEnable; set => _ramEnable = value; }
+    public bool ModeRamBankSnapshot { get => _modeRamBank; set => _modeRamBank = value; }
+
+    /// <summary>
     /// Advance hardware timers by <paramref name="tCycles"/> t-cycles.
     /// Called by the CPU after each instruction (and during HALT).
     /// Implements DIV (always-on, 16384 Hz) + TIMA (TAC-gated) per Pan Docs.

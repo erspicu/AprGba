@@ -148,6 +148,15 @@ public sealed class GbSteppableCpu : IBlockBoundedSteppableCpu
             ExtRam = (byte[])_bus.ExtRam.Clone(),
             InterruptEnable = _bus.InterruptEnable,
             InterruptFlag   = _bus.InterruptFlag,
+            // Phase 30.18aa — also snapshot timer accumulators + MBC state.
+            // Without this JIT and INTERP have independent timer state →
+            // timer-overflow timing differs → divergent IRQ delivery.
+            DivAccum     = _bus.DivAccumSnapshot,
+            TimaAccum    = _bus.TimaAccumSnapshot,
+            RomBank      = _bus.RomBankSnapshot,
+            RamBank      = _bus.RamBankSnapshot,
+            RamEnable    = _bus.RamEnableSnapshot,
+            ModeRamBank  = _bus.ModeRamBankSnapshot,
         };
         var cpuBlob = _cpu.SnapshotState();
         var hwBlob  = AdditionalSnapshot?.Invoke();
@@ -166,12 +175,20 @@ public sealed class GbSteppableCpu : IBlockBoundedSteppableCpu
         Array.Copy(busBlob.ExtRam, _bus.ExtRam, busBlob.ExtRam.Length);
         _bus.InterruptEnable = busBlob.InterruptEnable;
         _bus.InterruptFlag   = busBlob.InterruptFlag;
+        // Phase 30.18aa — restore timer + MBC state for cadence parity.
+        _bus.DivAccumSnapshot     = busBlob.DivAccum;
+        _bus.TimaAccumSnapshot    = busBlob.TimaAccum;
+        _bus.RomBankSnapshot      = busBlob.RomBank;
+        _bus.RamBankSnapshot      = busBlob.RamBank;
+        _bus.RamEnableSnapshot    = busBlob.RamEnable;
+        _bus.ModeRamBankSnapshot  = busBlob.ModeRamBank;
         _cpu.LoadState(cpuBlob);
         AdditionalRestore?.Invoke(hwBlob);
     }
 }
 
-/// <summary>Snapshot blob for the GB memory bus (Phase 30.16 sprint 5.5).</summary>
+/// <summary>Snapshot blob for the GB memory bus (Phase 30.16 sprint 5.5,
+/// extended in Phase 30.18aa with timer + MBC state).</summary>
 public sealed class GbBusStateBlob
 {
     public byte[] Wram = System.Array.Empty<byte>();
@@ -182,4 +199,12 @@ public sealed class GbBusStateBlob
     public byte[] ExtRam = System.Array.Empty<byte>();
     public byte InterruptEnable;
     public byte InterruptFlag;
+    // Phase 30.18aa — timer + MBC state needed for cadence parity
+    // between JIT and INTERP backends.
+    public int  DivAccum;
+    public int  TimaAccum;
+    public int  RomBank;
+    public int  RamBank;
+    public bool RamEnable;
+    public bool ModeRamBank;
 }
