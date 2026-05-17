@@ -7,7 +7,12 @@ REM   gui-test.bat                 HLE BIOS + FreeDOS (per-instruction backend,
 REM                                because HLE + block-JIT hits Phase 28.8x)
 REM   gui-test.bat realbios        real pcxtbios.bin + videorom.bin + FreeDOS
 REM                                (VGA mode 3, recommended). 2nd arg = mda|cga|vga
-REM                                (default vga); 3rd arg = "auto" for AutoTester.
+REM                                (default vga); 3rd arg = "auto" for AutoTester;
+REM                                4th arg picks AutoTester sequence + B: mount:
+REM                                  dir   (default) = A:\>dir, freedos-mda-dir
+REM                                  bhello          = A:\>B: + B:\>HELLO,
+REM                                                    mounts --floppy-b + runs
+REM                                                    freedos-b-hello sequence.
 REM   gui-test.bat hle-jit         HLE BIOS + block-JIT  (known broken; for
 REM                                reproducing Phase 28.8x)
 REM   gui-test.bat build           force rebuild before launching (HLE mode)
@@ -104,13 +109,31 @@ REM (BDA tick counter advances 11x faster than wall clock, hits some
 REM FreeDOS internal conversion corner case). The FDC motor-on hack
 REM + 2ms HLT-wake polling deliver enough responsiveness on their own.
 REM Third positional arg = "auto" to run scripted bring-up test.
+REM Fourth positional arg picks the AutoTester sequence (default = "dir"):
+REM   dir    -> freedos-mda-dir          (A:\>dir, no B: mount)
+REM   bhello -> freedos-b-hello + mounts --floppy-b=test-roms\x86\test-floppy-b.img
 set AUTO=%3
+set AUTOSEQ=%4
+if "%AUTOSEQ%"=="" set AUTOSEQ=dir
 set AUTO_ARG=
-if /i "%AUTO%"=="auto" set AUTO_ARG=--auto-test=freedos-mda-dir
-echo [gui-test] Mode: Real BIOS pcxtbios.bin + FreeDOS  (Phase 30 path, backend=json, video=%VIDEO%, auto=%AUTO%)
+set FLOPPY_B_ARG=
+if /i not "%AUTO%"=="auto" goto :after_auto_args
+if /i "%AUTOSEQ%"=="bhello" goto :auto_bhello
+set AUTO_ARG=--auto-test=freedos-mda-dir
+goto :after_auto_args
+:auto_bhello
+if not exist "test-roms\x86\test-floppy-b.img" (
+    echo [gui-test] Missing test-roms\x86\test-floppy-b.img.
+    echo [gui-test] Build it with: python tools\make_fat12_floppy.py --src=test-roms\x86\fat12-b --out=test-roms\x86\test-floppy-b.img --label=APRPCTEST
+    exit /b 1
+)
+set AUTO_ARG=--auto-test=freedos-b-hello
+set FLOPPY_B_ARG=--floppy-b=test-roms\x86\test-floppy-b.img
+:after_auto_args
+echo [gui-test] Mode: Real BIOS pcxtbios.bin + FreeDOS  (Phase 30 path, backend=json, video=%VIDEO%, auto=%AUTO%, seq=%AUTOSEQ%)
 REM --video=vga also passes through the MDA renderer codepath as a fallback;
 REM whichever framebuffer (0xB0000 or 0xB8000) the VBIOS init populates wins.
 set VIDEO_RENDER=%VIDEO%
 if /i "%VIDEO%"=="vga" set VIDEO_RENDER=cga
-dotnet "%DLL%" --bios=%BIOS% %VBIOS_ARG% --floppy-a=%FLOPPY% --backend=json --video=%VIDEO_RENDER% %AUTO_ARG% --window-scale=2 --window-title="AprPc - real BIOS pcxtbios.bin (%VIDEO%)" --verbose
+dotnet "%DLL%" --bios=%BIOS% %VBIOS_ARG% --floppy-a=%FLOPPY% %FLOPPY_B_ARG% --backend=json --video=%VIDEO_RENDER% %AUTO_ARG% --window-scale=2 --window-title="AprPc - real BIOS pcxtbios.bin (%VIDEO%)" --verbose
 goto :eof

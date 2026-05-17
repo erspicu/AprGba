@@ -339,6 +339,53 @@ for r in entry np null-ss dpl-gp ss-bad-type; do
 done
 ```
 
+#### Run the AprPc (IBM PC/XT) emulator
+
+Real BIOS (`pcxtbios.bin`) + FreeDOS 1.3 boots end-to-end. The
+`gui-test.bat` wrapper covers the common launch modes:
+
+```bat
+REM HLE BIOS + FreeDOS (no real ROM, fastest path)
+gui-test.bat
+
+REM Real pcxtbios.bin + Tseng VGA BIOS + FreeDOS (recommended)
+REM   2nd arg: video adapter = mda | cga | vga (default vga)
+REM   3rd arg: "auto"        run AutoTester (scripted bring-up)
+REM   4th arg: AutoTester sequence
+REM            dir    (default) A:\>dir, freedos-mda-dir
+REM            bhello           mounts --floppy-b + runs HELLO.COM from B:
+gui-test.bat realbios vga
+gui-test.bat realbios vga auto              REM A:\>dir, screenshot, exit
+gui-test.bat realbios vga auto bhello       REM A:\>B: + B:\>HELLO, TEST_PASS via port 0xE9
+```
+
+Manual flag form for ad-hoc runs:
+
+```bat
+dotnet src\AprPc.Cli\bin\Debug\net10.0-windows\apr-pc.dll ^
+    --bios=BIOS\firmware\pcxtbios.bin ^
+    --video-bios=BIOS\firmware\videorom.bin ^
+    --floppy-a=BIOS\freedos-1.3-floppy.img ^
+    --floppy-b=test-roms\x86\test-floppy-b.img ^
+    --backend=json --video=cga --window-scale=2 ^
+    --auto-test=freedos-b-hello
+```
+
+After an AutoTester run:
+- `temp/port-e9.log` — Bochs/QEMU-style `OUT 0xE9, AL` capture (test assertions land here)
+- `result/pc/auto-test-<timestamp>.png` — final framebuffer screenshot
+- `temp/kbd-trace.log` — keyboard / port-61 trace
+
+Build a custom B: floppy from `.COM` files:
+```bat
+python tools\make_fat12_floppy.py ^
+    --src=test-roms\x86\fat12-b ^
+    --out=test-roms\x86\test-floppy-b.img ^
+    --label=APRPCTEST
+```
+
+Full workflow guide: [`MD/process/03-dos-test-injection-workflow.md`](MD/process/03-dos-test-injection-workflow.md).
+
 ### 7. How to contribute / take over development
 
 #### Read these in order
@@ -690,6 +737,53 @@ for r in entry np null-ss dpl-gp ss-bad-type; do
       --backend=json-block --variant=i80286
 done
 ```
+
+#### 跑 AprPc (IBM PC/XT) 模擬器
+
+Real BIOS（`pcxtbios.bin`）+ FreeDOS 1.3 端到端 boot。`gui-test.bat`
+wrapper cover 常用 launch 模式：
+
+```bat
+REM HLE BIOS + FreeDOS（無真 ROM、最快路徑）
+gui-test.bat
+
+REM Real pcxtbios.bin + Tseng VGA BIOS + FreeDOS（建議）
+REM   第 2 arg：video adapter = mda | cga | vga（預設 vga）
+REM   第 3 arg："auto"        跑 AutoTester（腳本化 bring-up）
+REM   第 4 arg：AutoTester 序列
+REM            dir    （預設）A:\>dir、freedos-mda-dir
+REM            bhello         mount --floppy-b + 從 B: 跑 HELLO.COM
+gui-test.bat realbios vga
+gui-test.bat realbios vga auto              REM A:\>dir、screenshot、退出
+gui-test.bat realbios vga auto bhello       REM A:\>B: + B:\>HELLO、port 0xE9 收 TEST_PASS
+```
+
+手動 flag 形式給 ad-hoc 用：
+
+```bat
+dotnet src\AprPc.Cli\bin\Debug\net10.0-windows\apr-pc.dll ^
+    --bios=BIOS\firmware\pcxtbios.bin ^
+    --video-bios=BIOS\firmware\videorom.bin ^
+    --floppy-a=BIOS\freedos-1.3-floppy.img ^
+    --floppy-b=test-roms\x86\test-floppy-b.img ^
+    --backend=json --video=cga --window-scale=2 ^
+    --auto-test=freedos-b-hello
+```
+
+AutoTester 跑完後：
+- `temp/port-e9.log` — Bochs/QEMU 風格的 `OUT 0xE9, AL` 捕捉（test assertion 落在這）
+- `result/pc/auto-test-<timestamp>.png` — 最終 framebuffer screenshot
+- `temp/kbd-trace.log` — keyboard / port-61 trace
+
+從 `.COM` 檔自建 B: floppy：
+```bat
+python tools\make_fat12_floppy.py ^
+    --src=test-roms\x86\fat12-b ^
+    --out=test-roms\x86\test-floppy-b.img ^
+    --label=APRPCTEST
+```
+
+完整流程指南：[`MD/process/03-dos-test-injection-workflow.md`](MD/process/03-dos-test-injection-workflow.md)。
 
 ### 7. 想接手開發 / 貢獻？
 
