@@ -32,6 +32,9 @@ string variant = "i8086";
 bool verbose = false;
 bool fpu8087 = false;
 bool dumpFpuState = false;
+int  fuzzIterations = 0;
+int  fuzzBlocksPerIter = 50;
+int? fuzzSeed = null;
 
 foreach (var arg in args)
 {
@@ -53,6 +56,9 @@ foreach (var arg in args)
     // SST runs, matching pre-29.x behavior.
     else if (arg == "--enable-i8087" || arg == "--enable-fpu") fpu8087 = true;
     else if (arg == "--dump-fpu-state")               dumpFpuState = true;
+    else if (arg.StartsWith("--fuzz="))               fuzzIterations = int.Parse(arg.Substring("--fuzz=".Length));
+    else if (arg.StartsWith("--fuzz-blocks="))        fuzzBlocksPerIter = int.Parse(arg.Substring("--fuzz-blocks=".Length));
+    else if (arg.StartsWith("--fuzz-seed="))          fuzzSeed = int.Parse(arg.Substring("--fuzz-seed=".Length));
     else { Console.Error.WriteLine($"unknown arg: {arg}"); PrintUsage(); return 2; }
 }
 
@@ -94,6 +100,12 @@ if (tomHartePath != null)
         }
     }
     return result.Failed == 0 ? 0 : 6;
+}
+
+// Phase 30.18d — x86 differential fuzzer.
+if (fuzzIterations > 0)
+{
+    return AprX86.Cli.Validation.X86Fuzzer.Run(fuzzIterations, fuzzBlocksPerIter, fuzzSeed, entrySeg, entryOff);
 }
 
 // ============================================================
