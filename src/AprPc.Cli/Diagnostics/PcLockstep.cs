@@ -208,9 +208,24 @@ public static class PcLockstep
         var trail = new (long step, string desc)[16];
         int trailHead = 0;
 
+        // Phase 30.15c-A — watchpoint on a single physical byte. After
+        // every step, if the byte CHANGED in either env, log
+        // (env, step, CS:IP, before, after). The first divergent log
+        // entry between A and B points at the exact divergent write.
+        // APR_LOCKSTEP_WATCH_ADDR=hex (e.g. 279C0); 0 disables.
+        int watchAddr = ParseHexEnv("APR_LOCKSTEP_WATCH_ADDR", 0);
+        byte lastA_watch = (watchAddr > 0) ? envA.Bus.Memory.Ram[watchAddr] : (byte)0;
+        byte lastB_watch = (watchAddr > 0) ? envB.Bus.Memory.Ram[watchAddr] : (byte)0;
+        if (watchAddr > 0)
+            Console.WriteLine($"  watch: phys 0x{watchAddr:X5} (logged on change per env)");
+
         ICpuStateSnapshot? lastA = null, lastB = null;
         for (long i = 0; i < maxSteps; i++)
         {
+            // Capture watch byte BEFORE this step so we can detect post-
+            // step change.
+            byte preA = (watchAddr > 0) ? envA.Bus.Memory.Ram[watchAddr] : (byte)0;
+            byte preB = (watchAddr > 0) ? envB.Bus.Memory.Ram[watchAddr] : (byte)0;
             var sa = stepA.Snapshot();
             var sb = stepB.Snapshot();
             lastA = sa; lastB = sb;
@@ -281,6 +296,52 @@ public static class PcLockstep
 
             stepA.Step();
             stepB.Step();
+
+            // Watchpoint check: log any post-step change. CS:IP is from
+            // the CURRENT state (after the step that did the write),
+            // so for diagnostic purposes "the instruction at CS:IP-N
+            // did the write where N is its length".
+            if (watchAddr > 0)
+            {
+                byte postA = envA.Bus.Memory.Ram[watchAddr];
+                byte postB = envB.Bus.Memory.Ram[watchAddr];
+                if (postA != preA)
+                {
+                    var st = envA.Cpu.State;
+                    int instLin = (((st.CS << 4) + (st.IP - 5)) & 0xFFFFF);
+                    string bts = $"{envA.Bus.Memory.Ram[instLin]:X2} " +
+                                 $"{envA.Bus.Memory.Ram[(instLin + 1) & 0xFFFFF]:X2} " +
+                                 $"{envA.Bus.Memory.Ram[(instLin + 2) & 0xFFFFF]:X2} " +
+                                 $"{envA.Bus.Memory.Ram[(instLin + 3) & 0xFFFFF]:X2} " +
+                                 $"{envA.Bus.Memory.Ram[(instLin + 4) & 0xFFFFF]:X2}";
+                    // also dump expected target (BP-0x40 in SS) for comparison
+                    int expectedAddr = (((st.SS << 4) + (st.BP - 0x40)) & 0xFFFFF);
+                    Console.WriteLine($"  [WATCH-A] step={i,8} CS:IP={st.CS:X4}:{st.IP:X4} " +
+                        $"AX={st.A.X:X4} BX={st.B.X:X4} CX={st.C.X:X4} DX={st.D.X:X4} " +
+                        $"SI={st.SI:X4} DI={st.DI:X4} BP={st.BP:X4} SP={st.SP:X4} " +
+                        $"CS={st.CS:X4} DS={st.DS:X4} SS={st.SS:X4} ES={st.ES:X4} " +
+                        $"phys=0x{watchAddr:X5} 0x{preA:X2} -> 0x{postA:X2} " +
+                        $"instr@IP-5: {bts} expected=SS:[BP-0x40]=0x{expectedAddr:X5} (val there now=0x{envA.Bus.Memory.Ram[expectedAddr]:X2})");
+                }
+                if (postB != preB)
+                {
+                    var st = envB.Cpu.State;
+                    int instLin = (((st.CS << 4) + (st.IP - 5)) & 0xFFFFF);
+                    string bts = $"{envB.Bus.Memory.Ram[instLin]:X2} " +
+                                 $"{envB.Bus.Memory.Ram[(instLin + 1) & 0xFFFFF]:X2} " +
+                                 $"{envB.Bus.Memory.Ram[(instLin + 2) & 0xFFFFF]:X2} " +
+                                 $"{envB.Bus.Memory.Ram[(instLin + 3) & 0xFFFFF]:X2} " +
+                                 $"{envB.Bus.Memory.Ram[(instLin + 4) & 0xFFFFF]:X2}";
+                    Console.WriteLine($"  [WATCH-B] step={i,8} CS:IP={st.CS:X4}:{st.IP:X4} " +
+                        $"AX={st.A.X:X4} BX={st.B.X:X4} CX={st.C.X:X4} DX={st.D.X:X4} " +
+                        $"SI={st.SI:X4} DI={st.DI:X4} BP={st.BP:X4} SP={st.SP:X4} " +
+                        $"CS={st.CS:X4} DS={st.DS:X4} SS={st.SS:X4} ES={st.ES:X4} " +
+                        $"phys=0x{watchAddr:X5} 0x{preB:X2} -> 0x{postB:X2} " +
+                        $"instr@IP-5: {bts}");
+                }
+                lastA_watch = postA;
+                lastB_watch = postB;
+            }
         }
         sw.Stop();
         Console.WriteLine();
