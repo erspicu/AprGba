@@ -35,12 +35,22 @@ behavior for `RunCycles(1)`).
 **Extended GB ROM coverage** (all 200k blocks NoDiff, post-30.18ab):
   - `instr_timing.gb` (instruction timing test)
   - `halt_bug.gb` (HALT edge cases — confirms HALT-spin fix is solid)
-  - `mem_timing.gb` (memory timing test)
+  - `mem_timing.gb`, `mem_timing-2/mem_timing.gb` (memory timing tests)
+  - `interrupt_time.gb` (interrupt timing — validates IRQ-cadence fix)
 
 **Individual cpu_instrs sub-tests** (all 100k blocks NoDiff):
   - `01-special.gb`, `02-interrupts.gb` (✓ IRQ delivery clean),
     `03-op sp,hl.gb`, `07-jr,jp,call,ret,rst.gb` (✓ control flow),
     `11-op a,(hl).gb` (✓ memory ops)
+
+**Extended GBA ROM coverage** (all 200k blocks NoDiff):
+  - `gba-tests/arm/arm.gba` (1M blocks — primary)
+  - `gba-tests/memory/memory.gba`
+  - `gba-tests/bios/bios.gba`
+
+**GB fuzzer multi-seed cleanliness** (52+ verified seeds):
+  - Original 15-seed group + 37 additional seeds (11-40, 50, 60, 70,
+    80, 90, 110, 120) — all 0 divergences at 30-50 iter × 50 blocks/iter
 
 ## Fuzzer results across all 4 CPUs
 
