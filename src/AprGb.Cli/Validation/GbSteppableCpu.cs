@@ -108,10 +108,26 @@ public sealed class GbSteppableCpu : IBlockBoundedSteppableCpu
     /// this implicitly via RunCycles → CheckInterrupts; for INTERP-side
     /// the verifier calls this explicitly after the N×StepOnePerInstr
     /// loop so both backends see IRQ delivery at the same cadence.
+    ///
+    /// Phase 30.18ab — also mirror JIT.RunCycles' HALT-spin behavior:
+    /// when INTERP ended in HALT with no pending IRQ but JIT might
+    /// have ticked the bus (causing timer/PPU overflow to set IF),
+    /// also tick INTERP's bus by 4 cycles and re-check pending. Mirrors
+    /// JIT's one HALT-spin iteration for `RunCycles(1)`. This is the
+    /// cpu_instrs.gb block #280289+ case.
     /// </summary>
     public void PollPendingIrqsAtBlockBoundary()
     {
         _cpu.SetActiveForLockstep();
+        // If HALTed with no IRQ pending, mirror JIT's HALT-spin tick.
+        if (_cpu.IsHalted)
+        {
+            var pendingPre = (byte)(_bus.InterruptEnable & _bus.InterruptFlag & 0x1F);
+            if (pendingPre == 0)
+            {
+                _bus.Tick(4);
+            }
+        }
         _cpu.CheckInterruptsAtBlockBoundary();
     }
 
