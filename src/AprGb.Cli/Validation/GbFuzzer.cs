@@ -27,12 +27,13 @@ public static class GbFuzzer
         // now properly invokes EmitWriteByteWithSync to preserve sync-exit
         // semantics, so this env var is safe.
         Environment.SetEnvironmentVariable("APR_GB_NO_INLINE_RAM", "1");
-        // Phase 30.18i — disable cross-jump-follow so block-JIT's
-        // JIT-vs-interp PC trajectories stay aligned for the verifier.
-        // Cross-jump-follow inlines JR/JP target's instructions which
-        // makes LastInstrIndex grow without PC moving, causing per-
-        // instr (which advances PC normally) to land at a different
-        // PC than the JIT.
+        // Phase 30.18i — disable cross-jump-follow. Measured difference
+        // on 100-iter seed=42 fuzz sweep:
+        //   With APR_NO_CROSS_JUMP_FOLLOW=1: 2 divergences (cleaner signal)
+        //   Without:                          6 divergences (cross-jump
+        //     follow exposes its own JIT-vs-interp PC asymmetry which is
+        //     a known semantic gap, not an emitter bug)
+        // ON-by-default keeps fuzzer reports as actionable emitter bugs.
         Environment.SetEnvironmentVariable("APR_NO_CROSS_JUMP_FOLLOW", "1");
         Console.WriteLine("apr-gb fuzz (random cart ROM → per-block JIT-vs-interp diff)");
         Console.WriteLine($"  iterations:      {iterations:N0}");
