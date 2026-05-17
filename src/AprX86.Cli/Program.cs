@@ -18,6 +18,28 @@ if (args.Length == 0)
     return 1;
 }
 
+// Phase 30.18n — `--lint-spec` for x86 (use first variant only, e.g. i8086).
+if (args.Length == 1 && args[0] == "--lint-spec")
+{
+    string? lintPath = null;
+    for (var d = new System.IO.DirectoryInfo(System.AppContext.BaseDirectory); d is not null; d = d.Parent)
+    {
+        var probe = System.IO.Path.Combine(d.FullName, "spec", "cpu", "x86-16", "i8086", "cpu.json");
+        if (System.IO.File.Exists(probe)) { lintPath = probe; break; }
+    }
+    if (lintPath is null) { Console.Error.WriteLine("spec/cpu/x86-16/i8086/cpu.json not found"); return 3; }
+    var lintLoaded = AprCpu.Core.JsonSpec.SpecLoader.LoadCpuSpec(lintPath);
+    var lintWarnings = AprCpu.Core.JsonSpec.SpecLinter.Lint(lintLoaded);
+    Console.WriteLine($"apr-x86 spec-lint: {lintPath}");
+    Console.WriteLine($"  warnings: {lintWarnings.Count}");
+    foreach (var w in lintWarnings)
+    {
+        Console.WriteLine($"  [{w.Rule}] {w.Where}");
+        Console.WriteLine($"    {w.Message}");
+    }
+    return lintWarnings.Count == 0 ? 0 : 4;
+}
+
 string? romPath = null;
 string? screenshotPath = null;
 string? tomHartePath = null;

@@ -40,6 +40,28 @@ int  fuzzIterations = 0;
 int  fuzzBlocksPerIter = 100;
 int? fuzzSeed = null;
 bool fuzzContinue = false;
+
+// Phase 30.18n — `--lint-spec` runs SpecLinter on the 2A03 spec.
+if (args.Length == 1 && args[0] == "--lint-spec")
+{
+    string? lintPath = null;
+    for (var d = new System.IO.DirectoryInfo(System.AppContext.BaseDirectory); d is not null; d = d.Parent)
+    {
+        var probe = System.IO.Path.Combine(d.FullName, "spec", "cpu", "2a03", "cpu.json");
+        if (System.IO.File.Exists(probe)) { lintPath = probe; break; }
+    }
+    if (lintPath is null) { Console.Error.WriteLine("spec/cpu/2a03/cpu.json not found"); return 3; }
+    var lintLoaded = AprCpu.Core.JsonSpec.SpecLoader.LoadCpuSpec(lintPath);
+    var warnings = AprCpu.Core.JsonSpec.SpecLinter.Lint(lintLoaded);
+    Console.WriteLine($"apr-nes spec-lint: {lintPath}");
+    Console.WriteLine($"  warnings: {warnings.Count}");
+    foreach (var w in warnings)
+    {
+        Console.WriteLine($"  [{w.Rule}] {w.Where}");
+        Console.WriteLine($"    {w.Message}");
+    }
+    return warnings.Count == 0 ? 0 : 4;
+}
 foreach (var arg in args)
 {
     if      (arg == "--info")            { /* default — still prints info */ }
