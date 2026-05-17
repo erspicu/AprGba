@@ -131,8 +131,15 @@ public sealed class PcSystemRunner : IDisposable
         // paths (e.g. spec/coprocessors/x87/i8087/cpu.json) against the
         // machine spec file's directory. Empty list / null means "no
         // extensions" — same path as pre-29.1.
+        //
+        // The bundled i8087 extension declares extends_cpu='Intel8086' and
+        // is rejected at load time when the host variant is i80186+ (no
+        // i80187/i80287 spec ships yet). Skip extensions for those variants
+        // — matches real-hardware fact that 5160 / 5170 mostly ran without
+        // populated FPU socket. Re-enable once a per-base FPU spec exists.
         List<string>? resolvedExtensions = null;
-        if (spec.Extensions is { Count: > 0 } exts)
+        bool isI8086Class = _options.Cpu is "i8086" or "i8088";
+        if (spec.Extensions is { Count: > 0 } exts && isI8086Class)
         {
             var machineDir = Path.GetDirectoryName(Path.GetFullPath(machineSpecPath))!;
             resolvedExtensions = new List<string>(exts.Count);
