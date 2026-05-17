@@ -111,6 +111,8 @@ public static class GbVerifyBlocks
                 Console.WriteLine($"  diverged at block: #{r.BlockIndex}, pc=0x{r.BlockStartPc:X4}, " +
                     $"instrs in block={r.InstructionCount}");
                 Console.WriteLine($"  detail:            {r.Detail}");
+                if (r.CpuStatePre is not null)
+                    Console.WriteLine($"  pre-block:         {r.CpuStatePre}");
                 if (r.CpuStateA is not null)
                 {
                     Console.WriteLine($"  JIT post-block:    {r.CpuStateA}");
