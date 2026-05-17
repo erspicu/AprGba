@@ -1,0 +1,172 @@
+Timestamp: 2026-05-17T20:04:48
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Need fresh perspective on a subtle block-JIT divergence. All previous bugs in this fuzzer session have been fixed (5 major bug-fixes, now 14/15 seeds clean). This is the LAST remaining one.
+
+SYMPTOM (GbFuzzer seed=6 iter 2 / seed 2065773252):
+  PRE  PC=$003E A=$00 F=$C0 BC=$000E DE=$A1D6 HL=$FCA1 SP=$6CB0
+  JIT  POST PC=$0048 A=$00 F=$30 BC=$00A1 DE=$A1D6 HL=$F942 SP=$6CB0
+  INTERP POST PC=$6F9A A=$00 F=$30 BC=$00A1 DE=$A1D6 HL=$F942 SP=$6CB2
+
+Both backends agree on EVERY register EXCEPT PC and SP. INTERP's SP +=2 and PC went to $6F9A. JIT's SP unchanged and PC stuck at $0048.
+
+The block at $003E (cart bytes from random ROM):
+  $003E: C2 B6 D9  JP NZ, $D9B6   (cond NZ, F.Z=1 → not taken)
+  $0041: EA A7 08  LD ($08A7),A   (store, MBC writes suppressed in fuzzer)
+  $0044: 52        LD D,D         (no-op)
+  $0045: BC        CP H
+  $0046: 4D        LD C,L
+  $0047: 29        ADD HL,HL
+  $0048: D9        RETI           ← `writes_pc: always`
+
+Block-detector ends at RETI. All 7 instructions compiled.
+
+JIT POST PC=$0048 = RETI's start PC. JIT POST SP=$6CB0 = unchanged from pre.
+
+So in JIT, RETI's `ret` op (pop word from stack into PC, increment SP by 2) DID NOT TAKE EFFECT, despite the IR clearly showing the IR for it.
+
+THE COMPILED IR FOR RETI (i6_exec block):
+```
+i6_exec:                                          ; preds = %i6_pre
+  %ret_sp_pre = load i16, ptr %sp_local, align 2
+  %ret_a0 = add i16 %ret_sp_pre, 0
+  %ret_a0_z = zext i16 %ret_a0 to i32
+  %ret_b0_fn = load ptr, ptr @memory_read_8, align 8
+  %ret_b0 = call i8 %ret_b0_fn(i32 %ret_a0_z)
+  %ret_b0_z = zext i8 %ret_b0 to i16
+  %ret_b0_shl = shl i16 %ret_b0_z, 0
+  %ret_acc0 = or i16 0, %ret_b0_shl
+  %ret_a1 = add i16 %ret_sp_pre, 1
+  %ret_a1_z = zext i16 %ret_a1 to i32
+  %ret_b1_fn = load ptr, ptr @memory_read_8, align 8
+  %ret_b1 = call i8 %ret_b1_fn(i32 %ret_a1_z)
+  %ret_b1_z = zext i8 %ret_b1 to i16
+  %ret_b1_shl = shl i16 %ret_b1_z, 8
+  %ret_acc1 = or i16 %ret_acc0, %ret_b1_shl
+  %ret_sp_inc = add i16 %ret_sp_pre, 2
+  store i16 %ret_sp_inc, ptr %sp_local, align 2      ; ← SP+=2 stored
+  store i16 %ret_acc1, ptr %pc_local, align 2        ; ← popped PC stored
+  %pc_written_ptr95 = getelementptr ...
+  store i8 1, ptr %pc_written_ptr95, align 1         ; ← PcWritten=1
+  %set_ime_fn = load ptr, ptr @host_lr35902_set_ime, align 8
+  call void %set_ime_fn(i8 1)
+  br label %i6_post
+```
+
+CONTROL FLOW (from BB predecessors):
+  entry → i0_pre
+  i0..i5: each runs pre/exec/post/budget/advance, advances to next i
+  i5_advance → i6_pre
+  i6_pre clears PcWritten + writes LastInstrIndex=7 + writes pc_local = ip_block_start + 11 = $0049
+  i6_pre → i6_exec (above)
+  i6_exec sets sp_local=ret_sp_inc, pc_local=ret_acc1, PcWritten=1
+  i6_exec → i6_post (checks PcWritten=1 → i6_pre_exit)
+  i6_pre_exit deducts cycles, br block_exit
+  block_exit drains: sp_drain = load sp_local; pc_drain = load pc_local; stores to state
+
+The drain at block_exit SHOULD read sp_local=$6CB2 and pc_local=$6F9A (from i6_exec stores). Then state SP=$6CB2 and state PC=$6F9A.
+
+But JIT POST state has SP=$6CB0 and PC=$0048. So either:
+  (a) i6_exec's stores didn't happen (the load_byte calls happen but stores skipped?)
+  (b) Something between i6_exec and block_exit reset sp_local and pc_local
+  (c) The drain reads from somewhere else
+
+Notable: PC=$0048 = bi.Pc of RETI (BEFORE the i6_pre's "+1" pre-write makes it $0049).
+
+If LLVM's mem2reg + GVN somehow optimized the i6_exec stores away, the alloca would still hold the i6_pre value ($0049). Then drain → state PC=$0049. But JIT POST=$0048 (one less!).
+
+Could LLVM mem2reg be doing something weird with the alloca dataflow?
+
+ALSO interesting: instr[1] LD ($08A7),A at $0041 writes to address $08A7 (cart ROM range $0000-$3FFF = bank 0). The fuzzer sets `bus.SuppressMbcWrites = true` so this becomes a no-op. So no MBC bank switch. But memory_write_8_sync (the extern called by JIT's store_byte) still returns 1 for IRQ-relevant addresses. $08A7 is NOT IRQ-relevant (not in $FF00-$FF7F or $FFFF). So returns 0. No sync exit.
+
+Hmm so no sync exit at any point.
+
+QUESTION 1: Looking at the IR, what could cause the drain at block_exit to read pc_local=$0048 instead of the popped value $6F9A?
+
+QUESTION 2: Given that JIT POST SP also = pre-block value (no +2 from PopWord), what plausible single cause explains BOTH the SP and PC being un-modified by RETI? (Both register stores are in the same i6_exec BB.)
+
+QUESTION 3: Recent fixes I made to nearby code:
+  - SyncEmitter now skips PC overwrite when runtime PcWritten==1 (Phase 30.18w)
+  - BranchCc/CallCc/RetCc now set ctx.PcWriteEmittedInCurrentInstruction = true at JIT time (Phase 30.18u)
+  - Branch/Call/Ret use WriteReg.MarkPcWritten() instead of direct flag store (Phase 30.18s)
+
+  Could any of these interact badly with Ret (used by RETI)? Ret's IR (from StackOps.cs):
+  ```csharp
+  var newPc = PopWord(ctx, wordBytes, "ret", pcType);
+  ctx.Builder.BuildStore(newPc, pcPtr);
+  WriteReg.MarkPcWritten(ctx);
+  ```
+  Where MarkPcWritten does:
+  ```csharp
+  ctx.PcWriteEmittedInCurrentInstruction = true;
+  var slot = ctx.Layout.GepPcWritten(...);
+  ctx.Builder.BuildStore(1, slot);
+  ```
+
+  And PopWord does:
+  ```csharp
+  load sp_local
+  read mem[sp], read mem[sp+1]
+  compose new PC
+  store sp+2 back to sp_local
+  ```
+
+  The Ret emitter writes pcPtr (= alloca via GepStatusRegister routing) and sp_local. Looks fine.
+
+QUESTION 4: BlockFunctionBuilder's per-instr-PC pre-write at i6_pre stores `ip_pre_i6 = ip_block_start + (bi.Pc - blockStartLinear) + 1`. For LR35902 with variable-width instructions, this gives bi.Pc + 1 (= post-opcode PC). For instr[6] at $0048: stores $0049 to pc_local before i6_exec runs. This intentional pre-write is for x86/6502 ISAs where read_pc returns post-opcode IP.
+
+  Could this pre-write be MASKING the RETI's pop? E.g., if i6_pre's store and i6_exec's store somehow get coalesced/reordered by LLVM optimization?
+
+This bug is hard to find — IR looks perfect, expected behavior should produce correct output. Need fresh eyes.
+
+Bonus: T1 unit tests still pass 895/895 after all recent fixes. The other 14/15 fuzzer seeds are clean. This is an edge case in random-ROM territory.
+
+========================================================================
+RESPONSE
+========================================================================
+This is a classic "Sherlock Holmes" debugging scenario. The IR you dumped is perfectly correct, the `RETI` logic is sound, and your recent fixes in Q3 are entirely innocent. 
+
+The smoking gun is exactly what you noticed: **JIT POST PC is exactly `$0048`**, which is ONE LESS than `i6_pre`'s pre-write of `$0049`. 
+
+Here is the fresh perspective on what is actually happening.
+
+### The Core Diagnosis (Answering Q1 & Q2)
+The only mathematically possible way for the `block_exit` drain to read `PC=$0048` and `SP=$6CB0` when `i6_exec` clearly contains the stores for `$6F9A` and `$6CB2` is this: **`i6_exec` never executed.**
+
+Furthermore, `i6_pre` didn't fully execute either. 
+1. `i5` (`ADD HL, HL` at `$0047`) is a 1-byte instruction. Its pre-write in `i5_pre` wrote `0047 + 1 = $0048` to `pc_local`.
+2. `i5` finishes, and control flows to `i6_pre`.
+3. At the very top of `i6_pre` (before clearing `PcWritten` and before updating `pc_local` to `$0049`), there is almost certainly a **Cycle Budget Check**. 
+4. The budget check **failed**. The JIT immediately aborted the block and jumped to `block_exit`.
+5. `block_exit` drained the completely untouched `sp_local` (`$6CB0` from the block start) and the untouched `pc_local` (`$0048` left over from `i5_pre`).
+
+This perfectly explains both Q1 and Q2. The instructions weren't optimized away by LLVM; they were legally bypassed by JIT control flow.
+
+### Why did JIT run out of budget while INTERP executed RETI?
+If both the JIT and INTERP were given the exact same cycle budget by the fuzzer, why did they diverge? 
+
+Look at `i0`: **`JP NZ, $D9B6`**. The condition was false (Z=1). 
+In the Game Boy (LR35902), `JP cc, a16` takes **16 cycles if taken**, but only **12 cycles if not taken**. 
+
+If your JIT cycle-deduction logic accidentally deducts a fixed 16 cycles for `JP cc` regardless of the branch outcome (or deduces 16 in `i0_pre` without refunding 4), the JIT will believe it has consumed **4 extra cycles** compared to INTERP. 
+
+Let's do the math:
+* **INTERP Cycles (up to i6):** 12 (JP untaken) + 16 (LD) + 4 (LD) + 4 (CP) + 4 (LD) + 8 (ADD) = **48 cycles**.
+* **JIT Cycles (up to i6):** 16 (JP taken bug) + 16 + 4 + 4 + 4 + 8 = **52 cycles**.
+
+If the fuzzer fed a tight budget to execute the block (e.g., exactly 64 cycles), INTERP reaches `RETI` with 16 cycles left. Since `RETI` takes 16 cycles, INTERP happily executes it. The JIT, however, reaches `i6_pre` needing 16 cycles but only has 12 left. It fails the budget check and bails out cleanly exactly at the boundary of `$0048`.
+
+### Addressing Q3: Recent Fixes
+Your recent fixes are solid. 
+* Setting `ctx.PcWriteEmittedInCurrentInstruction = true` at JIT time for `Ret` safely ensures that `BlockFunctionBuilder` generates an `i6_post` that checks `PcWritten == 1` and cleanly ends the block. 
+* SyncEmitter skipping the overwrite when `PcWritten == 1` is completely correct for a block-terminating instruction.
+None of these caused the bug because the execution aborted before reaching them.
+
+### Addressing Q4: Pre-write Masking
+The pre-write of `$0049` is not masking `RETI`'s pop. If `i6_pre` had actually reached the pre-write line, `PC` would have been drained as `$0049` (or `$6F9A` if `i6_exec` ran). The fact that it drained as `$0048` is the absolute proof that the top of `i6_pre` was the end of the line.
+
+### How to Fix
+1. Verify your JIT cycle deduction logic for the LR35902 `JP cc, a16` instruction. Ensure it deducts exactly 12 cycles when the condition is false. (This often trips developers up because standard Z80 `JP cc, nn` is a fixed 10 cycles, but LR35902 makes it variable).
+2. If `JP cc` is already correct, look for any other cycle divergence in `ADD HL, HL` or the `LD` instructions, but `JP cc` is highly likely the culprit here.
