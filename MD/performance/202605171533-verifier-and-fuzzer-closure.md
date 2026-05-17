@@ -32,6 +32,16 @@ poll: `PollPendingIrqsAtBlockBoundary` ticks bus by 4 cycles when
 HALTed with no pending IRQ, matching JIT.RunCycles' one-iteration
 behavior for `RunCycles(1)`).
 
+**Extended GB ROM coverage** (all 200k blocks NoDiff, post-30.18ab):
+  - `instr_timing.gb` (instruction timing test)
+  - `halt_bug.gb` (HALT edge cases — confirms HALT-spin fix is solid)
+  - `mem_timing.gb` (memory timing test)
+
+**Individual cpu_instrs sub-tests** (all 100k blocks NoDiff):
+  - `01-special.gb`, `02-interrupts.gb` (✓ IRQ delivery clean),
+    `03-op sp,hl.gb`, `07-jr,jp,call,ret,rst.gb` (✓ control flow),
+    `11-op a,(hl).gb` (✓ memory ops)
+
 ## Fuzzer results across all 4 CPUs
 
 | CPU | First-iter bug-find rate | Status after fixes |
