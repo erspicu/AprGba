@@ -4,7 +4,7 @@
   "formats": [
     {
       "name": "Inc_Hl_Mem",
-      "comment": "0x34 — INC (HL): memory R-M-W with H from bit 3 of new value.",
+      "comment": "0x34 — INC (HL): memory R-M-W with H from bit 3 of new value. Phase 30.18v: flag updates moved BEFORE store_byte so when store triggers a sync-exit on MMIO writes ($FF00-$FF7F), F flags are already committed in block-JIT mode (per-instr is unaffected by reorder).",
       "pattern": "00110100",
       "fields": {},
       "mask": "0xFF",
@@ -17,16 +17,16 @@
           { "op": "load_byte",           "address": "addr", "out": "v" },
           { "op": "add",                 "in": ["v", { "const": 1 }], "out": "result_i32" },
           { "op": "trunc",               "in": "result_i32", "width": 8, "out": "result" },
-          { "op": "store_byte",          "address": "addr", "value": "result" },
           { "op": "update_zero",         "in": "result", "reg": "F", "flag": "Z" },
           { "op": "set_flag",            "reg": "F", "flag": "N", "value": 0 },
-          { "op": "update_h_inc",        "in": "result", "reg": "F", "flag": "H" }
+          { "op": "update_h_inc",        "in": "result", "reg": "F", "flag": "H" },
+          { "op": "store_byte",          "address": "addr", "value": "result" }
         ]
       }]
     },
     {
       "name": "Dec_Hl_Mem",
-      "comment": "0x35 — DEC (HL): memory R-M-W with H from bit 4 borrow of new value.",
+      "comment": "0x35 — DEC (HL): memory R-M-W with H from bit 4 borrow of new value. Phase 30.18v: see INC (HL) note above — flag updates moved before store_byte.",
       "pattern": "00110101",
       "fields": {},
       "mask": "0xFF",
@@ -39,10 +39,10 @@
           { "op": "load_byte",           "address": "addr", "out": "v" },
           { "op": "sub",                 "in": ["v", { "const": 1 }], "out": "result_i32" },
           { "op": "trunc",               "in": "result_i32", "width": 8, "out": "result" },
-          { "op": "store_byte",          "address": "addr", "value": "result" },
           { "op": "update_zero",         "in": "result", "reg": "F", "flag": "Z" },
           { "op": "set_flag",            "reg": "F", "flag": "N", "value": 1 },
-          { "op": "update_h_dec",        "in": "result", "reg": "F", "flag": "H" }
+          { "op": "update_h_dec",        "in": "result", "reg": "F", "flag": "H" },
+          { "op": "store_byte",          "address": "addr", "value": "result" }
         ]
       }]
     },
