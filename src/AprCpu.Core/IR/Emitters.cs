@@ -1056,18 +1056,31 @@ internal sealed class SyncEmitter : IMicroOpEmitter
         // not the next-instruction PC; this op currently shouldn't be
         // used in fixed-width specs (no use case yet).
         //
-        // Phase 30.18s — DO NOT overwrite PC if the current instruction
-        // already wrote it (e.g. EI deferred onto JP — JP's `branch`
-        // emitter writes PC=target first, then sync runs and would
-        // CLOBBER the target with bi.Pc+length=next-instr-PC). Found by
-        // GbFuzzer iter 79 seed 74172009 ($0150 block ending in JP $DBC9
-        // after EI). IME=1 + cycle deduct + ret still needed, just not
-        // the PC overwrite.
-        if (ctx.PipelinePcConstant is uint nextPc && !ctx.PcWriteEmittedInCurrentInstruction)
+        // Phase 30.18s — for an instruction whose own steps wrote PC
+        // (JP/CALL/RET/JR cc taken), preserve that target.
+        // Phase 30.18w — use RUNTIME check (not compile-time flag) so
+        // conditional branches NOT taken at runtime still get
+        // nextPc written. The compile-time
+        // ctx.PcWriteEmittedInCurrentInstruction flag fires when ANY
+        // PC-writer was emitted, even ones whose runtime cond was false
+        // (e.g. RET cc not taken). That left PC stale + PcWritten=0 →
+        // executor mis-advanced by full block bytes. Found by GbFuzzer
+        // seed 0 iter 19 at $0000 with RET Z (not taken) + EI defer.
+        if (ctx.PipelinePcConstant is uint nextPc)
         {
             var (pcPtr, pcType) = StackOps.LocateProgramCounter(ctx);
-            ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(pcType, nextPc, false), pcPtr);
             var pcwSlot = ctx.Layout.GepPcWritten(ctx.Builder, ctx.StatePtr);
+            var curPcw = ctx.Builder.BuildLoad2(LLVMTypeRef.Int8, pcwSlot, "sync_pcw_cur");
+            var pcwIsZero = ctx.Builder.BuildICmp(LLVMIntPredicate.LLVMIntEQ,
+                curPcw, LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false), "sync_pcw_is0");
+            // If a prior step in this instruction wrote PC (runtime),
+            // keep that value. Otherwise use bi.Pc+length.
+            var curPcVal = ctx.Builder.BuildLoad2(pcType, pcPtr, "sync_pc_cur");
+            var nextPcConst = LLVMValueRef.CreateConstInt(pcType, nextPc, false);
+            var chosenPc = ctx.Builder.BuildSelect(pcwIsZero, nextPcConst, curPcVal, "sync_pc_chosen");
+            ctx.Builder.BuildStore(chosenPc, pcPtr);
+            // Always set PcWritten=1 since we're exiting and the host
+            // executor must NOT then "advance PC by block size".
             ctx.Builder.BuildStore(LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 1, false), pcwSlot);
         }
         // P1 #5 — drain block-local register shadows before mid-block ret
