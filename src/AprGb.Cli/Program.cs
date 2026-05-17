@@ -37,6 +37,12 @@ if (opts.VerifyBlocks > 0 && opts.RomPath is not null)
     return GbVerifyBlocks.Run(opts.RomPath, opts.BiosPath, opts.VerifyBlocks);
 }
 
+// Phase 30.18 — GB differential fuzzer.
+if (opts.FuzzIterations > 0)
+{
+    return AprGb.Cli.Validation.GbFuzzer.Run(opts.FuzzIterations, opts.FuzzBlocksPerIter, opts.FuzzSeed);
+}
+
 if (opts.DiffBjitMaxBlocks > 0 && opts.RomPath is not null)
 {
     Console.WriteLine($"apr-gb — diff mode: per-instr vs block-JIT");
@@ -156,6 +162,9 @@ static Options? ParseArgs(string[] args)
         else if (arg == "--block-jit")            opts.BlockJit = true;
         else if (arg.StartsWith("--diff-bjit=")) opts.DiffBjitMaxBlocks = long.Parse(arg.Substring("--diff-bjit=".Length));
         else if (arg.StartsWith("--verify-blocks=")) opts.VerifyBlocks = long.Parse(arg.Substring("--verify-blocks=".Length));
+        else if (arg.StartsWith("--fuzz="))           opts.FuzzIterations = int.Parse(arg.Substring("--fuzz=".Length));
+        else if (arg.StartsWith("--fuzz-blocks="))    opts.FuzzBlocksPerIter = int.Parse(arg.Substring("--fuzz-blocks=".Length));
+        else if (arg.StartsWith("--fuzz-seed="))      opts.FuzzSeed = int.Parse(arg.Substring("--fuzz-seed=".Length));
         else                                      return null;
     }
     return opts.RomPath is null ? null : opts;
@@ -244,6 +253,9 @@ internal sealed class Options
     public bool     BlockJit;            // --block-jit: enable Phase 7 GB block-JIT path on json-llvm
     public long     DiffBjitMaxBlocks;   // --diff-bjit=N: lockstep per-instr vs block-JIT
     public long     VerifyBlocks;        // --verify-blocks=N: Phase 30.16 per-block JIT-vs-interp verifier
+    public int      FuzzIterations;      // --fuzz=N: Phase 30.18 random-cart fuzz mode
+    public int      FuzzBlocksPerIter = 100;
+    public int?     FuzzSeed;
 }
 
 /// <summary>
