@@ -26,8 +26,12 @@ public static class Lr35902InstructionLengths
 {
     private static readonly byte[] _table = new byte[256]
     {
-        // 0x00..0x0F
-        1, 3, 1, 1, 1, 1, 2, 1,    1, 1, 1, 1, 1, 1, 2, 1,
+        // 0x00..0x0F (Phase 30.18j — fix 0x08 = LD (a16), SP = 3 bytes,
+        // was incorrectly tabled as 1 byte; GbFuzzer surfaced this when
+        // JIT block-JIT advanced PC by 1 while per-instr's FetchImm16
+        // consumed 2 imm bytes → PC drift mid-block, different N
+        // instructions executed.)
+        1, 3, 1, 1, 1, 1, 2, 1,    3, 1, 1, 1, 1, 1, 2, 1,
         // 0x10..0x1F   (STOP=0x10 is documented as 2-byte: 10 00)
         2, 3, 1, 1, 1, 1, 2, 1,    2, 1, 1, 1, 1, 1, 2, 1,
         // 0x20..0x2F
