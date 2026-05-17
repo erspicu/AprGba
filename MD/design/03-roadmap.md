@@ -1458,3 +1458,18 @@ framework correctness 證據從 "hand-curated test ROM 跑得通" 升級到 "ran
 也跑得通"。fuzzer 暴露的 bug 都是 cadence / timing / spec-ordering 邊角 case，
 hand-written test 不太可能覆蓋。每個 CPU adapter 加 ~150-200 LoC 就能掛上，
 產出 "JIT vs INTERP 兩條獨立 path 100% 同意" 的 strong guarantee。
+
+## Phase 31：Block chaining + superblock JIT 演進 📋 PLANNED（2026-05-17）
+
+Phase 30.18 verifier 已 land、framework correctness 穩定。下一個 perf 推進方向是把
+compilation unit 從 single basic block 推到 chained blocks + superblock。預期 hot
+loop **2-3× throughput gain**、spec-driven 慣例不破壞。
+
+| Sprint | Deliverable | 估時 |
+|---|---|---|
+| **31.1** | Block chaining（patch exit jump → next block entry、QEMU TCG style） | ~4 day |
+| **31.2** | Conditional-branch follow（superblock 完整版、現有 crossJumpFollow 擴充） | ~6 day |
+| 31.3 | Hot-loop detection + re-compile（unrolled、tier-up）| ~10-15 day（延後） |
+
+詳細 plan + IR shape + 風險 + 業界參考：
+[`MD/design/31-block-chaining-superblock-plan.md`](31-block-chaining-superblock-plan.md)。

@@ -172,6 +172,15 @@ Effort：2-3 day。
 4. **Slave PIC at 0xA0**（P1、解鎖 CheckIt / AT ROM）
 5. 之後按 ISA 補齊 / optional feature 看實際需求挑
 
+## 框架 perf 演進（獨立 axis）
+
+跟上面 deferred 項目正交、是 future-quarter 的 perf 推進：
+
+- **[Phase 31](../../design/31-block-chaining-superblock-plan.md)** —
+  block chaining + superblock JIT。把 compilation unit 從 single basic
+  block 推到 chained blocks 跟 superblock。預期 hot loop 2-3× throughput
+  gain；spec-driven 慣例不破壞。實作成本 ~10 day（31.1 + 31.2）。
+
 ---
 
 ## 交叉參考
