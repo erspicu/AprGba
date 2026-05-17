@@ -65,6 +65,20 @@ not bit 2; bit 2 is sticky-high turbo flag).
 (no mtools dep needed). Full workflow doc:
 [`MD/process/03-dos-test-injection-workflow.md`](MD/process/03-dos-test-injection-workflow.md).
 
+**Phase 30.15d (Verified Block-JIT framework)** ✅ 2026-05-17 — generic
+per-block differential verifier: for every cached JIT block, snapshot
+pre-block state, run JIT once with trace capture, restore to a parallel
+INTERP env, drive the interpreter the same number of architectural
+instructions, then 3-axis compare (CPU state + mem-write trace +
+side-effect log). Found and fixed three real x86 emitter bugs (PC
+linear-vs-IP pre-write, packed-tail `ImmConsumed` leak, INT-pushed
+FLAGS reserved-bit) and validated the framework at **1,000,000 blocks
+NoDiff (4.38M architectural instructions, ~3 min runtime)** against
+`pcxtbios.bin` + FreeDOS boot. Usable for any future CPU backend via
+`IBlockBoundedSteppableCpu`. CLI: `apr-pc --verify-blocks`. How-to:
+[`MD/process/05-verified-blockjit-howto.md`](MD/process/05-verified-blockjit-howto.md).
+Design: [`MD/design/30.15d-verified-blockjit-framework-design.md`](MD/design/30.15d-verified-blockjit-framework-design.md).
+
 ---
 
 ## English
