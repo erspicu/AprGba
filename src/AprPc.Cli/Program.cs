@@ -32,9 +32,27 @@ catch (ArgumentException ex)
     return 2;
 }
 
+// Always-on startup banner — short, single line, tells the user the
+// most important state (which backend + which BIOS path). Verbose
+// mode below adds the full multi-line block for debugging.
+{
+    var backendLabel = opts.Backend switch
+    {
+        "json-block" => "JSON spec + LLVM block-JIT (fast)",
+        "json"       => "JSON spec + per-instr interpreter (slow, debug-friendly)",
+        "legacy"     => "hand-coded C# emulator (oldest path)",
+        _            => opts.Backend,
+    };
+    var biosLabel = opts.BiosPath is null
+        ? "HLE BIOS (no real ROM)"
+        : $"real BIOS {opts.BiosPath}";
+    var modeLabel = opts.Headless ? "headless" : "UI window";
+    Console.WriteLine($"apr-pc: cpu={opts.Cpu} backend={opts.Backend} ({backendLabel}); {biosLabel}; mode={modeLabel}");
+}
+
 if (opts.Verbose)
 {
-    Console.WriteLine($"apr-pc starting:");
+    Console.WriteLine($"apr-pc starting (verbose):");
     Console.WriteLine($"  cpu      = {opts.Cpu}");
     Console.WriteLine($"  backend  = {opts.Backend}");
     Console.WriteLine($"  memory   = {opts.Memory}");
