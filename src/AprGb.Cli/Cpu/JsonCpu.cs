@@ -118,6 +118,87 @@ public sealed unsafe class JsonCpu : ICpuBackend
 
     public long InstructionsExecuted => _totalInstructions;
 
+    /// <summary>
+    /// Phase 30.16 sprint 5.5 — Active trace sink for the Verified
+    /// Block-JIT framework. When non-null, MemWrite8 / MemWrite16 /
+    /// MemWrite8Sync / MemWrite16Sync also append the write to the
+    /// sink so the framework can compare JIT-vs-interp at block
+    /// boundaries. Null = no overhead.
+    /// </summary>
+    public static AprCpu.Core.Validation.IBlockTraceSink? ActiveTraceSink { get; set; }
+
+    /// <summary>
+    /// Phase 30.16 sprint 5.5 — most-recent block size (architectural
+    /// instructions executed; ACTUAL count from LastInstrIndex slot,
+    /// not compile-time block-detector size, so JIT mid-block exits
+    /// via JR/JP/RET don't mis-report). For per-instr mode this is
+    /// always 1. -1 if no block has ever run yet.
+    /// </summary>
+    public int LastBlockInstructionCount { get; private set; } = -1;
+
+    /// <summary>
+    /// Phase 30.16 sprint 5.5 — force a single per-instruction step
+    /// regardless of block-JIT enablement. Used by VerifiedBlockJitRunner
+    /// to drive the interp side N times to mirror the JIT's block.
+    /// </summary>
+    public int StepOnePerInstr()
+    {
+        _activeBus = _bus;
+        _activeCpu = this;
+        if (_halted)
+        {
+            LastBlockInstructionCount = 0;
+            return 0;
+        }
+        // StepOne returns cycles consumed; we don't care here.
+        StepOne();
+        LastBlockInstructionCount = 1;
+        return 1;
+    }
+
+    /// <summary>
+    /// Phase 30.16 sprint 5.5 — make this CPU the active singleton
+    /// for extern bus / port calls. Pairs with the verifier's
+    /// per-stepper env-activation pattern (X86 has the same shape).
+    /// </summary>
+    public void SetActiveForLockstep()
+    {
+        _activeBus = _bus;
+        _activeCpu = this;
+    }
+
+    /// <summary>
+    /// Phase 30.16 sprint 5.5 — clone the CPU state buffer + IME/halt
+    /// flags for the Verified Block-JIT framework's pre-block snapshot.
+    /// Bus memory is snapshotted separately by the harness (it owns the
+    /// bus reference). Returned record is opaque; pass to LoadState to
+    /// restore.
+    /// </summary>
+    public GbCpuStateBlob SnapshotState() => new()
+    {
+        StateCopy = (byte[])_state.Clone(),
+        Halted = _halted,
+        Ime = _ime,
+        EiDelay = _eiDelay,
+        HaltSignal = _haltSignal,
+        TotalInstructions = _totalInstructions,
+        BlockGeneration = _blockGeneration,
+    };
+
+    public void LoadState(GbCpuStateBlob blob)
+    {
+        if (blob.StateCopy.Length != _state.Length)
+            throw new InvalidOperationException(
+                $"GB JsonCpu.LoadState: state buffer size mismatch ({blob.StateCopy.Length} vs {_state.Length}).");
+        Array.Copy(blob.StateCopy, _state, _state.Length);
+        _halted = blob.Halted;
+        _ime = blob.Ime;
+        _eiDelay = blob.EiDelay;
+        _haltSignal = blob.HaltSignal;
+        _totalInstructions = blob.TotalInstructions;
+        _blockGeneration = blob.BlockGeneration;
+    }
+
     public JsonCpu(bool enableBlockJit = false)
     {
         _blockJitEnabled = enableBlockJit;
@@ -439,11 +520,19 @@ public sealed unsafe class JsonCpu : ICpuBackend
         // will set this so the post-block PC-advance path knows to skip.
         _statePtr[_pcWrittenOffset] = 0;
 
+        // Phase 30.16 sprint 5.5 — clear LastInstrIndex slot so block IR's
+        // per-preBB write gives us the actual instruction count on return
+        // (matches x86 5.4c pattern; needed for verifier accuracy).
+        int lastIdxOff = (int)_rt.LastInstrIndexOffset;
+        Marshal.WriteInt32((IntPtr)(_statePtr + lastIdxOff), 0);
+
         var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
         fn(_statePtr);
 
         int cyclesLeft = Marshal.ReadInt32((IntPtr)(_statePtr + _cyclesLeftOffset));
         int cyclesConsumed = blockBudget - cyclesLeft;
+        int actualInstrCount = Marshal.ReadInt32((IntPtr)(_statePtr + lastIdxOff));
+        LastBlockInstructionCount = actualInstrCount > 0 ? actualInstrCount : entry.InstructionCount;
 
         // If no branch fired AND budget didn't exhaust, advance PC to
         // the address right after the LAST instruction (P1 #6: this is
@@ -760,6 +849,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
         if (_activeBus is null) return;
         _activeBus.WriteByte((ushort)addr, value);
         _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
+        ActiveTraceSink?.RecordMemWrite(0, addr, value, 1);
     }
 
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
@@ -770,6 +860,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _activeBus.WriteByte((ushort)(addr + 1),  (byte)(value >> 8));
         _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
         _activeCpu?._blockCache?.NotifyMemoryWrite(addr + 1);
+        ActiveTraceSink?.RecordMemWrite(0, addr, value, 2);
     }
 
     /// <summary>
@@ -791,6 +882,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
         if (_activeBus is null) return 0;
         _activeBus.WriteByte((ushort)addr, value);
         _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
+        ActiveTraceSink?.RecordMemWrite(0, addr, value, 1);
         return IsIrqRelevantAddress((ushort)addr) ? (byte)1 : (byte)0;
     }
 
@@ -802,6 +894,7 @@ public sealed unsafe class JsonCpu : ICpuBackend
         _activeBus.WriteByte((ushort)(addr + 1),  (byte)(value >> 8));
         _activeCpu?._blockCache?.NotifyMemoryWrite(addr);
         _activeCpu?._blockCache?.NotifyMemoryWrite(addr + 1);
+        ActiveTraceSink?.RecordMemWrite(0, addr, value, 2);
         return (IsIrqRelevantAddress((ushort)addr) || IsIrqRelevantAddress((ushort)(addr + 1)))
             ? (byte)1 : (byte)0;
     }
