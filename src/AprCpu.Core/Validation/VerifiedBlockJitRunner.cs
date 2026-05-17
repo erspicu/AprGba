@@ -41,7 +41,8 @@ public sealed record VerifiedBlockResult(
     int InstructionCount,
     string Detail,
     string? CpuStateA = null,
-    string? CpuStateB = null);
+    string? CpuStateB = null,
+    string? CpuStatePre = null);
 
 /// <summary>
 /// Driver for verified-block-JIT mode. Owns the JIT CPU and interp
@@ -122,7 +123,8 @@ public sealed class VerifiedBlockJitRunner
                 cpuPre.Pc, blockInstrCount,
                 $"CPU state diverged: {cpuDiff}",
                 CpuStateA: FormatSnapshot(cpuPostJit),
-                CpuStateB: FormatSnapshot(cpuPostInterp));
+                CpuStateB: FormatSnapshot(cpuPostInterp),
+                CpuStatePre: FormatSnapshot(cpuPre));
         }
 
         // 6. Axis 2: memory write trace.
@@ -134,7 +136,8 @@ public sealed class VerifiedBlockJitRunner
                 cpuPre.Pc, blockInstrCount,
                 $"mem-write trace diverged: {memDiff}",
                 CpuStateA: FormatSnapshot(cpuPostJit),
-                CpuStateB: FormatSnapshot(cpuPostInterp));
+                CpuStateB: FormatSnapshot(cpuPostInterp),
+                CpuStatePre: FormatSnapshot(cpuPre));
         }
 
         // 7. Axis 3: side effects (ports + IRQs).

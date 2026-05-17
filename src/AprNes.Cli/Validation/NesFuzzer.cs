@@ -101,6 +101,8 @@ public static class NesFuzzer
                         Console.WriteLine($"  iter {iter}/seed {iterSeed}: divergence at block #{r.BlockIndex}, pc=0x{r.BlockStartPc:X4}");
                         Console.WriteLine($"    status: {r.Status}");
                         Console.WriteLine($"    detail: {r.Detail}");
+                        if (r.CpuStatePre is not null)
+                            Console.WriteLine($"    pre:    {r.CpuStatePre}");
                         if (r.CpuStateA is not null)
                         {
                             Console.WriteLine($"    JIT:    {r.CpuStateA}");
