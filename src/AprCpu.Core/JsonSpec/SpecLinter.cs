@@ -47,6 +47,8 @@ public static class SpecLinter
             {
                 var where = $"{setName}/{group.Name}/{format.Name}/{instr.Mnemonic}";
                 CheckPostStoreRegisterUpdate(instr, where, warnings);
+                CheckHaltStopSemantics(instr, where, warnings);
+                CheckEmptyStepsNonNop(instr, where, warnings);
             }
         }
         return warnings;
@@ -64,6 +66,66 @@ public static class SpecLinter
     /// store_byte, using a snapshot of the original pair value as the
     /// store address.
     /// </summary>
+    /// <summary>
+    /// HALT and STOP instructions stop CPU execution until an IRQ. They
+    /// MUST end the block (writes_pc:"always" or changes_mode:true) so
+    /// block-JIT exits to the host scheduler. The block-detector's
+    /// HasHaltOrStopStep check (BlockDetector.cs ~line 587) covers the
+    /// step-op side, but spec authors sometimes forget to set the
+    /// metadata fields too — the metadata is what the JIT IR uses
+    /// to emit the right code path.
+    /// </summary>
+    private static void CheckHaltStopSemantics(
+        InstructionDef instr, string where, List<Warning> warnings)
+    {
+        if (instr.Steps is null) return;
+        bool hasHaltOrStop = false;
+        foreach (var step in instr.Steps)
+            if (step.Op == "halt" || step.Op == "stop") { hasHaltOrStop = true; break; }
+        if (!hasHaltOrStop) return;
+
+        bool isMode = instr.ChangesMode;
+        bool writesPc = instr.WritesPc == "always";
+        if (!isMode && !writesPc)
+        {
+            warnings.Add(new Warning(
+                Rule: "HaltStopMetadata",
+                Where: where,
+                Message: $"instruction has op=\"halt\"/\"stop\" step but neither " +
+                         $"changes_mode:true nor writes_pc:\"always\" is set. Without " +
+                         $"these the block-detector may not end the block at this " +
+                         $"instruction; block-JIT then runs PAST the halt, silently " +
+                         $"corrupting state. Set changes_mode:true."));
+        }
+    }
+
+    /// <summary>
+    /// Warn on instructions whose mnemonic is non-trivial but steps is
+    /// empty — typically a typo or in-progress entry. NOP / STOP / HALT
+    /// are legitimately empty (NOP does nothing; HALT/STOP have steps
+    /// via the op field). Anything else with empty steps should declare
+    /// at least one step OR be marked as `unconditional:true` no-op.
+    /// </summary>
+    private static void CheckEmptyStepsNonNop(
+        InstructionDef instr, string where, List<Warning> warnings)
+    {
+        if (instr.Steps is null || instr.Steps.Count > 0) return;
+        if (instr.Mnemonic == "NOP" || instr.Mnemonic == "STOP" || instr.Mnemonic == "HALT")
+            return;
+        // FPU no-op stubs are intentionally empty; recognise common ones.
+        if (instr.Mnemonic == "FPU_NOOP" || instr.Mnemonic == "ESCAPE")
+            return;
+        // Instructions that switch instruction set (GB CB-prefix, ARM BX
+        // when changing T-bit) are legitimately empty — the decoder /
+        // host dispatch handles the actual work.
+        if (instr.SwitchesInstructionSet) return;
+        warnings.Add(new Warning(
+            Rule: "EmptyStepsNonNop",
+            Where: where,
+            Message: $"instruction has zero steps but mnemonic '{instr.Mnemonic}' is not " +
+                     $"a known no-op (NOP/STOP/HALT). Likely an in-progress spec entry."));
+    }
+
     private static void CheckPostStoreRegisterUpdate(
         InstructionDef instr, string where, List<Warning> warnings)
     {
