@@ -255,10 +255,30 @@ context needed to identify the buggy emitter.
   on x86, not NOP) as silent NOP for unknown opcodes ran wrong
   semantics. Framework fix: only do fallback when 0x00 has zero
   operand steps + length = 1.
+- **GB SyncEmitter PC clobber (30.18s)**: EI's deferred `sync` body
+  overwrote JP/CALL/RET branch targets with bi.Pc+length. Fixed by
+  runtime PcWritten check.
+- **GB MBC interaction (30.18u)**: random `LD (HL),A` writes to
+  $4000-$5FFF triggered MBC bank switch, JIT ran stale pre-compiled
+  IR. Fixed with `bus.SuppressMbcWrites=true` in fuzzer.
+- **GBA STMDB R15 (30.18p)**: user-mode read path returned stale
+  PC for R15. Fixed by routing through PipelinePcConstant.
+- **GBA LDR/STR Rn=R15 (30.18q)**: per-instr WriteReg with runtime
+  index = R15 didn't mark PcWritten. Fixed with runtime check.
+- **GB INC/DEC (HL) flag ordering (30.18v)**: store_byte sync-exit
+  skipped post-store flag updates. Fixed by reordering spec steps.
+- **GB IRQ-cadence (30.18y)**: verifier INTERP didn't poll IRQ at
+  block boundary. Fixed with `PollPendingIrqsAtBlockBoundary()`.
+- **GB HALT-spin cadence (30.18ab)**: JIT.RunCycles ticks during
+  HALT-spin (can wake via timer overflow), INTERP didn't. Fixed by
+  mirroring one tick in `PollPendingIrqsAtBlockBoundary` when HALTed.
 
 The fuzzer is the production tool for finding the *next* emitter
 bug; the verifier is the production tool for proving a known-good
-workload stays bit-identical across emitter changes.
+workload stays bit-identical across emitter changes. After the
+Phase 30.18 sprint series, both modes report **0 divergences** across
+all 4 CPUs on primary test ROMs (1M blocks each) AND across 52+
+random fuzzer seeds. Use this as the regression baseline.
 
 ## 7.4 Spec linter (Phase 30.18n)
 

@@ -62,3 +62,23 @@ Key callbacks:
 - PIT IRQs disabled (verifier needs determinism).
 - V1 snapshot is full RAM memcpy (~1MB × ~15k blocks/sec). CoW
   optimisation deferred — see design doc §4.6.
+
+## Phase 30.18 final state (2026-05-17)
+
+All 4 CPU backends at **1,000,000 blocks NoDiff** on primary test
+ROMs, plus 0 divergences across 52+ random fuzzer seeds. The
+verifier and fuzzer combo surfaced ~10 real bugs during the
+Phase 30.18 sprint series — full breakdown in
+`MD/process/05-verified-blockjit-howto.md` §7 and the closure note
+at `MD/performance/202605171533-verifier-and-fuzzer-closure.md`.
+
+Companion differential fuzzer (Phase 30.17/30.18):
+```bash
+apr-nes --fuzz=N [--fuzz-blocks=M] [--fuzz-seed=S] [--fuzz-continue]
+apr-gb  --fuzz=N [...]
+apr-gba --fuzz=N [...]
+apr-x86 --fuzz=N [...]
+```
+Generates random instruction streams and feeds them through the
+verifier. Reliably surfaces emitter / cadence / spec-ordering bugs
+that hand-curated test ROMs miss.
