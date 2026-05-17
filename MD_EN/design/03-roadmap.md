@@ -1422,3 +1422,45 @@ complete POST + bootstrap a real OS.
 
 Evidence: at commit `e62a462`, real BIOS + real FreeDOS floppy boot
 end-to-end. Screenshot `result/pc/30-rolfix-realbios.png`.
+
+## 30.15-30.18 series: Verified Block-JIT framework + fuzzer ✅ done (2026-05-17)
+
+Built a lock-step JIT-vs-INTERP verifier framework + random-ROM
+differential fuzzer across 4 CPUs (x86-16, LR35902/GB, MOS 6502/NES,
+ARM7TDMI/GBA). Bug-hunting surfaced ~10 real emitter/framework/spec
+bugs. Full closure in
+`MD/performance/202605171533-verifier-and-fuzzer-closure.md`.
+
+### Final verification state
+
+| CPU | Primary ROM | Blocks NoDiff | Fuzzer (52+ seeds) |
+|---|---|---|---|
+| x86 (i8086) | pcxtbios + FreeDOS | 1,000,000 | 0 div |
+| **GB (LR35902)** | cpu_instrs.gb | **1,000,000** | 0 div |
+| NES (Ricoh 2A03) | blargg cpu_test5 | 1,000,000 | 0 div |
+| GBA (ARM7TDMI) | gba-tests/arm/arm.gba | 1,000,000 | 0 div |
+
+GB extended ROM coverage (200k blocks each NoDiff): halt_bug.gb,
+instr_timing.gb, mem_timing.gb / mem_timing-2.gb, interrupt_time.gb.
+Individual cpu_instrs sub-tests (5 ROMs × 100k each).
+
+GBA extended (200k each NoDiff): memory.gba, bios.gba.
+
+### Bugs fixed
+
+- #339 GB JP/RST + EI defer interaction (3 sub-fixes)
+- #340 GBA STMDB R15 pipeline + base-Rn=R15
+- #342 x86 fuzzer empty-block SKIPPED rate
+- #343 GBA LDR/STR Rn=R15 writeback
+- #344 GB INC/DEC (HL) flag update ordering
+- #345 GB IRQ-vector cadence (block-boundary poll)
+- #346 GB HALT-spin cadence (verifier mirror)
+
+### Why 30.18 matters for the framework
+
+Upgrades correctness evidence from "hand-curated test ROMs pass"
+to "random ROMs also pass". Fuzzer-found bugs are all cadence /
+timing / spec-ordering edge cases that hand-written tests rarely
+hit. Each CPU adapter is ~150-200 LoC. The framework now produces
+a strong "JIT and INTERP — two independent paths — agree 100%"
+guarantee that no single-path test can match.

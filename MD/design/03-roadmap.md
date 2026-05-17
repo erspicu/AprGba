@@ -1420,3 +1420,41 @@ handler conventions、ROL trick 等等都是 1980s real-world code。能跑這�
 
 實證：commit `e62a462` 那一刻 real BIOS + real FreeDOS floppy 端到端 boot 成功，
 screenshot `result/pc/30-rolfix-realbios.png` 為證。
+
+## 30.15-30.18 系列：Verified Block-JIT framework + differential fuzzer ✅ 完成（2026-05-17）
+
+跨 4 CPU（x86-16, LR35902/GB, MOS 6502/NES, ARM7TDMI/GBA）建構 lock-step JIT-vs-INTERP
+驗證 framework + 隨機 ROM differential fuzzer。bug-hunting 期間總共修了 ~10 個 real
+emitter / framework / spec bug。完整 closure note 在
+`MD/performance/202605171533-verifier-and-fuzzer-closure.md`。
+
+### 最終驗證狀態
+
+| CPU | 主要 ROM | Blocks NoDiff | Fuzzer (52+ seeds) |
+|---|---|---|---|
+| x86 (i8086) | pcxtbios + FreeDOS | 1,000,000 | 0 div |
+| **GB (LR35902)** | cpu_instrs.gb | **1,000,000** | 0 div |
+| NES (Ricoh 2A03) | blargg cpu_test5 | 1,000,000 | 0 div |
+| GBA (ARM7TDMI) | gba-tests/arm/arm.gba | 1,000,000 | 0 div |
+
+GB 擴充覆蓋：halt_bug.gb / instr_timing.gb / mem_timing.gb / mem_timing-2.gb /
+interrupt_time.gb 各 200k blocks NoDiff，5 個 cpu_instrs 子測試各 100k NoDiff。
+
+GBA 擴充：memory.gba / bios.gba 各 200k NoDiff。
+
+### 修了的 bug
+
+- #339 GB JP/RST + EI defer 互動（3 個子 fix）
+- #340 GBA STMDB R15 pipeline + base-Rn=R15
+- #342 x86 fuzzer empty-block SKIPPED rate
+- #343 GBA LDR/STR Rn=R15 writeback
+- #344 GB INC/DEC (HL) flag update ordering
+- #345 GB IRQ-vector cadence（block-boundary poll）
+- #346 GB HALT-spin cadence（verifier mirror）
+
+### 為何 30.18 對 framework 重要
+
+framework correctness 證據從 "hand-curated test ROM 跑得通" 升級到 "random ROM
+也跑得通"。fuzzer 暴露的 bug 都是 cadence / timing / spec-ordering 邊角 case，
+hand-written test 不太可能覆蓋。每個 CPU adapter 加 ~150-200 LoC 就能掛上，
+產出 "JIT vs INTERP 兩條獨立 path 100% 同意" 的 strong guarantee。

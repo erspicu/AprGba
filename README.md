@@ -97,20 +97,33 @@ Results:
 each backend exposes a `--fuzz=N --fuzz-blocks=M --fuzz-seed=S` mode
 that generates random-instruction-stream ROMs and feeds them through
 the verifier. Per-CPU adapter ~150 LoC. The fuzzer reliably surfaces
-emitter and framework bugs that hand-curated test ROMs don't reach:
+emitter and framework bugs that hand-curated test ROMs don't reach.
 
-| CPU | Bugs found by fuzzer | Status |
+**Phase 30.18 final state** (after the bug-hunting + cadence-fix arc):
+
+| CPU | Primary ROM verifier | Fuzzer (52+ random seeds) |
 |---|---|---|
-| NES | 3 verifier-framework gaps (`_cpubus` snapshot, `FetchImm` fast-path, open-bus PC) | All fixed; **500-iter × 200-blocks = 41,473 blocks NoDiff** |
-| LR35902 (GB) | 2 per-instr emitter bugs (STOP pad-byte, HALT flag transfer) | Both fixed in spec + runtime |
-| ARM7TDMI (GBA) | 1 emitter bug (STMDB R15 pipeline offset, off by 8 bytes) | Tracked for follow-up |
-| x86-16 | 1 BlockDetector NOP-fallback bug (synthesizing 0x00=ADD as silent NOP) | Fixed; safety check added |
+| x86 (i8086) | pcxtbios + FreeDOS, 1,000,000 blocks NoDiff | 0 divergences |
+| **LR35902 (GB)** | cpu_instrs.gb, **1,000,000 blocks NoDiff** | 0 divergences |
+| NES (Ricoh 2A03) | blargg cpu_test5/cpu.nes, 1,000,000 blocks NoDiff | 0 divergences |
+| ARM7TDMI (GBA) | gba-tests/arm/arm.gba, 1,000,000 blocks NoDiff | 0 divergences |
 
-Plus 3 real x86 emitter bugs surfaced during the original 30.15d
-framework bring-up (PC linear-vs-IP, packed-tail `ImmConsumed` leak,
-INT-pushed FLAGS reserved-bit). Total framework session: ~10 real
-bugs found + fixed via the verifier + fuzzer combo. The framework is
-production-ready for any future CPU backend.
+GB extended ROM coverage (all 200k blocks NoDiff): halt_bug.gb,
+instr_timing.gb, mem_timing.gb / mem_timing-2/mem_timing.gb,
+interrupt_time.gb. Individual cpu_instrs sub-tests (5 ROMs × 100k
+blocks each).
+
+GBA extended (200k blocks each): memory.gba, bios.gba.
+
+Bug-fix arc: tasks #339, #340, #342, #343, #344, #345, #346 — 7
+distinct root causes including SyncEmitter PC clobber after EI defer,
+MBC bank-switch interaction, conditional-branch defer-sync, R15-write
+detection, INC/DEC (HL) flag ordering, IRQ-cadence asymmetry, and
+HALT-spin asymmetry. The framework is production-ready and the
+fuzzer is demonstrably effective at surfacing edge-case bugs that
+hand-curated test ROMs miss. T1 unit tests: 895/895 PASS.
+
+Closure note: [`MD/performance/202605171533-verifier-and-fuzzer-closure.md`](MD/performance/202605171533-verifier-and-fuzzer-closure.md).
 
 ---
 
