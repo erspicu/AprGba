@@ -106,6 +106,20 @@ public static class NesFuzzer
                             Console.WriteLine($"    JIT:    {r.CpuStateA}");
                             Console.WriteLine($"    INTERP: {r.CpuStateB}");
                         }
+                        // Dump the PRG bytes near the block start so future
+                        // investigation can disassemble. addr is the linear
+                        // PC at block entry; we know it's in PRG-ROM
+                        // ($8000..$FFFF), so look up the bytes from the
+                        // mapper-fed bus directly.
+                        Console.WriteLine($"    PRG bytes @ pc=0x{r.BlockStartPc:X4}..+32:");
+                        var hexLine = new System.Text.StringBuilder("      ");
+                        for (int i = 0; i < 32; i++)
+                        {
+                            var bb = busJit.ReadByte((ushort)((uint)r.BlockStartPc + (uint)i));
+                            hexLine.Append($"{bb:X2} ");
+                            if ((i & 7) == 7) hexLine.Append(" ");
+                        }
+                        Console.WriteLine(hexLine.ToString());
                         iterDiverged = true;
                         break;
                     }
