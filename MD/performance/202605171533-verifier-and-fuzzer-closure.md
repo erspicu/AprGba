@@ -189,6 +189,22 @@ around defer/sync/MBC interactions).
 
 T1 unit-tests: 895/895 pass throughout the bug-fix series.
 
+## Stress-test results (5M-block sweep, post Phase 30.18ab)
+
+Verifier was pushed past the original 1M-block target to confirm
+sustained correctness:
+
+| CPU | Sweep | Verified blocks | Verified instrs | Elapsed |
+|---|---|---|---|---|
+| GB  | cpu_instrs.gb @ 5M    | 5,000,000 | 27,923,052 | 89s |
+| GBA | gba-tests/arm.gba @ 3M | 3,000,000 |  3,000,000 | 8m 16s |
+| x86 | pcxtbios + FreeDOS @ 5M cyc | 5,000,000 | 22,466,145 | 17m 43s |
+
+All three sweeps: **status NoDiff**. Combined with the multi-ROM
+expansion (30 unique ROMs across 4 CPUs verified clean) and the
+52+ random fuzzer seeds, the framework is comprehensively validated
+at scale.
+
 ## Diagnostic + framework-prevention tools added (Phase 30.18l/m/n)
 
 After the immediate verifier+fuzzer work, this session added several
