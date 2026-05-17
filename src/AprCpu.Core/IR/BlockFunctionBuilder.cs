@@ -321,6 +321,16 @@ public sealed unsafe class BlockFunctionBuilder
             builder.BuildStore(
                 LLVMValueRef.CreateConstInt(LLVMTypeRef.Int8, 0, false),
                 Layout.GepPcWritten(builder, statePtr));
+            // Phase 30.15d sprint 5.4c — track actual JIT instruction
+            // count. Write (i+1) into LastInstrIndex slot here at the
+            // start of each preBB so any block exit point (mid-block
+            // Jcc/RET/INT, budget exhaustion, or fall-through) leaves
+            // the slot containing the 1-based count of instructions
+            // entered. Verifier framework reads this to step interp the
+            // same N times. Cleared to 0 by host pre-call.
+            builder.BuildStore(
+                LLVMValueRef.CreateConstInt(LLVMTypeRef.Int32, (ulong)(i + 1), false),
+                Layout.GepLastInstrIndex(builder, statePtr));
 
             // N1.B' — for architectures whose emitters always read+advance
             // state PC (no block-JIT bake path) — currently MOS6502 and

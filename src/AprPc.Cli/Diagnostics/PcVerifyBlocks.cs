@@ -56,6 +56,18 @@ public static class PcVerifyBlocks
         var jitStepper = new X86SteppableCpu("JIT", envJit.Cpu, envJit.Bus.Memory);
         var interpStepper = new X86SteppableCpu("INTERP", envInterp.Cpu, envInterp.Bus.Memory);
 
+        // Phase 30.15d sprint 5.4b — wire HW-state snapshot into the
+        // verifier. JIT side captures PortBus state into the snapshot;
+        // interp side restores it so port-cycling counters (e.g. CGA
+        // status port 0x3DA) don't drift between envs and cause spurious
+        // mem-write divergences. This eliminates a whole class of
+        // false-positive verifier reports.
+        jitStepper.AdditionalSnapshot = () => envJit.Ports.Snapshot();
+        interpStepper.AdditionalRestore = portSnap =>
+        {
+            if (portSnap is PcPortBusSnapshot pbs) envInterp.Ports.RestoreSnapshot(pbs);
+        };
+
         // Activate JIT env once at start so JIT-emitted code routes correctly.
         envJit.Activate();
         var runner = new VerifiedBlockJitRunner(jitStepper, interpStepper);

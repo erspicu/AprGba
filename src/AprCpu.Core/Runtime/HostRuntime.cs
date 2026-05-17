@@ -409,6 +409,7 @@ public sealed unsafe class HostRuntime : IDisposable
     public ulong CycleCounterOffset => GetFieldOffsetBytes(Layout.CycleCounterFieldIndex);
     public ulong PcWrittenOffset    => GetFieldOffsetBytes(Layout.PcWrittenFieldIndex);
     public ulong CyclesLeftOffset   => GetFieldOffsetBytes(Layout.CyclesLeftFieldIndex);
+    public ulong LastInstrIndexOffset => GetFieldOffsetBytes(Layout.LastInstrIndexFieldIndex);
 
     private void EnsureFinalized()
     {

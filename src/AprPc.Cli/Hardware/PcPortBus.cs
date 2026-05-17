@@ -612,4 +612,54 @@ public sealed class PcPortBus
             }
         }
     }
+
+    /// <summary>
+    /// Phase 30.15d sprint 5.4b — snapshot/restore for the verifier
+    /// framework. Captures the small amount of in-PortBus state that
+    /// evolves independently of guest memory (cycling counters, control
+    /// register copies, kbd FIFO position) so the JIT-vs-interp diff
+    /// doesn't see spurious divergences from one env's PortBus being
+    /// "ahead" of the other's. Does NOT snapshot Pic / Pit / Fdc / Dma
+    /// — those have their own state, snapshotted separately by the
+    /// env wrapper.
+    /// </summary>
+    public PcPortBusSnapshot Snapshot() => new()
+    {
+        VideoStatusCount = _videoStatusCount,
+        Port61 = _port61,
+        Port80 = _port80,
+        NmiMask = _nmiMask,
+        CmosIndex = _cmosIndex,
+        CmosCopy = (byte[])_cmos.Clone(),
+        Kbd60Data = _kbd60Data,
+        Kbd64Status = _kbd64Status,
+        Kbd60IrqLine = _kbd60IrqLine,
+    };
+
+    public void RestoreSnapshot(PcPortBusSnapshot s)
+    {
+        _videoStatusCount = s.VideoStatusCount;
+        _port61 = s.Port61;
+        _port80 = s.Port80;
+        _nmiMask = s.NmiMask;
+        _cmosIndex = s.CmosIndex;
+        Array.Copy(s.CmosCopy, _cmos, s.CmosCopy.Length);
+        _kbd60Data = s.Kbd60Data;
+        _kbd64Status = s.Kbd64Status;
+        _kbd60IrqLine = s.Kbd60IrqLine;
+    }
+}
+
+/// <summary>Snapshot blob for PcPortBus (Phase 30.15d sprint 5.4b).</summary>
+public sealed class PcPortBusSnapshot
+{
+    public long VideoStatusCount;
+    public byte Port61;
+    public byte Port80;
+    public byte NmiMask;
+    public byte CmosIndex;
+    public byte[] CmosCopy = System.Array.Empty<byte>();
+    public byte Kbd60Data;
+    public byte Kbd64Status;
+    public bool Kbd60IrqLine;
 }

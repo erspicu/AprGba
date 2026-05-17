@@ -86,6 +86,18 @@ public sealed unsafe class CpuStateLayout
     /// </summary>
     public int CyclesLeftFieldIndex { get; }
 
+    /// <summary>
+    /// Phase 30.15d sprint 5.4c — i32 "1-based last-instruction-index completed
+    /// in most-recent block" slot. BlockFunctionBuilder writes (i+1) at the
+    /// start of each instruction's pre-BB; the host runtime clears it pre-call
+    /// and reads it post-call to get the actual number of architectural
+    /// instructions the JIT block executed before exiting (vs the BLOCK SIZE
+    /// detected at compile time, which differs when an early Jcc/RET takes).
+    /// Required by the Verified Block-JIT framework so its interpreter side
+    /// runs exactly N matching instructions.
+    /// </summary>
+    public int LastInstrIndexFieldIndex { get; }
+
     public CpuStateLayout(
         LLVMContextRef context,
         RegisterFile registerFile,
@@ -149,6 +161,8 @@ public sealed unsafe class CpuStateLayout
         PcWrittenFieldIndex         = elements.Count;
         elements.Add(LLVMTypeRef.Int8);
         CyclesLeftFieldIndex        = elements.Count;
+        elements.Add(LLVMTypeRef.Int32);
+        LastInstrIndexFieldIndex    = elements.Count;
         elements.Add(LLVMTypeRef.Int32);
 
         StructType  = LLVMTypeRef.CreateStruct(elements.ToArray(), Packed: false);
@@ -261,6 +275,10 @@ public sealed unsafe class CpuStateLayout
     /// <summary>GEP into the i32 "cycles remaining in JIT budget" slot.</summary>
     public LLVMValueRef GepCyclesLeft(LLVMBuilderRef builder, LLVMValueRef statePtr)
         => BuildGep(builder, statePtr, CyclesLeftFieldIndex, "cycles_left_ptr");
+
+    /// <summary>GEP into the i32 "1-based last completed-instr index in last block" slot.</summary>
+    public LLVMValueRef GepLastInstrIndex(LLVMBuilderRef builder, LLVMValueRef statePtr)
+        => BuildGep(builder, statePtr, LastInstrIndexFieldIndex, "last_instr_idx_ptr");
 
     /// <summary>
     /// GEP into a GPR slot by a runtime-computed index. Bitcasts the state

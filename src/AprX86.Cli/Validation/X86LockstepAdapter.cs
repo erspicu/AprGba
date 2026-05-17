@@ -127,18 +127,33 @@ public sealed class X86SteppableCpu : IBlockBoundedSteppableCpu
         X86JsonCpu.ActiveTraceSink = token as IBlockTraceSink;
     }
 
+    /// <summary>
+    /// Phase 30.15d sprint 5.4b — optional hook for capturing additional
+    /// host-side state (e.g. PcPortBus cycling counters, PIC IMR, PIT
+    /// reload values) into the snapshot blob. Returns an arbitrary
+    /// object that the matching <see cref="AdditionalRestore"/> hook
+    /// will receive. Both are no-op by default; the harness that
+    /// constructs the steppers wires them to whichever HW state needs
+    /// snapshotting to keep JIT-vs-interp deterministic.
+    /// </summary>
+    public Func<object?>?     AdditionalSnapshot { get; set; }
+    public Action<object?>?  AdditionalRestore  { get; set; }
+
     public object SnapshotMemoryState()
     {
-        // V1: full 1MB memcpy + CPU state clone.
+        // V1: full 1MB memcpy + CPU state clone + optional HW state.
         var ramCopy = (byte[])_mem.Ram.Clone();
         var cpuCopy = _cpu.State;  // X86State.Clone-equivalent via getter
-        return (ramCopy, cpuCopy);
+        var hwCopy = AdditionalSnapshot?.Invoke();
+        return (ramCopy, cpuCopy, hwCopy);
     }
 
     public void LoadMemoryState(object snapshot)
     {
-        var (ramCopy, cpuCopy) = ((byte[], AprX86.Cli.Cpu.X86State))snapshot;
+        var (ramCopy, cpuCopy, hwCopy) =
+            ((byte[], AprX86.Cli.Cpu.X86State, object?))snapshot;
         Array.Copy(ramCopy, _mem.Ram, ramCopy.Length);
         _cpu.LoadState(cpuCopy);
+        AdditionalRestore?.Invoke(hwCopy);
     }
 }

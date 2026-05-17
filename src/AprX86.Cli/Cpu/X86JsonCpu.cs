@@ -541,7 +541,15 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
             }
         }
 
-        return StepOne();
+        // Phase 30.15d sprint 5.4c — fall-through to per-instr (prefix
+        // case OR block-JIT compile bailed). Must explicitly set
+        // LastBlockInstructionCount=1; otherwise the slot holds STALE
+        // value from a prior block (e.g. 59 from previous block-JIT
+        // call), and the verifier framework would drive interp for the
+        // wrong number of instructions.
+        var rc1 = StepOne();
+        LastBlockInstructionCount = 1;
+        return rc1;
     }
 
     /// <summary>
@@ -610,13 +618,20 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
         // signal. Stale value from prior call would mis-signal.
         _statePtr[_rt.PcWrittenOffset] = 0;
 
+        // Phase 30.15d sprint 5.4c — clear LastInstrIndex slot, JIT
+        // block writes (i+1) at start of each instr's preBB, so on
+        // return the slot contains the 1-based count of instructions
+        // actually entered (correct even on mid-block early Jcc/RET
+        // exits, unlike entry.InstructionCount which is the COMPILE-
+        // TIME block size). Required by verifier framework.
+        var lastIdxOff = (int)_rt.LastInstrIndexOffset;
+        Marshal.WriteInt32((IntPtr)(_statePtr + lastIdxOff), 0);
         var fn = (delegate* unmanaged[Cdecl]<byte*, void>)entry.Fn;
         fn(_statePtr);
-        // Phase 30.15d sprint 5.3 — record actual block size from the
-        // cache entry (BlockCache stores the per-block instruction
-        // count). Lets the verifier framework drive the interp side
-        // for exactly the same number of architectural instructions.
-        LastBlockInstructionCount = entry.InstructionCount;
+        int actualCount = Marshal.ReadInt32((IntPtr)(_statePtr + lastIdxOff));
+        if (Environment.GetEnvironmentVariable("APR_X86_TRACE_BLOCKLEN") is not null)
+            Console.Error.WriteLine($"[BLOCKLEN] pc=0x{linearPc:X5} detected={entry.InstructionCount} actual={actualCount}");
+        LastBlockInstructionCount = actualCount > 0 ? actualCount : entry.InstructionCount;
         return 1;
     }
 
