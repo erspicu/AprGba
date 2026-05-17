@@ -253,6 +253,45 @@ public class BlockDetectorTests
         Assert.Equal(BlockEndReason.SwitchesInstructionSet, blk.EndReason);
     }
 
+    /// <summary>
+    /// Phase 30.18r — Regression repro for bug #339 (GB fuzzer iter 79
+    /// seed 74172009, block at $0150). Random-ROM byte sequence:
+    /// `07 1F 1E 1E 64 2E 19 69 35 FB C3 C9 DB ...`.
+    /// Expected decode: 9 instructions ending in `JP $DBC9` (writes_pc:
+    /// always). With cross-jump-follow DISABLED, block must end at JP
+    /// with 9 instructions, 13 bytes total. With cross-jump-follow
+    /// ENABLED, detector would follow $DBC9 and produce a longer block.
+    /// </summary>
+    [Fact]
+    public void Lr35902_Bug339_RandomBytes_JpEndsBlock_WithoutCrossJumpFollow()
+    {
+        // Force OFF cross-jump-follow for this test.
+        var prior = Environment.GetEnvironmentVariable("APR_NO_CROSS_JUMP_FOLLOW");
+        Environment.SetEnvironmentVariable("APR_NO_CROSS_JUMP_FOLLOW", "1");
+        try
+        {
+            var (det, bus) = BuildLr35902Main();
+            // The exact 13 bytes from iter 79 seed 74172009.
+            byte[] bytes = { 0x07, 0x1F, 0x1E, 0x1E, 0x64, 0x2E, 0x19, 0x69,
+                             0x35, 0xFB, 0xC3, 0xC9, 0xDB };
+            for (uint i = 0; i < bytes.Length; i++)
+                bus.WriteByte(0x0150u + i, bytes[i]);
+
+            var blk = det.Detect(bus, 0x0150u);
+
+            Assert.Equal(BlockEndReason.WritesPc, blk.EndReason);
+            // Expected: 9 instructions ending at JP (idx 8).
+            Assert.Equal(9, blk.Instructions.Count);
+            Assert.Equal("JP", blk.Instructions[^1].Decoded.Instruction.Mnemonic);
+            // Last instr is JP at $015A, length 3 → EndPc = $015D.
+            Assert.Equal(0x015Du, blk.EndPc);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("APR_NO_CROSS_JUMP_FOLLOW", prior);
+        }
+    }
+
     // Minimal in-memory bus for tests — implements just the read/write
     // helpers the BlockDetector calls (ReadWord for ARM 4-byte fetch).
     // Backed by a flat 64KB byte array.
