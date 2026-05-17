@@ -4,126 +4,62 @@
 > *generated* from a machine-readable specification — and whether the
 > generated code can run fast enough to be practical.
 
-**Last updated:** 2026-05-11 (Asia/Taipei)
-**License:** [WTFPL v2](LICENSE) — do what the fuck you want to.
-**Status:** Active research. **Six CPU variants** running through the
-same framework — ARM7TDMI, LR35902, Ricoh 2A03, and the **Intel x86-16
-family** (i8086 / i80186 / i80286, with 80286 protected-mode segmentation
-and a 4-baseline-check fault model live). Block-JIT path live for all of
-them. Memory bus + cycle table + interrupt vectors + access widths +
-spec inheritance all spec-driven (i80186 / i80286 land via JSON Merge
-Patch on i8086 with **zero** runtime overhead). 894 unit tests passing.
-**Phase 28 (Intel PC emulator → FreeDOS boot)** ✅ CLOSED 2026-05-15 —
-real FreeDOS 1.3 floppy boots end-to-end on the JSON-driven CPU framework:
-kernel banner → COMMAND.COM (FreeCom 0.85a) → AUTOEXEC.BAT → FreeDOS
-ASCII logo. Closure note:
-[`MD/performance/202605152200-pc-emulator-freedos-boot.md`](MD/performance/202605152200-pc-emulator-freedos-boot.md).
-**Phase 29 (Intel 8087 / 80287 FPU as coprocessor mix-in)** ✅
-FUNCTIONALLY COMPLETE 2026-05-16 — ~30 8087/287 ESC opcodes (FNINIT,
-data movement m32/m64, FLD/FSTP/FXCH, 6 hardware constants, arithmetic
-FADD/FMUL/FSUB/FDIV±R, compares FCOM/FCOMP + FNSTSW AX, misc
-FCHS/FABS/FSQRT/FTST/FRNDINT/FFREE, control FLDCW/FSTCW/FNCLEX,
-transcendentals F2XM1/FYL2X/FPTAN/FPATAN via C# `Math.*` externs) wired
-through the JSON-driven framework as an **orthogonal coprocessor
-extension** — `spec/machines/ibm-pc-xt.json`'s `"extensions"` array
-loads `spec/coprocessors/x87/i8087/cpu.json` which is merged into the
-base i8086 spec at load time. Same LLVM module, single state struct,
-swappable silicon model. Integration capstone test computes
-`√(3² + 4²) = 5.0` via chained FPU ops, bit-exact f32/f64. Closure
-note:
-[`MD/performance/202605160100-x87-fpu-functional-complete.md`](MD/performance/202605160100-x87-fpu-functional-complete.md).
-**Phase 30 (8272 FDC + 8237 DMA + real-BIOS path)** ✅ COMPLETE
-2026-05-16 — `apr-pc --bios=BIOS/firmware/pcxtbios.bin
---floppy-a=BIOS/freedos-1.3-floppy.img` boots FreeDOS to COMMAND.COM
-with **zero HLE BIOS intercept**. Adds 8272A FDC (7 commands) + 8237
-DMA channel 2 (synchronous burst mode per Gemini 2026-05-16
-consultation) + an `X86ShiftRotateW16CountClEmitter` fix for
-`ROL r/m16, CL` with count > 1 (pcxtbios.bin INT 13h uses
-`MOV CL,4; ROL AX,CL` to split caller's segment into DMA base + page
-register; the prior stub gave wrong rotation and silently corrupted DMA
-target addresses). Real-BIOS chain validates Phase 28.IO + 29 + 30 +
-30.6c hang together. Plan: [`MD/design/30-fdc-dma-plan.md`](MD/design/30-fdc-dma-plan.md).
+**Last updated:** 2026-05-17 (Asia/Taipei) · **License:** [WTFPL v2](LICENSE) · **Tests:** 895/895 passing
 
-**Phase 30.12 (Tseng ET4000 VGA BIOS as option ROM)** ✅ 2026-05-16 —
-`--video-bios=BIOS/firmware/videorom.bin` loads the 32 KB Tseng VGA
-BIOS at 0xC0000; pcxtbios POST scans the option-ROM region (asm line
-819-880), finds the `55 AA` signature + valid checksum, and FAR-CALLs
-offset 3. The Tseng init code runs (157 INT 10h calls from `caller=C000`
-in trace) and forces video mode 3, so FreeDOS renders in full 16-colour
-text via the existing CGA decoder. Smoke-test-only — no VGA register or
-0xA0000 planar framebuffer emulation yet.
+## At a glance
 
-**Phase 30.14 (DOS test-binary injection workflow)** ✅ 2026-05-16 —
-three pieces enable end-to-end automated DOS test runs:
-(1) Port 0xE9 debug-out hook à la Bochs / QEMU
-(`OUT 0xE9, AL` → `temp/port-e9.log` + `[E9] ...` on host stdout).
-(2) `--floppy-b=PATH` second floppy mount + equipment-word fix declaring
-2 drives so FreeDOS treats B: as a real drive (uncovered a subtler
-pcxtbios `TURBO_ENABLED` bug — Port 0x61 SW2 selector is bit 3,
-not bit 2; bit 2 is sticky-high turbo flag).
-(3) `tools/make_fat12_floppy.py` — pure-Python FAT12 1.44 MB builder
-(no mtools dep needed). Full workflow doc:
-[`MD/process/03-dos-test-injection-workflow.md`](MD/process/03-dos-test-injection-workflow.md).
-
-**Phase 30.15d (Verified Block-JIT framework)** ✅ 2026-05-17 — generic
-per-block differential verifier: for every cached JIT block, snapshot
-pre-block state, run JIT once with trace capture, restore to a parallel
-INTERP env, drive the interpreter the same number of architectural
-instructions, then 3-axis compare (CPU state + mem-write trace +
-side-effect log). Found and fixed three real x86 emitter bugs (PC
-linear-vs-IP pre-write, packed-tail `ImmConsumed` leak, INT-pushed
-FLAGS reserved-bit) and validated the framework at **1,000,000 blocks
-NoDiff (4.38M architectural instructions, ~3 min runtime)** against
-`pcxtbios.bin` + FreeDOS boot. Usable for any future CPU backend via
-`IBlockBoundedSteppableCpu`. CLI: `apr-pc --verify-blocks`. How-to:
-[`MD/process/05-verified-blockjit-howto.md`](MD/process/05-verified-blockjit-howto.md).
-Design: [`MD/design/30.15d-verified-blockjit-framework-design.md`](MD/design/30.15d-verified-blockjit-framework-design.md).
-
-**Phase 30.16 (Verifier across all 4 framework CPUs)** ✅ 2026-05-17
-— extended Phase 30.15d to GB (`apr-gb --verify-blocks`), NES
-(`apr-nes --verify-blocks`), and GBA (`apr-gba --verify-blocks`).
-**Every framework-target CPU now runs through the same generic
-`VerifiedBlockJitRunner`** with per-CPU adapter at ~150-200 LoC each.
-Results:
-
-| CPU | Test ROM | Blocks NoDiff | Instructions | Runtime |
-|---|---|---|---|---|
-| x86-16 (i8086) | pcxtbios + FreeDOS | 1,000,000 | 4.38M | 2:54 |
-| LR35902 (GB) | cpu_instrs.gb | 278,872 (IRQ asymmetry) | 1.48M | 4.6s |
-| Ricoh 2A03 (NES) | cpu_test5/cpu.nes | 1,000,000 | 2.00M | 6.2s |
-| ARM7TDMI (GBA) | gba-tests/arm/arm.gba | 1,000,000 | 1.00M | 1:06 |
-
-**Phase 30.17/18 (Differential fuzzing — all 4 CPUs)** ✅ 2026-05-17 —
-each backend exposes a `--fuzz=N --fuzz-blocks=M --fuzz-seed=S` mode
-that generates random-instruction-stream ROMs and feeds them through
-the verifier. Per-CPU adapter ~150 LoC. The fuzzer reliably surfaces
-emitter and framework bugs that hand-curated test ROMs don't reach.
-
-**Phase 30.18 final state** (after the bug-hunting + cadence-fix arc):
-
-| CPU | Primary ROM verifier | Fuzzer (52+ random seeds) |
+| CPU | Block-JIT verifier (real ROM) | Random-ROM fuzzer |
 |---|---|---|
-| x86 (i8086) | pcxtbios + FreeDOS, 1,000,000 blocks NoDiff | 0 divergences |
-| **LR35902 (GB)** | cpu_instrs.gb, **1,000,000 blocks NoDiff** | 0 divergences |
-| NES (Ricoh 2A03) | blargg cpu_test5/cpu.nes, 1,000,000 blocks NoDiff | 0 divergences |
-| ARM7TDMI (GBA) | gba-tests/arm/arm.gba, 1,000,000 blocks NoDiff | 0 divergences |
+| **x86-16** (i8086/i80186/i80286) | pcxtbios + FreeDOS, 5M blocks NoDiff | 0 divergences |
+| **LR35902** (Game Boy DMG) | cpu_instrs.gb, **5M blocks NoDiff** | 0 div / 52+ seeds |
+| **Ricoh 2A03** (NES) | blargg cpu_test5, 1M blocks NoDiff | 0 divergences |
+| **ARM7TDMI** (GBA) | gba-tests/arm.gba, 3M blocks NoDiff | 0 divergences |
 
-GB extended ROM coverage (all 200k blocks NoDiff): halt_bug.gb,
-instr_timing.gb, mem_timing.gb / mem_timing-2/mem_timing.gb,
-interrupt_time.gb. Individual cpu_instrs sub-tests (5 ROMs × 100k
-blocks each).
+Six CPU variants share one framework. Memory bus + cycle table + interrupt
+vectors + access widths + spec inheritance all **spec-driven** (i80186 /
+i80286 land via JSON Merge Patch on i8086 with zero runtime overhead).
+Block-JIT live for all four CPUs; 30+ test ROMs verified bit-identical
+between JIT and INTERP backends across the verifier framework.
 
-GBA extended (200k blocks each): memory.gba, bios.gba.
+→ Skip to **[Quick start](#6-quick-start)** to try it.
 
-Bug-fix arc: tasks #339, #340, #342, #343, #344, #345, #346 — 7
-distinct root causes including SyncEmitter PC clobber after EI defer,
-MBC bank-switch interaction, conditional-branch defer-sync, R15-write
-detection, INC/DEC (HL) flag ordering, IRQ-cadence asymmetry, and
-HALT-spin asymmetry. The framework is production-ready and the
-fuzzer is demonstrably effective at surfacing edge-case bugs that
-hand-curated test ROMs miss. T1 unit tests: 895/895 PASS.
+## Recent milestones
 
-Closure note: [`MD/performance/202605171533-verifier-and-fuzzer-closure.md`](MD/performance/202605171533-verifier-and-fuzzer-closure.md).
+| Date | Phase | What shipped |
+|---|---|---|
+| 2026-05-17 | **30.15d–30.18** | Verified Block-JIT framework + 4-CPU differential fuzzer. 7 root-cause bugs fixed (SyncEmitter PC clobber, MBC bank-switch, conditional-branch defer-sync, R15-write detection, INC/DEC (HL) flag ordering, IRQ-cadence, HALT-spin). All 4 CPUs now at multi-million-block NoDiff. [Closure note.](MD/performance/202605171533-verifier-and-fuzzer-closure.md) |
+| 2026-05-16 | **30.14** | DOS test-binary injection workflow (port 0xE9 hook, `--floppy-b`, FAT12 builder). [Workflow doc.](MD/process/03-dos-test-injection-workflow.md) |
+| 2026-05-16 | **30.12** | Tseng ET4000 VGA BIOS as option ROM (smoke-test only). |
+| 2026-05-16 | **30** | 8272 FDC + 8237 DMA + real-BIOS path: `apr-pc --bios=pcxtbios.bin --floppy-a=freedos.img` boots FreeDOS with **zero HLE intercept**. Fixed `ROL r/m16, CL` emitter as part of the chain. [Plan.](MD/design/30-fdc-dma-plan.md) |
+| 2026-05-16 | **29** | Intel 8087/80287 FPU as orthogonal coprocessor mix-in (~30 ESC opcodes). [Closure.](MD/performance/202605160100-x87-fpu-functional-complete.md) |
+| 2026-05-15 | **28** | Intel PC emulator → FreeDOS boots end-to-end on JSON-driven CPU framework. [Closure.](MD/performance/202605152200-pc-emulator-freedos-boot.md) |
+
+For the full history see [`MD/design/03-roadmap.md`](MD/design/03-roadmap.md).
+
+## Verified Block-JIT framework + differential fuzzer
+
+The framework's biggest correctness milestone. Per-block, the verifier
+snapshots state, runs JIT once with trace capture, restores to a parallel
+INTERP env, runs INTERP the same N instructions, then **3-axis compares**
+(CPU state + memory-write trace + side-effect log). The companion fuzzer
+generates random-instruction-stream ROMs and feeds them through the
+verifier — surfaces emitter / cadence / spec-ordering bugs that
+hand-curated test ROMs miss.
+
+```bash
+# Verifier (each CPU)
+apr-pc  --bios=... --floppy-a=... --verify-blocks --max-cycles=1000000
+apr-gb  --rom=test-roms/blargg-cpu/cpu_instrs.gb       --verify-blocks=1000000
+apr-nes --rom=test-roms/blargg_nes_cpu_test5/cpu.nes   --verify-blocks=1000000
+apr-gba --rom=test-roms/gba-tests/arm/arm.gba          --verify-blocks=1000000
+
+# Random-ROM fuzzer (each CPU)
+apr-gb  --fuzz=100 --fuzz-blocks=50 --fuzz-seed=42 --fuzz-continue
+# (same flags for apr-nes / apr-gba / apr-x86)
+```
+
+How-to: [`MD/process/05-verified-blockjit-howto.md`](MD/process/05-verified-blockjit-howto.md) ·
+Design: [`MD/design/30.15d-verified-blockjit-framework-design.md`](MD/design/30.15d-verified-blockjit-framework-design.md)
 
 ---
 
@@ -459,6 +395,63 @@ Look at `spec/cpu/lr35902/cpu.json` + `spec/cpu/lr35902/groups/*.json` for a com
 ---
 
 ## 中文版
+
+**最後更新：** 2026-05-17（Asia/Taipei）· **授權：** [WTFPL v2](LICENSE) · **測試：** 895/895 通過
+
+### 現況一覽
+
+| CPU | Block-JIT verifier（real ROM） | 隨機 ROM fuzzer |
+|---|---|---|
+| **x86-16**（i8086/i80186/i80286） | pcxtbios + FreeDOS, 5M blocks NoDiff | 0 divergences |
+| **LR35902**（Game Boy DMG） | cpu_instrs.gb, **5M blocks NoDiff** | 0 div / 52+ seeds |
+| **Ricoh 2A03**（NES） | blargg cpu_test5, 1M blocks NoDiff | 0 divergences |
+| **ARM7TDMI**（GBA） | gba-tests/arm.gba, 3M blocks NoDiff | 0 divergences |
+
+六種 CPU variant 共用同一個 framework。Memory bus + cycle table + interrupt
+vectors + access widths + spec inheritance 全部 **spec-driven**（i80186 /
+i80286 透過 JSON Merge Patch 繼承 i8086，runtime 零負擔）。Block-JIT 路徑
+4 個 CPU 都活著；30+ 個 test ROM 通過 verifier framework 證實 JIT vs INTERP
+bit-identical。
+
+→ 跳到 **[Quick start](#6-quick-start-1)** 直接試。
+
+### 近期里程碑
+
+| 日期 | Phase | 出貨內容 |
+|---|---|---|
+| 2026-05-17 | **30.15d–30.18** | Verified Block-JIT framework + 4-CPU 隨機 ROM differential fuzzer。修了 7 個 root-cause bug（SyncEmitter PC clobber、MBC bank-switch、conditional-branch defer-sync、R15-write detection、INC/DEC (HL) flag ordering、IRQ-cadence、HALT-spin）。4 CPU 都做到 multi-million-block NoDiff。[Closure note](MD/performance/202605171533-verifier-and-fuzzer-closure.md)。|
+| 2026-05-16 | **30.14** | DOS test-binary injection workflow（port 0xE9 hook、`--floppy-b`、FAT12 builder）。[Workflow doc](MD/process/03-dos-test-injection-workflow.md)。|
+| 2026-05-16 | **30.12** | Tseng ET4000 VGA BIOS as option ROM（smoke test）。|
+| 2026-05-16 | **30** | 8272 FDC + 8237 DMA + real-BIOS path：`apr-pc --bios=pcxtbios.bin --floppy-a=freedos.img` 啟動 FreeDOS **零 HLE intercept**。順便修了 `ROL r/m16, CL` emitter。[Plan](MD/design/30-fdc-dma-plan.md)。|
+| 2026-05-16 | **29** | Intel 8087/80287 FPU 透過 orthogonal coprocessor mix-in（~30 ESC opcodes）。[Closure](MD/performance/202605160100-x87-fpu-functional-complete.md)。|
+| 2026-05-15 | **28** | Intel PC emulator → FreeDOS 端到端 boot on JSON-driven CPU framework。[Closure](MD/performance/202605152200-pc-emulator-freedos-boot.md)。|
+
+完整歷史見 [`MD/design/03-roadmap.md`](MD/design/03-roadmap.md)。
+
+### Verified Block-JIT framework + differential fuzzer
+
+Framework 最大 correctness 里程碑。每個 block：snapshot pre-state → JIT
+跑一次（含 trace capture）→ restore 給平行的 INTERP env → INTERP 跑同樣
+N 個 architectural instructions → **3-axis 比對**（CPU state + memory-write
+trace + side-effect log）。Companion fuzzer 產生隨機指令流 ROM 餵進 verifier，
+專門 surface hand-curated test ROM 抓不到的 emitter / cadence / spec-ordering bug。
+
+```bash
+# Verifier（每個 CPU）
+apr-pc  --bios=... --floppy-a=... --verify-blocks --max-cycles=1000000
+apr-gb  --rom=test-roms/blargg-cpu/cpu_instrs.gb       --verify-blocks=1000000
+apr-nes --rom=test-roms/blargg_nes_cpu_test5/cpu.nes   --verify-blocks=1000000
+apr-gba --rom=test-roms/gba-tests/arm/arm.gba          --verify-blocks=1000000
+
+# 隨機 ROM fuzzer（每個 CPU）
+apr-gb  --fuzz=100 --fuzz-blocks=50 --fuzz-seed=42 --fuzz-continue
+# （同樣 flag for apr-nes / apr-gba / apr-x86）
+```
+
+How-to：[`MD/process/05-verified-blockjit-howto.md`](MD/process/05-verified-blockjit-howto.md) ·
+Design：[`MD/design/30.15d-verified-blockjit-framework-design.md`](MD/design/30.15d-verified-blockjit-framework-design.md)
+
+---
 
 ### 1. 這專案到底是什麼？
 
