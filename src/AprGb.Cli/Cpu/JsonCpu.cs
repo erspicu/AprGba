@@ -540,6 +540,8 @@ public sealed unsafe class JsonCpu : ICpuBackend
         int cyclesConsumed = blockBudget - cyclesLeft;
         int actualInstrCount = Marshal.ReadInt32((IntPtr)(_statePtr + lastIdxOff));
         LastBlockInstructionCount = actualInstrCount > 0 ? actualInstrCount : entry.InstructionCount;
+        if (Environment.GetEnvironmentVariable("APR_GB_TRACE_BLOCKLEN") is not null)
+            Console.Error.WriteLine($"[BLOCKLEN] pc=0x{pc:X4} detected={entry.InstructionCount} actual={actualInstrCount} pcWritten={_statePtr[_pcWrittenOffset]}");
 
         // If no branch fired AND budget didn't exhaust, advance PC to
         // the address right after the LAST instruction (P1 #6: this is
