@@ -1,0 +1,71 @@
+Timestamp: 2026-05-17T11:58:27
+Model:     gemini-3.1-pro-preview-customtools
+========================================================================
+QUESTION
+========================================================================
+Context — long-running CPU emulator framework hunt:
+
+I'm building AprGba, a .NET/LLVM-based emulator framework that compiles JSON CPU specs into LLVM IR (per-instruction interpreter + block-JIT). Backends so far: ARM7TDMI (GBA), LR35902 (Game Boy), Ricoh 2A03 (NES), Intel x86-16 (8086/186/286). Each backend can be driven per-instruction OR via a block-JIT (block of N x86 instructions compiled into one LLVM function, alloca-shadow for guest registers + status, mem2reg promotion, single block_exit drain).
+
+The recurring problem I've now hit on the x86 backend, and that I suspect will continue to hit:
+
+**"Some memory-write instruction under block-JIT produces DIFFERENT RAM contents than per-instr at the same architectural instruction count."**
+
+For x86 the symptom appeared during real-pcxtbios + FreeDOS boot:
+- Built a generic LockstepDiff (existing framework infra) into the x86 backend
+- After fixing one obvious bug (block-JIT pre-wrote IP slot with `bi.Pc + 1` where bi.Pc is the LINEAR 20-bit address, masking to 16-bit happened to yield IP+1 for CS=F000 segments but corrupted IP+1 for low-CS segments)
+- Lockstep with PIT IRQs deterministically injected runs OK for 350K+ steps
+- Eventually CPU register state matches at a step but MEMORY at phys 0x279C0 differs (A=`10 00 01 00 A0 63 ...` looks like an INT 13h disk-read packet; B=zeros). Some earlier silent mem write happened.
+
+Existing GB block-JIT framework already has:
+1. `memory_write_8_sync` extern — write returns flag "this hit MMIO with HW state change, block must exit immediately so executor re-checks". Block compiles `if sync == 1: write next-PC + PcWritten=1 + ret void`.
+2. `EmitSmcCoverageNotify` — inline per-byte coverage counter check after a RAM write; if cached block covers this addr → call notify extern → invalidate.
+3. RAM-region fast-path inline stores (WRAM 0xC000-0xE000, HRAM 0xFF80-0xFFFF).
+
+So GB framework solves: MMIO-state-change-needs-exit, code-page-write-needs-invalidate, perf-via-inline-fast-path.
+
+What it DOES NOT solve: **the actual write semantics differing between backends at the IR-emitter level** — e.g. the IP-prewrite bug I found, or whatever's making 0x279C0 diverge now.
+
+My questions for framework design:
+
+Q1 — Is there a known framework pattern for **automatically catching architectural semantic divergences between an interpreter and a JIT**? Cases I'm thinking of:
+- Per-instruction state diff (lockstep) — I have this; helps but slow + reactive
+- Tom Harte SST-style per-opcode JSON test vectors — I have this for x86 + 6502; catches a lot but not control-flow / multi-instruction interactions
+- "Shadow JIT" mode where every JITed block ALSO runs per-instr and compares state at block boundary — interesting; catches more than lockstep + cheaper than full lockstep
+- Symbolic execution / equivalence proof — too heavy
+- Differential fuzzing — randomly generated instruction sequences
+
+Which combo is the standard? What do Bochs/QEMU/Dolphin/RPCS3 do?
+
+Q2 — For my specific bug (RAM write at phys 0x279C0 diverges), what's the most efficient diagnostic to localise the EXACT instruction that wrote 0x279C0 in A but not B? Options I've enumerated:
+(a) Lockstep with mem-period=1 (byte-walk every step) — currently ~10× slowdown, may be acceptable
+(b) Hardware-watchpoint-style: register a callback on writes to 0x279C0 in both envs, log the (step, CS:IP, value) — most surgical
+(c) Memory-write-trace and post-compare — verbose but unmissable
+Which would you reach for first? Any tricks I'm missing?
+
+Q3 — Looking at my framework, is there a **proactive design check** I could add that would have caught the IP-prewrite bug at compile-time rather than at boot-time? E.g. an invariant assertion like "PC slot value at block entry == bi.Pc - (cs_at_entry << 4) for x86"? Or some IR-verifier extension?
+
+Q4 — Once we find the next bug, is there a **canonical "framework-level mem-write divergence guard"** I should add to BlockFunctionBuilder so subsequent CPU additions (e.g. when I add R3000A/MIPS later) don't repeat the same class of bug? Something like: after every IR-level memory write, also write a debug-mode trail entry that lockstep can compare?
+
+Please answer in English. One focused recommendation per Q + brief rationale. Keep it under 500 words total.
+
+========================================================================
+RESPONSE
+========================================================================
+Here are focused recommendations for your framework design:
+
+**Q1: Catching Divergences (Framework Pattern)**
+*   **Recommendation:** **Differential Fuzzing on Random Basic Blocks.**
+*   **Rationale:** This is the standard for heavyweights like QEMU (via their *RISU* tool) and Dolphin. Generating random, valid sequences of instructions (basic blocks), running them through both Interpreter and JIT from an identical seeded state, and comparing state at block exit catches multi-instruction interactions and flag corruptions. It avoids the massive overhead of full boot lockstep while achieving deep coverage. 
+
+**Q2: Isolating the 0x279C0 Divergence**
+*   **Recommendation:** **(b) Hardware-Watchpoint Callback.**
+*   **Rationale:** Since you already know the exact diverging physical address, surgical programmatic watchpoints are the fastest path to the root cause. Inject a temporary `if (phys_addr == 0x279C0) log(Step, CS:IP, Val);` into your `memory_write` dispatcher in both envs. It has near-zero performance overhead, avoids massive disk I/O from full tracing, and will immediately pinpoint the differing instruction.
+
+**Q3: Proactive Design Checks (Preventing the IP Bug)**
+*   **Recommendation:** **Block Boundary Invariant Assertions (Debug IR).**
+*   **Rationale:** To catch structural mapping bugs (like linear vs. segmented PC), your JSON-to-LLVM compiler should support a debug flag that emits IR assertions at block entry/exit. For x86, it would emit IR to calculate `(CS << 4) + IP` from the guest shadow registers and `abort()` if it doesn't match the JIT's compile-time linear PC. This turns silent state corruption into immediate, localized compile-time/runtime crashes.
+
+**Q4: Canonical Mem-Write Divergence Guard**
+*   **Recommendation:** **Block-Scoped Memory Trace Buffers.**
+*   **Rationale:** Extend your existing `LockstepDiff`. In lockstep mode, hook your IR emitter and interpreter to append `(Address, Value, Size)` to a thread-local ring buffer on every memory write. At the block exit drain, assert that the JIT's buffer exactly matches the interpreter's buffer. This guarantees identical write *ordering, payloads, and quantities* mid-block, catching divergences the moment a block finishes rather than millions of steps later when the corrupted memory is finally read.
