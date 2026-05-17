@@ -619,7 +619,36 @@ public sealed class BlockDetector
             // generic `defer` mechanism. Detector is now LR35902-agnostic.
         }
 
+        // Phase 30.18o — Empty-block guard. If the very first byte was
+        // undecodable AND not safe-NOP-fallback (x86 0x00=ADD case), we
+        // break out with instrs.Count==0. Raise a specific exception so
+        // dispatchers can catch + bail to per-instr handling for that
+        // single byte. Without this we'd throw a generic ArgumentException
+        // from the Block constructor that callers can't distinguish from
+        // genuine input-validation errors.
+        if (instrs.Count == 0)
+            throw new UndecodableFirstInstructionException(startPc, _setSpec.Name);
+
         return new Block(startPc, pc, _setSpec.Name, _instrSizeBytes, instrs, endReason);
+    }
+
+    /// <summary>
+    /// Phase 30.18o — raised by <see cref="Detect"/> when the first byte
+    /// at <paramref name="startPc"/> is undecodable AND the safe NOP
+    /// fallback doesn't apply (e.g. x86 where 0x00 is a real instruction,
+    /// not NOP). Dispatchers should catch this and bail to per-instruction
+    /// stepping for that one byte; the next dispatch should land past it.
+    /// </summary>
+    public sealed class UndecodableFirstInstructionException : Exception
+    {
+        public uint StartPc { get; }
+        public string SetName { get; }
+        public UndecodableFirstInstructionException(uint startPc, string setName)
+            : base($"BlockDetector: undecodable first instruction at pc=0x{startPc:X5} in set '{setName}'. Dispatcher should fall back to per-instr stepping.")
+        {
+            StartPc = startPc;
+            SetName = setName;
+        }
     }
 
     private static bool HasHaltOrStopStep(JsonSpec.InstructionDef def)

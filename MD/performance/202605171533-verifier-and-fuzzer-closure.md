@@ -90,11 +90,17 @@ shape — both involve unconditional control transfers:
   in principle. Bug is subtler — possibly cross-jump-followed block
   PC drift at the STM instruction's bi.Pc.
 
-- **#342 (x86 mid-block undecodable)** — BlockDetector's "include
-  N decoded instructions, end at undecodable" logic still has an
-  edge case for x86 where the operand bytes of a decoded instruction
-  coincide with what looks like a fresh opcode. Symptom: JIT runs
-  zero blocks for the iteration, INTERP runs many.
+- ~~**#342 (x86 mid-block undecodable)**~~ — **RESOLVED (Phase 30.18o,
+  commit pending).** Actual root cause was different from initial
+  diagnosis: BlockDetector returned 0-instruction blocks when the
+  first byte was undecodable AND the safe-NOP-fallback didn't apply
+  (x86 0x00=ADD), then constructing `Block(instructions: [])` threw
+  generic `ArgumentException` which the dispatcher couldn't
+  distinguish. Fix: `BlockDetector` now raises
+  `UndecodableFirstInstructionException`; `X86JsonCpu.StepBlock`
+  catches it and bails to per-instr. Fuzzer SKIPPED rate at
+  seed=831377771 dropped 11 → 0; verified-block coverage jumped
+  14 → 564 (40×).
 
 All three are real emitter / block-detector bugs that the fuzzer
 reliably surfaces. Each is its own focused investigation sprint;

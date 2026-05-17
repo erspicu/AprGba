@@ -602,6 +602,16 @@ public sealed unsafe class X86JsonCpu : IX86CpuBackend
                 // BlockDetector found 0 instructions). Bail to per-instr.
                 return -1;
             }
+            catch (BlockDetector.UndecodableFirstInstructionException)
+            {
+                // Phase 30.18o — first byte at startPc is undecodable AND
+                // not safe-NOP-fallback (x86 0x00=ADD). Bail to per-instr;
+                // the per-instr StepOne will treat the byte as [UNK] and
+                // advance past it. Without this catch the fuzzer reports
+                // these blocks as SKIPPED (uncaught ArgumentException) and
+                // never gets to verify the post-byte block.
+                return -1;
+            }
         }
 
         // Initialize the IR-level cycle budget. BlockFunctionBuilder's

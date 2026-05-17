@@ -192,6 +192,8 @@ static Options? ParseArgs(string[] args)
         else if (arg == "--fuzz-continue")            opts.FuzzContinue = true;
         else                                      return null;
     }
+    // Fuzz mode generates its own random cart — no --rom required.
+    if (opts.FuzzIterations > 0) return opts;
     return opts.RomPath is null ? null : opts;
 }
 
