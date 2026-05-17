@@ -49,6 +49,8 @@ public static class GbVerifyBlocks
         // this, JIT inline-writes WRAM/HRAM directly via baked pointers
         // and the trace count diverges from INTERP's per-byte path.
         Environment.SetEnvironmentVariable("APR_GB_NO_INLINE_RAM", "1");
+        // Phase 30.18i — disable cross-jump-follow (see GbFuzzer note).
+        Environment.SetEnvironmentVariable("APR_NO_CROSS_JUMP_FOLLOW", "1");
 
         var rom = RomLoader.Load(romPath);
         var bios = biosPath is not null ? File.ReadAllBytes(biosPath) : null;

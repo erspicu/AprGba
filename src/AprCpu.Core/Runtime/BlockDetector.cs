@@ -449,6 +449,16 @@ public sealed class BlockDetector
             // until the cycle drift is rooted out.
             bool isRomToRom = false;
             bool crossJumpRam = Environment.GetEnvironmentVariable("APR_CROSS_JUMP_RAM") is not null;
+            // Phase 30.18i — verifier framework gate: disable cross-jump-
+            // follow when verifying. JIT block-JIT follows JR/JP target
+            // and includes target's instructions inline (bumping
+            // LastInstrIndex). Per-instr just executes JR/JP normally
+            // and advances PC. Both run "N instructions" from the same
+            // pre-state but JIT's PC trajectory differs because the
+            // followed code's PC writes were optimised out. Result: same
+            // instr count, different final PC = false-positive divergence.
+            // GbFuzzer found this surfaces ~15% of random programs.
+            bool disableCrossJump = Environment.GetEnvironmentVariable("APR_NO_CROSS_JUMP_FOLLOW") is not null;
             if (followTarget is uint t0)
                 isRomToRom = pc <= 0x7FFFu && t0 <= 0x7FFFu;
             // 24.6.8e — for x86 (busLengthOracle path) followTarget is
@@ -463,7 +473,8 @@ public sealed class BlockDetector
                 && followTarget is uint t
                 && !visited.Contains(t)
                 && i + 1 < maxInstructions
-                && (crossJumpRam || isRomToRom);
+                && (crossJumpRam || isRomToRom)
+                && !disableCrossJump;
 
             // N2.1 — pre-extract immediate for variable-width ISAs.
             // Operand bytes (length - 1 trailing bytes after the opcode)
