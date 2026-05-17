@@ -97,6 +97,25 @@ apr-x86 --fuzz=N [--fuzz-blocks=M] [--fuzz-seed=S] [--fuzz-continue]
 - README.md status section (sync'd with all phase deliverables)
 - This file (closure note)
 
+## QA validation
+
+Full T1 unit-test suite (894 tests, all backends + spec + IR layers)
+passes after the session's many changes:
+
+```
+已通過! - 失敗:     0，通過:   894，略過:     0，總計:   894，持續時間: 6 m 25 s - AprCpu.Tests.dll (net10.0)
+```
+
+So all the spec changes (GB STOP `read_imm8`), runtime changes
+(GB StepOnePerInstr `_haltSignal` transfer, X86JsonCpu
+LastInstrIndex reading, MemoryBusBindings SetActive/ActiveTraceSink,
+NesMemoryBus internal-state exposure, BlockDetector NOP-fallback
+safety check, Mos6502 FetchImm env gate), and infrastructure
+additions (CpuStateLayout LastInstrIndexFieldIndex, X86SteppableCpu
++ GbSteppableCpu + NesSteppableCpu + GbaSteppableCpu adapters,
+4 verifier runners, 4 fuzzers) preserve the existing functional
+coverage. No regressions.
+
 ## Conclusion
 
 The framework is portable (4 different ISAs, ~150-200 LoC per-CPU adapter), additive (no breaking changes to existing backends, all CLI flags are opt-in), and demonstrably effective at finding bugs that hand-curated test ROMs don't reach (~10 real bugs in one session). It's production-ready for any future CPU backend.
