@@ -1,30 +1,29 @@
-# Phase 28 closure — AprPc + FreeDOS 1.3 boot
+# Phase 28 收尾 — AprPc + FreeDOS 1.3 boot
 
-> **Closed**: 2026-05-15
-> **Scope**: Intel PC emulator (AprPc.Cli) wraps the existing AprX86
-> i8086 backend with HLE BIOS + minimal IO controllers + WinForms UI.
-> **End-to-end achievement**: real FreeDOS 1.3 boot through kernel +
-> COMMAND.COM + AUTOEXEC.BAT to the FreeDOS LOGO program.
+> **收尾**：2026-05-15
+> **Scope**：Intel PC emulator (AprPc.Cli) 包 AprX86 i8086 backend，
+> 加上 HLE BIOS + 最小 IO controller + WinForms UI。
+> **端到端成就**：real FreeDOS 1.3 透過 kernel + COMMAND.COM + AUTOEXEC.BAT
+> 開到 FreeDOS LOGO 程式。
 
-## Architectural milestone
+## 架構里程碑
 
-The JSON-driven CPU framework now runs **commercial-grade
-real-mode OS code** end-to-end. A 1.44 MB FreeDOS floppy image
-boots through:
+JSON-driven CPU framework 現在能端到端跑**商業級 real-mode OS code**。
+1.44 MB FreeDOS floppy image 啟動順序：
 
-1. CPU reset vector at FFFF:0000 → real-CPU `INT 19h` opcode
-2. HLE INT 19h loads boot sector to 0000:7C00 + redirects CS:IP
-3. Boot sector self-relocates (0xEA far jmp) to 1FE0:7C00
-4. Boot sector loads kernel.sys via 114 INT 13h sector reads
-5. Kernel prints 3-line banner via INT 10h teletype
-6. Kernel installs its own IVT[0x21] DOS API handler
-7. Kernel reads CONFIG.SYS / AUTOEXEC.BAT from FAT12 directory
-8. Kernel loads COMMAND.COM (FreeCom 0.85a XMS_Swap)
-9. COMMAND.COM prints its banner
-10. AUTOEXEC.BAT runs the FreeDOS ASCII-art LOGO program
-11. Large green "FreeDOS" logo renders on blue background
+1. CPU reset vector 在 FFFF:0000 → real-CPU `INT 19h` opcode
+2. HLE INT 19h 載入 boot sector 到 0000:7C00 + redirect CS:IP
+3. Boot sector 自我搬移（0xEA far jmp）到 1FE0:7C00
+4. Boot sector 透過 114 個 INT 13h sector read 載 kernel.sys
+5. Kernel 透過 INT 10h teletype 印 3 行 banner
+6. Kernel install 自己的 IVT[0x21] DOS API handler
+7. Kernel 從 FAT12 directory 讀 CONFIG.SYS / AUTOEXEC.BAT
+8. Kernel 載 COMMAND.COM（FreeCom 0.85a XMS_Swap）
+9. COMMAND.COM 印 banner
+10. AUTOEXEC.BAT 跑 FreeDOS ASCII-art LOGO 程式
+11. 大綠色「FreeDOS」logo 渲染在藍底上
 
-Final visible state (`result/pc/28.8e-prompt.png`):
+最終可見狀態（`result/pc/28.8e-prompt.png`）：
 
 ```
 FreeCom version 0.85a - WATCOMC - XMS_Swap [Jul 10 2021 19:28:06]
@@ -32,165 +31,152 @@ FreeCom version 0.85a - WATCOMC - XMS_Swap [Jul 10 2021 19:28:06]
        [Large green ASCII-art "FreeDOS" logo on blue]
 ```
 
-## What shipped — Phase 28 sprint chain
+## 出貨內容 — Phase 28 sprint chain
 
-13 micro-sprints, all landed 2026-05-11 through 2026-05-15. Each
-sprint is one commit, individually revertable.
+13 個 micro-sprint，全部 2026-05-11 到 2026-05-15 land。每個 sprint 一個
+commit、可獨立 revert。
 
-### Infrastructure (Sprints 28.0 → 28.5)
+### 基礎建設（Sprint 28.0 → 28.5）
 
 | Sprint | Commit | Deliverable |
 |---|---|---|
 | 28.0 | `245729e` | `AprPc.Cli` scaffolding + WinForms UI shell + emulator thread plumbing |
-| 28.1 | `35a73ea` | PC memory map (`PcMemoryBus`) + IVT + BDA + reset vector |
+| 28.1 | `35a73ea` | PC memory map（`PcMemoryBus`）+ IVT + BDA + reset vector |
 | 28.2 | `413afeb` | HLE BIOS framework + INT 10h + 60Hz framebuffer blt |
 | 28.3 | `92d8e11` | INT 16h + 8042 keyboard buffer + WinForms KeyDown queue |
 | 28.4 | `ee1098e` | PIT 8253 + INT 1Ah + wall-clock BDA tick |
 | 28.5 | `d5cceee` | INT 13h floppy/HDD HLE + `DiskImage` + `.img` loader |
 
-### Boot path (Sprints 28.6 → 28.7)
+### Boot path（Sprint 28.6 → 28.7）
 
 | Sprint | Commit | Deliverable |
 |---|---|---|
-| 28.6 | `ebbcaab` | INT 19h bootstrap (partial-LLE) + self-written boot sector |
-| 28.7 | `8c8f2b6` | Pic8259 + IRQ delivery model (PIT IRQ 0 + keyboard IRQ 1) |
+| 28.6 | `ebbcaab` | INT 19h bootstrap（partial-LLE）+ 自己寫的 boot sector |
+| 28.7 | `8c8f2b6` | Pic8259 + IRQ delivery model（PIT IRQ 0 + 鍵盤 IRQ 1） |
 
-### FreeDOS boot (Sprints 28.8a → 28.8e)
+### FreeDOS boot（Sprint 28.8a → 28.8e）
 
 | Sprint | Commit | Deliverable |
 |---|---|---|
-| 28.8a | `e71f15a` | Add 0xEA (JMP ptr16:16) to i8086 spec — unblock boot sector self-relocation |
-| 28.8b | `9012790` | Install HLE INT 8/9 defaults — fix IRQ wandering to 0:0 |
-| 28.8c | `7d7bda3` | RETF (0xCB/0xCA) + CALL far (0x9A) + pre-install all 256 IVT defaults |
-| 28.8d | `837ede2` | FreeDOS kernel full 3-line banner printed |
-| 28.8e | `7a3b8ef` | COMMAND.COM (FreeCom) + AUTOEXEC.BAT + FreeDOS LOGO printed |
+| 28.8a | `e71f15a` | i8086 spec 加 0xEA（JMP ptr16:16）— 解開 boot sector 自我搬移 |
+| 28.8b | `9012790` | Install HLE INT 8/9 default — 修 IRQ 漂到 0:0 |
+| 28.8c | `7d7bda3` | RETF（0xCB/0xCA）+ CALL far（0x9A）+ pre-install 全 256 IVT default |
+| 28.8d | `837ede2` | FreeDOS kernel 完整 3 行 banner 印出 |
+| 28.8e | `7a3b8ef` | COMMAND.COM（FreeCom）+ AUTOEXEC.BAT + FreeDOS LOGO 印出 |
 
-## i8086 spec additions through Phase 28
+## Phase 28 期間 i8086 spec 新增
 
-Phase 28 closed three of the i8086 spec's "deferred" gaps documented
-in `spec/cpu/x86-16/i8086/groups/control-flow.json`:
+Phase 28 關掉 i8086 spec 在 `spec/cpu/x86-16/i8086/groups/control-flow.json`
+裡記載的「deferred」gap 中的三個：
 
-| Opcode | Name | Phase | Why |
+| Opcode | Name | Phase | 原因 |
 |---|---|---|---|
-| 0xEA | JMP ptr16:16 (far direct) | 28.8a | FreeDOS boot sector self-relocation |
-| 0x9A | CALL ptr16:16 (far direct) | 28.8c | Proactive (FreeDOS kernel calls device drivers) |
-| 0xCB | RETF | 28.8c | FreeDOS kernel push-then-retf far jumps |
-| 0xCA | RETF imm16 | 28.8c | Companion to 0xCB |
+| 0xEA | JMP ptr16:16（far direct） | 28.8a | FreeDOS boot sector 自我搬移 |
+| 0x9A | CALL ptr16:16（far direct） | 28.8c | 主動（FreeDOS kernel call device driver） |
+| 0xCB | RETF | 28.8c | FreeDOS kernel push-then-retf far jump |
+| 0xCA | RETF imm16 | 28.8c | 0xCB 的同伴 |
 
-Each addition was a 3-part change: length-oracle case, spec entry,
-new emitter class. All micro-sprint commits include regression
-verification (T2 visual matrix + variant matrix unchanged, prior PC
-demos byte-identical).
+每個 add 都是 3 部分改動：length-oracle case、spec entry、新 emitter class。
+每個 micro-sprint commit 都包含 regression 驗證（T2 visual matrix + variant
+matrix 不變、先前 PC demo byte-identical）。
 
-## INT handler count
+## INT handler 數量
 
-HLE BIOS now provides handlers for these vectors:
+HLE BIOS 現在提供下列 vector 的 handler：
 
-| INT | Subset | What |
+| INT | Subset | 什麼 |
 |---|---|---|
-| 0x08-0x0F | All 8 | IRQ 0-7 default IRET (PIT, keyboard, etc.) |
-| 0x10 | AH=00/02/03/06/09/0E/0F | Video — set mode, cursor, scroll, char/attr, teletype, get mode |
-| 0x13 | AH=00/01/02/03/04/08/15 | Disk — reset, status, read, write, verify, params, type |
-| 0x16 | AH=00/01/02 | Keyboard — read (block), peek, shift flags |
+| 0x08-0x0F | 全 8 個 | IRQ 0-7 預設 IRET（PIT、keyboard 等） |
+| 0x10 | AH=00/02/03/06/09/0E/0F | Video — set mode、cursor、scroll、char/attr、teletype、get mode |
+| 0x13 | AH=00/01/02/03/04/08/15 | Disk — reset、status、read、write、verify、params、type |
+| 0x16 | AH=00/01/02 | Keyboard — read（block）、peek、shift flag |
 | 0x19 | AH=00 | Bootstrap — load sector 0 + jump |
 | 0x1A | AH=00 | Time — get ticks since midnight |
-| 0x1B, 1C, 1E | default IRET | Ctrl-Break, user timer, FDPT (dummy) |
-| 0x00-0xFF (all 251 others) | default IRET | Pre-installed no-op trap; user code overrides |
+| 0x1B、1C、1E | 預設 IRET | Ctrl-Break、user timer、FDPT（dummy） |
+| 0x00-0xFF（其他 251 個） | 預設 IRET | 預先 install 的 no-op trap；user code override |
 
-The "pre-install all 256" approach (Phase 28.8c) was the key
-robustness fix. FreeDOS's accidental INT calls to vectors we never
-explicitly handle (INT 11h equipment, INT 12h memory, INT 17h
-printer, etc.) all silently IRET instead of crashing on `IVT[v]=0:0`.
+「Pre-install 全 256」做法（Phase 28.8c）是關鍵的 robustness 修補。FreeDOS
+意外 INT 到我們從沒明確 handle 的 vector（INT 11h equipment、INT 12h memory、
+INT 17h printer 等等）全部靜默 IRET、不會在 `IVT[v]=0:0` crash。
 
-## Inheritance ROI through Phase 28
+## Phase 28 期間 inheritance ROI
 
-Phase 28 added zero new CPU spec inheritance levels. The i8086 spec
-gained 4 opcodes (~80 lines) and the same number of emitter
-classes (~120 lines C#). No new CPU was introduced.
+Phase 28 沒加新的 CPU spec inheritance level。i8086 spec 多了 4 個 opcode
+（~80 行）跟一樣數量的 emitter class（~120 行 C#）。沒新 CPU 加入。
 
-| Component | Lines added in Phase 28 |
+| Component | Phase 28 加的行數 |
 |---|---|
-| `spec/cpu/x86-16/i8086/groups/control-flow.json` | ~80 (3 entries) |
-| `src/AprCpu.Core/IR/X86_16Emitters.cs` | ~120 (3 emitters) |
-| `src/AprCpu.Core/Runtime/X86_16InstructionLengths.cs` | 3 lines |
+| `spec/cpu/x86-16/i8086/groups/control-flow.json` | ~80（3 entry） |
+| `src/AprCpu.Core/IR/X86_16Emitters.cs` | ~120（3 emitter） |
+| `src/AprCpu.Core/Runtime/X86_16InstructionLengths.cs` | 3 行 |
 
-The other ~2000 lines of Phase 28 work are all under `src/AprPc.Cli/`
-— pure application code (memory bus, BIOS, IO controllers, UI).
-**Application code is the right place for this work**; the framework
-itself didn't need protected mode v2 or any spec-driven extension.
+Phase 28 其他 ~2000 行工作都在 `src/AprPc.Cli/` 底下 — 純 application code
+（memory bus、BIOS、IO controller、UI）。**Application code 是這個工作該在的地方**；
+framework 本身不需要 protected mode v2 或任何 spec-driven 擴充。
 
-## Demos as artifacts
+## Demo as artifact
 
 ```
 result/pc/
 ├── 28.2-hello.png              ← INT 10h teletype "Hi"
 ├── 28.3-echo.png               ← INT 16h read + echo "Hi AprPc!"
-├── 28.4-tick.png               ← INT 1Ah read returns "OK"
-├── 28.5-int13.png              ← INT 13h reads FreeDOS boot sector → "OK"
-├── 28.6-bootstrap.png          ← Self-written boot sector "AprPc bootstrap OK"
+├── 28.4-tick.png               ← INT 1Ah read return "OK"
+├── 28.5-int13.png              ← INT 13h read FreeDOS boot sector → "OK"
+├── 28.6-bootstrap.png          ← 自己寫的 boot sector "AprPc bootstrap OK"
 ├── 28.7-irq.png                ← User INT 8 handler counter "IRQ OK 3"
-├── 28.8-attempt1.png           ← First FreeDOS attempt (pre-28.8a, 2 dots)
-├── 28.8a-attempt.png           ← 28.8a result (CPU progressed past 0xEA)
-├── 28.8b-attempt.png           ← (block-JIT INT bug — empty screen)
-├── 28.8b-perinstr.png          ← FreeDOS bootstrap "..." dots line (93 dots)
-├── 28.8c-attempt.png           ← 28.8c first attempt
-├── 28.8c-attempt2.png          ← 28.8c second attempt
-├── 28.8c-attempt3.png          ← Kernel banner first line printed
-├── 28.8d-banner.png            ← Full 3-line kernel banner
+├── 28.8-attempt1.png           ← First FreeDOS attempt（pre-28.8a、2 dot）
+├── 28.8a-attempt.png           ← 28.8a 結果（CPU 推進過 0xEA）
+├── 28.8b-attempt.png           ← （block-JIT INT bug — 空螢幕）
+├── 28.8b-perinstr.png          ← FreeDOS bootstrap "..." dot line（93 dot）
+├── 28.8c-attempt.png           ← 28.8c 第一次嘗試
+├── 28.8c-attempt2.png          ← 28.8c 第二次嘗試
+├── 28.8c-attempt3.png          ← Kernel banner 第一行印出
+├── 28.8d-banner.png            ← 完整 3 行 kernel banner
 ├── 28.8e-with-keys.png         ← FreeCom 0.85a banner
 └── 28.8e-prompt.png            ← FreeDOS ASCII-art LOGO ★
 ```
 
-11 distinct stages of "the PC boots a bit more" captured visually.
+11 個不同的「PC 又開了一點」階段視覺捕捉。
 
-## Known issues / deferred
+## 已知 issue / 延後
 
-### Block-JIT loses INT dispatch (28.8x)
-With `--backend=json-block`, INT instructions compiled into a JIT'd
-block don't surface to the emulator-thread's IsTrapped() check
-between Step() calls — the trap is consumed inside the block but
-HleBios.Dispatch never runs. Workaround: use `--backend=json`
-(per-instr) for FreeDOS. The block-JIT INT emitter needs an audit;
-likely fix is to force PcWritten=1 on INT instruction so the block
-exits at the INT, then dispatcher fetches the next block at
-F000:00xx which the emulator-thread sees as trapped.
+### Block-JIT 漏 INT dispatch (28.8x)
+`--backend=json-block` 下，compile 進 JIT'd block 的 INT 指令不會 surface
+到 emulator-thread 的 IsTrapped() check（在 Step() 呼叫之間）— trap 在
+block 內消耗掉、但 HleBios.Dispatch 不會跑。Workaround：FreeDOS 用
+`--backend=json`（per-instr）。Block-JIT INT emitter 需要 audit；可能的
+修法是強制 INT 指令 PcWritten=1 讓 block 在 INT 那裡退出，dispatcher 從
+F000:00xx 取下個 block，emulator-thread 看到 trapped。
 
-### Interactive A:\\> prompt (28.8f)
-After AUTOEXEC.BAT runs the FreeDOS LOGO program, the screen stays
-on the LOGO. Either the LOGO program loops on key wait + our --keys
-script doesn't reach it (consumed by earlier polls), or our wall-
-clock cycle budget runs out before the LOGO exits to COMMAND.COM
-prompt. Either fix is mechanical:
-1. Plumb a Console.In stdin pipe into the emulator's keyboard queue
-   (`PcKeyboard.Enqueue` from a host stdin reader thread).
-2. Or have HLE INT 16h AH=00 timeout and return ESC after N ms with
-   no input.
-Once the prompt appears, INT 16h is already wired so dir/type/cls/ver
-should "just work" via the existing keyboard buffer + INT 21h DOS
-calls (FreeDOS-provided).
+### 互動式 A:\\> prompt (28.8f)
+AUTOEXEC.BAT 跑完 FreeDOS LOGO 程式之後螢幕停在 LOGO。可能 LOGO 程式 loop
+等 key + 我們的 --keys script 到不了它（被早期 poll 吃掉）、或我們的
+wall-clock cycle budget 用完之前 LOGO 還沒退出到 COMMAND.COM prompt。
+兩個修法都是機械化：
+1. 把 Console.In stdin pipe 接到 emulator 的鍵盤 queue（`PcKeyboard.Enqueue`
+   from a host stdin reader thread）。
+2. 或者 HLE INT 16h AH=00 在 N ms 沒輸入時 timeout return ESC。
+一旦 prompt 出來，INT 16h 已經接好、dir/type/cls/ver 應該「就 work」，
+透過既有的鍵盤 buffer + INT 21h DOS call（FreeDOS 提供）。
 
-### Mouse (28.10) and PC speaker PCM (28.11)
-Tagged optional in the original plan. No FreeDOS-on-floppy demo
-depends on these; deferred.
+### 滑鼠 (28.10) 跟 PC speaker PCM (28.11)
+原 plan 標 optional。沒 FreeDOS-on-floppy demo 依賴；延後。
 
-## Phase 28 achievement summary
+## Phase 28 成就總結
 
-- **Real FreeDOS 1.3 kernel boots end-to-end** on a JSON-driven CPU
-  framework. The same i8086 spec + JIT pipeline that runs the 5-ROM
-  Phase 27b fault matrix now runs commercial-grade 1990s-era
-  operating-system code.
-- **Application layer is the right boundary**: ~2000 lines of
-  `AprPc.Cli` (BIOS / IO / UI) sit on top of ~3500 lines of spec-
-  driven CPU. No framework-level invention required.
-- **Three "deferred" i8086 opcodes (far jmp/call, retf) landed
-  organically** as FreeDOS exercised them. The spec-driven design
-  meant each was a 3-file change with regression-clean diffs.
-- **No regression** on existing demos: T2 18 PNGs + variant matrix
-  + Phase 27b 5-ROM fault matrix all unchanged through 28 commits.
+- **Real FreeDOS 1.3 kernel 端到端 boot** on JSON-driven CPU framework。
+  跑 Phase 27b 5-ROM fault matrix 的同個 i8086 spec + JIT pipeline 現在跑
+  商業級 1990s 時代的作業系統 code。
+- **Application layer 是對的邊界**：~2000 行 `AprPc.Cli`（BIOS / IO / UI）
+  坐在 ~3500 行 spec-driven CPU 上。不需要 framework-level invention。
+- **三個「deferred」i8086 opcode（far jmp/call、retf）自然 land**，
+  當 FreeDOS 練到時。Spec-driven design 讓每個都是 3-file 改動、
+  regression-clean diff。
+- **無 regression**：T2 18 PNG + variant matrix + Phase 27b 5-ROM fault
+  matrix 跨 28 個 commit 全部不變。
 
-> Phase 28 closed at the "FreeDOS LOGO printed" milestone. The
-> remaining interactive shell + 4 command screenshots (28.8f / 28.9)
-> are mechanical follow-ups not requiring CPU or framework work.
-> Phase 28 framework-genericity claim **fulfilled**: the JSON-driven
-> CPU emulation framework reaches commercial-grade real-mode OS
-> compatibility.
+> Phase 28 在「FreeDOS LOGO 印出」這個里程碑收尾。剩下的 interactive
+> shell + 4 個 command screenshot（28.8f / 28.9）是機械化 follow-up、
+> 不需要 CPU 或 framework 工作。Phase 28 framework-genericity 宣稱
+> **達成**：JSON-driven CPU emulation framework 到達商業級 real-mode OS
+> 相容性。
