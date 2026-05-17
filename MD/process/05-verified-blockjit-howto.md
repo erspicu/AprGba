@@ -218,7 +218,49 @@ for (long b = 0; b < maxBlocks; b++) {
   Acceptable for verification mode, deferred CoW optimisation
   available in design doc §4.6.
 
-## 7. Related docs
+## 7. Companion: differential fuzzer (Phase 30.17 / 30.18)
+
+Each verifier-aware CPU backend now exposes a fuzzer mode that
+generates random instruction streams and feeds them through the
+verifier. This surfaces emitter bugs that hand-curated test ROMs
+don't reach (each per-CPU fuzzer found at least one real bug on
+first run):
+
+```bash
+apr-nes --fuzz=N [--fuzz-blocks=M] [--fuzz-seed=S] [--fuzz-continue]
+apr-gb  --fuzz=N [--fuzz-blocks=M] [--fuzz-seed=S] [--fuzz-continue]
+apr-gba --fuzz=N [--fuzz-blocks=M] [--fuzz-seed=S] [--fuzz-continue]
+apr-x86 --fuzz=N [--fuzz-blocks=M] [--fuzz-seed=S] [--fuzz-continue]
+```
+
+Flags:
+- `--fuzz=N` — number of iterations (each gets a fresh random ROM)
+- `--fuzz-blocks=M` — max blocks to verify per iteration (default 50-100; bound runtime per iter)
+- `--fuzz-seed=S` — reproducibility seed (omit for time-based)
+- `--fuzz-continue` — don't stop at first divergence; report all and continue (useful for bug-density measurement; default stops at first for fast bisection)
+
+Each fuzzer also dumps the ROM bytes near the divergent block so the
+exact instruction sequence can be disassembled offline. Combine with
+the verifier's pre-block state report (`pre:` line) to get the full
+context needed to identify the buggy emitter.
+
+### Fuzzer-found bug examples (from Phase 30.18 session)
+
+- **GB STOP (0x10)**: per-instr ignored pad byte while block-JIT
+  consumed it. Spec fix: added `read_imm8` step.
+- **GB HALT (0x76)**: per-instr `_haltSignal → _halted` transfer
+  only happened in `RunCycles`, not in `StepOnePerInstr` used by
+  verifier. Runtime fix: added transfer.
+- **x86 BlockDetector NOP-fallback**: synthesizing 0x00 (= ADD r/m8,r8
+  on x86, not NOP) as silent NOP for unknown opcodes ran wrong
+  semantics. Framework fix: only do fallback when 0x00 has zero
+  operand steps + length = 1.
+
+The fuzzer is the production tool for finding the *next* emitter
+bug; the verifier is the production tool for proving a known-good
+workload stays bit-identical across emitter changes.
+
+## 8. Related docs
 
 - Design: `MD/design/30.15d-verified-blockjit-framework-design.md`
 - Investigation history: `MD/design/30.15-blockjit-pc-investigation.md`
