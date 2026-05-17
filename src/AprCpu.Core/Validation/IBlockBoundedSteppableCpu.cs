@@ -96,6 +96,26 @@ public interface IBlockBoundedSteppableCpu : ISteppableCpu
 
     /// <summary>Restore a snapshot produced by SnapshotMemoryState().</summary>
     void LoadMemoryState(object snapshot);
+
+    /// <summary>
+    /// Phase 30.18y — Poll any pending hardware interrupts and deliver
+    /// them via the architecture's interrupt-handling sequence
+    /// (push PC, set PC = vector, etc.). Called by the verifier framework
+    /// at block boundaries to match the JIT's implicit IRQ poll inside
+    /// `RunCycles` (which polls after each `StepBlock`).
+    ///
+    /// <para>JIT-side implementations typically no-op here because their
+    /// `Step()` already polled inside RunCycles. INTERP-side
+    /// implementations call into their CPU's CheckInterrupts (or
+    /// equivalent) so both backends see IRQ delivery at the same
+    /// block-boundary cadence — eliminates the
+    /// "JIT polls per-block / INTERP polls never" timing asymmetry
+    /// that surfaced in GbFuzzer seed=6 iter 2 (task #345).</para>
+    ///
+    /// <para>Default no-op so existing CPUs that don't override stay
+    /// timing-neutral.</para>
+    /// </summary>
+    void PollPendingIrqsAtBlockBoundary() { }
 }
 
 /// <summary>

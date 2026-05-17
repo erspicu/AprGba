@@ -102,6 +102,15 @@ public sealed class VerifiedBlockJitRunner
         {
             for (int i = 0; i < blockInstrCount; i++)
                 _interp.StepOneArchitecturalInstruction();
+            // Phase 30.18y — match JIT's implicit block-boundary IRQ
+            // poll. JIT.Step() runs through RunCycles which calls
+            // CheckInterrupts after StepBlock; INTERP's
+            // StepOnePerInstr does not. Without this explicit poll,
+            // a block that ends in an IRQ-pending state (e.g. RETI
+            // setting IME=1 with a pending IRQ) would land at
+            // different PCs in the two backends. Default no-op for
+            // CPUs that don't override.
+            _interp.PollPendingIrqsAtBlockBoundary();
         }
         catch (Exception ex)
         {

@@ -144,6 +144,21 @@ public sealed unsafe class JsonCpu : ICpuBackend
     /// regardless of block-JIT enablement. Used by VerifiedBlockJitRunner
     /// to drive the interp side N times to mirror the JIT's block.
     /// </summary>
+    /// <summary>
+    /// Phase 30.18y — public wrapper for the private CheckInterrupts so
+    /// the verifier framework can poll IRQs at block boundaries from
+    /// the INTERP side (matching the JIT's implicit poll inside
+    /// RunCycles). Without this the verifier's INTERP path would
+    /// never deliver IRQs, causing JIT-vs-INTERP cadence divergences
+    /// (e.g. seed=6 iter 2 at $003E ending in RETI + STAT IRQ).
+    /// </summary>
+    public void CheckInterruptsAtBlockBoundary()
+    {
+        _activeBus = _bus;
+        _activeCpu = this;
+        CheckInterrupts(out _);
+    }
+
     public int StepOnePerInstr()
     {
         _activeBus = _bus;

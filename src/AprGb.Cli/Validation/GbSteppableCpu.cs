@@ -103,6 +103,18 @@ public sealed class GbSteppableCpu : IBlockBoundedSteppableCpu
         _steps++;
     }
 
+    /// <summary>
+    /// Phase 30.18y — block-boundary IRQ poll. JIT-side already does
+    /// this implicitly via RunCycles → CheckInterrupts; for INTERP-side
+    /// the verifier calls this explicitly after the N×StepOnePerInstr
+    /// loop so both backends see IRQ delivery at the same cadence.
+    /// </summary>
+    public void PollPendingIrqsAtBlockBoundary()
+    {
+        _cpu.SetActiveForLockstep();
+        _cpu.CheckInterruptsAtBlockBoundary();
+    }
+
     public object BeginTrace(IBlockTraceSink sink)
     {
         var prior = JsonCpu.ActiveTraceSink;
