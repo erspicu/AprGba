@@ -42,6 +42,16 @@ public sealed class PcOptions
     /// </summary>
     public string? Hdd2Path     { get; set; }
     /// <summary>
+    /// Phase 32.2 supplement — when non-null and HddPath / Hdd2Path
+    /// points to a non-existent file, a sparse N-MB blank image is
+    /// auto-created at that location before mount. Set via the
+    /// :create:N suffix on the --hdd= / --hdd2= flag. Existing files
+    /// are NEVER overwritten by this; size is only consulted on
+    /// "file missing" condition.
+    /// </summary>
+    public long?   HddCreateMB  { get; set; }
+    public long?   Hdd2CreateMB { get; set; }
+    /// <summary>
     /// Phase 32.3 — host-directory mounts. List of --mount=DRV:host:opts
     /// specs. V1 skeleton: parses + holds the spec but does NOT yet
     /// expose the path as a guest drive (synthesizer is sprint 32.3a).
@@ -224,8 +234,8 @@ public sealed class PcOptions
             // Value flags --key=value.
             else if (arg.StartsWith("--floppy-a="))   o.FloppyAPaths = ParseFloppyList(arg["--floppy-a=".Length..]);
             else if (arg.StartsWith("--floppy-b="))   o.FloppyBPaths = ParseFloppyList(arg["--floppy-b=".Length..]);
-            else if (arg.StartsWith("--hdd="))        o.HddPath = arg["--hdd=".Length..];
-            else if (arg.StartsWith("--hdd2="))       o.Hdd2Path = arg["--hdd2=".Length..];
+            else if (arg.StartsWith("--hdd="))        (o.HddPath,  o.HddCreateMB)  = ParseHddSpec(arg["--hdd=".Length..]);
+            else if (arg.StartsWith("--hdd2="))       (o.Hdd2Path, o.Hdd2CreateMB) = ParseHddSpec(arg["--hdd2=".Length..]);
             else if (arg.StartsWith("--mount="))      o.HostMounts.Add(arg["--mount=".Length..]);
             else if (arg.StartsWith("--test-rom="))   o.TestRomPath = arg["--test-rom=".Length..];
             else if (arg.StartsWith("--cpu="))        o.Cpu = arg["--cpu=".Length..];
@@ -271,6 +281,29 @@ public sealed class PcOptions
     }
 
     /// <summary>
+    /// Phase 32.2 — parse a --hdd / --hdd2 spec which may carry an
+    /// optional `:create:N` suffix telling us to auto-create a blank
+    /// N-MB image if the path doesn't exist. Examples:
+    ///   --hdd=disks/c.img                      (must exist)
+    ///   --hdd=disks/c.img:create:20            (auto-create 20 MB if missing)
+    ///   --hdd=C:\virtual\dos.img:create:32     (Windows path + create)
+    ///
+    /// Windows paths contain ':' (e.g. C:\...), so we look for the
+    /// literal ':create:' substring (unambiguous in any real path).
+    /// </summary>
+    internal static (string path, long? createMB) ParseHddSpec(string spec)
+    {
+        const string CreateMarker = ":create:";
+        int idx = spec.LastIndexOf(CreateMarker, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return (spec, null);
+        string path = spec.Substring(0, idx);
+        string sizeStr = spec.Substring(idx + CreateMarker.Length).Trim();
+        if (!long.TryParse(sizeStr, out long mb) || mb <= 0)
+            throw new ArgumentException($"--hdd/--hdd2: invalid create size '{sizeStr}' (expect positive MB)");
+        return (path, mb);
+    }
+
+    /// <summary>
     /// Split a comma-separated --floppy-a / --floppy-b value into a list
     /// of image paths. Trims whitespace, skips empty segments, preserves
     /// path order (the first entry is the initial mount; later entries
@@ -301,12 +334,18 @@ public sealed class PcOptions
                                     mtools / DiscUtils so each test run picks
                                     up the latest binaries without touching
                                     the boot disk.
-          --hdd=PATH                C: hard disk image (.img). Geometry auto-detected
+          --hdd=PATH[:create:N]     C: hard disk image (.img). Geometry auto-detected
                                     from file size: 10/20/32/40-504 MB use canonical
                                     CHS tables; arbitrary sizes use S=63 H=16 fallback.
                                     Use FDISK + FORMAT + SYS to populate, then boot
                                     from C: with no --floppy-a.
-          --hdd2=PATH               D: secondary hard disk (FDC drive 0x81).
+                                    Optional ":create:N" auto-creates a sparse N-MB
+                                    blank image at PATH if it doesn't exist:
+                                      --hdd=disks/c.img:create:20
+                                    Existing files are never resized; the directive
+                                    only fires when the file is missing.
+          --hdd2=PATH[:create:N]    D: secondary hard disk (FDC drive 0x81). Same
+                                    syntax as --hdd including :create:N suffix.
           --mount=DRV:host[:opts]   Phase 32.3 — host-directory mount as a virtual
                                     FAT16 disk. opts: ro|rw (default ro), SIZE_MB
                                     (default 32). E.g. --mount=E:.\dos-stuff:rw:128

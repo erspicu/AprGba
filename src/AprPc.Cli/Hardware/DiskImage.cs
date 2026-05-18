@@ -94,9 +94,31 @@ public sealed class DiskImage
     /// "max CHS", and the guest must use LBA extensions (AH=42/43) to
     /// reach the rest. Phase 32.2c stubs AH=41h CF=1 / AH=01h so
     /// FreeDOS LBA-probe doesn't hang.
+    ///
+    /// Phase 32.2 supplement — when <paramref name="createSizeMB"/> is
+    /// non-null AND the target file does not exist, the image is
+    /// created as a sparse N-MB zero-filled file before loading. If
+    /// the file already exists, the size hint is ignored (so a user
+    /// who later resizes their disk externally won't have the .img
+    /// silently truncated). Matches VirtualBox / VMware UX.
     /// </summary>
-    public static DiskImage LoadHardDisk(string path, bool readOnly = false)
+    public static DiskImage LoadHardDisk(string path, bool readOnly = false, long? createSizeMB = null)
     {
+        if (!File.Exists(path) && createSizeMB is { } mb)
+        {
+            if (mb <= 0 || mb > 8192)
+                throw new ArgumentException(
+                    $"hdd image '{path}': create size {mb} MB out of range (expect 1-8192)");
+            var dir = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            using (var fs = File.Create(path))
+            {
+                // SetLength on NTFS allocates a sparse file (no actual
+                // disk write); on read each byte returns 0. The first
+                // FDISK write fills clusters as needed.
+                fs.SetLength(mb * 1024L * 1024L);
+            }
+        }
         var bytes = File.ReadAllBytes(path);
         (int c, int h, int s) = DetectHardDiskGeometry(bytes.Length);
         return new DiskImage(path, bytes, DiskKind.HardDisk, c, h, s, readOnly);

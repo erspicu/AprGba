@@ -59,15 +59,17 @@ internal static class HeadlessRunner
 
         if (opts.HddPath is { } hddPath)
         {
-            var disk = DiskImage.LoadHardDisk(hddPath);
+            bool created = opts.HddCreateMB is not null && !File.Exists(hddPath);
+            var disk = DiskImage.LoadHardDisk(hddPath, createSizeMB: opts.HddCreateMB);
             runner.MountDisk(0x80, disk);
-            Console.WriteLine($"  hdd C:    {hddPath} ({disk.Cylinders}x{disk.Heads}x{disk.Sectors} CHS, {disk.TotalSectors * 512L / (1024 * 1024)} MB)");
+            Console.WriteLine($"  hdd C:    {hddPath}{(created ? " (created blank)" : "")} ({disk.Cylinders}x{disk.Heads}x{disk.Sectors} CHS, {disk.TotalSectors * 512L / (1024 * 1024)} MB)");
         }
         if (opts.Hdd2Path is { } hdd2Path)
         {
-            var disk = DiskImage.LoadHardDisk(hdd2Path);
+            bool created = opts.Hdd2CreateMB is not null && !File.Exists(hdd2Path);
+            var disk = DiskImage.LoadHardDisk(hdd2Path, createSizeMB: opts.Hdd2CreateMB);
             runner.MountDisk(0x81, disk);
-            Console.WriteLine($"  hdd D:    {hdd2Path} ({disk.Cylinders}x{disk.Heads}x{disk.Sectors} CHS, {disk.TotalSectors * 512L / (1024 * 1024)} MB)");
+            Console.WriteLine($"  hdd D:    {hdd2Path}{(created ? " (created blank)" : "")} ({disk.Cylinders}x{disk.Heads}x{disk.Sectors} CHS, {disk.TotalSectors * 512L / (1024 * 1024)} MB)");
         }
 
         // Phase 32.3 — parse --mount specs. Skeleton: validate the spec
