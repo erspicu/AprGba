@@ -243,6 +243,27 @@ public sealed class AutoTester : IDisposable
             // Wait for the DOS-stdout banner from HELLO.COM to appear, then dump.
             new("Hello from B:", new List<byte>(), IsTerminal: true),
         },
+
+        // Phase 32.2g — exercise the HDD install path. Press Y on the
+        // installer prompt instead of N (freedos-mda-dir aborts; this
+        // one proceeds). Terminal condition is any FDISK-related text
+        // that proves we got past the FreeCom banner: "FDISK", "Drive C:",
+        // "FLAG_SECTOR" (the known failure mode pre-32.2g fix), or
+        // "successfully" (full success). Whichever appears first
+        // triggers the screenshot.
+        "freedos-install-y" => new List<Step>
+        {
+            new("language", new List<byte> { 0x1C }),               // Enter (English)
+            new("[Y,N]",    new List<byte> { 0x15, 0x1C }),         // 'Y' + Enter (install)
+            // Wait for FDISK output without injecting keys. Picks up
+            // EITHER the failure pattern "FLAG_SECTOR" or the success
+            // patterns "FDISK" / "Partition" -- "AG" appears in both
+            // FLAG_SECTOR (failure) and "Verifying" / "Range" (success
+            // dialogs FDISK prints), making it a permissive wait.
+            new("AG",       new List<byte>()),                       // wait, no inject
+            // After the wait advances, dump + close form.
+            new(string.Empty, new List<byte>(), IsTerminal: true),
+        },
         _ => null,
     };
 }

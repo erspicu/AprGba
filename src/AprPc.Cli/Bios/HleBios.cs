@@ -559,7 +559,10 @@ public sealed class HleBios
                 _realBiosInt13Vector = ((uint)cs << 16) | ip;
                 _int13HijackInstalled = true;
                 if (_traceInt)
-                    Console.Error.WriteLine($"  [HLE] cached pcxtbios int_13 = {cs:X4}:{ip:X4} (from BDA scratch)");
+                {
+                    byte hddCnt = _bus.ReadByte(0x00475);
+                    Console.Error.WriteLine($"  [HLE] cached pcxtbios int_13 = {cs:X4}:{ip:X4} (from BDA scratch); BDA[0x475]={hddCnt} (hard disk count visible to DOS)");
+                }
             }
             ushort newIp = (ushort)(_realBiosInt13Vector & 0xFFFF);
             ushort newCs = (ushort)((_realBiosInt13Vector >> 16) & 0xFFFF);
