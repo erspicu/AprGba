@@ -49,6 +49,20 @@ public sealed class HleBios
     // Last INT 13h status code (returned by AH=01).
     private byte _diskLastStatus;
 
+    // Phase 32.2g — real-BIOS INT 13h hijack state.
+    //
+    // In real-BIOS mode (--bios=pcxtbios.bin) the BIOS POST installs its
+    // own IVT[0x13] = pcxtbios `int_13` proc (asm:5100) which only
+    // handles floppies and fails DL>=0x80 with "invalid drive". To make
+    // HDD reachable, our INT 19h handler (called at end of POST) snapshots
+    // the pcxtbios INT 13h vector here, then overwrites IVT[0x13] with
+    // F000:0013 (our HLE trap). Subsequent INT 13h calls reach
+    // HleBios.Int13 which forks: floppy DL<0x80 chains back via
+    // CS:IP redirect; HDD DL>=0x80 served by HLE directly.
+    private bool _int13HijackInstalled;       // set true after first Int19 fires
+    private uint _realBiosInt13Vector;        // (CS<<16) | IP of pcxtbios int_13
+    private bool _realBiosMode;               // PcSystemRunner sets this when --bios=PATH
+
     public HleBios(X86JsonCpu cpu, PcMemoryBus bus, PcKeyboard kbd, PcPit pit, bool traceInt = false)
     {
         _cpu      = cpu ?? throw new ArgumentNullException(nameof(cpu));
@@ -122,6 +136,87 @@ public sealed class HleBios
     }
 
     /// <summary>
+    /// Phase 32.2g — minimal HLE install for real-BIOS mode. Only
+    /// hooks IVT[0x19] (boot) and marks INT 13h as "owned" so the
+    /// follow-up IVT[0x13] = F000:0013 swap done from inside Int19
+    /// dispatches into our trap rather than being treated as raw code.
+    ///
+    /// pcxtbios POST runs first and overwrites IVT[0x10/13/16/etc.]
+    /// with its own handlers. Our INT 19h hook fires AFTER POST
+    /// (at the end of POST pcxtbios `jmp far ptr int_19`); inside
+    /// that handler we snapshot pcxtbios's int_13 vector and replace
+    /// it with our trap so HDD calls reach Int13. Floppy calls go
+    /// through our trap too but Int13 chains them back to pcxtbios
+    /// by CS:IP redirect (no IRET pop).
+    /// </summary>
+    public void InstallRealBiosHook()
+    {
+        _realBiosMode = true;
+        // Pre-mark INT 13h as ours so the hijack-time IVT swap is
+        // recognised by IsTrapped() once installed. Don't install any
+        // IVT entries now — pcxtbios POST overwrites them all. The
+        // hijack is performed lazily by MaybeHijackInt13() once
+        // pcxtbios has installed its own int_13 vector.
+        _owned[0x13] = true;
+        if (_traceInt)
+            Console.Error.WriteLine("  [HLE] real-BIOS hook: INT 13h hijack armed (waits for pcxtbios to install its vector first)");
+    }
+
+    /// <summary>
+    /// Phase 32.2g — lazy INT 13h hijack. Called from the emulator
+    /// thread once per Step() in real-BIOS mode. Watches IVT[0x13]
+    /// for a non-trap vector (= pcxtbios has installed its int_13);
+    /// snapshots it, overwrites with F000:0013 so future INT 13h
+    /// calls reach our Int13() handler. One-shot: sets
+    /// _int13HijackInstalled = true and becomes a no-op after.
+    ///
+    /// Polling approach beats hooking INT 19h (which we tried first)
+    /// because pcxtbios POST eagerly writes IVT[0x19] = its own int_19
+    /// AFTER any pre-POST hook we install. POST does write IVT[0x13]
+    /// = pcxtbios int_13 early enough that our polling sees it well
+    /// before the BIOS reaches its `jmp int_19` (boot) so the hijack
+    /// is in place when the boot sector / FreeDOS kernel call INT 13h.
+    /// </summary>
+    public void MaybeHijackInt13()
+    {
+        if (!_realBiosMode || _int13HijackInstalled) return;
+        const int Int13Slot = 0x13 * 4;
+        ushort ip = _bus.ReadWord16(Int13Slot);
+        ushort cs = _bus.ReadWord16(Int13Slot + 2);
+        // Skip until a *plausible* pcxtbios vector is written: CS must
+        // be 0xF000 (pcxtbios lives there) AND IP must NOT be in our
+        // HLE trap range. This rejects:
+        //   - reset state (CS:IP = 0:0 or RAM-test patterns like 0x5555:0x5555)
+        //   - our own trap entry (avoid feedback loop on subsequent polls)
+        // It accepts pcxtbios's int_13 (typically F000:EC59 per spec) and
+        // any other valid in-BIOS handler.
+        if (cs != 0xF000) return;
+        if (ip <= 0xFF) return;        // covers our trap range AND silly low offsets
+        // Snapshot real-BIOS vector + overwrite with our trap.
+        _realBiosInt13Vector = ((uint)cs << 16) | ip;
+        _bus.WriteWord16(Int13Slot,     0x0013);
+        _bus.WriteWord16(Int13Slot + 2, HleTrapSegment);
+        _int13HijackInstalled = true;
+        // Phase 32.2g — also patch BDA[0x40:0x75] = hard disk count.
+        // pcxtbios is XT-class with no HDD support so it leaves this
+        // byte zero. DOS / FreeDOS reads BDA[0x475] to decide whether
+        // to probe INT 13h for fixed disks; "0 = no HDD" means
+        // FreeDOS skips HDD detection ENTIRELY and never calls our
+        // hijacked INT 13h. Setting this byte to the count of
+        // attached HDDs (0x80, 0x81) makes FreeDOS treat the system
+        // as if pcxtbios had detected the drives during POST.
+        byte hddCount = 0;
+        if (_disks.ContainsKey(0x80)) hddCount++;
+        if (_disks.ContainsKey(0x81)) hddCount++;
+        _bus.WriteByte(0x00475, hddCount);
+        if (_traceInt)
+            Console.Error.WriteLine(
+                $"  [HLE] INT 13h hijack installed: was {cs:X4}:{ip:X4} (pcxtbios int_13), " +
+                $"now {HleTrapSegment:X4}:0013 (HLE); floppy chains, HDD served; " +
+                $"BDA[0x475]={hddCount} (hard disk count)");
+    }
+
+    /// <summary>
     /// Install IVT entries for every supported vector. Call once after
     /// PcMemoryBus.Reset() has zeroed the IVT region.
     /// </summary>
@@ -183,7 +278,7 @@ public sealed class HleBios
         switch (vector)
         {
             case 0x10: Int10(state); break;
-            case 0x13: Int13(state); break;
+            case 0x13: skipIret = Int13(state); break;     // Phase 32.2g chain may set skipIret
             case 0x16: Int16(state); break;
             case 0x19: Int19(state); skipIret = true; break;
             case 0x1A: Int1A(state); break;
@@ -381,8 +476,36 @@ public sealed class HleBios
     private const byte DiskSectorNotFound = 0x04;
     private const byte DiskWriteProtect  = 0x03;
 
-    private void Int13(AprX86.Cli.Cpu.X86State state)
+    /// <summary>
+    /// INT 13h dispatch. Returns true if the call was chained to the
+    /// real-BIOS handler (caller skips SimulateIret so the chained
+    /// handler's eventual IRET pops the original frame). Returns false
+    /// for HLE-served calls (caller does SimulateIret normally).
+    ///
+    /// Phase 32.2g chain rule:
+    ///   - real-BIOS mode AND hijack installed AND DL &lt; 0x80
+    ///     -> redirect CS:IP to _realBiosInt13Vector, return true.
+    ///     The CPU resumes execution at pcxtbios's int_13 proc, which
+    ///     sees the (still-on-stack) flags+CS+IP frame and eventually
+    ///     IRETs back to the original INT 13h caller.
+    ///   - all other cases -> HLE-served, return false.
+    /// </summary>
+    private bool Int13(AprX86.Cli.Cpu.X86State state)
     {
+        if (_realBiosMode && _int13HijackInstalled && state.D.L < 0x80)
+        {
+            // Floppy chain — redirect to pcxtbios int_13 by changing
+            // CS:IP. The stack frame [IP, CS, flags] left by the
+            // original INT 13h instruction is untouched; pcxtbios's
+            // int_13 will IRET on it back to the caller.
+            ushort newIp = (ushort)(_realBiosInt13Vector & 0xFFFF);
+            ushort newCs = (ushort)((_realBiosInt13Vector >> 16) & 0xFFFF);
+            if (_traceInt)
+                Console.Error.WriteLine($"  [HLE] INT 13h DL={state.D.L:X2} (floppy) -> chain to {newCs:X4}:{newIp:X4}");
+            state.CS = newCs;
+            state.IP = newIp;
+            return true;
+        }
         switch (state.A.H)
         {
             case 0x00: Int13_Reset(state); break;
@@ -411,6 +534,7 @@ public sealed class HleBios
                 Int13Fail(state, DiskBadCmd);
                 break;
         }
+        return false;   // HLE-served; caller does SimulateIret
     }
 
     private void Int13Ok(AprX86.Cli.Cpu.X86State state, byte ret = DiskOk)

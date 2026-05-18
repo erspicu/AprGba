@@ -256,9 +256,15 @@ public sealed class PcSystemRunner : IDisposable
         {
             _bios.Install();
         }
-        else if (_options.TraceInt)
+        else
         {
-            Console.Error.WriteLine("  [HLE] real BIOS image loaded — skipping HLE IVT install");
+            // Phase 32.2g — real-BIOS mode installs a minimal hook
+            // (only IVT[0x19]) so when pcxtbios POST finishes and calls
+            // INT 19h, we get a chance to snapshot pcxtbios's INT 13h
+            // vector and install our own. From then on, INT 13h DL>=0x80
+            // (HDD) is served by HLE; DL<0x80 (floppy) chains back to
+            // pcxtbios's int_13. See MD/issue/pc/hdd-mount-swap-plan.md §32.2g.
+            _bios.InstallRealBiosHook();
         }
 
         // Start in Paused so LoadTestRom() / Open Floppy can land
@@ -510,6 +516,13 @@ public sealed class PcSystemRunner : IDisposable
                         Interlocked.Increment(ref _instructionsExecuted);
                         continue;
                     }
+
+                    // Phase 32.2g — lazy INT 13h hijack in real-BIOS mode.
+                    // Idempotent + cheap (4 bytes of IVT read + flag check)
+                    // until installed, then no-op forever. Runs before
+                    // IsTrapped so the hijacked vector at F000:0013 is
+                    // recognised by the same Dispatch path.
+                    _bios.MaybeHijackInt13();
 
                     if (_bios.IsTrapped(st.CS, st.IP))
                     {
