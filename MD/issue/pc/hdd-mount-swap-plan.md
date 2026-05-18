@@ -28,7 +28,8 @@
 |---|---|---|---|---|
 | **32.1** | Floppy swap hotkey + DSKCHG | ~1 day | CheckIt 2-disk、FreeDOS install 4-disk | ✅ `e8ed55e` (2026-05-18) |
 | **32.2** | Virtual HDD（HLE INT 13h、FDPT、LBA stub） | ~2-3 day | CheckIt persistent install、FreeDOS C: | ⚠️ partial (2026-05-18) — real-BIOS HDD detection blocked、看 32.2g |
-| **32.2g** | Real-BIOS INT 13h hijack for HDD（chain floppy 回 pcxtbios、HDD 走 HLE） | ~0.5-1 day | **FreeDOS / CheckIt / FDISK 偵測 HDD** | 📋 **next** |
+| **32.2g** | Real-BIOS INT 13h hijack for HDD（XT-IDE-style option ROM + HLE chain） | ~0.5-1 day → 實作完了 | **FreeDOS / CheckIt / FDISK 偵測 HDD** | ✅ `08a8809`/`6a890fd`/`dc6f9e4`/`3762127`（2026-05-18）：BDA[0x475]=1 set OK、IVT[0x13] hijack OK；FreeDOS install 仍卡 FDISK FLAG_SECTOR error（packed binary、不是 BDA wipe）—> 32.2h |
+| **32.2h** | FDISK FLAG_SECTOR root cause + bypass | ~1-2 day | FreeDOS install 完整跑完 | 📋 **next**（看下面詳細 plan） |
 | **32.3** | Host-dir mount（vvfat OR Guest TSR） | ~2+ week | dev-loop QoL、跨 host/guest 拖檔 | 🚧 V0 skeleton (2026-05-18) |
 
 順序 32.1 → 32.2 → 32.3 — 從便宜 / unblock 度高的開始。
@@ -334,6 +335,86 @@ Total ~1.5 day。
 32.2d 修法（FDPT 放 0x004E0 / 0x004F0）— pcxtbios 不會碰那邊、所以這個
 方案跟 32.2g 並存無問題。CheckIt / FDISK 透過 IVT[0x41]/[0x46] 讀 FDPT
 仍然 work。
+
+---
+
+## Phase 32.2h — FDISK FLAG_SECTOR root cause + bypass
+
+### 現況
+
+Phase 32.2g 全部 land 之後、HDD 偵測完全 work：
+- 我們 option ROM 在 pcxtbios POST 末端 FAR-CALL、寫 IVT[0x13] hijack + BDA[0x475]=1
+- Trace 證明 `cached pcxtbios int_13 = F000:EC59`、`BDA[0x475]=1 (hard disk count visible to DOS)`
+- DL>=0x80 INT 13h 進我們 HLE handler、floppy chain 回 pcxtbios
+
+但 FreeDOS 1.3 install 還是 die：
+```
+The "FLAG_SECTOR" value in the "fdisk.ini" file is out of range...
+Operation Terminated.
+
+CRITICAL error: A partitioning error has occurred. A hard disk may not
+be present or may be invisible to the current operating system.
+The installation of FreeDOS 1.3 has been aborted.
+```
+
+Trace 顯示 FDISK 完全沒 call INT 13h DL>=0x80 之前就 die — 表示 die 在
+`Process_Fdiskini_File()` 階段（FDISK source `fdiskio.c`、SETUP.BAT 內
+的 `%FDISK% /info DRIVE` 也會跑到這）。
+
+### Gemini consult 2026-05-18 #3 假設
+
+兩個候選 root cause（看 `tools/knowledgebase/message/20260518_204827.txt`）：
+
+1. **FDC DMA corruption**：fdisk.ini 從 A: 讀進 RAM 時某些 byte flip 了。
+   `FLAG_SECTOR 2` 被讀成 `FLAG_SECTOR <某 value>` 之類。
+
+2. **CPU bug in atoi/MUL/REP**：fdisk.ini 內容正確、但 FDISK.EXE atoi("2")
+   或之前的 MUL/shift 算錯。FDISK 是 packed binary（UPX-8086 之類）、
+   decompression stub 大量用 `REP MOVSB / LODSB`、subtle bug 會 explode。
+   Tom Harte 8088 SST 我們已 verify 過、但可能仍有 edge case。
+
+### 32.2h sprint plan
+
+| Sub | Deliverable | Effort |
+|---|---|---|
+| 32.2h-1 | 加 RAM dump trigger：FDISK.EXE load fdisk.ini 後、watch buffer 內容。比對 floppy original bytes、確認是 FDC corruption 還是 CPU bug | 0.5 day |
+| 32.2h-2 | 視 32.2h-1 結果：FDC bug → 修 FDC sector read path；CPU bug → 加 differential trace 找 broken instruction | 1+ day |
+| 32.2h-3 | Pragmatic bypass：[`tools/make_dos_hdd.py`](../../../tools/make_dos_hdd.py) — 預寫 MBR + FAT16 VBR + 空 FAT 到 .img、user boot 到 DOS prompt 後 `SYS C:` 直接安裝 | ✅ 已交付（2026-05-18） |
+| 32.2h-4 | Test：FreeDOS install 端到端跑完到 `C:\>` reboot prompt | 0.5 day（32.2h-1/2 解之後） |
+
+### 32.2h-3 已交付
+
+`tools/make_dos_hdd.py` 寫一個 single-partition FAT16 .img：
+- MBR with type=0x06 FAT16BIG partition at LBA 63
+- FAT16 VBR with auto-sized cluster (4-64 sectors/cluster picked for valid count)
+- Empty FAT (cluster 0=0xF8/0xFF, cluster 1=EOC marker)
+- Empty root directory
+- Boot code = `INT 18h` fallback (SYS C: 之後會被取代)
+
+```bash
+python tools/make_dos_hdd.py --out=disks/c.img --size-mb=32
+```
+
+**注意**：32.2h-3 alone 不會解 FreeDOS install 問題（SETUP.BAT 仍 call
+`FDISK /info` → 仍 parse fdisk.ini → 仍 die）。要走 manual route：
+
+1. `gui-test.bat realbios cga` （boot FreeDOS install floppy）
+2. 在 install confirmation 按 N（不要 auto-install）
+3. A:\\> prompt 出來後、有 HDD pre-formatted、`SYS C:` install bootloader
+4. `COPY A:\\FREEDOS\\BIN\\*.* C:\\` 手動 copy files
+5. reboot 從 C: boot
+
+複雜但不 block。
+
+### 32.2h-1/2 真修法（next session）
+
+加 emulator-level diagnostic：
+- INT 21h AH=3D（DOS Open）watch — 看 fdisk.ini 的 file handle
+- INT 21h AH=3F（DOS Read）watch — 看讀進 RAM 的 buffer + content
+- Compare buffer bytes vs floppy original
+- 不一致 → FDC bug；一致 → CPU bug（再深 trace atoi 內 MUL）
+
+需要新 PcSystemRunner debug flag 或 INT trap。1-2 day 工作。
 
 ---
 
