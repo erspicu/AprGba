@@ -78,6 +78,23 @@ public sealed class Fdc8272
         _drives[drive] = img;
     }
 
+    /// <summary>Drive attached to slot N, or null. Used for swap + DSKCHG plumbing.</summary>
+    public DiskImage? GetDrive(byte drive) => drive < 4 ? _drives[drive] : null;
+
+    /// <summary>
+    /// True if any drive currently asserts DSKCHG. Real 8272A wires
+    /// DSKCHG per-drive on port 0x3F7 bit 7; the BIOS reads it via the
+    /// currently-selected drive (DOR bits 0-1). Match that semantic.
+    /// </summary>
+    public bool ActiveDriveDiskChanged
+    {
+        get
+        {
+            byte sel = (byte)(_dor & 3);
+            return _drives[sel]?.DiskChanged ?? false;
+        }
+    }
+
     public void Reset()
     {
         _phase = Phase.Idle; _cmdLen = 0; _cmdExpected = 0;
@@ -244,6 +261,8 @@ public sealed class Fdc8272
     {
         byte drive = (byte)(_cmdBuf[1] & 3);
         _pcn[drive] = 0;
+        // Phase 32.1 — clear DSKCHG on SEEK/RECAL per real 8272A.
+        if (_drives[drive] is { } d) d.DiskChanged = false;
         // No result phase. ST0 reflects the seek-end + drive.
         _pendingSt0 = (byte)(0x20 | drive);  // SE (Seek End) bit
         _interruptPending = true;
@@ -276,6 +295,8 @@ public sealed class Fdc8272
         byte drive = (byte)(_cmdBuf[1] & 3);
         byte ncn   = _cmdBuf[2];
         _pcn[drive] = ncn;
+        // Phase 32.1 — clear DSKCHG on SEEK/RECAL per real 8272A.
+        if (_drives[drive] is { } d) d.DiskChanged = false;
         _pendingSt0 = (byte)(0x20 | drive);
         _interruptPending = true;
         _pic.AssertIrq(6);

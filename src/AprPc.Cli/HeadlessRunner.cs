@@ -87,6 +87,22 @@ internal static class HeadlessRunner
 
         runner.Resume();
 
+        // Phase 32.1d — headless stdin command listener for floppy swap.
+        // Read lines from Console.In on a background thread; recognise:
+        //     INSERT A <N|NEXT|PREV|path>     -> swap slot A
+        //     INSERT B <N|NEXT|PREV|path>     -> swap slot B
+        // N is 1-based index into the --floppy-a / -b list. Path can be
+        // any file (lets you swap to something not in the list). The
+        // thread is daemon-style (background=true) so headless exit
+        // doesn't wait on stdin EOF.
+        var stdinCts = new System.Threading.CancellationTokenSource();
+        var stdinThread = new Thread(() => RunStdinCommandLoop(runner, stdinCts.Token))
+        {
+            Name = "apr-pc stdin commands",
+            IsBackground = true,
+        };
+        stdinThread.Start();
+
         // Limit driver — max-cycles in CPU instructions. Default 1M
         // gives BDA-read fixture plenty of room without infinite-looping
         // if the ROM never HLTs.
@@ -103,6 +119,11 @@ internal static class HeadlessRunner
         while (runner.InstructionsExecuted - startCount < limit)
         {
             if (runner.Cpu is { Halted: true }) break;
+            // Phase 32.1d — stdin "QUIT" command, or any other path
+            // that called Stop(), promotes RunnerState to Stopping /
+            // Stopped. Exit the limit loop now so we still snapshot
+            // state + screenshot cleanly.
+            if (runner.State is RunnerState.Stopping or RunnerState.Stopped) break;
             if (DateTime.UtcNow >= deadline)
             {
                 // Phase 28.IO — still snapshot a screenshot before
@@ -310,5 +331,93 @@ internal static class HeadlessRunner
             '9'              => 0x0A,
             _                => 0,
         };
+    }
+
+    /// <summary>
+    /// Phase 32.1d — stdin command loop for headless mode. Parses one
+    /// command per line; unknown lines are ignored. Recognised:
+    ///
+    ///     INSERT A N        # swap slot A to image N (1-based) from --floppy-a list
+    ///     INSERT A NEXT     # cycle to next image in slot A's list
+    ///     INSERT A PREV     # cycle to previous image in slot A's list
+    ///     INSERT A path     # swap slot A to that specific file (need not be in list)
+    ///     INSERT B ...      # same for slot B (--floppy-b)
+    ///     QUIT              # stop emulator (graceful)
+    ///
+    /// Case-insensitive on command + slot; path is case-sensitive on
+    /// host filesystems that distinguish.
+    /// </summary>
+    private static void RunStdinCommandLoop(PcSystemRunner runner, System.Threading.CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                string? line = Console.In.ReadLine();
+                if (line is null) return;
+                line = line.Trim();
+                if (line.Length == 0) continue;
+                var parts = line.Split(new[] { ' ', '\t' }, 3, StringSplitOptions.RemoveEmptyEntries);
+                string cmd = parts[0].ToUpperInvariant();
+                if (cmd == "QUIT" || cmd == "EXIT")
+                {
+                    Console.WriteLine("  [stdin] QUIT received, stopping emulator");
+                    runner.Stop();
+                    return;
+                }
+                if (cmd == "INSERT" && parts.Length >= 3)
+                {
+                    string slotStr = parts[1].ToUpperInvariant();
+                    byte slot = slotStr switch { "A" => 0, "B" => 1, _ => 255 };
+                    if (slot == 255)
+                    {
+                        Console.WriteLine($"  [stdin] INSERT: unknown slot '{parts[1]}', expected A or B");
+                        continue;
+                    }
+                    string arg = parts[2].Trim();
+                    string? newPath;
+                    if (string.Equals(arg, "NEXT", StringComparison.OrdinalIgnoreCase))
+                    {
+                        newPath = runner.SwapFloppy(slot, nextInList: true);
+                    }
+                    else if (string.Equals(arg, "PREV", StringComparison.OrdinalIgnoreCase))
+                    {
+                        newPath = runner.SwapFloppy(slot, nextInList: false);
+                    }
+                    else if (int.TryParse(arg, out int idx1))
+                    {
+                        // 1-based index in user-facing CLI.
+                        int size = runner.GetFloppyListSize(slot);
+                        if (idx1 < 1 || idx1 > size)
+                        {
+                            Console.WriteLine($"  [stdin] INSERT: index {idx1} out of range (1..{size})");
+                            continue;
+                        }
+                        // Walk to target index via nextInList — simpler
+                        // than exposing an absolute SwapFloppy(idx).
+                        int cur = runner.GetFloppyIndex(slot);
+                        int steps = ((idx1 - 1) - cur + size) % size;
+                        string? p = null;
+                        for (int i = 0; i < steps; i++) p = runner.SwapFloppy(slot, nextInList: true);
+                        newPath = p ?? runner.GetFloppyPath(slot);
+                    }
+                    else
+                    {
+                        // Treat arg as explicit file path.
+                        newPath = runner.SwapFloppy(slot, nextInList: false, explicitPath: arg);
+                    }
+                    if (newPath is null)
+                        Console.WriteLine($"  [stdin] INSERT {slotStr} {arg}: swap failed");
+                    else
+                        Console.WriteLine($"  [stdin] INSERT {slotStr} -> {newPath} (DSKCHG asserted)");
+                    continue;
+                }
+                Console.WriteLine($"  [stdin] unknown command: '{line}' (expected INSERT A|B <N|NEXT|PREV|path> or QUIT)");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"  [stdin] reader thread exited: {ex.GetType().Name}: {ex.Message}");
+        }
     }
 }

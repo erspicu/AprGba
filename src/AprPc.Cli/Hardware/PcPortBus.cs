@@ -341,17 +341,22 @@ public sealed class PcPortBus
 
             // FDC Digital Input Register (port 0x3F7). Bit 7 = DSKCHG
             // (disk change line). Bits 6-0 undriven on real hardware
-            // (= float HIGH, read as 1). Our open-bus default 0xFF
-            // would set bit 7 -> DOS thinks the user swapped the disk
-            // on EVERY status check -> invalidates FAT/dir cache, re-
-            // reads boot sector (LBA 0), repeats forever. This was the
-            // root cause of FreeCom `ver` taking 90 seconds per
-            // character to print. Diagnosed via Gemini 2026-05-16
-            // consultation (tools/knowledgebase/message/20260516_152244.txt).
-            // Return 0x7F = bits 6-0 high, bit 7 (DSKCHG) low = "no
-            // disk change". To emulate disk swapping in the future,
-            // make this sticky-on-eject-clear-on-SEEK.
-            0x3F7 or 0x377 => 0x7F,
+            // (= float HIGH, read as 1).
+            //
+            // Phase 32.1 — route bit 7 to the FDC's active-drive
+            // DSKCHG state. DiskImage.Swap() sets DiskChanged=true;
+            // FDC clears it on the next SEEK / RECALIBRATE for that
+            // drive. Steady-state (no swap) returns 0x7F = bit 7 low
+            // = "no disk change", matching the original hard-coded
+            // value that fixed the FreeCom-`ver`-90s-per-char bug
+            // (Gemini 2026-05-16 consultation, tools/knowledgebase/
+            // message/20260516_152244.txt).
+            //
+            // CRITICAL: without this bit, DOS caches FAT sectors of
+            // the previous disk and writes them onto the new disk —
+            // permanent FS corruption on disk swap. Per Gemini
+            // 2026-05-18 consult (knowledgebase/message/20260518_184350.txt).
+            0x3F7 or 0x377 => (byte)((_fdc?.ActiveDriveDiskChanged == true ? 0x80 : 0x00) | 0x7F),
 
             // 8255 PPI Port C (0x62) — DIP switch readback. pcxtbios.bin
             // (Sergey Kiselev/VirtualXT XT BIOS) uses an UNUSUAL pattern

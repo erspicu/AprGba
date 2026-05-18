@@ -302,7 +302,72 @@ public sealed class PcSystemRunner : IDisposable
         // Phase 30 — also wire to the FDC if running in real-BIOS mode.
         // Real BIOS POST reads disk via FDC ports, not HLE INT 13h.
         _fdc?.AttachDrive(drive, img);
+        // Phase 32.1 — remember which slot holds which DiskImage so
+        // SwapFloppy() can find + hot-swap it.
+        if (drive < _mountedFloppies.Length)
+            _mountedFloppies[drive] = img;
     }
+
+    // Phase 32.1 — multi-image floppy swap state.
+    // Per-slot DiskImage handle (so Swap goes to the right backing
+    // store) + current index into the user's --floppy-a/-b list.
+    private readonly DiskImage?[] _mountedFloppies = new DiskImage?[2];
+    private readonly int[]        _floppyIndex     = new int[2];
+
+    /// <summary>
+    /// Phase 32.1 — hot-swap the floppy in slot A (0) or B (1) to a
+    /// different image. Two modes:
+    ///
+    ///   * <paramref name="nextInList"/> = true: cycle to the next image
+    ///     in <see cref="PcOptions.FloppyAPaths"/> (slot=0) or
+    ///     <see cref="PcOptions.FloppyBPaths"/> (slot=1).
+    ///   * <paramref name="nextInList"/> = false + <paramref name="explicitPath"/>:
+    ///     swap to that exact file (not necessarily in the list).
+    ///
+    /// Asserts DSKCHG on the slot per real 8272A semantics so DOS
+    /// invalidates cached FAT/dir on the next FDC access. Without
+    /// DSKCHG, DOS will corrupt the new disk's filesystem by writing
+    /// the previous disk's cached FAT onto it.
+    ///
+    /// Returns the new image path, or null if the slot is unmounted /
+    /// the list is exhausted.
+    /// </summary>
+    public string? SwapFloppy(byte slot, bool nextInList, string? explicitPath = null)
+    {
+        if (slot >= 2) return null;
+        var disk = _mountedFloppies[slot];
+        if (disk is null) return null;
+
+        string? newPath;
+        if (explicitPath is not null)
+        {
+            newPath = explicitPath;
+        }
+        else
+        {
+            var list = slot == 0 ? _options.FloppyAPaths : _options.FloppyBPaths;
+            if (list.Count < 2) return null;
+            _floppyIndex[slot] = (_floppyIndex[slot] + (nextInList ? 1 : -1) + list.Count) % list.Count;
+            newPath = list[_floppyIndex[slot]];
+        }
+
+        disk.Swap(newPath);
+        return newPath;
+    }
+
+    /// <summary>Current image path in slot (0=A, 1=B), or null if unmounted.</summary>
+    public string? GetFloppyPath(byte slot) =>
+        slot < _mountedFloppies.Length ? _mountedFloppies[slot]?.Path : null;
+
+    /// <summary>Number of images configured in the slot's --floppy-a/-b list.</summary>
+    public int GetFloppyListSize(byte slot)
+    {
+        if (slot >= 2) return 0;
+        return slot == 0 ? _options.FloppyAPaths.Count : _options.FloppyBPaths.Count;
+    }
+
+    /// <summary>Current index in the --floppy-a/-b list for the slot.</summary>
+    public int GetFloppyIndex(byte slot) => slot < 2 ? _floppyIndex[slot] : 0;
 
     /// <summary>Request pause; emulator thread parks at next safe boundary.</summary>
     public void Pause()

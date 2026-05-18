@@ -9,13 +9,32 @@ public sealed class PcOptions
 {
     // Disk inputs (at least one expected once 28.5+ is implemented;
     // empty in scaffolding mode → UI opens with no disk).
-    public string? FloppyAPath  { get; set; }
+    //
+    // Phase 32.1 — FloppyAPath / FloppyBPath are convenience aliases
+    // for FloppyAPaths[0] / FloppyBPaths[0]; the full list supports
+    // hot-swap via Ctrl+L (GUI) or "INSERT A 2" (headless stdin) for
+    // multi-disk software (CheckIt 2-disk, FreeDOS install 4-disk,
+    // Windows 3.1 6-disk). Parsed from --floppy-a=a.img,b.img,c.img.
+    public IReadOnlyList<string> FloppyAPaths { get; set; } = Array.Empty<string>();
+    public IReadOnlyList<string> FloppyBPaths { get; set; } = Array.Empty<string>();
+
+    public string? FloppyAPath
+    {
+        get => FloppyAPaths.Count > 0 ? FloppyAPaths[0] : null;
+        set => FloppyAPaths = value is null ? Array.Empty<string>() : new[] { value };
+    }
+
     /// <summary>
     /// Phase 30.14b — second floppy image (mounted as B:). Lets you keep
     /// the FreeDOS boot floppy A: pristine and put custom test programs
     /// on a separate disk. FDC drive index 0x01.
     /// </summary>
-    public string? FloppyBPath  { get; set; }
+    public string? FloppyBPath
+    {
+        get => FloppyBPaths.Count > 0 ? FloppyBPaths[0] : null;
+        set => FloppyBPaths = value is null ? Array.Empty<string>() : new[] { value };
+    }
+
     public string? HddPath      { get; set; }
 
     // Phase 28.5 — test ROM (tiny boot sector binary, < 1 KB) loaded
@@ -191,8 +210,8 @@ public sealed class PcOptions
             }
             else if (arg == "--verbose")     o.Verbose = true;
             // Value flags --key=value.
-            else if (arg.StartsWith("--floppy-a="))   o.FloppyAPath = arg["--floppy-a=".Length..];
-            else if (arg.StartsWith("--floppy-b="))   o.FloppyBPath = arg["--floppy-b=".Length..];
+            else if (arg.StartsWith("--floppy-a="))   o.FloppyAPaths = ParseFloppyList(arg["--floppy-a=".Length..]);
+            else if (arg.StartsWith("--floppy-b="))   o.FloppyBPaths = ParseFloppyList(arg["--floppy-b=".Length..]);
             else if (arg.StartsWith("--hdd="))        o.HddPath = arg["--hdd=".Length..];
             else if (arg.StartsWith("--test-rom="))   o.TestRomPath = arg["--test-rom=".Length..];
             else if (arg.StartsWith("--cpu="))        o.Cpu = arg["--cpu=".Length..];
@@ -237,6 +256,19 @@ public sealed class PcOptions
         return o;
     }
 
+    /// <summary>
+    /// Split a comma-separated --floppy-a / --floppy-b value into a list
+    /// of image paths. Trims whitespace, skips empty segments, preserves
+    /// path order (the first entry is the initial mount; later entries
+    /// are swap targets reachable via Ctrl+L or "INSERT A N" in headless).
+    /// </summary>
+    internal static IReadOnlyList<string> ParseFloppyList(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return Array.Empty<string>();
+        var parts = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length == 0 ? Array.Empty<string>() : parts;
+    }
+
     public static string UsageText() => """
         apr-pc — AprGba's Intel PC emulator (Phase 28 scaffolding)
 
@@ -244,8 +276,12 @@ public sealed class PcOptions
           apr-pc [options]
 
         # Disk inputs
-          --floppy-a=PATH           A: floppy image (.img, 1.44MB / 720KB / 360KB)
-          --floppy-b=PATH           B: floppy image (.img). Common pattern:
+          --floppy-a=PATH[,P2,P3...] A: floppy image (.img, 1.44MB / 720KB / 360KB).
+                                    Multiple comma-separated paths enable hot-swap
+                                    for multi-disk software (CheckIt 2-disk,
+                                    FreeDOS install 4-disk, etc.). Switch via
+                                    Ctrl+L (GUI) or "INSERT A N\n" on stdin (headless).
+          --floppy-b=PATH[,P2,P3...] B: floppy image (.img). Common pattern:
                                     keep --floppy-a=freedos-boot.img read-only,
                                     put your test .COM / .EXE on B: built with
                                     mtools / DiscUtils so each test run picks

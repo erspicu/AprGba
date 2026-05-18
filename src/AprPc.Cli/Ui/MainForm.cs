@@ -197,6 +197,32 @@ public sealed class MainForm : Form
         };
         KeyDown += (_, e) =>
         {
+            // Phase 32.1 — Ctrl+L (slot A) / Ctrl+Shift+L (slot B)
+            // hot-swap the floppy to the next image in the user's
+            // --floppy-a / --floppy-b list. Handled BEFORE the
+            // scancode mapping below so the L key isn't also injected
+            // into the guest. Status bar reflects the new mount.
+            if (e.Control && e.KeyCode == Keys.L)
+            {
+                byte slot = e.Shift ? (byte)1 : (byte)0;
+                var p = _runner.SwapFloppy(slot, nextInList: true);
+                if (p is not null)
+                {
+                    int idx  = _runner.GetFloppyIndex(slot);
+                    int size = _runner.GetFloppyListSize(slot);
+                    string slotName = slot == 0 ? "A:" : "B:";
+                    _statusState.Text = $"Swapped {slotName} -> {System.IO.Path.GetFileName(p)} ({idx + 1}/{size})";
+                    KbdTrace.Log($"FloppySwap {slotName} -> {p} ({idx + 1}/{size})");
+                }
+                else
+                {
+                    _statusState.Text = $"Swap failed (slot={(slot == 0 ? "A" : "B")}: not mounted or single-image)";
+                }
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
+            }
+
             // Map WinForms virtual key codes to PC XT scancode set 1.
             // For real-BIOS this is the ONLY path; for HLE it
             // supplements KeyPress for keys that have no ASCII (arrows,

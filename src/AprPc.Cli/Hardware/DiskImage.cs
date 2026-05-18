@@ -23,15 +23,34 @@ public sealed class DiskImage
 {
     public const int SectorSize = 512;
 
-    private readonly byte[] _bytes;
-    private readonly string _path;
+    private byte[] _bytes;
+    private string _path;
     private readonly object _lock = new();
     public DiskKind Kind { get; }
-    public int Cylinders { get; }
-    public int Heads     { get; }
-    public int Sectors   { get; }
+    public int Cylinders { get; private set; }
+    public int Heads     { get; private set; }
+    public int Sectors   { get; private set; }
     public int TotalSectors => Cylinders * Heads * Sectors;
     public bool ReadOnly  { get; }
+
+    /// <summary>
+    /// Path of the currently-loaded backing image. Updated on Swap().
+    /// </summary>
+    public string Path => _path;
+
+    /// <summary>
+    /// DSKCHG signal — set true on Swap(), cleared by FDC on the next
+    /// SEEK / RECALIBRATE command per real-hardware semantics. Real
+    /// 8272A drives this pin low when the door is opened; PC BIOS /
+    /// MS-DOS reads it via port 0x3F7 bit 7.
+    ///
+    /// CRITICAL: if this is not asserted on disk swap, DOS aggressively
+    /// caches FAT sectors and will write disk 1's cached FAT onto disk 2
+    /// — permanent filesystem corruption. See Gemini consult
+    /// 2026-05-18 (knowledgebase/message/20260518_184350.txt) and the
+    /// Phase 32.1 storage plan.
+    /// </summary>
+    public bool DiskChanged { get; set; }
 
     private DiskImage(string path, byte[] bytes, DiskKind kind, int c, int h, int s, bool readOnly)
     {
@@ -151,5 +170,40 @@ public sealed class DiskImage
         var b = new byte[SectorSize];
         ReadSectors(0, 1, b);
         return b;
+    }
+
+    /// <summary>
+    /// Hot-swap the backing image to a new file. Only supported for
+    /// floppy disks — HDD swap (eject) isn't a real-hardware concept.
+    /// Re-derives geometry from the new file's size (a 360 KB disk can
+    /// follow a 1.44 MB disk in the same slot — the BIOS reads the BPB
+    /// to figure out the new geometry on its next access).
+    ///
+    /// Asserts DSKCHG so the FDC reports the change on port 0x3F7;
+    /// FDC clears DSKCHG on the next SEEK / RECALIBRATE per real
+    /// 8272A semantics.
+    /// </summary>
+    public void Swap(string newPath)
+    {
+        if (Kind != DiskKind.Floppy)
+            throw new InvalidOperationException("Swap is only supported for floppy disks");
+        var bytes = File.ReadAllBytes(newPath);
+        (int c, int h, int s) = bytes.Length switch
+        {
+              360 * 1024 => (40, 2,  9),
+              720 * 1024 => (80, 2,  9),
+            1440 * 1024 => (80, 2, 18),
+            _ => throw new InvalidDataException(
+                $"floppy image {newPath}: size {bytes.Length} bytes does not match a standard floppy geometry (360K / 720K / 1.44M)")
+        };
+        lock (_lock)
+        {
+            _bytes    = bytes;
+            _path     = newPath;
+            Cylinders = c;
+            Heads     = h;
+            Sectors   = s;
+            DiskChanged = true;
+        }
     }
 }
