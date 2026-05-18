@@ -24,11 +24,11 @@
 
 依 Gemini 建議 + 我們現況：
 
-| Phase | Feature | Effort | 阻擋什麼 |
-|---|---|---|---|
-| **32.1** | Floppy swap hotkey + DSKCHG | ~1 day | CheckIt 2-disk、FreeDOS install 4-disk |
-| **32.2** | Virtual HDD（HLE INT 13h、FDPT、LBA stub） | ~2-3 day | CheckIt persistent install、FreeDOS C: |
-| **32.3** | Host-dir mount（vvfat OR Guest TSR） | ~2+ week | dev-loop QoL、跨 host/guest 拖檔 |
+| Phase | Feature | Effort | 阻擋什麼 | Status |
+|---|---|---|---|---|
+| **32.1** | Floppy swap hotkey + DSKCHG | ~1 day | CheckIt 2-disk、FreeDOS install 4-disk | ✅ `e8ed55e` (2026-05-18) |
+| **32.2** | Virtual HDD（HLE INT 13h、FDPT、LBA stub） | ~2-3 day | CheckIt persistent install、FreeDOS C: | ✅ (2026-05-18) |
+| **32.3** | Host-dir mount（vvfat OR Guest TSR） | ~2+ week | dev-loop QoL、跨 host/guest 拖檔 | 📋 planned |
 
 順序 32.1 → 32.2 → 32.3 — 從便宜 / unblock 度高的開始。
 

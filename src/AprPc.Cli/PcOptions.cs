@@ -36,6 +36,11 @@ public sealed class PcOptions
     }
 
     public string? HddPath      { get; set; }
+    /// <summary>
+    /// Phase 32.2 — secondary hard disk image, mounted at drive 0x81
+    /// (PC convention: 0x80 = primary, 0x81 = secondary). Optional.
+    /// </summary>
+    public string? Hdd2Path     { get; set; }
 
     // Phase 28.5 — test ROM (tiny boot sector binary, < 1 KB) loaded
     // directly to 0000:7C00 + entry point set. Coexists with
@@ -213,6 +218,7 @@ public sealed class PcOptions
             else if (arg.StartsWith("--floppy-a="))   o.FloppyAPaths = ParseFloppyList(arg["--floppy-a=".Length..]);
             else if (arg.StartsWith("--floppy-b="))   o.FloppyBPaths = ParseFloppyList(arg["--floppy-b=".Length..]);
             else if (arg.StartsWith("--hdd="))        o.HddPath = arg["--hdd=".Length..];
+            else if (arg.StartsWith("--hdd2="))       o.Hdd2Path = arg["--hdd2=".Length..];
             else if (arg.StartsWith("--test-rom="))   o.TestRomPath = arg["--test-rom=".Length..];
             else if (arg.StartsWith("--cpu="))        o.Cpu = arg["--cpu=".Length..];
             else if (arg.StartsWith("--bios="))       o.BiosPath = arg["--bios=".Length..];
@@ -287,7 +293,12 @@ public sealed class PcOptions
                                     mtools / DiscUtils so each test run picks
                                     up the latest binaries without touching
                                     the boot disk.
-          --hdd=PATH                C: hard disk image (.img, FAT12/16 partition)
+          --hdd=PATH                C: hard disk image (.img). Geometry auto-detected
+                                    from file size: 10/20/32/40-504 MB use canonical
+                                    CHS tables; arbitrary sizes use S=63 H=16 fallback.
+                                    Use FDISK + FORMAT + SYS to populate, then boot
+                                    from C: with no --floppy-a.
+          --hdd2=PATH               D: secondary hard disk (FDC drive 0x81).
           --test-rom=PATH           tiny boot-sector binary loaded directly
                                     to 0000:7C00 (coexists with --floppy-a)
 

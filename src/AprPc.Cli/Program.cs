@@ -127,6 +127,13 @@ if (opts.HddPath is { } hddPath)
 {
     var disk = DiskImage.LoadHardDisk(hddPath);
     runner.MountDisk(0x80, disk);
+    Console.WriteLine($"  hdd C: = {hddPath} ({disk.Cylinders}x{disk.Heads}x{disk.Sectors} CHS, {disk.TotalSectors * 512L / (1024 * 1024)} MB)");
+}
+if (opts.Hdd2Path is { } hdd2Path)
+{
+    var disk = DiskImage.LoadHardDisk(hdd2Path);
+    runner.MountDisk(0x81, disk);
+    Console.WriteLine($"  hdd D: = {hdd2Path} ({disk.Cylinders}x{disk.Heads}x{disk.Sectors} CHS, {disk.TotalSectors * 512L / (1024 * 1024)} MB)");
 }
 
 runner.Resume();

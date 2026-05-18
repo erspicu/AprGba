@@ -86,20 +86,56 @@ public sealed class DiskImage
     }
 
     /// <summary>
-    /// Load a flat .img file as a hard disk. Geometry is currently
-    /// fixed at 1024 × 16 × 63 (~504 MB, the INT 13h legacy CHS limit)
-    /// — sufficient for any image up to that size. Phase 28.5 ships
-    /// the floppy path; this is the placeholder Phase 28.8+ will
-    /// extend with --geometry CLI parsing.
+    /// Load a flat .img file as a hard disk. Geometry is auto-detected
+    /// from file size against a table of common DOS-era HDD sizes;
+    /// arbitrary sizes fall back to S=63 H=16 C=ceil(sectors/(16*63)).
+    /// Sub-504 MB images use traditional CHS; for &gt; 504 MB we still
+    /// report 1024×16×63 via INT 13h AH=08 so legacy callers see
+    /// "max CHS", and the guest must use LBA extensions (AH=42/43) to
+    /// reach the rest. Phase 32.2c stubs AH=41h CF=1 / AH=01h so
+    /// FreeDOS LBA-probe doesn't hang.
     /// </summary>
     public static DiskImage LoadHardDisk(string path, bool readOnly = false)
     {
         var bytes = File.ReadAllBytes(path);
-        const int C = 1024, H = 16, S = 63;
-        int expected = C * H * S * SectorSize;
-        // If the image is smaller than the full geometry, allow it —
-        // INT 13h reads past the end will return error 04h "sector not found".
-        return new DiskImage(path, bytes, DiskKind.HardDisk, C, H, S, readOnly);
+        (int c, int h, int s) = DetectHardDiskGeometry(bytes.Length);
+        return new DiskImage(path, bytes, DiskKind.HardDisk, c, h, s, readOnly);
+    }
+
+    /// <summary>
+    /// Common DOS-era HDD sizes mapped to canonical CHS geometry. Order
+    /// matters: largest match wins to handle slack space at end-of-image.
+    /// Source: tabular geometry per ISA / IDE Reference disk archives +
+    /// CompuServe DR-DOS HD database.
+    /// </summary>
+    internal static (int C, int H, int S) DetectHardDiskGeometry(long imageBytes)
+    {
+        // Standard table of (size in bytes, C, H, S).
+        // 10 MB / 20 MB / 32 MB are XT-class; 40-504 MB are AT-class
+        // with S=17 (early MFM/RLL) or S=63 (later IDE LBA-translated).
+        (long Size, int C, int H, int S)[] table =
+        {
+            (10L  * 1024 * 1024, 306,  4, 17),   // ST-412 5 MB (rounded) / 10 MB DOS 2.x
+            (20L  * 1024 * 1024, 615,  4, 17),   // 20 MB XT HDD
+            (32L  * 1024 * 1024, 615,  6, 17),   // 32 MB DOS 3.3 max single partition
+            (40L  * 1024 * 1024, 977,  5, 17),   // 40 MB AT
+            (60L  * 1024 * 1024, 1024, 7, 17),
+            (80L  * 1024 * 1024, 1024, 9, 17),
+            (120L * 1024 * 1024, 977, 12, 17),
+            (240L * 1024 * 1024, 1024, 13, 35),
+            (504L * 1024 * 1024, 1024, 16, 63),  // INT 13h legacy CHS ceiling
+        };
+        foreach (var (sz, c, h, s) in table)
+            if (imageBytes == sz) return (c, h, s);
+
+        // Heuristic fallback for non-standard sizes:
+        //   - Use S=63 H=16 (IDE LBA-translated common case).
+        //   - C = ceil(total_sectors / (H * S)), capped at 1024.
+        long sectors = imageBytes / SectorSize;
+        const int H_ = 16, S_ = 63;
+        int C_ = (int)Math.Min(1024L, (sectors + (H_ * S_) - 1) / (H_ * S_));
+        if (C_ < 1) C_ = 1;
+        return (C_, H_, S_);
     }
 
     /// <summary>

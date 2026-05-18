@@ -65,6 +65,52 @@ public sealed class HleBios
         if (_traceInt)
             Console.Error.WriteLine($"  [HLE] attached drive {drive:X2}h ({img.Kind}) " +
                 $"geom={img.Cylinders}x{img.Heads}x{img.Sectors} ({img.TotalSectors * 512 / 1024} KB)");
+        // Phase 32.2d — installing a hard disk also installs its FDPT
+        // (Fixed Disk Parameter Table) at the canonical INT 41h
+        // (drive 0x80) / INT 46h (drive 0x81) vector. CheckIt /
+        // FDISK / SpinRite read this table directly without going
+        // through INT 13h AH=08. Per Gemini consult 2026-05-18.
+        if (drive == 0x80) InstallFdpt(0x41, img, FdptDrive0Off);
+        if (drive == 0x81) InstallFdpt(0x46, img, FdptDrive1Off);
+    }
+
+    // Phase 32.2d — FDPT physical addresses inside our HLE BIOS area
+    // at 0xF000:0xE400. Real IBM BIOS places these in ROM too, just at
+    // different offsets per revision. They're stable for the lifetime
+    // of the HLE session — installed once on AttachDisk, never moved.
+    private const int FdptDrive0Off = 0x0E400;     // physical 0xFE400
+    private const int FdptDrive1Off = 0x0E410;     // physical 0xFE410
+
+    /// <summary>
+    /// Write the 16-byte Fixed Disk Parameter Table for an attached HDD
+    /// into HLE BIOS space, and point the INT vector (0x41 for drive
+    /// 0x80, 0x46 for 0x81) at it. Layout per Phoenix EDD / IBM 5170
+    /// reference; see hdd-mount-swap-plan.md.
+    /// </summary>
+    private void InstallFdpt(byte vector, DiskImage img, int fdptOffsetInHleSeg)
+    {
+        int phys = (HleTrapSegment << 4) + fdptOffsetInHleSeg;
+        ushort maxCyl  = (ushort)(img.Cylinders - 1);
+        byte   maxHead = (byte)(img.Heads - 1);
+        byte   sectors = (byte)img.Sectors;
+        byte   control = (byte)((img.Heads > 8 ? 0x08 : 0x00) | 0x40); // ECC + >8 head flag
+        _bus.WriteWord16(phys + 0x0, maxCyl);
+        _bus.WriteByte  (phys + 0x2, maxHead);
+        _bus.WriteWord16(phys + 0x4, 0xFFFF);
+        _bus.WriteWord16(phys + 0x6, 0xFFFF);
+        _bus.WriteByte  (phys + 0x8, 0x0B);
+        _bus.WriteByte  (phys + 0x9, control);
+        _bus.WriteByte  (phys + 0xA, 0x00);
+        _bus.WriteByte  (phys + 0xB, 0x00);
+        _bus.WriteByte  (phys + 0xC, 0x00);
+        _bus.WriteWord16(phys + 0xD, maxCyl);
+        _bus.WriteByte  (phys + 0xF, sectors);
+        // IVT[vector] = HleTrapSegment:fdptOffset
+        int slot = vector * 4;
+        _bus.WriteWord16(slot,     (ushort)fdptOffsetInHleSeg);
+        _bus.WriteWord16(slot + 2, HleTrapSegment);
+        if (_traceInt)
+            Console.Error.WriteLine($"  [HLE] FDPT for drive 0x{(vector == 0x41 ? 0x80 : 0x81):X2} -> {HleTrapSegment:X4}:{fdptOffsetInHleSeg:X4} (C={img.Cylinders} H={img.Heads} S={img.Sectors})");
     }
 
     /// <summary>
@@ -338,6 +384,19 @@ public sealed class HleBios
             case 0x04: Int13_Verify(state); break;
             case 0x08: Int13_GetDriveParams(state); break;
             case 0x15: Int13_GetDiskType(state); break;
+            // Phase 32.2c — INT 13h AH=41h LBA installation check. FreeDOS
+            // (and any modern DOS) probes this VERY early in boot to
+            // decide whether to use AH=42-48 LBA reads. If we don't
+            // explicitly say "no LBA", the carry flag stays at whatever
+            // the caller pushed and FreeDOS misinterprets garbage as a
+            // BX=0xAA55 + CX-bit-set positive response, then enters an
+            // LBA-only read path that we don't implement -> boot hang.
+            //
+            // Spec for "not supported" reply per Phoenix EDD: CF=1, AH=01h
+            // (invalid command). Per Gemini consult 2026-05-18.
+            case 0x41:
+                Int13Fail(state, DiskBadCmd);
+                break;
             default:
                 if (_traceInt)
                     Console.Error.WriteLine($"  [HLE] INT 13h AH={state.A.H:X2} not implemented; failing");

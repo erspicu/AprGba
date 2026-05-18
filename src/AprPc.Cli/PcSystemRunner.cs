@@ -299,11 +299,16 @@ public sealed class PcSystemRunner : IDisposable
         if (_bios is null)
             throw new InvalidOperationException("MountDisk must be called after Start()");
         _bios.AttachDisk(drive, img);
-        // Phase 30 — also wire to the FDC if running in real-BIOS mode.
-        // Real BIOS POST reads disk via FDC ports, not HLE INT 13h.
-        _fdc?.AttachDrive(drive, img);
-        // Phase 32.1 — remember which slot holds which DiskImage so
-        // SwapFloppy() can find + hot-swap it.
+        // Phase 30 — also wire to the FDC if this is a floppy slot
+        // (drives 0..3). Real BIOS POST reads floppies via FDC ports,
+        // not HLE INT 13h. HDD slots (0x80+) go through HLE INT 13h
+        // only — XT had no real-BIOS HDD support; XT-IDE option ROM
+        // is deferred per Phase 32.2 plan.
+        if (drive < 4)
+            _fdc?.AttachDrive(drive, img);
+        // Phase 32.1 — remember which floppy slot holds which DiskImage
+        // so SwapFloppy() can find + hot-swap it. Only floppies need
+        // swap; HDDs are persistent for the session.
         if (drive < _mountedFloppies.Length)
             _mountedFloppies[drive] = img;
     }
