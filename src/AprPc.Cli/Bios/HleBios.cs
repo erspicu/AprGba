@@ -70,47 +70,55 @@ public sealed class HleBios
         // (drive 0x80) / INT 46h (drive 0x81) vector. CheckIt /
         // FDISK / SpinRite read this table directly without going
         // through INT 13h AH=08. Per Gemini consult 2026-05-18.
-        if (drive == 0x80) InstallFdpt(0x41, img, FdptDrive0Off);
-        if (drive == 0x81) InstallFdpt(0x46, img, FdptDrive1Off);
+        if (drive == 0x80) InstallFdpt(0x41, img, FdptDrive0Phys);
+        if (drive == 0x81) InstallFdpt(0x46, img, FdptDrive1Phys);
     }
 
-    // Phase 32.2d — FDPT physical addresses inside our HLE BIOS area
-    // at 0xF000:0xE400. Real IBM BIOS places these in ROM too, just at
-    // different offsets per revision. They're stable for the lifetime
-    // of the HLE session — installed once on AttachDisk, never moved.
-    private const int FdptDrive0Off = 0x0E400;     // physical 0xFE400
-    private const int FdptDrive1Off = 0x0E410;     // physical 0xFE410
+    // Phase 32.2d — FDPT physical addresses in BDA scratch area.
+    //
+    // First implementation put FDPTs at F000:E400 (inside the BIOS
+    // segment); when --bios=pcxtbios.bin was used, this overwrote real
+    // BIOS bytes at 0xFE400 and pcxtbios's 8KB POST self-checksum
+    // (which scans 0xFE000-0xFFFFF) reported "System Error: 01" =
+    // error_bios = bad ROM checksum.
+    //
+    // Fix: relocate FDPTs to BDA scratch at physical 0x004E0 / 0x004F0
+    // (BDA offsets 0xE0-0xFF, reserved per IBM 5160 spec). These bytes
+    // are NOT inside any BIOS ROM checksum range, NOT used by FreeDOS
+    // or pcxtbios for any other purpose, and 16 bytes each is exactly
+    // an FDPT.
+    private const int FdptDrive0Phys = 0x004E0;
+    private const int FdptDrive1Phys = 0x004F0;
 
     /// <summary>
     /// Write the 16-byte Fixed Disk Parameter Table for an attached HDD
-    /// into HLE BIOS space, and point the INT vector (0x41 for drive
-    /// 0x80, 0x46 for 0x81) at it. Layout per Phoenix EDD / IBM 5170
-    /// reference; see hdd-mount-swap-plan.md.
+    /// at <paramref name="fdptPhys"/>, and point the INT vector (0x41
+    /// for drive 0x80, 0x46 for 0x81) at it. Layout per Phoenix EDD /
+    /// IBM 5170 reference; see hdd-mount-swap-plan.md.
     /// </summary>
-    private void InstallFdpt(byte vector, DiskImage img, int fdptOffsetInHleSeg)
+    private void InstallFdpt(byte vector, DiskImage img, int fdptPhys)
     {
-        int phys = (HleTrapSegment << 4) + fdptOffsetInHleSeg;
         ushort maxCyl  = (ushort)(img.Cylinders - 1);
         byte   maxHead = (byte)(img.Heads - 1);
         byte   sectors = (byte)img.Sectors;
         byte   control = (byte)((img.Heads > 8 ? 0x08 : 0x00) | 0x40); // ECC + >8 head flag
-        _bus.WriteWord16(phys + 0x0, maxCyl);
-        _bus.WriteByte  (phys + 0x2, maxHead);
-        _bus.WriteWord16(phys + 0x4, 0xFFFF);
-        _bus.WriteWord16(phys + 0x6, 0xFFFF);
-        _bus.WriteByte  (phys + 0x8, 0x0B);
-        _bus.WriteByte  (phys + 0x9, control);
-        _bus.WriteByte  (phys + 0xA, 0x00);
-        _bus.WriteByte  (phys + 0xB, 0x00);
-        _bus.WriteByte  (phys + 0xC, 0x00);
-        _bus.WriteWord16(phys + 0xD, maxCyl);
-        _bus.WriteByte  (phys + 0xF, sectors);
-        // IVT[vector] = HleTrapSegment:fdptOffset
+        _bus.WriteWord16(fdptPhys + 0x0, maxCyl);
+        _bus.WriteByte  (fdptPhys + 0x2, maxHead);
+        _bus.WriteWord16(fdptPhys + 0x4, 0xFFFF);
+        _bus.WriteWord16(fdptPhys + 0x6, 0xFFFF);
+        _bus.WriteByte  (fdptPhys + 0x8, 0x0B);
+        _bus.WriteByte  (fdptPhys + 0x9, control);
+        _bus.WriteByte  (fdptPhys + 0xA, 0x00);
+        _bus.WriteByte  (fdptPhys + 0xB, 0x00);
+        _bus.WriteByte  (fdptPhys + 0xC, 0x00);
+        _bus.WriteWord16(fdptPhys + 0xD, maxCyl);
+        _bus.WriteByte  (fdptPhys + 0xF, sectors);
+        // IVT[vector] = segment 0x0000 : offset fdptPhys
         int slot = vector * 4;
-        _bus.WriteWord16(slot,     (ushort)fdptOffsetInHleSeg);
-        _bus.WriteWord16(slot + 2, HleTrapSegment);
+        _bus.WriteWord16(slot,     (ushort)fdptPhys);
+        _bus.WriteWord16(slot + 2, 0x0000);
         if (_traceInt)
-            Console.Error.WriteLine($"  [HLE] FDPT for drive 0x{(vector == 0x41 ? 0x80 : 0x81):X2} -> {HleTrapSegment:X4}:{fdptOffsetInHleSeg:X4} (C={img.Cylinders} H={img.Heads} S={img.Sectors})");
+            Console.Error.WriteLine($"  [HLE] FDPT for drive 0x{(vector == 0x41 ? 0x80 : 0x81):X2} -> 0000:{fdptPhys:X4} (C={img.Cylinders} H={img.Heads} S={img.Sectors})");
     }
 
     /// <summary>
