@@ -1,6 +1,9 @@
 ; 32-test-hdd-int13.com — verify INT 13h AH=08 (get drive params) for HDD.
 ; Output via Port 0xE9 debug.
 
+cpu 8086        ; force NASM to use short Jcc; otherwise `jc err` to a far
+                ; label generates 286+ `0F 82 disp16` which our XT CPU does
+                ; not implement (will trap as unknown opcode).
 bits 16
 org  0x100
 
@@ -9,7 +12,9 @@ start:
     mov ah, 0x08
     mov dl, 0x80
     int 0x13
-    jc  err
+    jnc ok          ; short jc -> err overshoots 127 bytes; flip sense
+    jmp err
+ok:
 
     ; Save returned values
     mov [bx_save], bx
@@ -100,6 +105,13 @@ print_str:
     test al, al
     jz .done
     out 0xE9, al
+    push ax
+    push dx
+    mov dl, al
+    mov ah, 2          ; DOS putchar
+    int 0x21
+    pop dx
+    pop ax
     jmp print_str
 .done:
     ret
@@ -130,22 +142,57 @@ hex_nibble:
     jb .digit
     add al, 'A' - 10
     out 0xE9, al
+    push ax
+    push dx
+    mov dl, al
+    mov ah, 2          ; DOS putchar
+    int 0x21
+    pop dx
+    pop ax
     ret
 .digit:
     add al, '0'
     out 0xE9, al
+    push ax
+    push dx
+    mov dl, al
+    mov ah, 2          ; DOS putchar
+    int 0x21
+    pop dx
+    pop ax
     ret
 
 print_space:
     mov al, ' '
     out 0xE9, al
+    push ax
+    push dx
+    mov dl, al
+    mov ah, 2          ; DOS putchar
+    int 0x21
+    pop dx
+    pop ax
     ret
 
 print_newline:
     mov al, 13
     out 0xE9, al
+    push ax
+    push dx
+    mov dl, al
+    mov ah, 2          ; DOS putchar
+    int 0x21
+    pop dx
+    pop ax
     mov al, 10
     out 0xE9, al
+    push ax
+    push dx
+    mov dl, al
+    mov ah, 2          ; DOS putchar
+    int 0x21
+    pop dx
+    pop ax
     ret
 
 preamble db '[INT13/AH=08 DL=80] CH CL DH DL BL = ', 0

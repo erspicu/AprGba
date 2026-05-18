@@ -266,6 +266,40 @@ public sealed class AutoTester : IDisposable
         },
 
         // Phase 32.2h — boot FreeDOS install, abort installer (N),
+        // switch to B:, run HDDINT13.COM which calls INT 13h AH=08
+        // DL=0x80 and dumps the returned CH/CL/DH/DL/BL values via
+        // port 0xE9. This verifies whether our HLE INT 13h AH=08
+        // delivers the geometry FDISK expects.
+        "freedos-int13-probe" => new List<Step>
+        {
+            new("language", new List<byte> { 0x1C }),               // Enter (English)
+            new("[Y,N]",    new List<byte> { 0x31, 0x1C }),         // 'N' + Enter (abort installer)
+            new("A:\\>", new List<byte>
+            {
+                0x30,                          // 'B'
+                0x2A, 0x27, 0xA7, 0xAA,        // shift-make, ; make, ; break, shift-break (= ':')
+                0x1C,                          // Enter
+            }),
+            new("B:\\>", new List<byte>
+            {
+                0x23,                                        // 'H'
+                0x20,                                        // 'D'
+                0x20,                                        // 'D'
+                0x17,                                        // 'I'
+                0x31,                                        // 'N'
+                0x14,                                        // 'T'
+                0x02,                                        // '1'
+                0x04,                                        // '3'
+                0x1C,                                        // Enter
+            }),
+            // HDDINT13.COM prints "[TEST DONE]" then "[TEST_PASS]" via port 0xE9.
+            // The output also appears on screen via DOS stdout (since we use INT 21h AH=4C exit).
+            // Wait for "TEST" pattern in screen text.
+            new("TEST", new List<byte>()),
+            new(string.Empty, new List<byte>(), IsTerminal: true),
+        },
+
+        // Phase 32.2h — boot FreeDOS install, abort installer (N),
         // get to A:\> prompt, run FDISK /info on drive 1 (= HDD 0x80).
         // Used to test pre-formatted HDD image hypothesis.
         "freedos-fdisk-info" => new List<Step>
