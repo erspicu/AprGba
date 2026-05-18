@@ -517,13 +517,6 @@ public sealed class PcSystemRunner : IDisposable
                         continue;
                     }
 
-                    // Phase 32.2g — lazy INT 13h hijack in real-BIOS mode.
-                    // Idempotent + cheap (4 bytes of IVT read + flag check)
-                    // until installed, then no-op forever. Runs before
-                    // IsTrapped so the hijacked vector at F000:0013 is
-                    // recognised by the same Dispatch path.
-                    _bios.MaybeHijackInt13();
-
                     if (_bios.IsTrapped(st.CS, st.IP))
                     {
                         // Phase 28.3 — INT 16h AH=00 blocks on an empty

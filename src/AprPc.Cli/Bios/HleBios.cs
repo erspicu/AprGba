@@ -86,6 +86,13 @@ public sealed class HleBios
         // through INT 13h AH=08. Per Gemini consult 2026-05-18.
         if (drive == 0x80) InstallFdpt(0x41, img, FdptDrive0Phys);
         if (drive == 0x81) InstallFdpt(0x46, img, FdptDrive1Phys);
+        // Phase 32.2g rev2 — in real-BIOS mode, also install/refresh
+        // the XT-IDE option ROM at 0xC8000 so pcxtbios POST naturally
+        // FAR-CALLs it and self-installs IVT[0x13] + BDA[0x475] AFTER
+        // POST's BDA wipe. C# polling approach (rev1) lost the race
+        // against the wipe — see Gemini consult 2026-05-18 #2.
+        if (_realBiosMode && (drive == 0x80 || drive == 0x81))
+            InstallXtIdeOptionRom();
     }
 
     // Phase 32.2d — FDPT physical addresses in BDA scratch area.
@@ -152,68 +159,114 @@ public sealed class HleBios
     public void InstallRealBiosHook()
     {
         _realBiosMode = true;
-        // Pre-mark INT 13h as ours so the hijack-time IVT swap is
-        // recognised by IsTrapped() once installed. Don't install any
-        // IVT entries now — pcxtbios POST overwrites them all. The
-        // hijack is performed lazily by MaybeHijackInt13() once
-        // pcxtbios has installed its own int_13 vector.
+        // Pre-mark INT 13h as ours so when the option ROM (installed
+        // by AttachDisk for HDD drives) overwrites IVT[0x13] to point
+        // at F000:0013, the resulting trap is recognised by
+        // IsTrapped() and routed to Dispatch -> Int13.
         _owned[0x13] = true;
         if (_traceInt)
-            Console.Error.WriteLine("  [HLE] real-BIOS hook: INT 13h hijack armed (waits for pcxtbios to install its vector first)");
+            Console.Error.WriteLine("  [HLE] real-BIOS hook: INT 13h trap armed (option ROM at 0xC8000 will activate it during POST)");
     }
 
     /// <summary>
-    /// Phase 32.2g — lazy INT 13h hijack. Called from the emulator
-    /// thread once per Step() in real-BIOS mode. Watches IVT[0x13]
-    /// for a non-trap vector (= pcxtbios has installed its int_13);
-    /// snapshots it, overwrites with F000:0013 so future INT 13h
-    /// calls reach our Int13() handler. One-shot: sets
-    /// _int13HijackInstalled = true and becomes a no-op after.
-    ///
-    /// Polling approach beats hooking INT 19h (which we tried first)
-    /// because pcxtbios POST eagerly writes IVT[0x19] = its own int_19
-    /// AFTER any pre-POST hook we install. POST does write IVT[0x13]
-    /// = pcxtbios int_13 early enough that our polling sees it well
-    /// before the BIOS reaches its `jmp int_19` (boot) so the hijack
-    /// is in place when the boot sector / FreeDOS kernel call INT 13h.
+    /// Phase 32.2g (option-ROM rev) — DEPRECATED stub. Previous
+    /// implementation polled IVT[0x13] per CPU Step and self-installed
+    /// the hijack. That race against pcxtbios's POST BDA wipe was the
+    /// root cause of FreeDOS seeing "0 HDDs" even after the hijack
+    /// fired (Gemini consult 2026-05-18 #2). Replaced by the option-ROM
+    /// at 0xC8000 which pcxtbios POST FAR-CALLs naturally at the end
+    /// of POST, after the BDA wipe — see InstallXtIdeOptionRom().
     /// </summary>
     public void MaybeHijackInt13()
     {
-        if (!_realBiosMode || _int13HijackInstalled) return;
-        const int Int13Slot = 0x13 * 4;
-        ushort ip = _bus.ReadWord16(Int13Slot);
-        ushort cs = _bus.ReadWord16(Int13Slot + 2);
-        // Skip until a *plausible* pcxtbios vector is written: CS must
-        // be 0xF000 (pcxtbios lives there) AND IP must NOT be in our
-        // HLE trap range. This rejects:
-        //   - reset state (CS:IP = 0:0 or RAM-test patterns like 0x5555:0x5555)
-        //   - our own trap entry (avoid feedback loop on subsequent polls)
-        // It accepts pcxtbios's int_13 (typically F000:EC59 per spec) and
-        // any other valid in-BIOS handler.
-        if (cs != 0xF000) return;
-        if (ip <= 0xFF) return;        // covers our trap range AND silly low offsets
-        // Snapshot real-BIOS vector + overwrite with our trap.
-        _realBiosInt13Vector = ((uint)cs << 16) | ip;
-        _bus.WriteWord16(Int13Slot,     0x0013);
-        _bus.WriteWord16(Int13Slot + 2, HleTrapSegment);
-        _int13HijackInstalled = true;
-        // Phase 32.2g — also patch BDA[0x40:0x75] = hard disk count.
-        // pcxtbios is XT-class with no HDD support so it leaves this
-        // byte zero. DOS / FreeDOS reads BDA[0x475] to decide whether
-        // to probe INT 13h for fixed disks; "0 = no HDD" means
-        // FreeDOS skips HDD detection ENTIRELY and never calls our
-        // hijacked INT 13h. Setting this byte to the count of
-        // attached HDDs (0x80, 0x81) makes FreeDOS treat the system
-        // as if pcxtbios had detected the drives during POST.
+        // Intentionally empty. Kept as API for callers; will be
+        // removed once all PcSystemRunner code paths are updated.
+    }
+
+    // ---- Phase 32.2g rev2: XT-IDE-style option ROM at 0xC8000 ----
+
+    /// <summary>
+    /// Where the option ROM is staged in the C000-DE000 expansion-ROM
+    /// scan area. pcxtbios scans in 2KB increments looking for
+    /// 0x55 0xAA, so any 2KB-aligned slot below ROM_END works.
+    /// 0xC8000 is the canonical XT-IDE / WD HDC location (right after
+    /// the typical 32KB VGA BIOS region at 0xC0000).
+    /// </summary>
+    public const int XtIdeOptionRomBase = 0xC8000;
+
+    /// <summary>Saved real-BIOS INT 13h vector physical addresses (in BDA reserved area).</summary>
+    private const int SavedInt13IpPhys = 0x00488;
+    private const int SavedInt13CsPhys = 0x0048A;
+
+    /// <summary>
+    /// Build a 512-byte XT-IDE-style option ROM that, when FAR-CALLed
+    /// by pcxtbios POST, does three things:
+    ///   1. Snapshots IVT[0x13] (= pcxtbios int_13 vector) into BDA
+    ///      scratch at phys 0x488 (IP) + 0x48A (CS).
+    ///   2. Overwrites IVT[0x13] = F000:0013 so subsequent INT 13h
+    ///      reaches our HLE trap.
+    ///   3. Writes BDA[0x40:0x75] = <paramref name="hddCount"/> so
+    ///      FreeDOS / DOS sees the fixed-disk count.
+    ///
+    /// Layout:
+    ///   +0  55 AA          signature
+    ///   +2  01             size = 1 block of 512 bytes
+    ///   +3..N init code (~47 bytes)
+    ///   +N..510 zero padding
+    ///   +511 checksum filler so 8-bit sum of all 512 bytes == 0
+    /// </summary>
+    public static byte[] BuildXtIdeOptionRom(byte hddCount)
+    {
+        var rom = new byte[512];
+        // Signature + size
+        rom[0] = 0x55; rom[1] = 0xAA; rom[2] = 0x01;
+        // Init code (FAR-CALLed by pcxtbios at end of POST, after BDA wipe)
+        byte[] code =
+        {
+            0x1E,                                       // PUSH DS
+            0x50,                                       // PUSH AX
+            0x53,                                       // PUSH BX
+            0x31, 0xC0,                                 // XOR AX, AX
+            0x8E, 0xD8,                                 // MOV DS, AX           ; DS = 0
+            0xA1, 0x4C, 0x00,                           // MOV AX, [0x004C]     ; IVT[13].IP
+            0xA3, 0x88, 0x04,                           // MOV [0x0488], AX     ; save pcxtbios int_13 IP
+            0x8B, 0x1E, 0x4E, 0x00,                     // MOV BX, [0x004E]     ; IVT[13].CS
+            0x89, 0x1E, 0x8A, 0x04,                     // MOV [0x048A], BX     ; save pcxtbios int_13 CS
+            0xC7, 0x06, 0x4C, 0x00, 0x13, 0x00,         // MOV [0x004C], 0x0013 ; install HLE trap IP
+            0xC7, 0x06, 0x4E, 0x00, 0x00, 0xF0,         // MOV [0x004E], 0xF000 ; install HLE trap CS
+            0xB8, 0x40, 0x00,                           // MOV AX, 0x0040
+            0x8E, 0xD8,                                 // MOV DS, AX           ; DS = 0x0040 (BDA segment)
+            0xC6, 0x06, 0x75, 0x00, hddCount,           // MOV BYTE [0x0075], <hddCount>
+            0x5B,                                       // POP BX
+            0x58,                                       // POP AX
+            0x1F,                                       // POP DS
+            0xCB,                                       // RETF
+        };
+        Array.Copy(code, 0, rom, 3, code.Length);
+        // Compute 8-bit checksum so pcxtbios's checksum_entry returns 0.
+        int sum = 0;
+        for (int i = 0; i < 511; i++) sum = (sum + rom[i]) & 0xFF;
+        rom[511] = (byte)((256 - sum) & 0xFF);
+        return rom;
+    }
+
+    /// <summary>
+    /// Install the XT-IDE-style option ROM at 0xC8000 so pcxtbios POST
+    /// scans + FAR-CALLs it. Idempotent — re-installation refreshes
+    /// the hdd-count immediate byte.
+    /// </summary>
+    private void InstallXtIdeOptionRom()
+    {
         byte hddCount = 0;
         if (_disks.ContainsKey(0x80)) hddCount++;
         if (_disks.ContainsKey(0x81)) hddCount++;
-        _bus.WriteByte(0x00475, hddCount);
+        var rom = BuildXtIdeOptionRom(hddCount);
+        for (int i = 0; i < rom.Length; i++)
+            _bus.WriteByte(XtIdeOptionRomBase + i, rom[i]);
         if (_traceInt)
             Console.Error.WriteLine(
-                $"  [HLE] INT 13h hijack installed: was {cs:X4}:{ip:X4} (pcxtbios int_13), " +
-                $"now {HleTrapSegment:X4}:0013 (HLE); floppy chains, HDD served; " +
-                $"BDA[0x475]={hddCount} (hard disk count)");
+                $"  [HLE] XT-IDE option ROM installed at 0x{XtIdeOptionRomBase:X5} ({rom.Length} bytes, " +
+                $"hddCount={hddCount}); pcxtbios POST will FAR-CALL it and self-install IVT[0x13]+BDA[0x475]");
     }
 
     /// <summary>
@@ -492,12 +545,22 @@ public sealed class HleBios
     /// </summary>
     private bool Int13(AprX86.Cli.Cpu.X86State state)
     {
-        if (_realBiosMode && _int13HijackInstalled && state.D.L < 0x80)
+        if (_realBiosMode && state.D.L < 0x80)
         {
             // Floppy chain — redirect to pcxtbios int_13 by changing
-            // CS:IP. The stack frame [IP, CS, flags] left by the
-            // original INT 13h instruction is untouched; pcxtbios's
-            // int_13 will IRET on it back to the caller.
+            // CS:IP. The vector was saved by our option ROM at
+            // 0xC8000:0003 into BDA scratch (phys 0x488 / 0x48A)
+            // during POST. Cache the read on first call so subsequent
+            // calls don't re-hit RAM.
+            if (!_int13HijackInstalled)
+            {
+                ushort ip = _bus.ReadWord16(SavedInt13IpPhys);
+                ushort cs = _bus.ReadWord16(SavedInt13CsPhys);
+                _realBiosInt13Vector = ((uint)cs << 16) | ip;
+                _int13HijackInstalled = true;
+                if (_traceInt)
+                    Console.Error.WriteLine($"  [HLE] cached pcxtbios int_13 = {cs:X4}:{ip:X4} (from BDA scratch)");
+            }
             ushort newIp = (ushort)(_realBiosInt13Vector & 0xFFFF);
             ushort newCs = (ushort)((_realBiosInt13Vector >> 16) & 0xFFFF);
             if (_traceInt)
