@@ -606,7 +606,14 @@ public sealed class HleBios
     private void Int13Ok(AprX86.Cli.Cpu.X86State state, byte ret = DiskOk)
     {
         state.A.H = ret;
+        // Setting state.FlagC alone is ineffective: SimulateIret will pop
+        // the caller's pre-INT FLAGS off the stack and overwrite it. Real
+        // BIOS handlers patch the saved FLAGS word on the stack frame
+        // (per Ralf Brown's INT list + IBM BIOS listings — INT 13h only
+        // guarantees CF; other flags are undefined). Keep state.FlagC in
+        // sync for code that inspects current CPU state mid-handler.
         state.FlagC = false;
+        SetStackFlagC(state, false);
         _diskLastStatus = ret;
     }
 
@@ -614,7 +621,29 @@ public sealed class HleBios
     {
         state.A.H = status;
         state.FlagC = true;
+        SetStackFlagC(state, true);
         _diskLastStatus = status;
+    }
+
+    /// <summary>
+    /// Patch CF in the saved FLAGS word on the INT stack frame
+    /// (SS:[SP+4]). Mirrors the real-BIOS idiom of editing the frame
+    /// before IRET so the popped FLAGS carry the handler's status.
+    /// CF = bit 0.
+    /// </summary>
+    private void SetStackFlagC(AprX86.Cli.Cpu.X86State state, bool set)
+        => PatchStackFlags(state, 0x0001, set);
+
+    /// <summary>Patch ZF (bit 6) in the saved FLAGS word on the stack.</summary>
+    private void SetStackFlagZ(AprX86.Cli.Cpu.X86State state, bool set)
+        => PatchStackFlags(state, 0x0040, set);
+
+    private void PatchStackFlags(AprX86.Cli.Cpu.X86State state, ushort mask, bool set)
+    {
+        int phys = X86Memory.LinearAddr(state.SS, (ushort)(state.SP + 4));
+        ushort f = _bus.ReadWord16(phys);
+        f = set ? (ushort)(f | mask) : (ushort)(f & (ushort)~mask);
+        _bus.WriteWord16(phys, f);
     }
 
     /// <summary>AH=00 — reset disk system. DL = drive. We just clear last-status.</summary>
@@ -627,7 +656,9 @@ public sealed class HleBios
     private void Int13_LastStatus(AprX86.Cli.Cpu.X86State state)
     {
         state.A.H = _diskLastStatus;
-        state.FlagC = _diskLastStatus != DiskOk;
+        bool err = _diskLastStatus != DiskOk;
+        state.FlagC = err;
+        SetStackFlagC(state, err);
     }
 
     /// <summary>AH=02 — read sectors. AL = count, CH/CL = cyl/sec, DH/DL = head/drive, ES:BX = buffer.</summary>
@@ -717,9 +748,12 @@ public sealed class HleBios
     /// <summary>AH=08 — get drive parameters. CH/CL = max cyl/sec, DH = max head, DL = drive count.</summary>
     private void Int13_GetDriveParams(AprX86.Cli.Cpu.X86State state)
     {
-        if (!_disks.TryGetValue(state.D.L, out var disk))
+        byte reqDrive = state.D.L;
+        if (!_disks.TryGetValue(reqDrive, out var disk))
         {
             Int13Fail(state, DiskNoMedia);
+            if (_traceInt && reqDrive >= 0x80)
+                Console.Error.WriteLine($"  [HLE] AH=08 DL={reqDrive:X2} -> FAIL (no media): AH={DiskNoMedia:X2} CF=1");
             return;
         }
         int maxCyl = disk.Cylinders - 1;
@@ -738,6 +772,9 @@ public sealed class HleBios
         // ES:DI = pointer to drive parameter table — not provided.
         state.ES = 0; state.DI = 0;
         Int13Ok(state);
+        if (_traceInt && reqDrive >= 0x80)
+            Console.Error.WriteLine(
+                $"  [HLE] AH=08 DL={reqDrive:X2} -> OK: CH={state.C.H:X2} CL={state.C.L:X2} DH={state.D.H:X2} DL={state.D.L:X2} BL={state.B.L:X2} CF=0");
     }
 
     /// <summary>AH=15 — get disk type. AH on return: 0=no disk, 1=floppy no diskchg, 2=floppy w/diskchg, 3=fixed.</summary>
@@ -745,7 +782,7 @@ public sealed class HleBios
     {
         if (!_disks.TryGetValue(state.D.L, out var disk))
         {
-            state.A.H = 0; state.FlagC = false; return;
+            state.A.H = 0; state.FlagC = false; SetStackFlagC(state, false); return;
         }
         if (disk.Kind == DiskKind.Floppy)
         {
@@ -760,6 +797,7 @@ public sealed class HleBios
             state.D.X = (ushort)(total & 0xFFFF);
         }
         state.FlagC = false;
+        SetStackFlagC(state, false);
     }
 
     // ---------- INT 19h: bootstrap loader ----------
@@ -862,10 +900,12 @@ public sealed class HleBios
             state.A.L = ascii;
             state.A.H = scancode;
             state.FlagZ = false;
+            SetStackFlagZ(state, false);
         }
         else
         {
             state.FlagZ = true;
+            SetStackFlagZ(state, true);
         }
     }
 

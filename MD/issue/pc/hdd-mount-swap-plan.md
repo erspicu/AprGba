@@ -483,6 +483,85 @@ python tools/make_dos_hdd.py --out=disks/c.img --size-mb=32
 
 ---
 
+### 32.2h-4 — Root cause REVISED：SimulateIret CF clobber（2026-05-18 session）
+
+**之前的 FLAG_SECTOR / total_sect=0 分析其實是症狀，不是 root cause**。
+真正原因找到了，跟 FAT12 / fdisk.ini parsing 完全無關。
+
+#### Symptom
+
+FreeDOS 1.3 install boot 過程印 `can't get drive parameters for drive 04`，
+然後 FDISK / installer 認為「No fixed disks present」直接 abort。但我們的
+HLE BIOS INT 13h AH=08 對 DL=0x80 明明回 CHS = 261x16x63（正確值），
+trace 也看得到 handler 被叫。
+
+#### Root cause
+
+`HleBios.SimulateIret` 把 handler 設好的 `state.FlagC` 用 stack 上原本
+push 的 FLAGS word 蓋掉：
+
+```csharp
+private void SimulateIret(X86State state) {
+    ushort flags = ReadStackWord(state, 4);   // saved FLAGS from INT
+    ...
+    state.SetFlags(flags);   // <-- clobbers handler-set FlagC
+}
+```
+
+FreeDOS kernel (`initdisk.c:659`) 跟 standard 防呆 idiom 一樣，在 call
+`init_call_intr(0x13, &regs)` 之前**故意把 `regs.flags = FLG_CARRY` 設成
+1**，這樣 BIOS 不支援該 call 時 CF 保持 1。
+
+`init_call_intr` 的 ASM (`intr.asm:63-64`) 用 `SAHF` 把 `regs.flags` low byte
+load 進 CPU FLAGS，所以 INT 13h 是帶著 CF=1 push 上 stack 進入 handler。
+我們 handler 改了 `state.FlagC=false` 但沒改 stack frame；`SimulateIret`
+pop 出來 CF 還是 1。FreeDOS PUSHF 拿到 CF=1，treat as failure → drive
+unenumerable → "No fixed disks present"。
+
+同樣的 bug 同時影響其他帶 CF 的 INT call（AH=41 LBA probe、AH=15 type
+query、INT 16h AH=01 keypress poll 用 ZF），但因為大部分 caller 沒 pre-set
+CF=1，所以巧合 not blocking。
+
+#### Fix（Approach B per Gemini 諮詢）
+
+`SimulateIret` 不動（純 CPU IRET）。Handler 改成像 real BIOS 一樣，直接
+patch stack 上的 FLAGS word（SS:[SP+4]）：
+
+```csharp
+private void SetStackFlagC(X86State state, bool set)
+    => PatchStackFlags(state, 0x0001, set);
+
+private void Int13Ok(X86State state, byte ret = 0) {
+    state.A.H = ret;
+    state.FlagC = false;
+    SetStackFlagC(state, false);   // <-- patches stack so IRET preserves
+    ...
+}
+```
+
+Why not pure `SimulateIret`-side merge：CPU emulator 不該知道哪些 INT 用
+CF / ZF / etc 當 status；BIOS API 語意是 BIOS 層責任。INT 16h AH=01 用 ZF
+當 key-ready signal、INT 13h 用 CF 當 status — 在 SimulateIret 統一處理
+會 leak 其他 stale flags（OF/SF/etc.）給 caller。Ralf Brown's INT list 確認
+INT 13h **只** guarantee CF；其他 flag 都 undefined。
+
+#### Files modified
+
+- `src/AprPc.Cli/Bios/HleBios.cs`
+  - 新增 `SetStackFlagC` / `SetStackFlagZ` / `PatchStackFlags` helpers
+  - `Int13Ok`/`Int13Fail` 加 `SetStackFlagC`
+  - `Int13_LastStatus` / `Int13_GetDiskType` 同
+  - `Int16_PeekChar` 加 `SetStackFlagZ`（key ready / empty）
+  - `SimulateIret` **完全不動**
+
+#### Status
+
+- 21:57 build 完成
+- T1 unit tests 跑中（背景 task `bn2cm6dyc`）
+- 等用戶實機驗證 FreeDOS install 路徑是否解開
+
+---
+
 ## Phase 32.3 — Host-directory mount
 
 ### 重新評估（Gemini 警告）
