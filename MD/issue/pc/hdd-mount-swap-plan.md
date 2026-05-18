@@ -28,7 +28,7 @@
 |---|---|---|---|---|
 | **32.1** | Floppy swap hotkey + DSKCHG | ~1 day | CheckIt 2-disk、FreeDOS install 4-disk | ✅ `e8ed55e` (2026-05-18) |
 | **32.2** | Virtual HDD（HLE INT 13h、FDPT、LBA stub） | ~2-3 day | CheckIt persistent install、FreeDOS C: | ✅ (2026-05-18) |
-| **32.3** | Host-dir mount（vvfat OR Guest TSR） | ~2+ week | dev-loop QoL、跨 host/guest 拖檔 | 📋 planned |
+| **32.3** | Host-dir mount（vvfat OR Guest TSR） | ~2+ week | dev-loop QoL、跨 host/guest 拖檔 | 🚧 V0 skeleton (2026-05-18) |
 
 順序 32.1 → 32.2 → 32.3 — 從便宜 / unblock 度高的開始。
 
@@ -280,16 +280,57 @@ Rule：
 
 ### 工作項目
 
-| Sprint | Deliverable | Effort |
-|---|---|---|
-| 32.3a (V1) | Host dir scan + FAT16 synthesizer + INT 13h backing | 4-5 day |
-| 32.3b (V1) | `--mount=C:host\path` CLI + drive slot 0x81 wiring | 0.5 day |
-| 32.3c (V1) | Test：host file 出現在 guest DOS dir、可 copy / read | 0.5 day |
-| 32.3d (V2) | Guest TSR ASM + INT 2Fh Redirector hook | 5-7 day |
-| 32.3e (V2) | C# backdoor port handler + write-back path | 3-4 day |
-| 32.3f (V2) | LFN aliasing bidirectional cache | 1-2 day |
+| Sprint | Deliverable | Effort | Status |
+|---|---|---|---|
+| **32.3-V0** | **Skeleton：`HostDirMount` class + `--mount` CLI parse + validation** | 0.3 day | ✅ `bbc67c1` (2026-05-18) |
+| 32.3a (V1) | Host dir scan + FAT16 synthesizer + INT 13h backing | 4-5 day | 📋 next |
+| 32.3b (V1) | `--mount=C:host\path` → drive 0x82/0x83 MountDisk wiring | 0.5 day | 📋 |
+| 32.3c (V1) | Test：host file 出現在 guest DOS dir、可 copy / read | 0.5 day | 📋 |
+| 32.3d (V2) | Guest TSR ASM + INT 2Fh Redirector hook | 5-7 day | 📋 V2 |
+| 32.3e (V2) | C# backdoor port handler + write-back path | 3-4 day | 📋 V2 |
+| 32.3f (V2) | LFN aliasing bidirectional cache | 1-2 day | 📋 V2 |
 
-V1 total ~5-6 day。V2 ~10-13 day。整段 2+ week。
+V0 done。V1 total ~5-6 day（next milestone）。V2 ~10-13 day。整段 2+ week。
+
+### V0 已交付（2026-05-18）
+
+- `src/AprPc.Cli/Hardware/HostDirMount.cs` — class with `TryParse()`,
+  `Synthesize()` (stub returns all-zero buffer), spec parsing
+  (`DRV:host[:ro|rw][:SIZE_MB]`), validation of drive letter range
+  (C-Z), path existence check.
+- `PcOptions.HostMounts` list + `--mount=...` CLI flag.
+- `HeadlessRunner` walks specs, validates host path, prints
+  "Phase 32.3 SKELETON (not yet exposed to guest)" status.
+
+### V1 hand-off — what comes next
+
+The framework is ready for the real vvfat synthesizer. Sprint 32.3a is:
+
+1. **FAT16 boot sector + BPB at offset 0**:
+   - Standard 32 MB FAT16 BPB constants (512 byte/sector, 64 sec/cluster,
+     2 FATs, 512 root entries, etc.).
+   - JMP short + NOP + OEM stamp + BPB + minimal stub code that runs
+     INT 18h "no system" message if user tries to boot from it.
+
+2. **Scan host directory**, allocate one or more 8.3 short-name dir
+   entries per host file:
+   - Build canonical 8.3 short name from host filename (Phoenix
+     "first 6 chars + ~N" algorithm).
+   - For each file, allocate a contiguous chain of FAT16 clusters
+     (V1 keeps it simple — no fragmentation).
+   - Write file content into the cluster region; write FAT chain.
+
+3. **Wire HostDirMount.Synthesize() output to MountDisk(0x82) /
+   MountDisk(0x83)** so guest sees E: / F: as a mountable HDD.
+
+4. **Test plan**: `--mount=E:./test-roms/x86/fat12-b:ro` →
+   FreeDOS boot → `E:\>dir` should list HELLO.COM, CHECKIT.EXE, etc.;
+   `TYPE E:HELLO.COM` should print bytes; `COPY E:HELLO.COM A:` should
+   succeed.
+
+Once V1 read-only is solid, V2 picks up Guest TSR + write-back per
+Gemini's advice (don't bolt write-back onto vvfat — pivot to INT 2Fh
+Redirector pattern with an x86-16 driver in the guest).
 
 ---
 

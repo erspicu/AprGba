@@ -41,6 +41,13 @@ public sealed class PcOptions
     /// (PC convention: 0x80 = primary, 0x81 = secondary). Optional.
     /// </summary>
     public string? Hdd2Path     { get; set; }
+    /// <summary>
+    /// Phase 32.3 — host-directory mounts. List of --mount=DRV:host:opts
+    /// specs. V1 skeleton: parses + holds the spec but does NOT yet
+    /// expose the path as a guest drive (synthesizer is sprint 32.3a).
+    /// See MD/issue/pc/hdd-mount-swap-plan.md §32.3.
+    /// </summary>
+    public List<string> HostMounts { get; } = new();
 
     // Phase 28.5 — test ROM (tiny boot sector binary, < 1 KB) loaded
     // directly to 0000:7C00 + entry point set. Coexists with
@@ -219,6 +226,7 @@ public sealed class PcOptions
             else if (arg.StartsWith("--floppy-b="))   o.FloppyBPaths = ParseFloppyList(arg["--floppy-b=".Length..]);
             else if (arg.StartsWith("--hdd="))        o.HddPath = arg["--hdd=".Length..];
             else if (arg.StartsWith("--hdd2="))       o.Hdd2Path = arg["--hdd2=".Length..];
+            else if (arg.StartsWith("--mount="))      o.HostMounts.Add(arg["--mount=".Length..]);
             else if (arg.StartsWith("--test-rom="))   o.TestRomPath = arg["--test-rom=".Length..];
             else if (arg.StartsWith("--cpu="))        o.Cpu = arg["--cpu=".Length..];
             else if (arg.StartsWith("--bios="))       o.BiosPath = arg["--bios=".Length..];
@@ -299,6 +307,12 @@ public sealed class PcOptions
                                     Use FDISK + FORMAT + SYS to populate, then boot
                                     from C: with no --floppy-a.
           --hdd2=PATH               D: secondary hard disk (FDC drive 0x81).
+          --mount=DRV:host[:opts]   Phase 32.3 — host-directory mount as a virtual
+                                    FAT16 disk. opts: ro|rw (default ro), SIZE_MB
+                                    (default 32). E.g. --mount=E:.\dos-stuff:rw:128
+                                    SKELETON ONLY in this build — parse + accept
+                                    spec but synthesizer is sprint 32.3a (see plan
+                                    MD/issue/pc/hdd-mount-swap-plan.md).
           --test-rom=PATH           tiny boot-sector binary loaded directly
                                     to 0000:7C00 (coexists with --floppy-a)
 

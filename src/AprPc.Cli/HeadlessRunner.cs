@@ -70,6 +70,25 @@ internal static class HeadlessRunner
             Console.WriteLine($"  hdd D:    {hdd2Path} ({disk.Cylinders}x{disk.Heads}x{disk.Sectors} CHS, {disk.TotalSectors * 512L / (1024 * 1024)} MB)");
         }
 
+        // Phase 32.3 — parse --mount specs. Skeleton: validate the spec
+        // but don't yet expose as a guest drive. Real synthesizer +
+        // INT 13h backing is sprint 32.3a-c (vvfat read-only V1).
+        foreach (var spec in opts.HostMounts)
+        {
+            var m = HostDirMount.TryParse(spec);
+            if (m is null)
+            {
+                Console.Error.WriteLine($"  --mount={spec}: malformed (expect DRV:host[:ro|rw][:SIZE_MB]); skipped");
+                continue;
+            }
+            if (!Directory.Exists(m.HostPath))
+            {
+                Console.Error.WriteLine($"  --mount={spec}: host path '{m.HostPath}' not found; skipped");
+                continue;
+            }
+            Console.WriteLine($"  mount {m.DriveLetter}: {m.HostPath} ({(m.ReadWrite ? "rw" : "ro")}, {m.SizeMB} MB) — Phase 32.3 SKELETON (not yet exposed to guest)");
+        }
+
         if (opts.TestRomPath is { } testRomPath)
         {
             var bytes = File.ReadAllBytes(testRomPath);
