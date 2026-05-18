@@ -181,6 +181,19 @@ Effort：2-3 day。
   block 推到 chained blocks 跟 superblock。預期 hot loop 2-3× throughput
   gain；spec-driven 慣例不破壞。實作成本 ~10 day（31.1 + 31.2）。
 
+## Storage capabilities（獨立 axis）
+
+跟上面也正交、是 multi-disk install / 安裝 program 到 HDD / dev-loop
+拖檔的能力推進：
+
+- **[Phase 32 storage plan](hdd-mount-swap-plan.md)** —
+  - **32.1** Floppy swap hotkey（Ctrl+L cycle）+ DSKCHG port 0x3F7
+    （~1 day、解 CheckIt / FreeDOS install 多碟 install）
+  - **32.2** Virtual HDD（HLE INT 13h、FDPT INT 41h/46h、LBA probe stub）
+    （~2-3 day、解 persistent C: + 從 C: boot + CheckIt 安裝到 C:）
+  - **32.3** Host-dir mount（vvfat read-only V1 + Guest TSR write V2）
+    （~2+ week、解 dev-loop 拖檔；INT 21h trap 不能用 — Gemini 警告）
+
 ---
 
 ## 交叉參考
