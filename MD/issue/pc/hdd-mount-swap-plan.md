@@ -382,6 +382,71 @@ Trace 顯示 FDISK 完全沒 call INT 13h DL>=0x80 之前就 die — 表示 die 
 | 32.2h-3 | Pragmatic bypass：[`tools/make_dos_hdd.py`](../../../tools/make_dos_hdd.py) — 預寫 MBR + FAT16 VBR + 空 FAT 到 .img、user boot 到 DOS prompt 後 `SYS C:` 直接安裝 | ✅ 已交付（2026-05-18） |
 | 32.2h-4 | Test：FreeDOS install 端到端跑完到 `C:\>` reboot prompt | 0.5 day（32.2h-1/2 解之後） |
 
+### 2026-05-18 深度 investigation 結果
+
+UPX-unpack 後 FDISK.EXE 可讀。Turbo C++ 1990 編譯。完整 error string：
+```
+The "FLAG_SECTOR" value in the "fdisk.ini" file is out of range...
+Operation Terminated.
+```
+
+Disasm 找到 error path 在 image 0xD12（function start 0xAA1）：
+
+```
+; setup
+mov word [0x5F16], 0x80     ; drive number
+...
+call 0x4D4E                  ; probe drives (loops drives, calls INT 13h AH=08)
+                              ; populates part_table[X].total_sect
+
+; validation
+mov ax, [0x5F16]              ; AX = drive number / index
+mov dx, 0x0B0C                ; struct size 2828
+imul dx
+mov bx, ax                    ; BX = idx * 2828
+mov ax, [bx - 0x16CC]         ; high word of part_table[idx].total_sect
+mov dx, [bx - 0x16CE]         ; low word
+cmp ax, [0x5F1E]              ; high word of flag_sector
+ja  skip_error                ; total_sect.hi > flag_sector.hi → OK
+jc  cmp_low
+cmp dx, [0x5F1C]              ; low word of flag_sector
+jnc skip_error
+cmp_low:
+or  word [0x5F1C], [0x5F1E]   ; check flag_sector != 0
+jz  skip_error                ; if flag_sector = 0, OK
+
+; ERROR PATH:
+mov ax, 0x2C2                 ; string offset for "FLAG_SECTOR... out of range"
+push ax; call 0xC39D
+mov ax, 0x306                 ; "Operation Terminated.\n"
+push ax; call 0xC39D
+push 3
+call 0xBB84                   ; exit(3)
+```
+
+Logic：if `flag_sector != 0 AND part_table[drive].total_sect < flag_sector` → error.
+
+**Trace shows ZERO `DL=8` INT 13h hits** before the error. 表示 `call 0x4D4E` 內 INT 13h
+AH=08 從沒 fire — function 0x47C9 (probe drive via INT 13h) 沒被 reach。
+
+兩個可能：
+- (a) **`call 0x4D4E` 整個沒跑** — 表示 0xAA1 function 內 control flow 在 call 0x4D4E
+  之前已 exit。但 0xCE6 是 unconditional call、應該必跑。Unless function 0xAA1 itself
+  is reached via wrong code path.
+- (b) **`0x4D4E` 跑了但內部 0x47C9 提早 return** — 0x47C9 內有 `cmp [0x5F36], 0xFF`
+  check + various branches。如果某個 init 沒做、可能 early return.
+
+Pre-formatted disk image with valid MBR 也沒解 → 確認 FDISK 連 INT 13h 都沒 call、
+所以讀 disk 內容對 FDISK 沒影響。
+
+下次 session 該做的事：
+- 加 `--trace-cpu-cs=` filter for the FDISK code segment、看真實 CS:IP 流到哪、
+  是否真進 0xAA1
+- 加 RAM dump on DOS INT 21h AH=3F 讀 fdisk.ini 那個 buffer、確認 byte-level 正確性
+- 或更直接：寫 DOS .COM 在 emulator 內跑、做 `atoi("2")` 然後 print、看 CPU 算術正確
+
+Diagnostic tools 不存在、要新建 — 屬於 32.2h-1 工作項目。
+
 ### 32.2h-3 已交付
 
 `tools/make_dos_hdd.py` 寫一個 single-partition FAT16 .img：

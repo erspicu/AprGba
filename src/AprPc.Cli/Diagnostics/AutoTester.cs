@@ -264,6 +264,39 @@ public sealed class AutoTester : IDisposable
             // After the wait advances, dump + close form.
             new(string.Empty, new List<byte>(), IsTerminal: true),
         },
+
+        // Phase 32.2h — boot FreeDOS install, abort installer (N),
+        // get to A:\> prompt, run FDISK /info on drive 1 (= HDD 0x80).
+        // Used to test pre-formatted HDD image hypothesis.
+        "freedos-fdisk-info" => new List<Step>
+        {
+            new("language", new List<byte> { 0x1C }),               // Enter (English)
+            new("[Y,N]",    new List<byte> { 0x31, 0x1C }),         // 'N' + Enter (abort installer)
+            new("A:\\>",    new List<byte>
+            {
+                // type "FDISK /INFO 1" + Enter
+                0x21,                                       // 'F'
+                0x20,                                       // 'D'
+                0x17,                                       // 'I'
+                0x1F,                                       // 'S'
+                0x25,                                       // 'K'
+                0x39,                                       // SPACE
+                0x35,                                       // '/'
+                0x17,                                       // 'I'
+                0x31,                                       // 'N'
+                0x21,                                       // 'F'
+                0x18,                                       // 'O'
+                0x39,                                       // SPACE
+                0x02,                                       // '1'
+                0x1C,                                       // Enter
+            }),
+            // Wait for any FDISK *output* — pattern "ange" matches
+            // both failure ("out of range") and success ("Range"/various
+            // FDISK header lines). Picking specifically "ange" avoids
+            // matching the user-typed "fdisk /info" line which has no 'g'.
+            new("ange", new List<byte>()),                           // wait
+            new(string.Empty, new List<byte>(), IsTerminal: true),
+        },
         _ => null,
     };
 }
