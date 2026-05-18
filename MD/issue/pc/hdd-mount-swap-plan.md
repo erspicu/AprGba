@@ -27,7 +27,8 @@
 | Phase | Feature | Effort | 阻擋什麼 | Status |
 |---|---|---|---|---|
 | **32.1** | Floppy swap hotkey + DSKCHG | ~1 day | CheckIt 2-disk、FreeDOS install 4-disk | ✅ `e8ed55e` (2026-05-18) |
-| **32.2** | Virtual HDD（HLE INT 13h、FDPT、LBA stub） | ~2-3 day | CheckIt persistent install、FreeDOS C: | ✅ (2026-05-18) |
+| **32.2** | Virtual HDD（HLE INT 13h、FDPT、LBA stub） | ~2-3 day | CheckIt persistent install、FreeDOS C: | ⚠️ partial (2026-05-18) — real-BIOS HDD detection blocked、看 32.2g |
+| **32.2g** | Real-BIOS INT 13h hijack for HDD（chain floppy 回 pcxtbios、HDD 走 HLE） | ~0.5-1 day | **FreeDOS / CheckIt / FDISK 偵測 HDD** | 📋 **next** |
 | **32.3** | Host-dir mount（vvfat OR Guest TSR） | ~2+ week | dev-loop QoL、跨 host/guest 拖檔 | 🚧 V0 skeleton (2026-05-18) |
 
 順序 32.1 → 32.2 → 32.3 — 從便宜 / unblock 度高的開始。
@@ -228,6 +229,111 @@ FreeDOS boot from HDD use case、先用 HLE。
 | 32.2f | Test：FDISK + FORMAT + SYS C: + 從 C: boot | 0.5 day |
 
 Total ~2.3 day。
+
+---
+
+## Phase 32.2g — Real-BIOS INT 13h hijack for HDD
+
+### 觸發
+
+2026-05-18 32.2 完成、FreeDOS install GUI 跑、結果：
+
+```
+"No fixed disks present" → installer abort
+```
+
+Root cause：**`--bios=pcxtbios.bin` 之下、IVT[0x13] 被 pcxtbios 自己 install**
+（pcxtbios.asm:5100 `dw int_13` 把 `int_13` proc 接管 INT 13h）。pcxtbios 的
+`int_13` proc 只 handle 軟碟、DL ≥ 0x80（HDD）直接 fail 回 "no fixed disk"。
+
+我們 HLE INT 13h 已寫好（32.2b/c/d 出貨）、但 IVT[0x13] 沒指過來、call 不到。
+
+### 設計
+
+**Trampoline + chain pattern**：
+
+1. POST 結束之後（或 reset 後第一次 `INT 19h` boot 觸發前），HleBios 把
+   IVT[0x13] 改指自己的 HLE trap（`F000:0013` = HleTrapSegment 內）
+2. 原 pcxtbios INT 13h vector 存到 `_realBiosInt13Vector` field
+3. `HleBios.Int13(state)` dispatch：
+   - `state.D.L < 0x80`（floppy）→ **chain** 回 `_realBiosInt13Vector`
+     （pcxtbios floppy handler 仍然處理 A:/B:、跟既有行為一致）
+   - `state.D.L >= 0x80`（HDD）→ HLE 自己 serve（既有 Int13_Read /
+     Int13_GetDriveParams / Int13_AH41_LBAStub / etc.）
+
+### POST-完成偵測
+
+候選：
+- **(a) 偵測 INT 19h** — pcxtbios POST 最後 call INT 19h boot；在這 INT
+  的 HLE handler hook 內 install IVT[0x13] 改寫。但 IVT[0x19] 也被
+  pcxtbios 接管、需要 chain。
+- **(b) 寫入監視** — 監視 phys 0x4C（IVT[0x13] entry）的 write、
+  在 pcxtbios 寫完之後重新 patch。簡單但耦合到 CPU memory write hook。
+- **(c) 啟動時統一 hook** — Reset 後立刻 install IVT[0x13] = HLE trap。
+  pcxtbios POST 之後會覆蓋它；但我們在 POST 完成偵測點再次 install。
+- **(d) 簡化**：reset 後最簡單就 install HLE INT 13h、然後在 pcxtbios
+  init_int 寫 IVT[0x13] 之後（用 memory write watch 監視 phys 0x4C-0x4F），
+  重新 install。
+
+**建議 (a)**：HleBios 已經有「F000:0019 = INT 19h HLE handler」基礎建設
+（HLE BIOS path 用同樣機制）。real-BIOS mode 下、第一次 CPU JMP 到
+IVT[0x19] 之前我們 intercept。
+
+實作：在 PcSystemRunner 初始化時、**只**改 IVT[0x19] = F000:0019、
+HleBios.Int19 內：
+1. 從 IVT[0x13] 讀出 real-BIOS 的 INT 13h vector、存 field
+2. 把 IVT[0x13] 改成 F000:0013（HLE trap）
+3. **chain** 回原 pcxtbios INT 19h（保持 boot 行為）— 透過 `JMP FAR`
+   或 push `_realBiosInt19Vector` + IRET-style return
+
+### Chain 給 floppy 的機制
+
+當 `state.D.L < 0x80`、HleBios.Int13 不能就 `IRET` 回 caller（這樣 floppy
+read 永遠 fail）。需要把 control 轉到 pcxtbios `int_13` handler、
+讓它跑、它 IRET 之後 caller 收到 pcxtbios 的 result。
+
+兩種做法：
+- **TRAMPOLINE**：HleBios trap 內、push caller flags+CS+IP、JMP FAR
+  到 `_realBiosInt13Vector`（pcxtbios `int_13`）。pcxtbios `int_13` IRET
+  時 pop 三件、回到 user 的 INT 13h 之後。等於 emulator 透明做了 INT
+  redirect。需要 CPU state direct manipulation：HleBios.Int13 不 RET 回
+  emulator framework、而是把 CS:IP 改成 pcxtbios handler、emulator 繼續 step。
+- **直接 call C# emulation of floppy**：HleBios.Int13 floppy path 也用
+  我們自己的 HLE 軟碟 INT 13h handler（既有的 Int13_Read 等）— 直接 serve、
+  不 chain。Cons：bypass pcxtbios 的 floppy state（motor、DSKCHG）、可能
+  跟 32.1 swap 衝突。
+
+**建議 TRAMPOLINE 路線**：保留 pcxtbios floppy handler、只插 HDD。
+
+### 工作項目
+
+| Sprint | Deliverable | Effort |
+|---|---|---|
+| 32.2g-1 | Reset 後 install IVT[0x19] = F000:0019 HLE trap（只 in real-BIOS mode） | 0.2 day |
+| 32.2g-2 | HleBios.Int19 first-call：snapshot real-BIOS IVT[0x13] vector + install F000:0013 HLE trap + chain 回 pcxtbios INT 19h | 0.3 day |
+| 32.2g-3 | HleBios.Int13 dispatch by DL：floppy → trampoline CS:IP 改回 _realBiosInt13Vector、CPU 繼續 step；HDD → 既有 HLE serve | 0.5 day |
+| 32.2g-4 | Test：`--hdd=blank.img:create:20` + FreeDOS install → 看 installer 偵測 HDD、跑 FDISK + FORMAT + SYS + reboot | 0.5 day |
+
+Total ~1.5 day。
+
+### 風險
+
+- **Trampoline 跨 CS 跳轉**：CPU framework 在 HleBios.Int13 callback 結束時
+  預期 CS:IP 是 trap segment + IRET-pop 之後。改 CS:IP 到 pcxtbios 然後
+  跳過 IRET pop 需要小心 — flags / SP 對齊要對。
+- **POST-時 INT 13h call**：pcxtbios POST 自己 call INT 13h（floppy detect、
+  boot sector load）。Phase 32.2g 在 INT 19h hook 點才 install HDD trap、
+  POST INT 13h 仍 100% 走 pcxtbios — 無 regression。
+- **Real-BIOS 在 IRET 之後修改 IVT[0x13]**：FreeDOS load 自己的 disk driver
+  可能 over-install IVT[0x13]（網路 redirector pattern）。如果發生、需要
+  進一步 hook、但 FreeDOS 5/6/freedos1.3 不會。
+- **8087 FPU extension 不影響**：FPU 不碰 IVT[0x13]。
+
+### 確認 FDPT 在 BDA scratch 仍然 work
+
+32.2d 修法（FDPT 放 0x004E0 / 0x004F0）— pcxtbios 不會碰那邊、所以這個
+方案跟 32.2g 並存無問題。CheckIt / FDISK 透過 IVT[0x41]/[0x46] 讀 FDPT
+仍然 work。
 
 ---
 

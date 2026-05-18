@@ -26,6 +26,7 @@
 |---|---|---|---|
 | **32.1** | Floppy swap hotkey + DSKCHG | ~1 day | CheckIt 2-disk, FreeDOS install 4-disk |
 | **32.2** | Virtual HDD (HLE INT 13h, FDPT, LBA stub) | ~2-3 day | CheckIt persistent install, FreeDOS C: |
+| **32.2g** | Real-BIOS INT 13h hijack for HDD (chain floppy to pcxtbios; HDD to HLE) | ~0.5-1 day | **FreeDOS / CheckIt / FDISK can see HDD** |
 | **32.3** | Host-dir mount (vvfat V1 read-only, TSR V2 read-write) | ~2+ week | dev-loop QoL, host/guest file transfer |
 
 (Full design + sprint breakdown in 中文 [`MD/issue/pc/hdd-mount-swap-plan.md`](../../../MD/issue/pc/hdd-mount-swap-plan.md).)
