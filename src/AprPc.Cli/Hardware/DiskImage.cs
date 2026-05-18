@@ -199,6 +199,14 @@ public sealed class DiskImage
     /// <summary>
     /// Mirror of ReadSectors. Returns the count actually written
     /// (0 if read-only).
+    ///
+    /// Phase 32.2g — when this is an HDD image, persist via
+    /// FileStream.Seek+Write of just the touched sector range
+    /// instead of rewriting the entire file. Floppy stays on the
+    /// whole-file path (1.44 MB rewrite is cheap; HDD up to 504 MB
+    /// is not). Without this, FreeDOS install writes thousands of
+    /// sectors to a 128 MB image, each rewriting 128 MB to disk —
+    /// makes a 5-minute install take hours.
     /// </summary>
     public int WriteSectors(int lba, int count, ReadOnlySpan<byte> src)
     {
@@ -206,6 +214,7 @@ public sealed class DiskImage
         lock (_lock)
         {
             int wrote = 0;
+            int firstOff = lba * SectorSize;
             for (int i = 0; i < count; i++)
             {
                 int off = (lba + i) * SectorSize;
@@ -213,11 +222,25 @@ public sealed class DiskImage
                 src.Slice(i * SectorSize, SectorSize).CopyTo(new Span<byte>(_bytes, off, SectorSize));
                 wrote++;
             }
-            // Persist eagerly — DOS writes are infrequent and we want
-            // the .img file to reflect a clean shutdown crash. For 28.5
-            // we just rewrite the whole file; future optimisation can
-            // batch by sector range.
-            File.WriteAllBytes(_path, _bytes);
+            if (wrote == 0) return 0;
+            // Persist only the touched range. FileStream open-write-close
+            // per call is wasteful for tight loops but matches the
+            // current "image is the truth on every write" semantics +
+            // works on a hot-swappable backing file. Future optimisation
+            // can batch via async flush.
+            if (Kind == DiskKind.HardDisk)
+            {
+                using var fs = new FileStream(_path, FileMode.Open, FileAccess.Write, FileShare.Read);
+                fs.Seek(firstOff, SeekOrigin.Begin);
+                fs.Write(_bytes, firstOff, wrote * SectorSize);
+            }
+            else
+            {
+                // Floppy: ~1.44 MB total; full rewrite is fine + matches
+                // old behaviour (avoids subtle ordering bugs in disk
+                // hot-swap path).
+                File.WriteAllBytes(_path, _bytes);
+            }
             return wrote;
         }
     }
